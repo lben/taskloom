@@ -20,7 +20,7 @@ workstation or on a Linux server, without admin/root rights.
 - Extensible: a new block is one Python file; blocks can be added or replaced
   without rebuilding the app.
 - Large data safe: query results of millions of rows never have to fit in memory.
-- Runs without admin (Windows) or root (Linux), and recovers from weekly restarts.
+- Runs without admin (Windows) or root (Linux), and comes back on its own after reboots.
 - Shippable to non-developers as a zip or exe: full editor, or runner + one flow.
 
 **Non-goals (for now)**
@@ -133,7 +133,7 @@ class RunQuery(Block):
   2. installed packages exposing the `taskloom.blocks` entry point;
   3. `.py` files in the user blocks folder (works inside the packaged exe).
 - A user block with the same `type_id` as a built-in **overrides** it — this is how
-  you replace a built-in privately (e.g. a company-specific email sender).
+  you replace a built-in privately (e.g. your own email sender).
 - **Versioning**: when a block's config changes shape, bump `version` and provide
   `migrate(old_config, old_version)`; old flow files keep loading.
 - **Python Code block**: inline editor; receives `inputs` and `ctx`, returns a dict of outputs.
@@ -145,19 +145,22 @@ class RunQuery(Block):
 ```yaml
 taskloom: 1
 name: daily-sales-report
-params: {region: EU}
+params:
+  region: {type: text, value: EU}
+  day: {type: date, expr: "today() - days(1)"}
+  day_key: {type: int, expr: "int(format(day, '%Y%m%d'))"}
 triggers:
   - schedule: {cron: "0 7 * * MON-FRI", misfire: run_once}
 notify: {on: [failure]}
 blocks:
   q:
     type: db.run_query
-    config: {connection: warehouse, sql: "select ... where region = :region"}
+    config: {connection: warehouse, sql: "select ... where region = :region and day_key = :day_key"}
     retry: {policy: exponential, initial: 30s, factor: 2, max_delay: 10m, max_attempts: 5}
     ui: {x: 120, y: 80}
   xl:
     type: report.to_excel
-    config: {path: "reports/sales_{date}.xlsx", chart: {kind: bar, x: day, y: total}}
+    config: {path: "reports/sales_{day:%Y-%m-%d}.xlsx", chart: {kind: bar, x: day, y: total}}
   mail:
     type: email.send
     config: {connection: smtp, to: ["{settings.notify_email}"], subject: "Daily sales"}
@@ -167,6 +170,35 @@ edges:
 ```
 
 Plain text, diff-friendly, safe to commit and share (no secrets).
+
+### Parameters
+
+Parameters are defined once per flow (a **Parameters** tab in the editor, not
+blocks on the canvas) and can be used by any block.
+
+- **Types**: `text`, `int`, `float`, `bool`, `date`, `datetime`, `list`.
+- **Value** is either a literal (`value:`) or an expression (`expr:`) computed at
+  the start of every run. Expressions can use earlier parameters and a small, safe
+  function set (no imports, no file or network access):
+  - dates: `today()`, `now()`, `days(n)`, `weeks(n)`, `months(n)`,
+    `start_of_month(d)`, `end_of_month(d)`, `start_of_week(d)`, `previous_weekday(d)`;
+  - conversion: `format(d, '%Y%m%d')`, `parse_date(s, fmt)`, `int()`, `float()`, `str()`.
+- **Type and format are separate.** A parameter keeps its real type (`day` is a date);
+  the format is chosen where it is used:
+  - SQL **bind parameters** `:name` pass the typed value to the driver
+    (`:day` as a date, `:day_key` as the integer `20260101`) — safe from injection;
+  - **text templates** `{name}` / `{name:format}` in paths, subjects, commands, e.g.
+    `{day:%Y-%m-%d}` → `2026-01-01`, `{day:%Y%m%d}` → `20260101`. Inside SQL these are
+    raw text substitution, for things binds can't do (table or partition names).
+- Evaluated **once per run**, in the flow's time zone (default: the machine's), so
+  every block and every retry sees the same values even if the run crosses midnight.
+- **Overrides**: a manual run from the editor shows the computed values and lets you
+  change them (e.g. re-run for a past date); the CLI accepts `--param day=2026-01-01`;
+  scheduled runs use the computed values. The values used are saved with the run.
+- **Values that come from data** (e.g. "latest loaded date" from a query) are not
+  parameters: they flow through ports like any other data, e.g. into a query's
+  `params` input. An **Expression** block computes new values from block outputs
+  with the same function set.
 
 ---
 
@@ -208,11 +240,11 @@ flows can email you directly.
 - `taskloom scheduler` is a long-running process with a tray icon that runs all
   scheduled flows.
 - Registered in the user's **Startup folder** (no admin) → it comes back on
-  login after the weekly restart.
+  login after a reboot.
 - Per-trigger **misfire policy** for runs missed while off: `skip | run_once | catch_up`.
 - Single-instance lock so it never runs twice.
 
-**Linux server (no root, no crontab, no linger)**
+**Linux server** (works even without root, crontab or systemd user lingering)
 
 - A server-side `taskloom scheduler` started detached (`setsid nohup …`), writing a PID file.
 - The Windows scheduler acts as its **keeper**: on startup and every N minutes it
@@ -240,6 +272,17 @@ default; if neither exists, it fails immediately instead of waiting forever.
 
 PySide6 (Qt) application:
 
+- **Flows panel** (left, above the palette): every flow you have open or scheduled,
+  each with its status:
+  - spinner — running;
+  - green dot — last run succeeded;
+  - red ✕ — last run failed;
+  - clock — scheduled to run again (tooltip shows the next run time), shown next to
+    the last-run status.
+  Right-click: run now, open, open last run, enable/disable schedule. Runs started
+  by the scheduler appear here too (shared run history).
+- **Tabs**: several flows open at once, each in its own tab with its own canvas,
+  live status and logs; switching tabs never interrupts a run.
 - **Left**: block palette by category, searchable.
 - **Center**: canvas — drag, connect, pan/zoom, multi-select, copy/paste, undo/redo.
 - **Right**: properties of the selected block (generated from its config).
@@ -249,7 +292,7 @@ PySide6 (Qt) application:
 - Click an edge or output to **preview data** (schema, row count, first rows).
 - **Run history** (SQLite): open any past run and inspect every block as it was.
 - Connection manager and settings dialogs.
-- Desktop notifications through the Qt tray icon (standard Windows 11 notifications,
+- Desktop notifications through the Qt tray icon (standard Windows notifications,
   no admin); clicking one opens that run.
 
 ---
@@ -271,7 +314,7 @@ PySide6 (Qt) application:
 | Category | Blocks | Milestone |
 |---|---|---|
 | Triggers | Manual, Schedule | M1 / M3 |
-| Logic | Python Code, If, Wait, For Each (sub-flow), Ask User | M1 / M3 |
+| Logic | Python Code, Expression, If, Wait, For Each (sub-flow), Ask User | M1 / M3 |
 | Data | DuckDB SQL, Polars Transform, Read File, Write File (CSV/Excel/Parquet) | M1 |
 | Database | Run Query (JDBC), Execute Statement (JDBC) | M1 |
 | Reports | Table → HTML, HTML Template, Chart, To Excel | M4 |
@@ -312,12 +355,12 @@ taskloom editor
   than one-file), each also shipped zipped.
 - Artifacts:
   - `taskloom` for Windows (editor + runner + scheduler);
-  - `taskloom-runner` for Linux, built on a RHEL 8–compatible base (glibc 2.28),
+  - `taskloom-runner` for Linux, built on an Enterprise Linux 8–compatible base (glibc 2.28),
     bundling its own Python — no system Python needed.
 - Windows builds are produced on Windows (GitHub Actions `windows-latest`), Linux
   builds in an Alma/Rocky 8 container.
-- Installing from an internal package mirror is a user-level pip config; nothing
-  mirror-specific lives in the repo.
+- Installing from a private package index is a user-level pip config; nothing
+  index-specific lives in the repo.
 - Sharing with teammates: either the full app, or the runner + a flow file
   (double-click or scheduled).
 - **"Deploy runner to server"** ships as an example flow built with Taskloom's own
@@ -333,16 +376,19 @@ Each milestone ends with tests passing and a demo on the real path.
 **M1 — Engine and runner (headless)**
 Flow model + YAML loader/validator, block registry and plugin discovery, engine
 (topological run, error ports, skips, retry policies, timeouts, cancellation),
+typed parameters with expressions and overrides,
 Table on Parquet, per-block structured logs, run history in SQLite, CLI
 `run`/`validate`. Blocks: Python Code, If, Wait, DuckDB SQL, Polars Transform,
 Read/Write File, JDBC Run Query.
-*Accept*: example flows run end to end; a flaky block succeeds after retries with
+*Accept*: example flows run end to end; a date parameter computed as "yesterday" is bound
+to SQL as a date and as a `YYYYMMDD` integer, and can be overridden from the CLI; a flaky block succeeds after retries with
 correct backoff timings; a multi-million-row result streams to Parquet without
 loading in memory; a user block in the user folder is discovered and can override
 a built-in.
 
 **M2 — Editor**
-Canvas, palette, properties panel, save/load, run in subprocess with live status
+Flows panel with status icons, tabs for several open flows, canvas, palette,
+properties panel, Parameters tab, save/load, run in subprocess with live status
 and per-block logs, data preview, run history browser, connections and settings
 dialogs, Ask User.
 *Accept*: build, save, reopen and run a flow entirely from the UI; kill a running
@@ -362,7 +408,7 @@ policies.
 correctly in desktop Outlook.
 
 **M5 — Packaging**
-PyInstaller builds (Windows, RHEL 8–compatible Linux), zips, the deploy-to-server
+PyInstaller builds (Windows, Enterprise Linux 8–compatible), zips, the deploy-to-server
 example flow, user documentation.
 *Accept*: fresh Windows machine (no Python) runs the editor; fresh Linux user
 account runs the runner; deploy flow installs and re-run asks before overwriting.
