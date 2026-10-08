@@ -51,10 +51,14 @@ workstation or on a Linux server, without admin/root rights.
 - A flow is a directed acyclic graph. The engine runs blocks in topological order
   (sequentially in v1; parallel branches can be added later without format changes).
 - **Many flows run at the same time.** Each run is its own process, so the editor,
-  the scheduler and the CLI can run any number of flows in parallel. Settings cap the
-  total concurrent runs, and each flow has an **overlap policy** for when it is
-  triggered while a previous run of itself is still going: `skip | queue | allow`
-  (default `skip`).
+  the scheduler and the CLI can run any number of flows in parallel. An optional
+  setting caps the total concurrent runs (**unlimited by default**).
+- **Overlap** — a flow started while a previous run of itself is still going:
+  - **manual run from the editor**: a dialog says a previous run is still going and
+    offers **Skip**, **Queue** or **Run alongside**, with "remember for this flow";
+  - **scheduled or headless run** (nobody to click): uses the flow's
+    **overlap policy** `skip | queue | allow` (default `skip`) and logs it; with
+    `skip`, a notification tells you a run was skipped.
 - A block runs when all of its **connected** inputs have values.
 - Every block has an implicit **`error`** output. On failure:
   - if `error` is connected, the error info (message, traceback, block id) flows
