@@ -1,6 +1,8 @@
 """The editor, driven through its widgets, with real runner processes."""
 
 import os
+import signal
+import sys
 import textwrap
 
 import pytest
@@ -267,3 +269,21 @@ def test_settings_dialog_keeps_settings_it_does_not_show(win):
     settings = win.home.settings()
     assert settings["keep_runs"] == 50 and settings["calendar"] == "US"
     assert settings["keeper"] == [{"connection": "appserver", "command": "~/taskloom/taskloom", "home": "~/.taskloom"}]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")
+def test_scheduler_button_starts_and_stops_the_scheduler(win, qtbot, monkeypatch):
+    assert win.scheduler_action.text() == "Scheduler off"
+    win.scheduler_action.trigger()
+    try:
+        qtbot.waitUntil(win.scheduler_running, timeout=30_000)
+        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler on", timeout=10_000)
+
+        monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+        win.scheduler_action.trigger()
+
+        qtbot.waitUntil(lambda: not win.scheduler_running(), timeout=15_000)
+        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler off", timeout=10_000)
+    finally:
+        if win.scheduler_running():
+            os.kill(int((win.home.root / "scheduler.pid").read_text()), signal.SIGKILL)

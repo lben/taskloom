@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import yaml
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
@@ -307,6 +309,14 @@ class SettingsDialog(QDialog):
         form.addRow("Keep files of last runs", self.keep_runs)
         form.addRow("Scheduled runs at once", self.max_runs)
         form.addRow("Java folder", java_row)
+        self.at_login = QCheckBox("Start the scheduler when I log in")
+        if sys.platform == "win32":
+            from ..scheduler import startup_file
+            self.at_login.setChecked(startup_file().exists())
+        else:
+            self.at_login.setEnabled(False)
+            self.at_login.setToolTip("Windows only; on servers the keeper starts the scheduler")
+        form.addRow("Scheduler", self.at_login)
         form.addRow(QLabel("Servers whose scheduler this computer keeps running (checked every 5 minutes):"))
         self.keeper = QTableWidget(0, 3)
         self.keeper.setHorizontalHeaderLabels(["SSH connection", "Taskloom command on the server", "Taskloom folder there"])
@@ -352,4 +362,7 @@ class SettingsDialog(QDialog):
         data = {k: v for k, v in data.items() if v != SETTINGS_DEFAULTS[k]}
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "settings.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        if self.at_login.isEnabled():
+            from ..scheduler import set_start_at_login
+            set_start_at_login(self.home, self.at_login.isChecked())
         self.accept()

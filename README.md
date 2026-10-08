@@ -78,10 +78,11 @@ overlap: skip        # if the previous run is still going: skip | queue | allow
 ```
 
 Turn on "Run on schedule" in the editor's Flow tab (or list the flow in
-`scheduled.yaml`), then start the scheduler: **Tools → Start scheduler**, or
-`taskloom scheduler`. It shows a tray icon and notifies you about failed or skipped
-runs. On Windows, **Tools → Start scheduler when I log in** (or
-`taskloom scheduler --at-login on`) adds it to your Startup folder; no admin needed.
+`scheduled.yaml`), then start the scheduler with the **Scheduler** button at the top
+right of the editor (it also shows whether it is on), or `taskloom scheduler`. It shows
+a tray icon and notifies you about failed or skipped runs. On Windows, **Tools →
+Settings → Start the scheduler when I log in** (or `taskloom scheduler --at-login on`)
+adds it to your Startup folder; no admin needed.
 
 Runs missed while the computer was off follow `misfire`: `skip`, `run_once` (the
 latest missed one) or `catch_up` (each of them), with parameters computed for the

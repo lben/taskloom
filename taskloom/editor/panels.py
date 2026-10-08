@@ -10,7 +10,7 @@ import polars as pl
 import yaml
 from PySide6.QtCore import QAbstractTableModel, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFontDatabase, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QTableView,
                                QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem,
@@ -69,6 +69,29 @@ def status_icon(status: str | None, frame: int = 0, size: int = 14, clock: bool 
         p.drawEllipse(QPointF(x, c), c - 1.5, c - 1.5)
         p.drawLine(QPointF(x, c), QPointF(x, 3.5))
         p.drawLine(QPointF(x, c), QPointF(x + 2.5, c + 1.5))
+    p.end()
+    return QIcon(pix)
+
+
+def scheduler_icon(running: bool, size: int = 20) -> QIcon:
+    """A play (or stop) symbol with a small clock: the scheduler button."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    color = QColor(STATUS_COLORS["success"] if running else "#5f6d7c")
+    p.setPen(Qt.NoPen)
+    p.setBrush(color)
+    if running:
+        p.drawRoundedRect(QRectF(2, 2, 10, 10), 2, 2)  # stop
+    else:
+        p.drawPolygon([QPointF(3, 1.5), QPointF(13, 7), QPointF(3, 12.5)])  # play
+    c = QPointF(size - 6, size - 6)
+    p.setBrush(QApplication.palette().base())
+    p.setPen(QPen(color, 1.6))
+    p.drawEllipse(c, 5, 5)
+    p.drawLine(c, c + QPointF(0, -3))
+    p.drawLine(c, c + QPointF(2.2, 1.2))
     p.end()
     return QIcon(pix)
 

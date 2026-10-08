@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import yaml
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QLabel, QMainWindow, QMessageBox, QSplitter,
+from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from .. import params as P
@@ -21,12 +21,13 @@ from ..flow import FlowError, load_flow, run_clock, validate
 from ..history import History
 from ..launch import runner_command
 from ..schedule import Trigger
+from ..scheduler import acquire_lock
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowsPanel, HistoryPanel, LogPanel, Palette, ParametersPanel,
-                     PreviewPanel, PropertiesPanel)
+                     PreviewPanel, PropertiesPanel, scheduler_icon)
 from .runs import RunProcess
 
 CLIPBOARD_KEY = "taskloom_blocks"
@@ -121,8 +122,6 @@ class MainWindow(QMainWindow):
         self.flows_panel.last_run_requested.connect(self._open_last_run)
         self.flows_panel.schedule_toggled.connect(self.set_scheduled)
         self.flow_settings.schedule_toggled.connect(lambda on: self.current and self.set_scheduled(self.current, on))
-        self.scheduler_status = QLabel()
-        self.statusBar().addPermanentWidget(self.scheduler_status)
         self.history_panel.open_run.connect(self.show_history_run)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
         self._poll = QTimer(self, interval=2000)
@@ -183,20 +182,20 @@ class MainWindow(QMainWindow):
         m = bar.addMenu("&Tools")
         act(m, "Connections…", lambda: ConnectionsDialog(self.home, self).exec())
         act(m, "Settings…", lambda: SettingsDialog(self.home, self).exec())
-        m.addSeparator()
-        act(m, "Start scheduler", self.start_scheduler)
-        self.at_login_action = act(m, "Start scheduler when I log in", self._toggle_at_login)
-        self.at_login_action.setCheckable(True)
-        self.at_login_action.setEnabled(sys.platform == "win32")
-        if sys.platform == "win32":
-            from ..scheduler import startup_file
-            self.at_login_action.setChecked(startup_file().exists())
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.addAction(self.validate_action)
         toolbar.addAction(self.stop_action)
         toolbar.addAction(self.run_action)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        self.scheduler_action = QAction(self)
+        self.scheduler_action.triggered.connect(self.toggle_scheduler)
+        toolbar.addAction(self.scheduler_action)
+        self._show_scheduler_state(False)
 
     # --- tabs -----------------------------------------------------------------------
 
@@ -506,7 +505,7 @@ class MainWindow(QMainWindow):
             self._refresh_schedule(tab)
             if not tab.running:
                 self._load_last_run(tab)
-        self.scheduler_status.setText("Scheduler: running" if self.scheduler_running() else "Scheduler: not running")
+        self._show_scheduler_state(self.scheduler_running())
 
     # --- scheduling -----------------------------------------------------------------
 
@@ -538,14 +537,41 @@ class MainWindow(QMainWindow):
         if tab is self.current:
             self.flow_settings.refresh()
         if enabled and not self.scheduler_running():
-            self.statusBar().showMessage("Scheduled. Start the scheduler (Tools menu) so it runs.", 8000)
+            self.statusBar().showMessage("Scheduled. Start the scheduler (button at the top right) so it runs.", 8000)
 
     def scheduler_running(self) -> bool:
-        heartbeat = self.home.root / "scheduler.heartbeat"
+        """The scheduler holds its lock file while it runs."""
         try:
-            return time.time() - int(heartbeat.read_text()) < 60
-        except (OSError, ValueError):
+            acquire_lock(self.home).close()  # we got it, so nobody holds it
             return False
+        except RuntimeError:
+            return True
+
+    def _show_scheduler_state(self, running: bool):
+        self.scheduler_action.setIcon(scheduler_icon(running))
+        self.scheduler_action.setText("Scheduler on" if running else "Scheduler off")
+        self.scheduler_action.setToolTip(
+            "The scheduler is running scheduled flows. Click to stop it." if running else
+            "Scheduled flows only run while the scheduler is on. Click to start it.")
+
+    def toggle_scheduler(self):
+        if not self.scheduler_running():
+            self.start_scheduler()
+            return
+        answer = QMessageBox.question(self, "Stop the scheduler?",
+                                      "Scheduled flows will not run until the scheduler is started again. "
+                                      "Runs already going continue.")
+        if answer == QMessageBox.Yes:
+            self.stop_scheduler()
+
+    def stop_scheduler(self):
+        try:
+            os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Cannot stop the scheduler", str(e))
+            return
+        QTimer.singleShot(1500, lambda: self._show_scheduler_state(self.scheduler_running()))
+        self.statusBar().showMessage("Scheduler stopped", 5000)
 
     def start_scheduler(self):
         if self.scheduler_running():
@@ -558,11 +584,7 @@ class MainWindow(QMainWindow):
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self.statusBar().showMessage("Scheduler started", 5000)
-
-    def _toggle_at_login(self, checked: bool):
-        from ..scheduler import set_start_at_login
-        path = set_start_at_login(self.home, checked)
-        self.statusBar().showMessage(f"{'Added' if checked else 'Removed'} {path}", 8000)
+        QTimer.singleShot(2000, lambda: self._show_scheduler_state(self.scheduler_running()))
 
     def _refresh_history(self, tab: FlowTab):
         if tab.doc.path is None or not self.home.history_db.exists():
