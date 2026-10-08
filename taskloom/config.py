@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-SETTINGS_DEFAULTS = {"calendar": None, "keep_runs": 20, "java_home": None}
+SETTINGS_DEFAULTS = {"calendar": None, "keep_runs": 20, "java_home": None, "max_concurrent_runs": None, "keeper": []}
 SECRET_PREFIX = "secret:"
 KEYRING_SERVICE = "taskloom"
 
@@ -50,6 +50,16 @@ class Home:
     @property
     def history_db(self) -> Path:
         return self.root / "history.db"
+
+    def scheduled_flows(self) -> list[Path]:
+        """Flows the scheduler runs, listed in scheduled.yaml."""
+        data = _load_yaml(self.root / "scheduled.yaml")
+        return [Path(p) for p in data.get("flows") or []]
+
+    def set_scheduled(self, flow_path: Path, enabled: bool):
+        flows = [p for p in self.scheduled_flows() if p != flow_path] + ([flow_path] if enabled else [])
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / "scheduled.yaml").write_text(yaml.safe_dump({"flows": [str(p) for p in flows]}), encoding="utf-8")
 
     def settings(self) -> dict:
         data = _load_yaml(self.root / "settings.yaml")

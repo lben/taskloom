@@ -61,3 +61,18 @@ def events(stdout: str) -> list[dict]:
 @pytest.fixture
 def env(tmp_path) -> Env:
     return Env(tmp_path)
+
+
+@pytest.fixture
+def server(env):
+    """A local SSH server registered as the connection `appserver`; its home is env.root / "server"."""
+    from sshserver import PASSWORD, SSHTestServer
+
+    home = env.root / "server"
+    home.mkdir()
+    srv = SSHTestServer(home).start()
+    env.write("home/connections.yaml", srv.connection())
+    env.write("home/secrets.yaml", f"appserver_password: {PASSWORD}\n").chmod(0o600)
+    srv.home_path = home
+    yield srv
+    srv.stop()

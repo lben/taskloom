@@ -110,11 +110,13 @@ class AskDialog(QDialog):
 class ConnectionsDialog(QDialog):
     """Edit connections.yaml. Passwords go to the secret store, never into the file."""
 
+    KINDS = ("jdbc", "ssh")
+
     def __init__(self, home, parent=None):
         super().__init__(parent)
         self.home = home
         self.setWindowTitle("Connections")
-        self.resize(760, 460)
+        self.resize(780, 480)
         self.conns = home.connections()
         layout = QHBoxLayout(self)
         left = QVBoxLayout()
@@ -128,29 +130,38 @@ class ConnectionsDialog(QDialog):
         layout.addLayout(left, 1)
 
         right = QVBoxLayout()
-        form = QFormLayout()
-        self.kind = QLabel("jdbc")
-        self.driver = QLineEdit(placeholderText="e.g. com.example.jdbc.Driver")
-        self.url = QLineEdit(placeholderText="jdbc:…")
-        self.jars = QLineEdit(placeholderText="driver .jar file(s), separated by ;")
+        self.form = QFormLayout()
+        self.kind = QComboBox()
+        self.kind.addItems(self.KINDS)
+        self.edits = {key: QLineEdit() for key in ("driver", "url", "jars", "host", "port", "username", "key_file")}
+        self.edits["driver"].setPlaceholderText("e.g. com.example.jdbc.Driver")
+        self.edits["url"].setPlaceholderText("jdbc:…")
+        self.edits["jars"].setPlaceholderText("driver .jar file(s), separated by ;")
+        self.edits["port"].setPlaceholderText("22")
+        self.edits["key_file"].setPlaceholderText("optional, e.g. ~/.ssh/id_ed25519 (or set a password)")
         browse = QToolButton(text="…")
-        jar_row = QHBoxLayout()
-        jar_row.addWidget(self.jars)
-        jar_row.addWidget(browse)
-        form.addRow("Kind", self.kind)
-        form.addRow("Driver class", self.driver)
-        form.addRow("URL", self.url)
-        form.addRow("Jar files", jar_row)
-        right.addLayout(form)
-        right.addWidget(QLabel("Driver properties (user, timeouts, …)"))
+        jar_row = QWidget()
+        jar_layout = QHBoxLayout(jar_row)
+        jar_layout.setContentsMargins(0, 0, 0, 0)
+        jar_layout.addWidget(self.edits["jars"])
+        jar_layout.addWidget(browse)
+        self.form.addRow("Kind", self.kind)
+        labels = {"driver": "Driver class", "url": "URL", "host": "Host", "port": "Port", "username": "User name",
+                  "key_file": "Key file"}
+        for key, edit in self.edits.items():
+            self.form.addRow("Jar files" if key == "jars" else labels[key], jar_row if key == "jars" else edit)
+        self.props_label = QLabel("Driver properties (user, timeouts, …)")
+        self.form.addRow(self.props_label)
+        right.addLayout(self.form)
         self.props = QTableWidget(0, 2)
         self.props.setHorizontalHeaderLabels(["Property", "Value"])
         self.props.horizontalHeader().setStretchLastSection(True)
         self.props.verticalHeader().hide()
         right.addWidget(self.props)
         prop_row = QHBoxLayout()
-        add_prop, remove_prop, password = QPushButton("Add property"), QPushButton("Remove property"), QPushButton("Set password…")
-        for b in (add_prop, remove_prop, password):
+        self.add_prop, self.remove_prop = QPushButton("Add property"), QPushButton("Remove property")
+        password = QPushButton("Set password…")
+        for b in (self.add_prop, self.remove_prop, password):
             prop_row.addWidget(b)
         right.addLayout(prop_row)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -160,16 +171,28 @@ class ConnectionsDialog(QDialog):
         self.current = None
         self.names.addItems(list(self.conns))
         self.names.currentTextChanged.connect(self._select)
+        self.kind.currentTextChanged.connect(self._show_kind)
         add.clicked.connect(self._add)
         remove.clicked.connect(self._remove)
         browse.clicked.connect(self._browse)
-        add_prop.clicked.connect(lambda: self._add_prop("", ""))
-        remove_prop.clicked.connect(lambda: self.props.removeRow(self.props.currentRow()))
+        self.add_prop.clicked.connect(lambda: self._add_prop("", ""))
+        self.remove_prop.clicked.connect(lambda: self.props.removeRow(self.props.currentRow()))
         password.clicked.connect(self._set_password)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
+        self._show_kind(self.kind.currentText())
         if self.conns:
             self.names.setCurrentRow(0)
+
+    FIELDS = {"jdbc": ("driver", "url", "jars"), "ssh": ("host", "port", "username", "key_file")}
+
+    def _show_kind(self, kind):
+        for key, edit in self.edits.items():
+            widget = edit.parentWidget() if key == "jars" else edit
+            self.form.setRowVisible(widget, key in self.FIELDS[kind])
+        for w in (self.props, self.add_prop, self.remove_prop):
+            w.setVisible(kind == "jdbc")
+        self.form.setRowVisible(self.props_label, kind == "jdbc")
 
     def _add_prop(self, key, value):
         row = self.props.rowCount()
@@ -180,25 +203,35 @@ class ConnectionsDialog(QDialog):
     def _store_current(self):
         if self.current is None or self.current not in self.conns:
             return
-        conn = self.conns[self.current]
-        conn.update(driver=self.driver.text().strip(), url=self.url.text().strip(),
-                    jars=[j.strip() for j in self.jars.text().split(";") if j.strip()])
-        props = {}
-        for r in range(self.props.rowCount()):
-            key = self.props.item(r, 0) and self.props.item(r, 0).text().strip()
-            if key:
-                props[key] = self.props.item(r, 1).text() if self.props.item(r, 1) else ""
-        conn["properties"] = props
+        kind = self.kind.currentText()
+        old = self.conns[self.current]
+        conn = {"kind": kind}
+        if kind == "jdbc":
+            conn.update(driver=self.edits["driver"].text().strip(), url=self.edits["url"].text().strip(),
+                        jars=[j.strip() for j in self.edits["jars"].text().split(";") if j.strip()])
+            props = {}
+            for r in range(self.props.rowCount()):
+                key = self.props.item(r, 0) and self.props.item(r, 0).text().strip()
+                if key:
+                    props[key] = self.props.item(r, 1).text() if self.props.item(r, 1) else ""
+            conn["properties"] = props
+        else:
+            for key in self.FIELDS["ssh"]:
+                text = self.edits[key].text().strip()
+                if text:
+                    conn[key] = int(text) if key == "port" and text.isdigit() else text
+            if old.get("kind") == "ssh" and old.get("password"):
+                conn["password"] = old["password"]
+        self.conns[self.current] = conn
 
     def _select(self, name):
         self._store_current()
         self.current = name or None
         conn = self.conns.get(name, {})
-        self.kind.setText(conn.get("kind", "jdbc"))
-        self.driver.setText(conn.get("driver", ""))
-        self.url.setText(conn.get("url", ""))
+        self.kind.setCurrentText(conn.get("kind", "jdbc"))
         jars = conn.get("jars") or []
-        self.jars.setText("; ".join([jars] if isinstance(jars, str) else jars))
+        for key, edit in self.edits.items():
+            edit.setText("; ".join([jars] if isinstance(jars, str) else jars) if key == "jars" else str(conn.get(key, "")))
         self.props.setRowCount(0)
         for key, value in (conn.get("properties") or {}).items():
             self._add_prop(key, value)
@@ -221,7 +254,7 @@ class ConnectionsDialog(QDialog):
     def _browse(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "JDBC driver jars", "", "Jar files (*.jar)")
         if paths:
-            self.jars.setText("; ".join(paths))
+            self.edits["jars"].setText("; ".join(paths))
 
     def _set_password(self):
         if self.current is None:
@@ -231,12 +264,16 @@ class ConnectionsDialog(QDialog):
             return
         secret = f"{self.current}_password"
         where = self.home.set_secret(secret, value)
-        for r in range(self.props.rowCount()):
-            if self.props.item(r, 0).text().strip() == "password":
-                self.props.item(r, 1).setText(f"secret:{secret}")
-                break
+        self._store_current()
+        if self.kind.currentText() == "ssh":
+            self.conns[self.current]["password"] = f"secret:{secret}"
         else:
-            self._add_prop("password", f"secret:{secret}")
+            for r in range(self.props.rowCount()):
+                if self.props.item(r, 0).text().strip() == "password":
+                    self.props.item(r, 1).setText(f"secret:{secret}")
+                    break
+            else:
+                self._add_prop("password", f"secret:{secret}")
         QMessageBox.information(self, "Password saved", f"Saved in {where}.")
 
     def _save(self):
@@ -251,10 +288,13 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.home = home
         self.setWindowTitle("Settings")
+        self.resize(640, 420)
         self.settings = home.settings()
         form = QFormLayout(self)
         self.calendar = QLineEdit(self.settings["calendar"] or "", placeholderText="weekends only, e.g. US or a calendars/<name>.yaml")
         self.keep_runs = QSpinBox(minimum=1, maximum=100000, value=int(self.settings["keep_runs"]))
+        self.max_runs = QSpinBox(minimum=0, maximum=1000, value=int(self.settings["max_concurrent_runs"] or 0),
+                                 specialValueText="unlimited")
         self.java_home = QLineEdit(self.settings["java_home"] or "", placeholderText="uses JAVA_HOME if empty")
         browse = QToolButton(text="…")
         browse.clicked.connect(self._browse)
@@ -265,12 +305,35 @@ class SettingsDialog(QDialog):
         row.addWidget(browse)
         form.addRow("Default calendar", self.calendar)
         form.addRow("Keep files of last runs", self.keep_runs)
+        form.addRow("Scheduled runs at once", self.max_runs)
         form.addRow("Java folder", java_row)
+        form.addRow(QLabel("Servers whose scheduler this computer keeps running (checked every 5 minutes):"))
+        self.keeper = QTableWidget(0, 3)
+        self.keeper.setHorizontalHeaderLabels(["SSH connection", "Taskloom command on the server", "Taskloom folder there"])
+        self.keeper.horizontalHeader().setStretchLastSection(True)
+        self.keeper.verticalHeader().hide()
+        for entry in self.settings["keeper"] or []:
+            self._add_keeper(entry.get("connection", ""), entry.get("command", ""), entry.get("home", "~/.taskloom"))
+        form.addRow(self.keeper)
+        keeper_buttons = QHBoxLayout()
+        add, remove = QPushButton("Add server"), QPushButton("Remove server")
+        add.clicked.connect(lambda: self._add_keeper("", "~/taskloom/taskloom", "~/.taskloom"))
+        remove.clicked.connect(lambda: self.keeper.removeRow(self.keeper.currentRow()))
+        keeper_buttons.addWidget(add)
+        keeper_buttons.addWidget(remove)
+        keeper_buttons.addStretch()
+        form.addRow(keeper_buttons)
         form.addRow(QLabel(f"Settings file: {home.root / 'settings.yaml'}"))
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+
+    def _add_keeper(self, connection, command, folder):
+        r = self.keeper.rowCount()
+        self.keeper.insertRow(r)
+        for col, text in enumerate((connection, command, folder)):
+            self.keeper.setItem(r, col, QTableWidgetItem(text))
 
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, "Java folder (contains bin/java)", self.java_home.text())
@@ -278,8 +341,14 @@ class SettingsDialog(QDialog):
             self.java_home.setText(path)
 
     def _save(self):
-        data = {"calendar": self.calendar.text().strip() or None, "keep_runs": self.keep_runs.value(),
-                "java_home": self.java_home.text().strip() or None}
+        keeper = []
+        for r in range(self.keeper.rowCount()):
+            values = [(self.keeper.item(r, c).text().strip() if self.keeper.item(r, c) else "") for c in range(3)]
+            if values[0] and values[1]:
+                keeper.append({"connection": values[0], "command": values[1], "home": values[2] or "~/.taskloom"})
+        data = {**self.settings, "calendar": self.calendar.text().strip() or None, "keep_runs": self.keep_runs.value(),
+                "max_concurrent_runs": self.max_runs.value() or None,
+                "java_home": self.java_home.text().strip() or None, "keeper": keeper}
         data = {k: v for k, v in data.items() if v != SETTINGS_DEFAULTS[k]}
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "settings.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")

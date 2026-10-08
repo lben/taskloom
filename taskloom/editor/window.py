@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSplitter,
+from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QLabel, QMainWindow, QMessageBox, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from .. import params as P
 from ..config import Home
 from ..flow import FlowError, load_flow, run_clock, validate
 from ..history import History
+from ..launch import runner_command
+from ..schedule import Trigger
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, RunDialog, SettingsDialog
@@ -50,6 +55,8 @@ class FlowTab(QWidget):
         self.block_info: dict[str, dict] = {}  # block -> status, tables, … of the run shown
         self.shown_run: RunProcess | None = None
         self.last: dict | None = None  # last finished run of this flow, from the history
+        self.scheduled = False  # listed for the scheduler
+        self.next_run: dt.datetime | None = None  # when the scheduler runs it next
 
     @property
     def running(self) -> bool:
@@ -112,6 +119,10 @@ class MainWindow(QMainWindow):
         self.flows_panel.activated.connect(lambda tab: self.tabs.setCurrentWidget(tab))
         self.flows_panel.run_requested.connect(self.run_flow)
         self.flows_panel.last_run_requested.connect(self._open_last_run)
+        self.flows_panel.schedule_toggled.connect(self.set_scheduled)
+        self.flow_settings.schedule_toggled.connect(lambda on: self.current and self.set_scheduled(self.current, on))
+        self.scheduler_status = QLabel()
+        self.statusBar().addPermanentWidget(self.scheduler_status)
         self.history_panel.open_run.connect(self.show_history_run)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
         self._poll = QTimer(self, interval=2000)
@@ -172,6 +183,14 @@ class MainWindow(QMainWindow):
         m = bar.addMenu("&Tools")
         act(m, "Connections…", lambda: ConnectionsDialog(self.home, self).exec())
         act(m, "Settings…", lambda: SettingsDialog(self.home, self).exec())
+        m.addSeparator()
+        act(m, "Start scheduler", self.start_scheduler)
+        self.at_login_action = act(m, "Start scheduler when I log in", self._toggle_at_login)
+        self.at_login_action.setCheckable(True)
+        self.at_login_action.setEnabled(sys.platform == "win32")
+        if sys.platform == "win32":
+            from ..scheduler import startup_file
+            self.at_login_action.setChecked(startup_file().exists())
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
@@ -193,6 +212,7 @@ class MainWindow(QMainWindow):
         tab.scene.block_selected.connect(lambda block_id, t=tab: self._on_block_selected(t, block_id))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
         self.tabs.addTab(tab, doc.title)
+        self._refresh_schedule(tab)
         self.flows_panel.add(tab)
         self._load_last_run(tab)
         self.tabs.setCurrentWidget(tab)
@@ -261,6 +281,7 @@ class MainWindow(QMainWindow):
 
     def _on_doc_changed(self, tab: FlowTab):
         self.tabs.setTabText(self.tabs.indexOf(tab), tab.doc.title + (" *" if tab.doc.dirty else ""))
+        self._refresh_schedule(tab)
         self.flows_panel.update_tab(tab)
         if tab is self.current:
             self.properties.on_doc_changed()
@@ -482,8 +503,66 @@ class MainWindow(QMainWindow):
 
     def _refresh_statuses(self):
         for tab in self.tabs_list():
+            self._refresh_schedule(tab)
             if not tab.running:
                 self._load_last_run(tab)
+        self.scheduler_status.setText("Scheduler: running" if self.scheduler_running() else "Scheduler: not running")
+
+    # --- scheduling -----------------------------------------------------------------
+
+    def _refresh_schedule(self, tab: FlowTab):
+        try:
+            tab.scheduled = tab.doc.path is not None and tab.doc.path in self.home.scheduled_flows()
+        except ValueError:
+            tab.scheduled = False
+        times = []
+        if tab.scheduled:
+            now = dt.datetime.now()
+            for data in tab.doc.data.get("triggers") or []:
+                try:
+                    times.append(Trigger(data).next_after(now))
+                except ValueError:
+                    pass
+        tab.next_run = min((t for t in times if t), default=None)
+        self.flows_panel.update_tab(tab)
+
+    def set_scheduled(self, tab: FlowTab, enabled: bool):
+        if enabled and (tab.doc.dirty or tab.doc.path is None) and not self.save(tab):
+            return
+        if enabled and not tab.doc.data.get("triggers"):
+            QMessageBox.information(self, "No schedule yet", "Add a schedule in the Flow tab first.")
+            self.flow_settings.refresh()
+            return
+        self.home.set_scheduled(tab.doc.path, enabled)
+        self._refresh_schedule(tab)
+        if tab is self.current:
+            self.flow_settings.refresh()
+        if enabled and not self.scheduler_running():
+            self.statusBar().showMessage("Scheduled. Start the scheduler (Tools menu) so it runs.", 8000)
+
+    def scheduler_running(self) -> bool:
+        heartbeat = self.home.root / "scheduler.heartbeat"
+        try:
+            return time.time() - int(heartbeat.read_text()) < 60
+        except (OSError, ValueError):
+            return False
+
+    def start_scheduler(self):
+        if self.scheduler_running():
+            self.statusBar().showMessage("The scheduler is already running", 5000)
+            return
+        subprocess.Popen(
+            runner_command() + ["scheduler"], env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=sys.platform != "win32",
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.statusBar().showMessage("Scheduler started", 5000)
+
+    def _toggle_at_login(self, checked: bool):
+        from ..scheduler import set_start_at_login
+        path = set_start_at_login(self.home, checked)
+        self.statusBar().showMessage(f"{'Added' if checked else 'Removed'} {path}", 8000)
 
     def _refresh_history(self, tab: FlowTab):
         if tab.doc.path is None or not self.home.history_db.exists():

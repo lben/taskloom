@@ -345,3 +345,65 @@ def test_ask_user_without_anyone_to_ask_uses_the_default_or_fails_at_once(env):
     assert time.monotonic() - started < 15
     run_id, _ = env.last_run()
     assert "set a default or a secret" in env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]
+
+
+def test_for_each_runs_a_flow_once_per_item(env):
+    env.write("per_region.yaml", """
+        params:
+          region: {type: text, value: ""}
+        blocks:
+          save:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open(f'done_{params[\\"region\\"]}.txt', 'w').write('ok')"}
+    """)
+    flow = env.write("flow.yaml", """
+        blocks:
+          regions:
+            type: logic.python
+            config: {inputs: [], code: "output = ['EU', 'US']"}
+          each:
+            type: logic.for_each
+            config: {flow: per_region.yaml, param: region}
+        edges:
+          - regions.output -> each.items
+    """)
+
+    result = env.taskloom("run", flow)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "done_EU.txt").exists() and (env.root / "done_US.txt").exists()
+    assert [s for (s,) in env.query("SELECT status FROM runs ORDER BY id")] == ["success"] * 3
+
+
+def test_copy_or_move_onto_itself_is_refused_and_keeps_the_file(env):
+    (env.root / "data").mkdir()
+    (env.root / "data" / "x.csv").write_text("a,b\n1,2\n")
+    for block in ("files.copy", "files.move"):
+        flow = env.write("flow.yaml", f"""
+            blocks:
+              same:
+                type: {block}
+                config: {{source: "data/x.csv", destination: "data/"}}
+        """)
+        assert env.taskloom("run", flow).returncode == 1
+        assert (env.root / "data" / "x.csv").read_text() == "a,b\n1,2\n"
+        run_id, _ = env.last_run()
+        assert "onto itself" in env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]
+
+
+def test_as_of_is_local_time_converted_to_the_flow_time_zone(env):
+    env.env["TZ"] = "America/New_York"
+    flow = env.write("flow.yaml", """
+        timezone: Asia/Tokyo
+        params:
+          day: {type: date, expr: "today()"}
+        blocks:
+          note:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+    """)
+    # 20:00 in New York is 09:00 the next morning in Tokyo.
+    result = env.taskloom("run", flow, "--as-of", "2026-10-08 20:00")
+
+    assert result.returncode == 0, result.stderr
+    assert env.query("SELECT params FROM runs") == [('{"day": "2026-10-09"}',)]

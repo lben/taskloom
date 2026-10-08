@@ -6,7 +6,8 @@ import polars as pl
 
 from ..block import Block, fields, ports
 from ..expr import evaluate
-from ..engine import SecretStr
+from ..engine import SecretStr, run_flow
+from ..flow import load_flow
 from ..table import Table
 
 
@@ -94,3 +95,37 @@ class AskUser(Block):
         elif c.kind == "password" or c.secret:
             answer = SecretStr(answer)
         return {"answer": answer}
+
+
+class ForEach(Block):
+    type_id = "logic.for_each"
+    title = "For Each"
+    category = "Logic"
+    inputs = {"items": ports.Any()}
+    outputs = {"results": ports.Any()}
+    config = {
+        "flow": fields.Path(help="The flow to run once per item"),
+        "param": fields.Text(help="The parameter of that flow that receives the item"),
+        "stop_on_failure": fields.Bool(default=False),
+    }
+
+    def run(self, ctx, items):
+        if not isinstance(items, (list, tuple)):
+            raise TypeError(f"input 'items' must be a list, got {type(items).__name__}")
+        flow = load_flow(self.config.flow)
+        if self.config.param not in flow.params:
+            raise ValueError(f"{self.config.flow} has no parameter '{self.config.param}'")
+        results = []
+        for item in items:
+            ctx.check_cancelled()
+            result = run_flow(flow, ctx.registry, ctx.home, {self.config.param: item},
+                              cancel=ctx.cancel_event, as_of=ctx.functions["now"]())
+            ctx.log(f"{self.config.param}={item}: run #{result.run_id} {result.status}")
+            results.append({"item": item, "run_id": result.run_id, "status": result.status})
+            if result.status != "success" and self.config.stop_on_failure:
+                break
+        failed = [r for r in results if r["status"] != "success"]
+        if failed:
+            raise RuntimeError(f"{len(failed)} of {len(results)} run(s) did not succeed: "
+                               + ", ".join(f"{r['item']} (run #{r['run_id']})" for r in failed[:10]))
+        return {"results": results}

@@ -6,8 +6,8 @@ restart remote apps, build reports and email them.
 
 Runs on Windows and Linux without admin/root rights.
 
-**Status:** milestones 1–2 — the engine, the command-line runner and the visual
-editor. Scheduling and server blocks come next. See [docs/DESIGN.md](docs/DESIGN.md).
+**Status:** milestones 1–3 — the engine, the command-line runner, the visual editor,
+scheduling and server blocks. Reports and email come next. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Try it
 
@@ -63,7 +63,41 @@ edges:
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
 
 Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
-`data.duckdb_sql`, `data.polars`, `data.read_file`, `data.write_file`, `db.run_query`.
+`logic.for_each`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
+`data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
+`servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
+`servers.health_check`, `servers.remote_extract`.
+
+## Schedules
+
+```yaml
+triggers:
+  - schedule: {cron: "0 7 * * MON-FRI", misfire: run_once}   # 07:00 on weekdays
+  - schedule: {at: "2026-10-08 15:30"}                       # once
+overlap: skip        # if the previous run is still going: skip | queue | allow
+```
+
+Turn on "Run on schedule" in the editor's Flow tab (or list the flow in
+`scheduled.yaml`), then start the scheduler: **Tools → Start scheduler**, or
+`taskloom scheduler`. It shows a tray icon and notifies you about failed or skipped
+runs. On Windows, **Tools → Start scheduler when I log in** (or
+`taskloom scheduler --at-login on`) adds it to your Startup folder; no admin needed.
+
+Runs missed while the computer was off follow `misfire`: `skip`, `run_once` (the
+latest missed one) or `catch_up` (each of them), with parameters computed for the
+time each run was due.
+
+## Servers
+
+Add an SSH connection (Tools → Connections) and use the Servers and Files blocks.
+File locations on a server are written `connection:path`, e.g. `appserver:~/app/`.
+
+An app watchdog is a flow: Health Check (URL and/or PID file) → `unhealthy` →
+Start Remote Process → Health Check, scheduled every few minutes.
+
+On a server without root or crontab, run `taskloom scheduler --headless` there and
+list the server in the `keeper` setting (Tools → Settings) on your PC: your
+scheduler checks it every 5 minutes and starts it again after a server reboot.
 
 ## Your files
 
@@ -72,11 +106,13 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | File | Purpose |
 |---|---|
 | `connections.yaml` | Database connections, e.g. a JDBC driver, URL, jar and properties |
-| `settings.yaml` | `calendar` (default business-day calendar), `keep_runs`, `java_home` |
+| `settings.yaml` | `calendar`, `keep_runs`, `java_home`, `max_concurrent_runs`, `keeper` |
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
 | `editor.ini` | Editor preferences, e.g. remembered choices for overlapping runs |
+| `scheduled.yaml` | Flows the scheduler runs |
+| `known_hosts` | SSH server keys trusted on first connection |
 
 ```yaml
 # connections.yaml

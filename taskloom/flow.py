@@ -15,9 +15,12 @@ from . import params as P
 from .block import IDENTIFIER, fields
 from .calendars import load_calendar
 from .expr import functions
+from .schedule import Trigger
 
 FORMAT_VERSION = 1
-FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone", "triggers", "notify", "blocks", "edges"}
+FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone", "triggers", "overlap", "notify",
+             "blocks", "edges"}
+OVERLAP_POLICIES = ("skip", "queue", "allow")
 BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui"}
 ERROR_PORT = "error"
 _EDGE = re.compile(r"^\s*(\w+)\.(\w+)\s*->\s*(\w+)\.(\w+)\s*$")
@@ -110,7 +113,8 @@ class Flow:
     params: dict
     calendar: str | None
     timezone: str | None
-    triggers: list
+    triggers: list[Trigger]
+    overlap: str
     blocks: dict[str, BlockSpec]
     edges: list[Edge]
 
@@ -159,6 +163,16 @@ def load_flow(path) -> Flow:
         except (ValueError, TypeError) as e:
             errors.append(f"{where}: {e}")
 
+    triggers = []
+    for i, trigger in enumerate(data.get("triggers") or []):
+        try:
+            triggers.append(Trigger(trigger))
+        except ValueError as e:
+            errors.append(f"triggers[{i}]: {e}")
+    overlap = data.get("overlap", "skip")
+    if overlap not in OVERLAP_POLICIES:
+        errors.append(f"overlap must be one of {', '.join(OVERLAP_POLICIES)}")
+
     edges = []
     for text in data.get("edges") or []:
         match = _EDGE.match(str(text))
@@ -172,7 +186,7 @@ def load_flow(path) -> Flow:
     return Flow(
         name=str(data.get("name") or path.stem), path=path, params=flow_params,
         calendar=data.get("calendar"), timezone=data.get("timezone"),
-        triggers=list(data.get("triggers") or []), blocks=blocks, edges=edges,
+        triggers=triggers, overlap=overlap, blocks=blocks, edges=edges,
     )
 
 
@@ -200,10 +214,18 @@ def block_config(cls, spec: BlockSpec) -> dict:
     return result
 
 
-def run_clock(flow: Flow, home) -> tuple[dt.datetime, dict]:
-    """The run's fixed 'now' and the expression functions (calendar applied)."""
+def run_clock(flow: Flow, home, as_of: dt.datetime | None = None) -> tuple[dt.datetime, dict]:
+    """The run's fixed 'now' and the expression functions (calendar applied).
+
+    `as_of` replaces 'now', e.g. the time a missed scheduled run was due. Like
+    schedules, it is in the machine's local time; with a flow time zone it is
+    converted, as the current time is.
+    """
     tz = ZoneInfo(flow.timezone) if flow.timezone else None
-    now = dt.datetime.now(tz).replace(tzinfo=None)
+    if as_of is not None:
+        now = as_of.astimezone(tz).replace(tzinfo=None) if tz else as_of
+    else:
+        now = dt.datetime.now(tz).replace(tzinfo=None)
     calendar = load_calendar(flow.calendar or home.settings()["calendar"], home.calendars_dir)
     return now, functions(now, calendar, lambda name: load_calendar(name, home.calendars_dir))
 

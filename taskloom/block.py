@@ -57,6 +57,12 @@ class fields:
                 raise ValueError(f"expected a number, got {value!r}")
             return float(value)
 
+    class Bool(Field):
+        def coerce(self, value):
+            if not isinstance(value, bool):
+                raise ValueError(f"expected true or false, got {value!r}")
+            return value
+
     class Choice(Field):
         def __init__(self, options, default=None, **kw):
             super().__init__(default=default, **kw)

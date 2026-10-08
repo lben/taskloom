@@ -8,18 +8,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import sys
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from ..config import Home
 from ..history import History
+from ..launch import runner_command
 
 KILL_AFTER_MS = 6000  # after asking a run to stop, kill it if it is still going
-
-
-def runner_command() -> list[str]:
-    return [sys.executable, "-m", "taskloom.cli"]
 
 
 class RunProcess(QObject):

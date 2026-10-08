@@ -229,7 +229,9 @@ blocks on the canvas) and can be used by any block.
   column types are read once per query; requires a Java runtime, found through
   the `java_home` setting or `JAVA_HOME`.
 - `smtp`: host, port, TLS mode, optional login, default sender.
-- `ssh`: host, port, username, password or key → secret reference.
+- `ssh`: host, port, username, password (secret reference) or key file. A server's
+  host key is trusted the first time and saved in `known_hosts` in the Taskloom
+  folder; a changed key is refused (like `ssh` with accept-new).
 - later: `smb` (network shares from Linux, pure Python, no mount).
 
 **Secrets**:
@@ -261,14 +263,21 @@ flows can email you directly.
 - Registered in the user's **Startup folder** (no admin) → it comes back on
   login after a reboot.
 - Per-trigger **misfire policy** for runs missed while off: `skip | run_once | catch_up`.
-- Single-instance lock so it never runs twice.
+  A run counts as missed when it starts more than 2 minutes late. Every scheduled
+  run computes its parameters as of the time it was due (`taskloom run --as-of`), so
+  a caught-up Monday 07:00 run reports on Monday even when it runs on Tuesday.
+- Schedules live in the flow file (`triggers:`, edited in the editor's Flow tab) and
+  use the machine's local time; `scheduled.yaml` in the Taskloom folder lists the
+  flows the scheduler runs (the editor's "Run on schedule" switch).
+- Single-instance lock so it never runs twice; `scheduler.heartbeat` shows it is alive.
 
 **Linux server** (works even without root, crontab or systemd user lingering)
 
 - A server-side `taskloom scheduler` started detached (`setsid nohup …`), writing a PID file.
-- The Windows scheduler acts as its **keeper**: on startup and every N minutes it
+- The Windows scheduler acts as its **keeper**: on startup and every 5 minutes it
   connects over SSH, checks the server scheduler (PID alive + heartbeat file fresh),
-  restarts it if needed, and notifies you.
+  restarts it if needed, and notifies you. Servers to keep are listed in the
+  `keeper` setting: SSH connection, the Taskloom command on the server, its folder.
 - Result: after a server reboot, server flows come back within minutes of your
   workstation being up.
 
@@ -335,14 +344,15 @@ PySide6 (Qt) application:
 
 | Category | Blocks | Milestone |
 |---|---|---|
-| Triggers | Manual, Schedule | M1 / M3 |
 | Logic | Python Code, Expression, If, Wait, For Each (sub-flow), Ask User | M1 / M3 |
 | Data | DuckDB SQL, Polars Transform, Read File, Write File (CSV/Excel/Parquet) | M1 |
 | Database | Run Query (JDBC), Execute Statement (JDBC) | M1 |
 | Reports | Table → HTML, HTML Template, Chart, To Excel | M4 |
 | Email | Send Email | M4 |
-| Servers | SSH Run Command, Upload/Download (SFTP/scp), Remote Extract, Start Remote Process, Stop Process, Health Check (URL/PID/port) | M3 |
-| Files | Copy/Move/Delete across local, SFTP, network share (via fsspec) | M3 |
+| Servers | SSH Command, Remote Extract, Start Remote Process, Stop Remote Process, Health Check (URL/PID/port) | M3 |
+| Files | Copy/Move/Delete Files between local folders, network shares and servers (SFTP); `server:path` locations make uploads and downloads plain copies | M3 |
+
+Schedules are flow settings (Flow tab) rather than blocks on the canvas.
 
 ---
 
@@ -418,7 +428,7 @@ dialogs, Ask User.
 flow from the UI; editor survives a flow that crashes.
 
 **M3 — Servers, files and scheduling**
-SSH/SFTP blocks, Start Remote Process, Health Check, fsspec file blocks, For Each,
+SSH/SFTP blocks, Start Remote Process, Health Check, file blocks, For Each,
 scheduler with misfire policies, Startup-folder registration, tray notifications,
 server scheduler and keeper.
 *Accept*: a watchdog flow detects a killed process and restarts it; the keeper

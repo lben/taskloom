@@ -8,9 +8,9 @@ import math
 
 import polars as pl
 import yaml
-from PySide6.QtCore import QAbstractTableModel, QDate, QMimeData, QModelIndex, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QAbstractTableModel, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFontDatabase, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateEdit, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QTableView,
                                QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem,
@@ -20,7 +20,8 @@ from .. import params as P
 from ..block import IDENTIFIER, fields
 from ..calendars import load_calendar
 from ..expr import functions
-from ..flow import BlockSpec, Retry, block_config, parse_duration
+from ..flow import OVERLAP_POLICIES, BlockSpec, Retry, block_config, parse_duration
+from ..schedule import MISFIRE_POLICIES, Trigger
 from .canvas import BLOCK_MIME, CATEGORY_COLORS, STATUS_COLORS, USER_COLOR
 
 MONO = QFontDatabase.systemFont(QFontDatabase.FixedFont)
@@ -38,9 +39,9 @@ def _square_icon(color: str, size: int = 14) -> QIcon:
     return QIcon(pix)
 
 
-def status_icon(status: str | None, frame: int = 0, size: int = 14) -> QIcon:
-    """Spinner (running), green dot (success), red ✕ (failed), hollow dot (never run)."""
-    pix = QPixmap(size, size)
+def status_icon(status: str | None, frame: int = 0, size: int = 14, clock: bool = False) -> QIcon:
+    """Spinner (running), green dot (success), red ✕ (failed), hollow dot (never run); plus a clock if scheduled."""
+    pix = QPixmap(size * 2 + 2 if clock else size, size)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.Antialiasing)
@@ -61,6 +62,13 @@ def status_icon(status: str | None, frame: int = 0, size: int = 14) -> QIcon:
     else:
         p.setPen(QPen(QColor("#9aa6b2"), 1.5))
         p.drawEllipse(QPointF(c, c), 4, 4)
+    if clock:
+        x = size + 2 + c
+        p.setPen(QPen(QColor("#5f6d7c"), 1.4))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(x, c), c - 1.5, c - 1.5)
+        p.drawLine(QPointF(x, c), QPointF(x, 3.5))
+        p.drawLine(QPointF(x, c), QPointF(x + 2.5, c + 1.5))
     p.end()
     return QIcon(pix)
 
@@ -158,6 +166,7 @@ class FlowsPanel(QWidget):
     activated = Signal(object)  # the FlowTab
     run_requested = Signal(object)
     last_run_requested = Signal(object)
+    schedule_toggled = Signal(object, bool)
 
     def __init__(self):
         super().__init__()
@@ -167,6 +176,7 @@ class FlowsPanel(QWidget):
         title.setStyleSheet("font-weight: 600; color: palette(placeholder-text); letter-spacing: 1px;")
         self.list = QListWidget()
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.setIconSize(QSize(30, 14))
         layout.addWidget(title)
         layout.addWidget(self.list)
         self.items: dict[int, QListWidgetItem] = {}
@@ -199,16 +209,23 @@ class FlowsPanel(QWidget):
         if item is None:
             return
         status, subtitle = tab.list_status()
+        if tab.next_run:
+            when = tab.next_run.strftime("%H:%M" if tab.next_run.date() == dt.date.today() else "%a %d %b %H:%M")
+            subtitle += f" · next {when}"
+            item.setToolTip(f"Scheduled; next run {tab.next_run:%Y-%m-%d %H:%M}")
+        else:
+            item.setToolTip("")
         item.setText(f"{tab.doc.data.get('name') or tab.doc.title}\n{subtitle}")
         item.setData(Qt.UserRole + 1, status)
-        item.setIcon(status_icon(status, self._frame))
+        item.setData(Qt.UserRole + 2, tab.next_run is not None)
+        item.setIcon(status_icon(status, self._frame, clock=tab.next_run is not None))
         item.setForeground(QColor(STATUS_COLORS["failed"]) if status == "failed" else self.list.palette().text().color())
 
     def _spin(self):
         self._frame = (self._frame + 1) % 8
         for item in self.items.values():
             if item.data(Qt.UserRole + 1) == "running":
-                item.setIcon(status_icon("running", self._frame))
+                item.setIcon(status_icon("running", self._frame, clock=bool(item.data(Qt.UserRole + 2))))
 
     def _menu(self, pos):
         item = self.list.itemAt(pos)
@@ -219,6 +236,12 @@ class FlowsPanel(QWidget):
         menu.addAction("Run now", lambda: self.run_requested.emit(tab))
         menu.addAction("Open", lambda: self.activated.emit(tab))
         menu.addAction("Open last run", lambda: self.last_run_requested.emit(tab))
+        if tab.doc.path is not None:
+            menu.addSeparator()
+            if tab.scheduled:
+                menu.addAction("Disable schedule", lambda: self.schedule_toggled.emit(tab, False))
+            else:
+                menu.addAction("Enable schedule", lambda: self.schedule_toggled.emit(tab, True))
         menu.exec(self.list.mapToGlobal(pos))
 
 
@@ -348,6 +371,11 @@ class PropertiesPanel(QScrollArea):
             w.addItems(f.options)
             w.setCurrentText(str(value if value is not None else default or f.options[0]))
             w.currentTextChanged.connect(lambda t: self._set(key, None if t == default else t))
+            return w
+        if isinstance(f, fields.Bool):
+            w = QCheckBox()
+            w.setChecked(bool(value if value is not None else default))
+            w.toggled.connect(lambda checked: self._set(key, None if checked == default else checked))
             return w
         if isinstance(f, fields.Connection):
             w = QComboBox(editable=True)
@@ -619,10 +647,15 @@ class ParametersPanel(QWidget):
 # --- Flow settings ----------------------------------------------------------------
 
 class FlowSettingsPanel(QWidget):
+    """Name, calendar and time zone of the flow, and when the scheduler runs it."""
+
+    schedule_toggled = Signal(bool)
+
     def __init__(self, home):
         super().__init__()
         self.home, self.doc = home, None
-        self.form = QFormLayout(self)
+        layout = QVBoxLayout(self)
+        self.form = QFormLayout()
         self.name = QLineEdit()
         self.description = QLineEdit()
         self.calendar = QComboBox(editable=True)
@@ -632,11 +665,54 @@ class FlowSettingsPanel(QWidget):
         self.form.addRow("Description", self.description)
         self.form.addRow("Calendar", self.calendar)
         self.form.addRow("Time zone", self.timezone)
+        layout.addLayout(self.form)
+
+        box = QGroupBox("Schedule")
+        schedule = QVBoxLayout(box)
+        self.scheduled = QCheckBox("Run on schedule (the scheduler must be running)")
+        schedule.addWidget(self.scheduled)
+        self.triggers = QTableWidget(0, 3)
+        self.triggers.setHorizontalHeaderLabels(["When", "Cron or date and time", "If missed"])
+        header = self.triggers.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.triggers.verticalHeader().hide()
+        self.triggers.setMinimumHeight(110)
+        schedule.addWidget(self.triggers)
+        buttons = QHBoxLayout()
+        add, remove = QPushButton("Add"), QPushButton("Remove")
+        buttons.addWidget(add)
+        buttons.addWidget(remove)
+        buttons.addStretch()
+        schedule.addLayout(buttons)
+        overlap_row = QFormLayout()
+        self.overlap = QComboBox()
+        self.overlap.addItems(OVERLAP_POLICIES)
+        overlap_row.addRow("If the previous run is still going", self.overlap)
+        schedule.addLayout(overlap_row)
+        self.next_label = QLabel()
+        self.next_label.setWordWrap(True)
+        schedule.addWidget(self.next_label)
+        hint = QLabel("Cron: minute hour day month weekday, e.g. <code>0 7 * * MON-FRI</code> (07:00 on weekdays), "
+                      "<code>*/5 * * * *</code> (every 5 minutes). Once: <code>2026-10-08 15:30</code>. "
+                      "If missed: what to do with runs due while the computer was off.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        schedule.addWidget(hint)
+        layout.addWidget(box)
+        layout.addStretch()
+
         self.name.editingFinished.connect(lambda: self._set("name", self.name.text().strip()))
         self.description.editingFinished.connect(lambda: self._set("description", self.description.text().strip()))
         self.calendar.lineEdit().editingFinished.connect(lambda: self._set("calendar", self.calendar.currentText().strip()))
         self.calendar.activated.connect(lambda _: self._set("calendar", self.calendar.currentText().strip()))
         self.timezone.editingFinished.connect(lambda: self._set("timezone", self.timezone.text().strip()))
+        self.overlap.activated.connect(lambda _: self._set("overlap", None if self.overlap.currentText() == "skip" else self.overlap.currentText()))
+        self.scheduled.clicked.connect(lambda: self.schedule_toggled.emit(self.scheduled.isChecked()))
+        add.clicked.connect(lambda: (self._add_trigger("cron", "0 7 * * MON-FRI", "run_once"), self._commit_triggers()))
+        remove.clicked.connect(lambda: (self.triggers.removeRow(self.triggers.currentRow()), self._commit_triggers()))
+        self.triggers.itemChanged.connect(lambda _: self._commit_triggers())
 
     def _set(self, key, value):
         if self.doc is not None:
@@ -645,6 +721,50 @@ class FlowSettingsPanel(QWidget):
     def show_doc(self, doc):
         self.doc = doc
         self.refresh()
+
+    def _add_trigger(self, kind, value, misfire):
+        self.triggers.blockSignals(True)
+        r = self.triggers.rowCount()
+        self.triggers.insertRow(r)
+        kinds = QComboBox()
+        kinds.addItems(["cron", "once"])
+        kinds.setCurrentText(kind)
+        misfires = QComboBox()
+        misfires.addItems(MISFIRE_POLICIES)
+        misfires.setCurrentText(misfire)
+        self.triggers.setCellWidget(r, 0, kinds)
+        self.triggers.setItem(r, 1, QTableWidgetItem(value))
+        self.triggers.setCellWidget(r, 2, misfires)
+        kinds.activated.connect(lambda _: self._commit_triggers())
+        misfires.activated.connect(lambda _: self._commit_triggers())
+        self.triggers.blockSignals(False)
+
+    def _commit_triggers(self):
+        triggers = []
+        for r in range(self.triggers.rowCount()):
+            kind = self.triggers.cellWidget(r, 0).currentText()
+            value = self.triggers.item(r, 1).text().strip() if self.triggers.item(r, 1) else ""
+            spec = {"cron" if kind == "cron" else "at": value}
+            misfire = self.triggers.cellWidget(r, 2).currentText()
+            if misfire != "run_once":
+                spec["misfire"] = misfire
+            triggers.append({"schedule": spec})
+        self._set("triggers", triggers or None)
+
+    def _show_next(self):
+        problems, upcoming = [], []
+        now = dt.datetime.now()
+        for i, data in enumerate(self.doc.data.get("triggers") or []):
+            try:
+                t = Trigger(data).next_after(now)
+                if t:
+                    upcoming.append(t)
+            except ValueError as e:
+                problems.append(f"Schedule {i + 1}: {e}")
+        text = "Next run: " + min(upcoming).strftime("%a %Y-%m-%d %H:%M") if upcoming else "No upcoming runs."
+        if problems:
+            text = "<span style='color:%s'>%s</span>" % (STATUS_COLORS["failed"], html.escape("; ".join(problems)))
+        self.next_label.setText(text)
 
     def refresh(self):
         if self.doc is None:
@@ -656,6 +776,19 @@ class FlowSettingsPanel(QWidget):
         self.calendar.addItems(list(dict.fromkeys(names)))
         self.calendar.setCurrentText(self.doc.data.get("calendar") or "")
         self.timezone.setText(self.doc.data.get("timezone") or "")
+        self.overlap.setCurrentText(self.doc.data.get("overlap") or "skip")
+        self.scheduled.setEnabled(self.doc.path is not None)
+        self.scheduled.setToolTip("" if self.doc.path else "Save the flow first")
+        try:
+            self.scheduled.setChecked(self.doc.path in self.home.scheduled_flows())
+        except ValueError:
+            self.scheduled.setChecked(False)
+        self.triggers.setRowCount(0)
+        for data in self.doc.data.get("triggers") or []:
+            spec = (data or {}).get("schedule") or {}
+            kind = "cron" if "cron" in spec else "once"
+            self._add_trigger(kind, str(spec.get("cron", spec.get("at", ""))), spec.get("misfire", "run_once"))
+        self._show_next()
 
 
 # --- Log ----------------------------------------------------------------------------

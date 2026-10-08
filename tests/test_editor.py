@@ -9,10 +9,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QDialogButtonBox, QFileDialog  # noqa: E402
+from PySide6.QtWidgets import QDialogButtonBox, QFileDialog, QMessageBox, QPushButton  # noqa: E402
 
 from taskloom.config import Home  # noqa: E402
-from taskloom.editor.dialogs import AskDialog, OverlapDialog, RunDialog  # noqa: E402
+from taskloom.editor.dialogs import AskDialog, OverlapDialog, RunDialog, SettingsDialog  # noqa: E402
 from taskloom.editor.document import FlowDocument  # noqa: E402
 from taskloom.editor.panels import CodeEdit  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
@@ -23,10 +23,16 @@ from taskloom.history import History  # noqa: E402
 def win(qtbot, tmp_path, monkeypatch):
     # The runner processes inherit this; never touch the real credential store.
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    # A message box would wait forever for a click; record it instead and fail the test.
+    shown = []
+    for name in ("information", "warning", "question"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, _n=name, **k: shown.append((_n, a[1:3])) or QMessageBox.No))
     w = MainWindow(Home(tmp_path / "home"))
+    w.message_boxes = shown
     qtbot.addWidget(w)
     w.show()
     yield w
+    assert shown == [], f"unexpected message boxes: {shown}"
     for tab in w.tabs_list():
         for run in tab.runs:
             if run.running:
@@ -230,3 +236,34 @@ def test_undo_restores_deleted_blocks_and_their_edges(tmp_path):
     assert [dict(doc.data["blocks"]), list(doc.data["edges"])] == before
     doc.redo()
     assert list(doc.blocks) == [b]
+
+
+def test_schedule_a_flow_from_the_flow_tab(win, tmp_path):
+    flow = write_flow(tmp_path / "daily.yaml", """
+        blocks:
+          note:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+    """)
+    tab = win.open_flow(flow)
+    panel = win.flow_settings
+    next(b for b in panel.findChildren(QPushButton) if b.text() == "Add").click()  # adds "0 7 * * MON-FRI"
+    panel.scheduled.click()
+
+    assert tab.doc.data["triggers"] == [{"schedule": {"cron": "0 7 * * MON-FRI"}}]
+    assert not tab.doc.dirty  # enabling the schedule saved the flow
+    assert win.home.scheduled_flows() == [flow.resolve()]
+    assert tab.next_run is not None and tab.next_run.hour == 7 and tab.next_run.weekday() < 5
+
+
+def test_settings_dialog_keeps_settings_it_does_not_show(win):
+    win.home.root.mkdir(parents=True, exist_ok=True)
+    (win.home.root / "settings.yaml").write_text(
+        "calendar: US\nkeeper:\n- {connection: appserver, command: ~/taskloom/taskloom, home: ~/.taskloom}\n")
+    dialog = SettingsDialog(win.home, win)
+    dialog.keep_runs.setValue(50)
+    dialog._save()
+
+    settings = win.home.settings()
+    assert settings["keep_runs"] == 50 and settings["calendar"] == "US"
+    assert settings["keeper"] == [{"connection": "appserver", "command": "~/taskloom/taskloom", "home": "~/.taskloom"}]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import getpass
 import json
 import os
@@ -109,7 +110,9 @@ def cmd_run(args, home: Home) -> int:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, on_signal)
     answers = StdinControl(cancel) if args.interactive else None
-    result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel, answers=answers)
+    as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
+    result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel,
+                      answers=answers, as_of=as_of)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
 
 
@@ -134,6 +137,20 @@ def cmd_secret_set(args, home: Home) -> int:
     return EXIT_OK
 
 
+def cmd_scheduler(args, home: Home) -> int:
+    from . import scheduler
+
+    if args.at_login:
+        path = scheduler.set_start_at_login(home, args.at_login == "on")
+        print(f"start at login {'enabled' if args.at_login == 'on' else 'disabled'}: {path}")
+        return EXIT_OK
+    try:
+        return scheduler.serve(home, args.headless)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_FAILED
+
+
 def cmd_editor(args, home: Home) -> int:
     from .editor.window import main as editor_main  # Qt is only needed for the editor
 
@@ -147,12 +164,17 @@ def main(argv=None) -> int:
     p.add_argument("flow")
     p.add_argument("--param", action="append", metavar="NAME=VALUE", help="override a parameter (repeatable)")
     p.add_argument("--json-events", action="store_true", help="print events as JSON lines on stdout")
+    p.add_argument("--as-of", metavar="DATETIME", help="compute parameters as if it were this local time (YYYY-MM-DD HH:MM)")
     p.add_argument("--interactive", action="store_true",
                    help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
     p.set_defaults(func=cmd_validate)
+    p = sub.add_parser("scheduler", help="run scheduled flows (keeps running)")
+    p.add_argument("--headless", action="store_true", help="no tray icon; for servers")
+    p.add_argument("--at-login", choices=["on", "off"], help="start the scheduler when you log in (Windows)")
+    p.set_defaults(func=cmd_scheduler)
     p = sub.add_parser("editor", help="open the visual editor")
     p.add_argument("flows", nargs="*", help="flow files to open")
     p.set_defaults(func=cmd_editor)

@@ -22,6 +22,7 @@ dependencies = [
     "xlsxwriter>=3.1",
     "tzdata; sys_platform == 'win32'",
     "pyside6>=6.7",
+    "paramiko>=3.4",
 ]
 
 [project.scripts]
@@ -29,6 +30,7 @@ taskloom = "taskloom.cli:main"
 
 [dependency-groups]
 dev = [
+    "asyncssh>=2.24.1",
     "pytest>=8",
     "pytest-qt>=4.5.0",
 ]

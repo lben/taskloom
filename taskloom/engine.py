@@ -34,7 +34,8 @@ class SecretStr(str):
 class Context:
     """What a block's run() receives as `ctx`."""
 
-    def __init__(self, *, block_id, attempt, params, functions, workspace, home, emit, run_cancel, attempt_cancel, answers=None):
+    def __init__(self, *, block_id, attempt, params, functions, workspace, home, emit, run_cancel, attempt_cancel,
+                 answers=None, registry=None):
         self.block_id = block_id
         self.attempt = attempt
         self.params = dict(params)
@@ -45,6 +46,7 @@ class Context:
         self._run_cancel = run_cancel
         self._attempt_cancel = attempt_cancel
         self._answers = answers
+        self.registry = registry  # for blocks that run other flows
 
     def log(self, message: str, level: str = "INFO"):
         self._emit({"event": "log", "block": self.block_id, "level": level, "message": str(message)})
@@ -76,6 +78,11 @@ class Context:
         self._emit({"event": "ask", "block": self.block_id, "ask_id": ask_id, "prompt": prompt,
                     "kind": kind, "options": list(options or []), "default": default})
         return self._answers.wait(ask_id, self)
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        """Set when the whole run is cancelled; pass it to runs started from this block."""
+        return self._run_cancel
 
     @property
     def cancelled(self) -> bool:
@@ -114,12 +121,12 @@ def _summary(produced: dict) -> str:
 
 
 def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
-             answers=None) -> RunResult:
+             answers=None, as_of: dt.datetime | None = None) -> RunResult:
     """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions."""
     errors, warnings = validate(flow, registry, home)
     if errors:
         raise FlowError(errors)
-    _, funcs = run_clock(flow, home)
+    _, funcs = run_clock(flow, home, as_of)
     values = P.resolve(flow.params, overrides or {}, funcs)
     cancel = cancel or threading.Event()
 
@@ -199,6 +206,7 @@ class _Runner:
                 block_id=spec.id, attempt=attempt, params=self.values, functions=self.funcs,
                 workspace=self.workspace / spec.id / f"attempt-{attempt}", home=self.home,
                 emit=self.emit, run_cancel=self.cancel, attempt_cancel=attempt_cancel, answers=self.answers,
+                registry=self.registry,
             )
             started = time.monotonic()
             try:
