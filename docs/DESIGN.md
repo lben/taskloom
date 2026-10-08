@@ -69,6 +69,8 @@ workstation or on a Linux server, without admin/root rights.
 - **Retry policy** is a setting on every block:
   `none | fixed(delay) | exponential(initial, factor, max_delay, jitter)` plus
   `max_attempts` and optional per-attempt `timeout`. Retries are logged per attempt.
+  A timeout is cooperative: blocks that wait or loop check `ctx.cancelled`; a block
+  that does not is abandoned after a short grace period and the attempt fails.
 - **Cancellation**: a run can be stopped from the editor or CLI; blocks receive a
   cancel signal through their context and long waits (retry sleeps) are interruptible.
 - **Isolation**: the editor never runs a flow in its own process. It launches the
@@ -169,7 +171,8 @@ edges:
   - xl.file -> mail.attachments
 ```
 
-Plain text, diff-friendly, safe to commit and share (no secrets).
+Plain text, diff-friendly, safe to commit and share (no secrets). Relative paths
+in a flow are relative to the flow file's folder.
 
 ### Parameters
 
@@ -220,9 +223,10 @@ blocks on the canvas) and can be used by any block.
 
 **Connections** (`connections.yaml`, per user, no secrets):
 
-- `jdbc`: driver class, JDBC URL, jar path(s), extra driver properties (key/value,
-  e.g. timeouts), username, password → secret reference. Uses `jaydebeapi`;
-  requires a Java runtime on the machine.
+- `jdbc`: driver class, JDBC URL, jar path(s) and driver properties (key/value:
+  user, password, timeouts, …); any value written `secret:NAME` is read from the
+  secret store. Talks to the driver through JPype (the bridge `jaydebeapi` uses) so
+  column types are read once per query; requires a Java runtime (`JAVA_HOME`).
 - `smtp`: host, port, TLS mode, optional login, default sender.
 - `ssh`: host, port, username, password or key → secret reference.
 - later: `smb` (network shares from Linux, pure Python, no mount).
@@ -437,7 +441,7 @@ account runs the runner; deploy flow installs and re-run asks before overwriting
 
 | Risk | Mitigation |
 |---|---|
-| `jaydebeapi` + JPype compatibility with newer Python | Pin versions known to work; test early in M1 against a local JDBC driver (e.g. H2/SQLite JDBC). |
+| JPype compatibility with newer Python/Java | Tested in M1 against a real H2 database server over TCP. |
 | JDBC fetch speed on very large results | Chunked streaming; a faster connection type can be added later without changing flows. |
 | Antivirus / proxy flags the exe | One-folder build; fall back to zip with launcher scripts. |
 | PyInstaller + JVM bridge packaging | Verify in M1 with a throwaway build before the editor exists. |

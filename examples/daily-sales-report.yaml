@@ -1,0 +1,37 @@
+taskloom: 1
+name: daily-sales-report
+description: Totals per region for the previous business day, saved as CSV.
+
+params:
+  day: {type: date, expr: "today() - bdays(1)"}
+  day_key: {type: int, expr: "int(format(day, '%Y%m%d'))"}
+  region: {type: text, value: EU}
+
+blocks:
+  sales:
+    type: data.read_file
+    config: {path: data/sales.csv}
+  totals:
+    type: data.duckdb_sql
+    config:
+      inputs: [sales]
+      sql: |
+        select :day_key as day_key, region, count(*) as stores, round(sum(amount), 2) as total
+        from sales
+        where day = :day and region = :region
+        group by region
+  save:
+    type: data.write_file
+    config: {path: "out/sales_{day:%Y-%m-%d}.csv"}
+  no_data:
+    type: logic.python
+    config:
+      inputs: [error]
+      outputs: []
+      code: |
+        ctx.warn(f"could not build the report: {error['error']}")
+
+edges:
+  - sales.table -> totals.sales
+  - totals.result -> save.table
+  - totals.error -> no_data.error
