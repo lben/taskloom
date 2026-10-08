@@ -181,7 +181,10 @@ blocks on the canvas) and can be used by any block.
   the start of every run. Expressions can use earlier parameters and a small, safe
   function set (no imports, no file or network access):
   - dates: `today()`, `now()`, `days(n)`, `weeks(n)`, `months(n)`,
-    `start_of_month(d)`, `end_of_month(d)`, `start_of_week(d)`, `previous_weekday(d)`;
+    `start_of_month(d)`, `end_of_month(d)`, `start_of_week(d)`;
+  - business days: `bdays(n)` (so `today() - bdays(1)` on a Monday is the previous
+    Friday), `is_business_day(d)`, `next_business_day(d)`, `previous_business_day(d)`,
+    `business_days_between(a, b)`;
   - conversion: `format(d, '%Y%m%d')`, `parse_date(s, fmt)`, `int()`, `float()`, `str()`.
 - **Type and format are separate.** A parameter keeps its real type (`day` is a date);
   the format is chosen where it is used:
@@ -190,6 +193,17 @@ blocks on the canvas) and can be used by any block.
   - **text templates** `{name}` / `{name:format}` in paths, subjects, commands, e.g.
     `{day:%Y-%m-%d}` → `2026-01-01`, `{day:%Y%m%d}` → `20260101`. Inside SQL these are
     raw text substitution, for things binds can't do (table or partition names).
+- **Business-day calendars** decide which days count:
+  - a calendar has weekend days (default Saturday and Sunday) and a holiday list;
+  - holidays can come from the `holidays` package (a country or region, e.g. `US`,
+    `US-NY`, or a market calendar), from your own file `calendars/<name>.yaml`
+    (extra closures, or removing a public holiday you work), or both combined;
+  - each flow picks a calendar (default from settings); `bdays(n, cal="name")` uses
+    another one for a single expression;
+  - the Parameters tab previews values "as of" any date, so you can check how
+    Mondays and holidays resolve before the flow runs;
+  - a calendar with no holiday data for the year in question is a warning in
+    `taskloom validate`, not a silent assumption.
 - Evaluated **once per run**, in the flow's time zone (default: the machine's), so
   every block and every retry sees the same values even if the run crosses midnight.
 - **Overrides**: a manual run from the editor shows the computed values and lets you
@@ -380,7 +394,8 @@ typed parameters with expressions and overrides,
 Table on Parquet, per-block structured logs, run history in SQLite, CLI
 `run`/`validate`. Blocks: Python Code, If, Wait, DuckDB SQL, Polars Transform,
 Read/Write File, JDBC Run Query.
-*Accept*: example flows run end to end; a date parameter computed as "yesterday" is bound
+*Accept*: example flows run end to end; a date parameter computed as "yesterday" or
+"previous business day" (weekends and calendar holidays skipped) is bound
 to SQL as a date and as a `YYYYMMDD` integer, and can be overridden from the CLI; a flaky block succeeds after retries with
 correct backoff timings; a multi-million-row result streams to Parquet without
 loading in memory; a user block in the user folder is discovered and can override
