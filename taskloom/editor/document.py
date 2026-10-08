@@ -157,13 +157,15 @@ class FlowDocument(QObject):
                               if not ((e := parse_edge(t)) and (e in drop or e[0] in gone or e[2] in gone))]
         self._done()
 
-    def connect(self, src, src_port, dst, dst_port):
-        """Connect an output to an input; an input takes one edge, so an older one is replaced."""
-        if src == dst:
+    def connect(self, src, src_port, dst, dst_port, many: bool = False):
+        """Connect an output to an input. Most inputs take one edge, so an older one is replaced;
+        a `many` input (e.g. email attachments) keeps them all."""
+        if src == dst or (src, src_port, dst, dst_port) in self.edges():
             return
         self._change()
-        self.data["edges"] = [t for t in self.data["edges"]
-                              if not ((e := parse_edge(t)) and e[2] == dst and e[3] == dst_port)]
+        if not many:
+            self.data["edges"] = [t for t in self.data["edges"]
+                                  if not ((e := parse_edge(t)) and e[2] == dst and e[3] == dst_port)]
         self.data["edges"].append(edge_text(src, src_port, dst, dst_port))
         self._done()
 

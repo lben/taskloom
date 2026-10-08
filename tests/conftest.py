@@ -76,3 +76,32 @@ def server(env):
     srv.home_path = home
     yield srv
     srv.stop()
+
+
+@pytest.fixture
+def smtp(env):
+    """A local SMTP server registered as the connection `mailer`; received messages land in smtp.messages."""
+    import email
+    from email import policy
+
+    from aiosmtpd.controller import Controller
+    from sshserver import free_port
+
+    class Inbox:
+        messages = []
+
+        async def handle_DATA(self, server, session, envelope):
+            self.messages.append(email.message_from_bytes(envelope.content, policy=policy.default))
+            return "250 OK"
+
+    inbox = Inbox()
+    inbox.messages = []
+    port = free_port()
+    controller = Controller(inbox, hostname="127.0.0.1", port=port)
+    controller.start()
+    connections = env.home / "connections.yaml"
+    existing = connections.read_text() if connections.exists() else ""
+    connections.write_text(existing + f"mailer:\n  kind: smtp\n  host: 127.0.0.1\n  port: {port}\n"
+                                      f"  sender: taskloom@example.com\n")
+    yield inbox
+    controller.stop()

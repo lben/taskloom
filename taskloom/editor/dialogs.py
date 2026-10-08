@@ -112,7 +112,7 @@ class AskDialog(QDialog):
 class ConnectionsDialog(QDialog):
     """Edit connections.yaml. Passwords go to the secret store, never into the file."""
 
-    KINDS = ("jdbc", "ssh")
+    KINDS = ("jdbc", "ssh", "smtp")
 
     def __init__(self, home, parent=None):
         super().__init__(parent)
@@ -135,11 +135,14 @@ class ConnectionsDialog(QDialog):
         self.form = QFormLayout()
         self.kind = QComboBox()
         self.kind.addItems(self.KINDS)
-        self.edits = {key: QLineEdit() for key in ("driver", "url", "jars", "host", "port", "username", "key_file")}
+        self.edits = {key: QLineEdit() for key in
+                      ("driver", "url", "jars", "host", "port", "security", "username", "key_file", "sender")}
         self.edits["driver"].setPlaceholderText("e.g. com.example.jdbc.Driver")
         self.edits["url"].setPlaceholderText("jdbc:…")
         self.edits["jars"].setPlaceholderText("driver .jar file(s), separated by ;")
-        self.edits["port"].setPlaceholderText("22")
+        self.edits["port"].setPlaceholderText("22 for SSH; 25, 587 or 465 for email")
+        self.edits["security"].setPlaceholderText("none, starttls or ssl")
+        self.edits["sender"].setPlaceholderText("the From address, e.g. reports@example.com")
         self.edits["key_file"].setPlaceholderText("optional, e.g. ~/.ssh/id_ed25519 (or set a password)")
         browse = QToolButton(text="…")
         jar_row = QWidget()
@@ -148,8 +151,8 @@ class ConnectionsDialog(QDialog):
         jar_layout.addWidget(self.edits["jars"])
         jar_layout.addWidget(browse)
         self.form.addRow("Kind", self.kind)
-        labels = {"driver": "Driver class", "url": "URL", "host": "Host", "port": "Port", "username": "User name",
-                  "key_file": "Key file"}
+        labels = {"driver": "Driver class", "url": "URL", "host": "Host", "port": "Port", "security": "Security",
+                  "username": "User name", "key_file": "Key file", "sender": "Sender"}
         for key, edit in self.edits.items():
             self.form.addRow("Jar files" if key == "jars" else labels[key], jar_row if key == "jars" else edit)
         self.props_label = QLabel("Driver properties (user, timeouts, …)")
@@ -186,7 +189,8 @@ class ConnectionsDialog(QDialog):
         if self.conns:
             self.names.setCurrentRow(0)
 
-    FIELDS = {"jdbc": ("driver", "url", "jars"), "ssh": ("host", "port", "username", "key_file")}
+    FIELDS = {"jdbc": ("driver", "url", "jars"), "ssh": ("host", "port", "username", "key_file"),
+              "smtp": ("host", "port", "security", "username", "sender")}
 
     def _show_kind(self, kind):
         for key, edit in self.edits.items():
@@ -218,11 +222,11 @@ class ConnectionsDialog(QDialog):
                     props[key] = self.props.item(r, 1).text() if self.props.item(r, 1) else ""
             conn["properties"] = props
         else:
-            for key in self.FIELDS["ssh"]:
+            for key in self.FIELDS[kind]:
                 text = self.edits[key].text().strip()
                 if text:
                     conn[key] = int(text) if key == "port" and text.isdigit() else text
-            if old.get("kind") == "ssh" and old.get("password"):
+            if old.get("kind") == kind and old.get("password"):
                 conn["password"] = old["password"]
         self.conns[self.current] = conn
 
@@ -267,7 +271,7 @@ class ConnectionsDialog(QDialog):
         secret = f"{self.current}_password"
         where = self.home.set_secret(secret, value)
         self._store_current()
-        if self.kind.currentText() == "ssh":
+        if self.kind.currentText() in ("ssh", "smtp"):
             self.conns[self.current]["password"] = f"secret:{secret}"
         else:
             for r in range(self.props.rowCount()):
@@ -317,6 +321,26 @@ class SettingsDialog(QDialog):
             self.at_login.setEnabled(False)
             self.at_login.setToolTip("Windows only; on servers the keeper starts the scheduler")
         form.addRow("Scheduler", self.at_login)
+        self.notify_email = QLineEdit(", ".join(self.settings["notify_email"]) if isinstance(self.settings["notify_email"], list)
+                                      else self.settings["notify_email"] or "", placeholderText="you@example.com")
+        self.smtp = QComboBox(editable=True)
+        try:
+            self.smtp.addItems([""] + [n for n, c in home.connections().items() if c.get("kind") == "smtp"])
+        except ValueError:
+            pass
+        self.smtp.setCurrentText(self.settings["smtp_connection"] or "")
+        events = QWidget()
+        events_row = QHBoxLayout(events)
+        events_row.setContentsMargins(0, 0, 0, 0)
+        self.events = {}
+        for event, label in (("failure", "a run fails"), ("success", "a run succeeds"), ("skipped", "runs are skipped")):
+            self.events[event] = QCheckBox(label)
+            self.events[event].setChecked(event in (self.settings["notify_on"] or []))
+            events_row.addWidget(self.events[event])
+        form.addRow("Email notifications to", self.notify_email)
+        form.addRow("Send them with", self.smtp)
+        form.addRow("Email me when", events)
+        form.addRow(QLabel("Notifications are for scheduled runs; a flow can override them with notify: in its file."))
         form.addRow(QLabel("Servers whose scheduler this computer keeps running (checked every 5 minutes):"))
         self.keeper = QTableWidget(0, 3)
         self.keeper.setHorizontalHeaderLabels(["SSH connection", "Taskloom command on the server", "Taskloom folder there"])
@@ -358,7 +382,10 @@ class SettingsDialog(QDialog):
                 keeper.append({"connection": values[0], "command": values[1], "home": values[2] or "~/.taskloom"})
         data = {**self.settings, "calendar": self.calendar.text().strip() or None, "keep_runs": self.keep_runs.value(),
                 "max_concurrent_runs": self.max_runs.value() or None,
-                "java_home": self.java_home.text().strip() or None, "keeper": keeper}
+                "java_home": self.java_home.text().strip() or None, "keeper": keeper,
+                "notify_email": self.notify_email.text().strip() or None,
+                "smtp_connection": self.smtp.currentText().strip() or None,
+                "notify_on": [e for e, box in self.events.items() if box.isChecked()]}
         data = {k: v for k, v in data.items() if v != SETTINGS_DEFAULTS[k]}
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "settings.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")

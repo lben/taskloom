@@ -14,8 +14,9 @@ class ports:
     class Port:
         kind = "any"
 
-        def __init__(self, required: bool = True):
+        def __init__(self, required: bool = True, many: bool = False):
             self.required = required
+            self.many = many  # an input that takes several edges and receives a list, in edge order
 
     class Any(Port):
         kind = "any"

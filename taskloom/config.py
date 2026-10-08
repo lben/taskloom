@@ -13,7 +13,10 @@ from pathlib import Path
 
 import yaml
 
-SETTINGS_DEFAULTS = {"calendar": None, "keep_runs": 20, "java_home": None, "max_concurrent_runs": None, "keeper": []}
+SETTINGS_DEFAULTS = {
+    "calendar": None, "keep_runs": 20, "java_home": None, "max_concurrent_runs": None, "keeper": [],
+    "notify_email": None, "notify_on": ["failure"], "smtp_connection": None,
+}
 SECRET_PREFIX = "secret:"
 KEYRING_SERVICE = "taskloom"
 

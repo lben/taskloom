@@ -6,8 +6,9 @@ restart remote apps, build reports and email them.
 
 Runs on Windows and Linux without admin/root rights.
 
-**Status:** milestones 1–3 — the engine, the command-line runner, the visual editor,
-scheduling and server blocks. Reports and email come next. See [docs/DESIGN.md](docs/DESIGN.md).
+**Status:** milestones 1–4 — the engine, the command-line runner, the visual editor,
+scheduling, server blocks, reports and email. Packaging (exe/zip) comes next. See
+[docs/DESIGN.md](docs/DESIGN.md).
 
 ## Try it
 
@@ -66,7 +67,27 @@ Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
 `logic.for_each`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
 `data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
-`servers.health_check`, `servers.remote_extract`.
+`servers.health_check`, `servers.remote_extract`, `reports.html_table`,
+`reports.html_template`, `reports.chart`, `reports.excel`, `email.send`.
+
+## Reports and email
+
+`examples/sales-report-email.yaml` builds a chart, an Excel file with a native Excel
+chart and an HTML table, and emails them. Emails are built for desktop Outlook:
+table layout, CSS moved into `style=""` attributes, charts as inline images with
+explicit sizes (never `data:` URIs or SVG), plus a plain-text version.
+
+- **HTML Template** (Jinja2): `{{ table(totals) }}`, `{{ image(chart) }}`, `{{ params.day }}`.
+- **Send Email** takes any number of body parts and attachments; `save_copy` also
+  writes the email as an `.eml` file you can open in Outlook.
+
+Notifications: set `notify_email`, `smtp_connection` and `notify_on` in Tools →
+Settings. Scheduled runs then email you on failure (or success / skipped runs). A flow
+can override this:
+
+```yaml
+notify: {when: [failure, success], to: [team@example.com]}
+```
 
 ## Schedules
 

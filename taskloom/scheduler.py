@@ -8,6 +8,7 @@ Each run is a separate `taskloom run` process, like runs from the editor.
 from __future__ import annotations
 
 import datetime as dt
+import html
 import json
 import os
 import queue
@@ -20,11 +21,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import ssh
+from . import mail, ssh
 from .config import Home
 from .flow import FlowError, load_flow
 from .history import History
 from .launch import runner_command
+from .report import Html
 
 TICK_SECONDS = 15
 ON_TIME_GRACE = dt.timedelta(minutes=2)  # later than this, a run counts as missed
@@ -112,7 +114,8 @@ class Scheduler:
                 elif missed and trigger.misfire == "catch_up":
                     to_run = missed + to_run
                 elif missed:
-                    self.notify("Missed runs skipped", f"{flow.name}: {len(missed)} run(s) were due while the scheduler was off")
+                    self._tell(flow, "skipped", "Missed runs skipped",
+                               f"{flow.name}: {len(missed)} run(s) were due while the scheduler was off")
                 for n, as_of in enumerate(to_run):
                     self._request(str(path), flow, as_of, force_queue=n > 0)
         self._write_heartbeat()
@@ -121,7 +124,7 @@ class Scheduler:
         if any(r.flow == path for r in self.runs) or self.queued.get(path):
             policy = "queue" if force_queue else flow.overlap
             if policy == "skip":
-                self.notify("Run skipped", f"{flow.name}: the previous run is still going")
+                self._tell(flow, "skipped", "Run skipped", f"{flow.name}: the previous run is still going")
                 return
             if policy == "queue":
                 self.queued.setdefault(path, []).append(as_of)
@@ -136,7 +139,8 @@ class Scheduler:
             self._start(path, as_of)
 
     def _start(self, path: str, as_of: dt.datetime):
-        command = runner_command() + ["run", path, "--json-events", "--as-of", as_of.isoformat(sep=" ", timespec="minutes")]
+        command = runner_command() + ["run", path, "--json-events", "--notify",
+                                      "--as-of", as_of.isoformat(sep=" ", timespec="minutes")]
         proc = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
@@ -174,6 +178,8 @@ class Scheduler:
                 name = Path(run.flow).stem
                 detail = run.errors[-1] if run.errors else f"exit code {run.proc.returncode}"
                 self.notify(f"{name} {run.status or 'failed'}", detail)
+                if run.status is None:  # it crashed, so it could not email about itself
+                    self._tell(self._load(Path(run.flow)), "failure", f"{name} crashed", detail, desktop=False)
             if self.queued.get(run.flow):
                 self._start_or_wait(run.flow, self.queued[run.flow].pop(0))
         while self.waiting:
@@ -181,6 +187,16 @@ class Scheduler:
             if limit and len(self.runs) >= int(limit):
                 break
             self._start(*self.waiting.pop(0))
+
+    def _tell(self, flow, event: str, title: str, message: str, desktop: bool = True):
+        """A desktop notification, plus an email if the flow's notify settings ask for this event."""
+        if desktop:
+            self.notify(title, message)
+        try:
+            mail.send_notice(self.home, flow.notify if flow else None, event, f"[Taskloom] {title}",
+                             Html(f"<p>{html.escape(message)}</p>"))
+        except Exception as e:
+            self.notify("Cannot send email", str(e))
 
     def _write_heartbeat(self):
         (self.home.root / "scheduler.heartbeat").write_text(str(int(time.time())))

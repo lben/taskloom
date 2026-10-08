@@ -115,6 +115,7 @@ class Flow:
     timezone: str | None
     triggers: list[Trigger]
     overlap: str
+    notify: dict | None
     blocks: dict[str, BlockSpec]
     edges: list[Edge]
 
@@ -169,6 +170,12 @@ def load_flow(path) -> Flow:
             triggers.append(Trigger(trigger))
         except ValueError as e:
             errors.append(f"triggers[{i}]: {e}")
+    notify = data.get("notify")
+    if notify is not None:
+        if not isinstance(notify, dict) or set(notify) - {"when", "to"}:
+            errors.append("notify looks like {when: [failure, success, skipped], to: [you@example.com]}")
+        elif set(notify.get("when") or []) - {"failure", "success", "skipped"}:
+            errors.append("notify.when can contain failure, success and skipped")
     overlap = data.get("overlap", "skip")
     if overlap not in OVERLAP_POLICIES:
         errors.append(f"overlap must be one of {', '.join(OVERLAP_POLICIES)}")
@@ -186,7 +193,7 @@ def load_flow(path) -> Flow:
     return Flow(
         name=str(data.get("name") or path.stem), path=path, params=flow_params,
         calendar=data.get("calendar"), timezone=data.get("timezone"),
-        triggers=triggers, overlap=overlap, blocks=blocks, edges=edges,
+        triggers=triggers, overlap=overlap, notify=notify, blocks=blocks, edges=edges,
     )
 
 
@@ -288,7 +295,8 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
             errors.append(f"edge {edge}: '{edge.src}' has no output '{edge.src_port}'")
         if edge.dst in ports and edge.dst_port not in ports[edge.dst][0]:
             errors.append(f"edge {edge}: '{edge.dst}' has no input '{edge.dst_port}'")
-        if (edge.dst, edge.dst_port) in connected:
+        many = edge.dst in ports and getattr(ports[edge.dst][0].get(edge.dst_port), "many", False)
+        if (edge.dst, edge.dst_port) in connected and not many:
             errors.append(f"edge {edge}: input '{edge.dst}.{edge.dst_port}' is already connected")
         connected.add((edge.dst, edge.dst_port))
     for block_id, (inputs, _) in ports.items():

@@ -173,7 +173,14 @@ class _Runner:
             if any((e.src, e.src_port) not in self.outputs for e in incoming):
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
-            inputs = {e.dst_port: self.outputs[(e.src, e.src_port)] for e in incoming}
+            in_ports = self._input_ports(self.flow.blocks[block_id])
+            inputs = {}
+            for e in incoming:
+                value = self.outputs[(e.src, e.src_port)]
+                if getattr(in_ports.get(e.dst_port), "many", False):
+                    inputs.setdefault(e.dst_port, []).append(value)
+                else:
+                    inputs[e.dst_port] = value
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
             for port, value in produced.items():
                 self.outputs[(block_id, port)] = value
@@ -183,6 +190,13 @@ class _Runner:
         if self.cancel.is_set():
             return "cancelled"
         return "failed" if unhandled_failure else "success"
+
+    def _input_ports(self, spec) -> dict:
+        cls = self.registry.get(spec.type)
+        try:
+            return cls.ports(block_config(cls, spec))[0]
+        except Exception:
+            return {}  # the block reports its config problem when it runs
 
     def _run_block(self, spec, inputs) -> tuple[str, dict]:
         cls = self.registry.get(spec.type)

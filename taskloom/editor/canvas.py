@@ -82,6 +82,7 @@ class NodeItem(QGraphicsItem):
         source = registry.sources.get(spec.get("type"), "")
         self.color = QColor(CATEGORY_COLORS.get(cls.category, USER_COLOR) if cls and source == "built-in" else USER_COLOR)
         inputs, outputs = block_ports(registry, spec)
+        self.input_ports = inputs
         self.inputs, self.outputs = list(inputs), list(outputs) + [ERROR_PORT]
         rows = max(len(self.inputs), len(self.outputs), 1)
         self.height = HEADER_H + 6 + rows * ROW_H + FOOTER_H
@@ -299,7 +300,8 @@ class FlowScene(QGraphicsScene):
             self._drag_from = self._drag_line = None
             if target is not None and target.is_output != start.is_output and target.node is not start.node:
                 out, inp = (start, target) if start.is_output else (target, start)
-                self.doc.connect(out.node.block_id, out.name, inp.node.block_id, inp.name)
+                many = getattr(inp.node.input_ports.get(inp.name), "many", False)
+                self.doc.connect(out.node.block_id, out.name, inp.node.block_id, inp.name, many)
             event.accept()
             return
         super().mouseReleaseEvent(event)

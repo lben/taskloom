@@ -287,3 +287,20 @@ def test_scheduler_button_starts_and_stops_the_scheduler(win, qtbot, monkeypatch
     finally:
         if win.scheduler_running():
             os.kill(int((win.home.root / "scheduler.pid").read_text()), signal.SIGKILL)
+
+
+def test_dragging_several_attachments_onto_send_email_keeps_them_all(win):
+    tab = win.new_flow()
+    a = tab.doc.add_block("reports.excel", 0, 0)
+    b = tab.doc.add_block("reports.excel", 0, 200)
+    m = tab.doc.add_block("email.send", 300, 100)
+    q = tab.doc.add_block("logic.wait", 300, 300)
+
+    drag_port_to_port(tab, a, "file", m, "attachments")
+    drag_port_to_port(tab, b, "file", m, "attachments")
+    drag_port_to_port(tab, a, "file", q, "value")
+    drag_port_to_port(tab, b, "file", q, "value")  # an ordinary input: replaces the first edge
+
+    assert sorted(tab.doc.edges()) == sorted([
+        (a, "file", m, "attachments"), (b, "file", m, "attachments"), (b, "file", q, "value")])
+    tab.doc.dirty = False  # the window closes before fixture teardown; don't ask to save

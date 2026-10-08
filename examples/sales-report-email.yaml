@@ -1,0 +1,49 @@
+taskloom: 1
+name: sales-report-email
+description: Totals per region for the previous business day, emailed with a chart and an Excel file.
+
+# Needs an SMTP connection named "mailer" (Tools -> Connections) and your address below.
+params:
+  day: {type: date, expr: "today() - bdays(1)"}
+
+blocks:
+  sales:
+    type: data.read_file
+    config: {path: data/sales.csv}
+  totals:
+    type: data.duckdb_sql
+    config:
+      inputs: [sales]
+      sql: |
+        select region, count(*) as stores, round(sum(amount), 2) as total
+        from sales where day = :day group by region order by region
+  chart:
+    type: reports.chart
+    config: {kind: bar, x: region, y: [total], title: "Sales by region"}
+  excel:
+    type: reports.excel
+    config: {path: "out/sales_{day:%Y-%m-%d}.xlsx", sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
+  body:
+    type: reports.html_template
+    config:
+      inputs: [totals, chart]
+      template: |
+        <h2 style="font-size:18px;color:#2c5d8f;">Sales for {{ params.day.strftime('%A %d %B %Y') }}</h2>
+        {{ image(chart) }}
+        <p>&nbsp;</p>
+        {{ table(totals) }}
+  mail:
+    type: email.send
+    config:
+      connection: mailer
+      to: [you@example.com]
+      subject: "Daily sales {day:%Y-%m-%d}"
+
+edges:
+  - sales.table -> totals.sales
+  - totals.result -> chart.table
+  - totals.result -> excel.totals
+  - totals.result -> body.totals
+  - chart.image -> body.chart
+  - body.html -> mail.body
+  - excel.file -> mail.attachments

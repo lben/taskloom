@@ -113,7 +113,25 @@ def cmd_run(args, home: Home) -> int:
     as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
     result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel,
                       answers=answers, as_of=as_of)
+    if args.notify and result.status in ("success", "failed"):
+        _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
+
+
+def _notify(home: Home, flow, result):
+    from . import mail
+    from .history import History
+
+    history = History(home.history_db)
+    try:
+        event = "success" if result.status == "success" else "failure"
+        subject = f"[Taskloom] {flow.name} {'succeeded' if event == 'success' else 'failed'}"
+        if mail.send_notice(home, flow.notify, event, subject, mail.run_summary(history, result.run_id)):
+            print(f"notified about run #{result.run_id}", file=sys.stderr)
+    except Exception as e:  # a notification problem must not change the run's result
+        print(f"warning: could not send the notification email: {e}", file=sys.stderr)
+    finally:
+        history.close()
 
 
 def cmd_validate(args, home: Home) -> int:
@@ -165,6 +183,8 @@ def main(argv=None) -> int:
     p.add_argument("--param", action="append", metavar="NAME=VALUE", help="override a parameter (repeatable)")
     p.add_argument("--json-events", action="store_true", help="print events as JSON lines on stdout")
     p.add_argument("--as-of", metavar="DATETIME", help="compute parameters as if it were this local time (YYYY-MM-DD HH:MM)")
+    p.add_argument("--notify", action="store_true",
+                   help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",
                    help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
     p.set_defaults(func=cmd_run)

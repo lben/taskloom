@@ -153,7 +153,7 @@ params:
   day_key: {type: int, expr: "int(format(day, '%Y%m%d'))"}
 triggers:
   - schedule: {cron: "0 7 * * MON-FRI", misfire: run_once}
-notify: {on: [failure]}
+notify: {when: [failure]}
 blocks:
   q:
     type: db.run_query
@@ -228,7 +228,8 @@ blocks on the canvas) and can be used by any block.
   secret store. Talks to the driver through JPype (the bridge `jaydebeapi` uses) so
   column types are read once per query; requires a Java runtime, found through
   the `java_home` setting or `JAVA_HOME`.
-- `smtp`: host, port, TLS mode, optional login, default sender.
+- `smtp`: host, port, security (none / starttls / ssl), optional username and
+  password (secret), and the sender (From) address.
 - `ssh`: host, port, username, password (secret reference) or key file. A server's
   host key is trusted the first time and saved in `known_hosts` in the Taskloom
   folder; a changed key is refused (like `ssh` with accept-new).
@@ -243,9 +244,12 @@ blocks on the canvas) and can be used by any block.
 
 **Settings** (`settings.yaml`, per user):
 
-- notification email address(es) and the SMTP connection to use;
-- default notification policy (failure / success / retries exhausted / app restarted),
-  overridable per flow;
+- notification email address(es) (`notify_email`) and the SMTP connection to use
+  (`smtp_connection`);
+- default notification events (`notify_on`: failure / success / skipped), overridable
+  per flow with `notify: {when: [...], to: [...]}` (not `on:`, which YAML reads as
+  "true"). Notifications are sent for scheduled runs (`taskloom run --notify`); an app
+  restart is reported by a Send Email block in the watchdog flow;
 - desktop notifications on/off;
 - paths: user blocks folder, run workspace, retention.
 
@@ -335,8 +339,11 @@ PySide6 (Qt) application:
 - Charts rendered with matplotlib to PNG and embedded as **inline CID attachments**
   (desktop Outlook blocks `data:` URIs).
 - Excel attachments via `xlsxwriter`, with **native Excel charts**.
-- Also: CSV / Parquet attachments; large attachments can be zipped.
-- Email sending uses `smtplib` from the standard library.
+- A plain-text alternative is included; a table passed as an attachment is sent as CSV.
+- Email sending uses `smtplib` from the standard library. Send Email takes any number
+  of body parts and attachments: its inputs accept several connections.
+- Charts use a fixed, color-vision-checked categorical order, thin bars (≤ 24 px), 2 px
+  lines, hairline gridlines, one y axis and a legend only for two or more series.
 
 ---
 
@@ -347,7 +354,7 @@ PySide6 (Qt) application:
 | Logic | Python Code, Expression, If, Wait, For Each (sub-flow), Ask User | M1 / M3 |
 | Data | DuckDB SQL, Polars Transform, Read File, Write File (CSV/Excel/Parquet) | M1 |
 | Database | Run Query (JDBC), Execute Statement (JDBC) | M1 |
-| Reports | Table → HTML, HTML Template, Chart, To Excel | M4 |
+| Reports | HTML Table, HTML Template, Chart, To Excel | M4 |
 | Email | Send Email | M4 |
 | Servers | SSH Command, Remote Extract, Start Remote Process, Stop Remote Process, Health Check (URL/PID/port) | M3 |
 | Files | Copy/Move/Delete Files between local folders, network shares and servers (SFTP); `server:path` locations make uploads and downloads plain copies | M3 |
