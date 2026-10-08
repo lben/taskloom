@@ -317,3 +317,31 @@ def test_computed_previous_business_day_uses_the_flow_calendar(env):
     assert result.returncode == 0, result.stderr
     assert pl.read_parquet(env.root / "out.parquet").to_dicts() == [
         {"day": expected, "day_key": int(expected.strftime("%Y%m%d"))}]
+
+
+def test_ask_user_without_anyone_to_ask_uses_the_default_or_fails_at_once(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          ask:
+            type: logic.ask_user
+            config: {prompt: "Region?", default: EU}
+          save:
+            type: logic.python
+            config: {outputs: [], code: "open('answer.txt', 'w').write(input)"}
+        edges:
+          - ask.answer -> save.input
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    assert (env.root / "answer.txt").read_text() == "EU"
+
+    no_default = env.write("no_default.yaml", """
+        blocks:
+          ask:
+            type: logic.ask_user
+            config: {prompt: "Region?"}
+    """)
+    started = time.monotonic()
+    assert env.taskloom("run", no_default).returncode == 1
+    assert time.monotonic() - started < 15
+    run_id, _ = env.last_run()
+    assert "set a default or a secret" in env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]

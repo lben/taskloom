@@ -21,12 +21,13 @@ ENTRY_POINT_GROUP = "taskloom.blocks"
 class Registry:
     def __init__(self):
         self.blocks: dict[str, type[Block]] = {}
+        self.sources: dict[str, str] = {}  # type_id -> "built-in", "plugin" or a file path
         self.warnings: list[str] = []
 
     def get(self, type_id: str) -> type[Block] | None:
         return self.blocks.get(type_id)
 
-    def _add_from(self, obj):
+    def _add_from(self, obj, source: str):
         found = [obj] if inspect.isclass(obj) else [
             c for c in vars(obj).values()
             if inspect.isclass(c) and c.__module__ == obj.__name__
@@ -34,15 +35,16 @@ class Registry:
         for cls in found:
             if issubclass(cls, Block) and cls is not Block and cls.type_id:
                 self.blocks[cls.type_id] = cls
+                self.sources[cls.type_id] = source
 
 
 def discover(user_blocks_dir: Path | None) -> Registry:
     registry = Registry()
     for name in BUILTIN_MODULES:
-        registry._add_from(importlib.import_module(name))
+        registry._add_from(importlib.import_module(name), "built-in")
     for ep in entry_points(group=ENTRY_POINT_GROUP):
         try:
-            registry._add_from(ep.load())
+            registry._add_from(ep.load(), "plugin")
         except Exception as e:
             registry.warnings.append(f"could not load block plugin {ep.value}: {e}")
     if user_blocks_dir and user_blocks_dir.is_dir():
@@ -59,5 +61,5 @@ def discover(user_blocks_dir: Path | None) -> Registry:
                 sys.modules.pop(module_name, None)
                 registry.warnings.append(f"could not load user block file {path}: {e}")
                 continue
-            registry._add_from(module)
+            registry._add_from(module, str(path))
     return registry

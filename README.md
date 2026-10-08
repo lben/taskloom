@@ -6,8 +6,8 @@ restart remote apps, build reports and email them.
 
 Runs on Windows and Linux without admin/root rights.
 
-**Status:** milestone 1 — the engine and the command-line runner. The visual editor
-comes next. See [docs/DESIGN.md](docs/DESIGN.md).
+**Status:** milestones 1–2 — the engine, the command-line runner and the visual
+editor. Scheduling and server blocks come next. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Try it
 
@@ -21,6 +21,22 @@ taskloom run examples/daily-sales-report.yaml --param day=2026-10-02
 
 The example reads `examples/data/sales.csv`, totals the previous business day with
 DuckDB SQL and writes `examples/out/sales_<day>.csv`.
+
+## The editor
+
+```
+taskloom editor examples/daily-sales-report.yaml
+```
+
+- Drag blocks from the tree on the left onto the canvas (or double-click them); drag
+  from an output port (right side of a block) to an input port (left side) to connect.
+- Select a block to edit its properties, retry and timeout; the **Parameters** tab
+  previews parameter values on any day; **Flow** sets the name and calendar.
+- **Run** (F5) saves, checks and runs the flow in a separate process: blocks show their
+  status live, the **Log** shows the selected block's output, **Data preview** shows
+  the tables it produced, and **Run history** reopens any past run. **Stop** cancels.
+- **Tools → Connections** and **Tools → Settings** edit your connections (passwords go
+  to the secret store) and settings such as the Java folder.
 
 ## Flows
 
@@ -46,8 +62,8 @@ edges:
 - Every block has an `error` output; connect it to handle failures.
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
 
-Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `data.duckdb_sql`,
-`data.polars`, `data.read_file`, `data.write_file`, `db.run_query`.
+Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
+`data.duckdb_sql`, `data.polars`, `data.read_file`, `data.write_file`, `db.run_query`.
 
 ## Your files
 
@@ -60,6 +76,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
+| `editor.ini` | Editor preferences, e.g. remembered choices for overlapping runs |
 
 ```yaml
 # connections.yaml

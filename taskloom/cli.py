@@ -6,13 +6,14 @@ import argparse
 import getpass
 import json
 import os
+import queue
 import signal
 import sys
 import threading
 from pathlib import Path
 
 from .config import Home
-from .engine import run_flow
+from .engine import Cancelled, run_flow
 from .flow import FlowError, load_flow, validate
 from .registry import discover
 
@@ -39,6 +40,45 @@ def _print_event(event: dict):
 
 def _print_json(event: dict):
     print(json.dumps(event, default=str), flush=True)
+
+
+class StdinControl:
+    """Commands from the editor, one JSON object per line on stdin.
+
+    {"cancel": true} cancels the run; {"ask_id": ..., "value": ...} answers a question.
+    If stdin closes (the editor went away) the run is cancelled.
+    """
+
+    def __init__(self, cancel: threading.Event):
+        self.cancel = cancel
+        self._answers: dict[str, queue.Queue] = {}
+        self._lock = threading.Lock()
+        threading.Thread(target=self._read, name="stdin-control", daemon=True).start()
+
+    def _queue(self, ask_id) -> queue.Queue:
+        with self._lock:
+            return self._answers.setdefault(ask_id, queue.Queue())
+
+    def _read(self):
+        for line in sys.stdin:
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("cancel"):
+                self.cancel.set()
+            elif "ask_id" in message:
+                self._queue(message["ask_id"]).put(message.get("value"))
+        self.cancel.set()
+
+    def wait(self, ask_id: str, ctx):
+        answers = self._queue(ask_id)
+        while True:
+            try:
+                return answers.get(timeout=0.1)
+            except queue.Empty:
+                if ctx.cancelled:
+                    raise Cancelled()
 
 
 def _parse_overrides(items) -> dict:
@@ -68,7 +108,8 @@ def cmd_run(args, home: Home) -> int:
     signal.signal(signal.SIGINT, on_signal)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, on_signal)
-    result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel)
+    answers = StdinControl(cancel) if args.interactive else None
+    result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel, answers=answers)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
 
 
@@ -93,6 +134,12 @@ def cmd_secret_set(args, home: Home) -> int:
     return EXIT_OK
 
 
+def cmd_editor(args, home: Home) -> int:
+    from .editor.window import main as editor_main  # Qt is only needed for the editor
+
+    return editor_main(args.flows)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="taskloom", description="Run and check Taskloom flows.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -100,10 +147,15 @@ def main(argv=None) -> int:
     p.add_argument("flow")
     p.add_argument("--param", action="append", metavar="NAME=VALUE", help="override a parameter (repeatable)")
     p.add_argument("--json-events", action="store_true", help="print events as JSON lines on stdout")
+    p.add_argument("--interactive", action="store_true",
+                   help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
     p.set_defaults(func=cmd_validate)
+    p = sub.add_parser("editor", help="open the visual editor")
+    p.add_argument("flows", nargs="*", help="flow files to open")
+    p.set_defaults(func=cmd_editor)
     p = sub.add_parser("secret", help="manage secrets")
     secret_sub = p.add_subparsers(dest="secret_command", required=True)
     s = secret_sub.add_parser("set", help="store a secret (prompts for the value)")

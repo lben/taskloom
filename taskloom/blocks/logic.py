@@ -6,6 +6,7 @@ import polars as pl
 
 from ..block import Block, fields, ports
 from ..expr import evaluate
+from ..engine import SecretStr
 from ..table import Table
 
 
@@ -56,3 +57,40 @@ class Wait(Block):
     def run(self, ctx, value=None):
         ctx.wait(self.config.seconds)
         return {"value": value}
+
+
+class AskUser(Block):
+    type_id = "logic.ask_user"
+    title = "Ask User"
+    category = "Logic"
+    inputs = {"value": ports.Any(required=False)}
+    outputs = {"answer": ports.Any()}
+    config = {
+        "prompt": fields.Text(),
+        "kind": fields.Choice(["text", "password", "yes_no", "choice"], default="text"),
+        "options": fields.List(default=[], help="Choices for kind 'choice'"),
+        "default": fields.Text(required=False, help="Used when nobody can be asked (scheduled runs)"),
+        "secret": fields.Text(required=False, help="Secret to use when nobody can be asked"),
+    }
+
+    def run(self, ctx, value=None):
+        c = self.config
+        if c.kind == "choice" and not c.options:
+            raise ValueError("kind 'choice' needs options")
+        if ctx.can_ask:
+            answer = ctx.ask(c.prompt, c.kind, c.options, c.default)
+            if answer is None:
+                raise RuntimeError("no answer was given")
+        elif c.secret:
+            answer = ctx.home.get_secret(c.secret)
+        elif c.default is not None:
+            answer = c.default
+        else:
+            raise RuntimeError("nobody can answer in this run; set a default or a secret for unattended runs")
+        if c.kind == "yes_no":
+            answer = answer if isinstance(answer, bool) else str(answer).strip().lower() in ("yes", "y", "true", "1")
+        elif c.kind == "choice" and answer not in c.options:
+            raise ValueError(f"answer {answer!r} is not one of {c.options}")
+        elif c.kind == "password" or c.secret:
+            answer = SecretStr(answer)
+        return {"answer": answer}

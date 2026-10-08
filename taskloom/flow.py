@@ -212,13 +212,12 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
     """Return (errors, warnings). A flow with errors cannot run."""
     errors, warnings = [], []
     connections = home.connections()
-    param_values = {}
     try:
         now, funcs = run_clock(flow, home)
         calendar_name = flow.calendar or home.settings()["calendar"]
         if calendar_name:
             warnings += load_calendar(calendar_name, home.calendars_dir).warnings_for_year(now.year)
-        param_values = P.resolve(flow.params, {}, funcs)
+        P.resolve(flow.params, {}, funcs)
     except Exception as e:
         errors.append(str(e))
 

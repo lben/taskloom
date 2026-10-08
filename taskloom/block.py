@@ -87,6 +87,14 @@ class fields:
         def coerce(self, value):
             return str(value)
 
+    class List(Field):
+        """A list of text values."""
+
+        def coerce(self, value):
+            if not isinstance(value, list):
+                raise ValueError(f"expected a list, got {value!r}")
+            return [str(v) for v in value]
+
     class Names(Field):
         """A list of identifiers, e.g. the input names of a code block."""
 

@@ -7,6 +7,7 @@ import shutil
 import threading
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,10 +24,17 @@ class Cancelled(Exception):
     pass
 
 
+class SecretStr(str):
+    """A string that never shows its value in logs, summaries or run history."""
+
+    def __repr__(self):
+        return "'***'"
+
+
 class Context:
     """What a block's run() receives as `ctx`."""
 
-    def __init__(self, *, block_id, attempt, params, functions, workspace, home, emit, run_cancel, attempt_cancel):
+    def __init__(self, *, block_id, attempt, params, functions, workspace, home, emit, run_cancel, attempt_cancel, answers=None):
         self.block_id = block_id
         self.attempt = attempt
         self.params = dict(params)
@@ -36,6 +44,7 @@ class Context:
         self._emit = emit
         self._run_cancel = run_cancel
         self._attempt_cancel = attempt_cancel
+        self._answers = answers
 
     def log(self, message: str, level: str = "INFO"):
         self._emit({"event": "log", "block": self.block_id, "level": level, "message": str(message)})
@@ -53,6 +62,20 @@ class Context:
         if name not in conns:
             raise KeyError(f"no connection named '{name}' in connections.yaml")
         return self.home.resolve_secrets(conns[name])
+
+    @property
+    def can_ask(self) -> bool:
+        """True when someone can answer questions (a manual run from the editor)."""
+        return self._answers is not None
+
+    def ask(self, prompt: str, kind: str = "text", options=None, default=None):
+        """Ask the person running the flow and wait for the answer (None if they decline)."""
+        if self._answers is None:
+            raise RuntimeError("this run cannot ask questions")
+        ask_id = uuid.uuid4().hex
+        self._emit({"event": "ask", "block": self.block_id, "ask_id": ask_id, "prompt": prompt,
+                    "kind": kind, "options": list(options or []), "default": default})
+        return self._answers.wait(ask_id, self)
 
     @property
     def cancelled(self) -> bool:
@@ -90,7 +113,9 @@ def _summary(produced: dict) -> str:
     return "; ".join(parts)
 
 
-def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None) -> RunResult:
+def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
+             answers=None) -> RunResult:
+    """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions."""
     errors, warnings = validate(flow, registry, home)
     if errors:
         raise FlowError(errors)
@@ -111,7 +136,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         emit({"event": "run_started", "flow": flow.name, "params": {k: str(v) for k, v in values.items()}})
         for message in registry.warnings + warnings:
             emit({"event": "log", "level": "WARNING", "message": message})
-        runner = _Runner(flow, registry, home, values, funcs, emit, cancel, home.runs_dir / str(run_id))
+        runner = _Runner(flow, registry, home, values, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
         try:
             status = runner.run()
         except BaseException:
@@ -126,8 +151,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
 
 
 class _Runner:
-    def __init__(self, flow, registry, home, values, funcs, emit, cancel, workspace):
-        self.flow, self.registry, self.home = flow, registry, home
+    def __init__(self, flow, registry, home, values, funcs, emit, cancel, workspace, answers):
+        self.flow, self.registry, self.home, self.answers = flow, registry, home, answers
         self.values, self.funcs, self.emit, self.cancel, self.workspace = values, funcs, emit, cancel, workspace
         self.outputs: dict = {}
 
@@ -173,7 +198,7 @@ class _Runner:
             ctx = Context(
                 block_id=spec.id, attempt=attempt, params=self.values, functions=self.funcs,
                 workspace=self.workspace / spec.id / f"attempt-{attempt}", home=self.home,
-                emit=self.emit, run_cancel=self.cancel, attempt_cancel=attempt_cancel,
+                emit=self.emit, run_cancel=self.cancel, attempt_cancel=attempt_cancel, answers=self.answers,
             )
             started = time.monotonic()
             try:
@@ -196,7 +221,8 @@ class _Runner:
                     return "cancelled", {}
                 continue
             self.emit({"event": "block_finished", "block": spec.id, "status": "success", "attempts": attempt,
-                       "duration": round(time.monotonic() - started, 3), "summary": summary})
+                       "duration": round(time.monotonic() - started, 3), "summary": summary,
+                       "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)}})
             return "success", produced
         raise AssertionError("unreachable")
 
