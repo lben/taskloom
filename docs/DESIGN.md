@@ -286,7 +286,8 @@ default; if neither exists, it fails immediately instead of waiting forever.
 
 PySide6 (Qt) application:
 
-- **Flows panel** (left, above the palette): every flow you have open or scheduled,
+- **Flows panel** (left, below the block palette; the divider between them can be
+  dragged to resize both): every flow you have open or scheduled,
   each with its status:
   - spinner — running;
   - green dot — last run succeeded;
