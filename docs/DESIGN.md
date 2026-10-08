@@ -226,7 +226,8 @@ blocks on the canvas) and can be used by any block.
 - `jdbc`: driver class, JDBC URL, jar path(s) and driver properties (key/value:
   user, password, timeouts, …); any value written `secret:NAME` is read from the
   secret store. Talks to the driver through JPype (the bridge `jaydebeapi` uses) so
-  column types are read once per query; requires a Java runtime (`JAVA_HOME`).
+  column types are read once per query; requires a Java runtime, found through
+  the `java_home` setting or `JAVA_HOME`.
 - `smtp`: host, port, TLS mode, optional login, default sender.
 - `ssh`: host, port, username, password or key → secret reference.
 - later: `smb` (network shares from Linux, pure Python, no mount).

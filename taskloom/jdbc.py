@@ -20,10 +20,11 @@ _DECIMALS = {2, 3}  # NUMERIC, DECIMAL
 _BOOLEAN, _DATE, _TIMESTAMP = 16, 91, 93
 
 
-def start_jvm(classpath: list[str]):
+def start_jvm(classpath: list[str], java_home: str | None = None):
     """Start the JVM once per process with every JDBC driver jar on the classpath.
 
     The classpath cannot change after the JVM starts, so all known jars go on it up front.
+    `java_home` (the java_home setting) wins over the JAVA_HOME environment variable.
     """
     import jpype
     import jpype.config
@@ -33,12 +34,16 @@ def start_jvm(classpath: list[str]):
             missing = [p for p in classpath if not Path(p).exists()]
             if missing:
                 raise FileNotFoundError(f"JDBC driver jar(s) not found: {', '.join(missing)}")
+            if java_home:
+                os.environ["JAVA_HOME"] = str(Path(java_home).expanduser())  # where JPype looks
             try:
                 jvm_path = jpype.getDefaultJVMPath()
             except jpype.JVMNotFoundException:
                 jvm_path = None
             if not jvm_path or not Path(os.fsdecode(jvm_path)).is_file():
-                raise FileNotFoundError("Java was not found; set the JAVA_HOME environment variable to your Java folder")
+                raise FileNotFoundError(
+                    "Java was not found; set java_home in settings.yaml (or the JAVA_HOME "
+                    "environment variable) to your Java folder")
             # The JVM starts in a block's worker thread; destroying it at exit from the main
             # thread can hang the process, so let the OS reclaim it instead.
             jpype.config.destroy_jvm = False
@@ -54,12 +59,12 @@ def all_jars(connections: dict) -> list[str]:
     return [str(Path(j).expanduser()) for j in dict.fromkeys(jars)]
 
 
-def connect(conn: dict, classpath: list[str]):
+def connect(conn: dict, classpath: list[str], java_home: str | None = None):
     """Open a JDBC connection: driver class, URL and driver properties (user, password, …)."""
     for key in ("driver", "url"):
         if not conn.get(key):
             raise ValueError(f"JDBC connection needs '{key}'")
-    start_jvm(classpath)
+    start_jvm(classpath, java_home)
     import jpype
 
     jpype.JClass(conn["driver"])  # loads and registers the driver

@@ -29,7 +29,8 @@ class RunQuery(Block):
         if missing:
             raise KeyError(f"no value for bind parameter(s): {', '.join(':' + n for n in missing)}")
         out = ctx.new_path("result.parquet")
-        conn = jdbc.connect(ctx.connection(self.config.connection), jdbc.all_jars(ctx.home.connections()))
+        conn = jdbc.connect(ctx.connection(self.config.connection), jdbc.all_jars(ctx.home.connections()),
+                            ctx.home.settings()["java_home"])
         try:
             rows = jdbc.query_to_parquet(conn, sql, [values[n] for n in names], out, self.config.chunk_size, ctx)
         finally:

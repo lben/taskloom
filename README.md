@@ -56,7 +56,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | File | Purpose |
 |---|---|
 | `connections.yaml` | Database connections, e.g. a JDBC driver, URL, jar and properties |
-| `settings.yaml` | `calendar` (default business-day calendar), `keep_runs` |
+| `settings.yaml` | `calendar` (default business-day calendar), `keep_runs`, `java_home` |
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
@@ -73,7 +73,7 @@ warehouse:
 
 Store the password with `taskloom secret set warehouse_password` (Windows Credential
 Manager / macOS Keychain, or a private `secrets.yaml` on headless Linux). JDBC needs
-Java; set `JAVA_HOME` if it is not found.
+Java; set `java_home` in `settings.yaml` (or `JAVA_HOME`) if it is not found.
 
 ## Writing a block
 

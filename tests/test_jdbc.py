@@ -73,7 +73,8 @@ def h2_server():
 
 @pytest.fixture
 def jdbc_env(env, h2_server):
-    env.env["JAVA_HOME"] = h2_server["java_home"]
+    env.env.pop("JAVA_HOME", None)  # found through the java_home setting instead
+    env.write("home/settings.yaml", f"java_home: '{Path(h2_server['java_home']).as_posix()}'\n")
     env.env["JAVA_TOOL_OPTIONS"] = "-Xmx256m"  # keep JVM heap growth from hiding Python memory use
     env.write("home/connections.yaml", f"""
         warehouse:
