@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "taskloom"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Build automations by dragging and connecting blocks."
 readme = "README.md"
 license = "MIT"
@@ -28,6 +28,9 @@ dependencies = [
     "css-inline>=0.14",
 ]
 
+[tool.hatch.version]
+path = "taskloom/__init__.py"
+
 [project.scripts]
 taskloom = "taskloom.cli:main"
 
@@ -35,6 +38,8 @@ taskloom = "taskloom.cli:main"
 dev = [
     "aiosmtpd>=1.4.6",
     "asyncssh>=2.24.1",
+    "pyflakes>=4.0.3",
+    "pyinstaller>=6.10",
     "pytest>=8",
     "pytest-qt>=4.5.0",
 ]

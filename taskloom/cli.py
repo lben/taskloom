@@ -176,7 +176,10 @@ def cmd_editor(args, home: Home) -> int:
 
 
 def main(argv=None) -> int:
+    from . import __version__
+
     parser = argparse.ArgumentParser(prog="taskloom", description="Run and check Taskloom flows.")
+    parser.add_argument("--version", action="version", version=f"taskloom {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("run", help="run a flow")
     p.add_argument("flow")

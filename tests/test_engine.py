@@ -391,6 +391,7 @@ def test_copy_or_move_onto_itself_is_refused_and_keeps_the_file(env):
         assert "onto itself" in env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="sets the local time zone with TZ")
 def test_as_of_is_local_time_converted_to_the_flow_time_zone(env):
     env.env["TZ"] = "America/New_York"
     flow = env.write("flow.yaml", """
@@ -407,3 +408,31 @@ def test_as_of_is_local_time_converted_to_the_flow_time_zone(env):
 
     assert result.returncode == 0, result.stderr
     assert env.query("SELECT params FROM runs") == [('{"day": "2026-10-09"}',)]
+
+
+def test_paths_that_meet_run_the_shared_block_once_either_way(env):
+    flow = env.write("flow.yaml", """
+        params:
+          fresh: {type: bool, value: true}
+        blocks:
+          check:
+            type: logic.if
+            config: {condition: "fresh"}
+          ask:
+            type: logic.python
+            config: {inputs: [input], code: "output = input"}
+          install:
+            type: files.copy
+            config: {source: a.txt, destination: b.txt}
+        edges:
+          - check.true -> install.after
+          - check.false -> ask.input
+          - ask.output -> install.after
+    """)
+    (env.root / "a.txt").write_text("x")
+    for fresh in ("true", "false"):
+        (env.root / "b.txt").unlink(missing_ok=True)
+        assert env.taskloom("run", flow, "--param", f"fresh={fresh}").returncode == 0
+        assert (env.root / "b.txt").read_text() == "x"
+        run_id, _ = env.last_run()
+        assert env.block_status(run_id)["install"] == "success"

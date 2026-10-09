@@ -25,7 +25,7 @@ from . import mail, ssh
 from .config import Home
 from .flow import FlowError, load_flow
 from .history import History
-from .launch import runner_command
+from .launch import runner_command, windowed_command
 from .report import Html
 
 TICK_SECONDS = 15
@@ -265,6 +265,7 @@ def acquire_lock(home: Home):
     try:
         if sys.platform == "win32":
             import msvcrt
+            handle.seek(0)  # every process must lock the same byte
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
@@ -327,7 +328,7 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     scheduler = Scheduler(home, lambda title, message: tray.showMessage(title, message))
     menu = QMenu()
     open_editor = QAction("Open editor", menu)
-    open_editor.triggered.connect(lambda: subprocess.Popen(runner_command() + ["editor"],
+    open_editor.triggered.connect(lambda: subprocess.Popen(windowed_command() + ["editor"],
                                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
     quit_action = QAction("Stop scheduler", menu)
     quit_action.triggered.connect(app.quit)
@@ -356,11 +357,7 @@ def startup_file() -> Path:
 
 def startup_script(home: Home) -> str:
     """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
-    program, *args = runner_command()
-    pythonw = Path(program).with_name("pythonw.exe")
-    if pythonw.exists():
-        program = str(pythonw)
-    command = " ".join(f'"{a}"' if " " in a else a for a in [program, *args, "scheduler"])
+    command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler"])
     return f'@echo off\nset "TASKLOOM_HOME={home.root}"\nstart "" {command}\n'
 
 

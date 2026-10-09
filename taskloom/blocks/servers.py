@@ -30,7 +30,7 @@ class SSHCommand(Block):
     title = "SSH Command"
     description = 'Runs a command on a server, like typing it in a terminal there, and gives you what it printed.'
     category = "Servers"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"stdout": ports.Any(), "exit_code": ports.Any()}
     config = {
         "connection": fields.Connection(kind="ssh"),
@@ -55,7 +55,7 @@ class StartProcess(Block):
     title = "Start Remote Process"
     description = 'Starts a program on a server so it keeps running after Taskloom disconnects, and checks it did not crash right away.'
     category = "Servers"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"pid": ports.Any()}
     config = {
         "connection": fields.Connection(kind="ssh"),
@@ -87,7 +87,7 @@ class StopProcess(Block):
     title = "Stop Remote Process"
     description = 'Stops a program on a server that was started with Start Remote Process.'
     category = "Servers"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"stopped": ports.Any()}
     config = {
         "connection": fields.Connection(kind="ssh"),
@@ -120,7 +120,7 @@ class HealthCheck(Block):
     title = "Health Check"
     description = "Checks that an app is alive: its web address answers, its process is running, or its port is open. Continues down 'healthy' or 'unhealthy'."
     category = "Servers"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"healthy": ports.Any(), "unhealthy": ports.Any()}
     config = {
         "url": fields.Text(required=False, help="Checked from this machine"),
@@ -177,7 +177,7 @@ class RemoteExtract(Block):
     title = "Remote Extract"
     description = 'Unpacks a .zip or .tar.gz file on a server into a folder.'
     category = "Servers"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"folder": ports.Any()}
     config = {
         "connection": fields.Connection(kind="ssh"),

@@ -185,7 +185,7 @@ class CopyFiles(Block):
     title = "Copy Files"
     description = 'Copies files or folders: on this computer, to or from a network folder, or to or from a server.'
     category = "Files"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"files": ports.Any()}
     config = {
         "source": fields.Text(help="A file, folder or pattern; server paths as connection:path"),
@@ -211,7 +211,7 @@ class DeleteFiles(Block):
     title = "Delete Files"
     description = 'Deletes files or folders, on this computer or on a server.'
     category = "Files"
-    inputs = {"after": ports.Any(required=False)}
+    inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"deleted": ports.Any()}
     config = {"path": fields.Text(help="A file, folder or pattern; server paths as connection:path")}
 

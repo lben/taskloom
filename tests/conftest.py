@@ -40,7 +40,7 @@ class Env:
     def popen(self, *args) -> subprocess.Popen:
         return subprocess.Popen(
             [sys.executable, "-m", "taskloom.cli", *map(str, args)],
-            env=self.env, cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=self.env, cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
 
     def query(self, sql, *args):

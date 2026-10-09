@@ -1,0 +1,52 @@
+taskloom: 1
+name: deploy-runner
+description: Installs (or updates) the Taskloom runner on a Linux server and starts its scheduler.
+
+# Needs an SSH connection named "deploy_target" (Tools -> Connections) and the runner
+# archive built for Linux (taskloom-runner-<version>-linux-x86_64.tar.gz).
+params:
+  archive: {type: text, value: taskloom-runner-linux-x86_64.tar.gz}
+
+blocks:
+  check:
+    type: servers.ssh_command
+    config: {connection: deploy_target, command: "cat ~/taskloom/VERSION 2>/dev/null || echo none", fail_on_error: false}
+  installed:
+    type: logic.if
+    config: {condition: "'none' not in value"}
+  confirm:
+    type: logic.ask_user
+    config: {prompt: "Taskloom is already installed on the server. Replace it?", kind: yes_no, default: "no"}
+  replace:
+    type: logic.if
+    config: {condition: "value"}
+  stop_old:
+    type: servers.stop_process
+    config: {connection: deploy_target, pid_file: "~/.taskloom/scheduler.pid"}
+  upload:
+    type: files.copy
+    config: {source: "{archive}", destination: "deploy_target:~/taskloom-runner.tar.gz"}
+  extract:
+    type: servers.remote_extract
+    config: {connection: deploy_target, archive: "~/taskloom-runner.tar.gz", destination: "~"}
+  start:
+    type: servers.start_process
+    config:
+      connection: deploy_target
+      command: "~/taskloom/taskloom scheduler --headless"
+      log_file: "~/.taskloom/scheduler.log"
+      pid_file: "~/.taskloom/scheduler.pid"
+  running:
+    type: servers.health_check
+    config: {connection: deploy_target, pid_file: "~/.taskloom/scheduler.pid"}
+
+edges:
+  - check.stdout -> installed.value
+  - installed.true -> confirm.value
+  - confirm.answer -> replace.value
+  - installed.false -> stop_old.after
+  - replace.true -> stop_old.after
+  - stop_old.stopped -> upload.after
+  - upload.files -> extract.after
+  - extract.folder -> start.after
+  - start.pid -> running.after

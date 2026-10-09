@@ -6,19 +6,43 @@ restart remote apps, build reports and email them.
 
 Runs on Windows and Linux without admin/root rights.
 
-**Status:** milestones 1–4 — the engine, the command-line runner, the visual editor,
-scheduling, server blocks, reports and email. Packaging (exe/zip) comes next. See
-[docs/DESIGN.md](docs/DESIGN.md).
+**Status:** milestones 1–5 — the engine, the visual editor, scheduling, server blocks,
+reports and email, and packaged builds. See [docs/DESIGN.md](docs/DESIGN.md).
 
-## Try it
+## Install
 
-Requires Python 3.11+.
+**Windows (no Python needed):** download `taskloom-<version>-windows-*.zip` from the
+[releases](https://github.com/lben/taskloom/releases) (or the latest build's artifacts),
+unzip it anywhere you can write (no admin needed) and run `taskloomw.exe` for the
+editor. `taskloom.exe` is the command line (`taskloom.exe run flow.yaml`).
+
+**Linux server (no root, no system Python needed):** the runner is
+`taskloom-runner-<version>-linux-x86_64.tar.gz`, built on Enterprise Linux 8 so it runs
+on RHEL 8 and newer. Install it with the `examples/deploy-runner.yaml` flow from your PC,
+or by hand: copy it to the server, `tar -xzf` it in your home folder and run
+`~/taskloom/taskloom scheduler --headless`.
+
+Teammates who only need to run a flow get the same zip plus the flow file.
+
+**From source** (Python 3.11+):
 
 ```
 pip install .
 taskloom validate examples/daily-sales-report.yaml
 taskloom run examples/daily-sales-report.yaml --param day=2026-10-02
 ```
+
+**Build the packages yourself** (e.g. through your company's package mirror):
+
+```
+pip install . pyinstaller
+python packaging/build.py             # editor + runner, for this OS
+python packaging/build.py --headless  # runner only, for servers
+python packaging/smoke.py dist/taskloom
+```
+
+Packaged builds include Python and all libraries; a Python Code block can import any of
+them (polars, duckdb, pyarrow, matplotlib, …) but not packages you install separately.
 
 The example reads `examples/data/sales.csv`, totals the previous business day with
 DuckDB SQL and writes `examples/out/sales_<day>.csv`.
@@ -177,6 +201,8 @@ uv run pytest
 ```
 
 The JDBC tests start an H2 database server and need Java; they download the H2 jar once.
+GitHub Actions (`.github/workflows/build.yml`) runs the tests on Linux and Windows, builds
+the Windows zip and the Linux runner, and smoke-tests both; tagging `v*` publishes them.
 
 ## License
 

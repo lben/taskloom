@@ -170,17 +170,20 @@ class _Runner:
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
             incoming = [e for e in self.flow.edges if e.dst == block_id]
-            if any((e.src, e.src_port) not in self.outputs for e in incoming):
+            in_ports = self._input_ports(self.flow.blocks[block_id])
+            inputs, ready = {}, True
+            for name in dict.fromkeys(e.dst_port for e in incoming):
+                port = in_ports.get(name)
+                edges = [e for e in incoming if e.dst_port == name]
+                delivered = [self.outputs[(e.src, e.src_port)] for e in edges if (e.src, e.src_port) in self.outputs]
+                # Usually every connected edge must deliver; an any_of input needs just one (paths that meet).
+                if not delivered or (len(delivered) < len(edges) and not getattr(port, "any_of", False)):
+                    ready = False
+                    break
+                inputs[name] = delivered if getattr(port, "many", False) else delivered[0]
+            if not ready:
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
-            in_ports = self._input_ports(self.flow.blocks[block_id])
-            inputs = {}
-            for e in incoming:
-                value = self.outputs[(e.src, e.src_port)]
-                if getattr(in_ports.get(e.dst_port), "many", False):
-                    inputs.setdefault(e.dst_port, []).append(value)
-                else:
-                    inputs[e.dst_port] = value
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
             for port, value in produced.items():
                 self.outputs[(block_id, port)] = value

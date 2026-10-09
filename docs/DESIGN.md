@@ -395,7 +395,10 @@ taskloom editor
 ## 14. Packaging and distribution
 
 - Python 3.12, PyInstaller **one-folder** builds (fewer antivirus false positives
-  than one-file), each also shipped zipped.
+  than one-file), each also shipped zipped. The folder holds two programs:
+  `taskloom` (console: runs and the scheduler) and `taskloomw` (no console window:
+  the editor, and the scheduler started at login). `packaging/smoke.py` checks a build
+  using only the packaged programs.
 - Artifacts:
   - `taskloom` for Windows (editor + runner + scheduler);
   - `taskloom-runner` for Linux, built on an Enterprise Linux 8–compatible base (glibc 2.28),

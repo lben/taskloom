@@ -642,4 +642,13 @@ def main(paths=()) -> int:
     if not any(opened):
         window.new_flow()
     window.show()
+    if os.environ.get("TASKLOOM_EDITOR_SMOKE") and opened and opened[0]:
+        _smoke_test(app, window, opened[0])  # used by packaging/smoke.py to check a packaged build
     return app.exec()
+
+
+def _smoke_test(app, window: MainWindow, tab: FlowTab):
+    """Run the flow from the editor (through the runner program) and quit with 0 if it succeeded."""
+    run = window.start_run(tab, {})
+    run.finished.connect(lambda status: app.exit(0 if status == "success" else 1))
+    QTimer.singleShot(120_000, lambda: app.exit(2))
