@@ -114,6 +114,7 @@ def main():
                                 env={**env, "TASKLOOM_EDITOR_SMOKE": "1", "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen")},
                                 cwd=work, timeout=180)
         check("editor runs a flow through the runner program", result.returncode == 0, f"exit code {result.returncode}")
+    shutil.rmtree(work, ignore_errors=True)
     print("all checks passed")
 
 

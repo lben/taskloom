@@ -3,7 +3,7 @@ name: deploy-runner
 description: Installs (or updates) the Taskloom runner on a Linux server and starts its scheduler.
 
 # Needs an SSH connection named "deploy_target" (Tools -> Connections) and the runner
-# archive built for Linux (taskloom-runner-<version>-linux-x86_64.tar.gz).
+# archive built for Linux (taskloom-runner-linux-x86_64.tar.gz, next to this file or give its path).
 params:
   archive: {type: text, value: taskloom-runner-linux-x86_64.tar.gz}
 

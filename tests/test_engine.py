@@ -436,3 +436,31 @@ def test_paths_that_meet_run_the_shared_block_once_either_way(env):
         assert (env.root / "b.txt").read_text() == "x"
         run_id, _ = env.last_run()
         assert env.block_status(run_id)["install"] == "success"
+
+
+def test_a_failed_prerequisite_still_stops_a_block_whose_paths_meet(env):
+    (env.root / "important.txt").write_text("keep me")
+    flow = env.write("flow.yaml", """
+        blocks:
+          backup:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('backup failed')"}
+          check:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          after_backup:
+            type: logic.python
+            config: {code: "output = input"}
+          cleanup:
+            type: files.delete
+            config: {path: important.txt}
+        edges:
+          - backup.output -> after_backup.input
+          - after_backup.output -> cleanup.after
+          - check.output -> cleanup.after
+    """)
+
+    assert env.taskloom("run", flow).returncode == 1
+    assert (env.root / "important.txt").read_text() == "keep me"
+    run_id, _ = env.last_run()
+    assert env.block_status(run_id)["cleanup"] == "skipped"

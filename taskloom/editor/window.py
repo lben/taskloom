@@ -127,8 +127,9 @@ class MainWindow(QMainWindow):
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
         self._poll.start()
-        for message in self.registry.warnings:
-            self.statusBar().showMessage(message, 15000)
+        if self.registry.warnings:
+            self.statusBar().showMessage(f"{len(self.registry.warnings)} problem(s) with blocks: "
+                                         + "; ".join(self.registry.warnings), 30000)
 
     def showEvent(self, event):
         super().showEvent(event)

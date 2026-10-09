@@ -65,7 +65,9 @@ workstation or on a Linux server, without admin/root rights.
     down that edge and the run continues;
   - otherwise the run is marked failed, downstream blocks are skipped.
 - Blocks downstream of a branch that was not taken (If block, unused `error` port)
-  are **skipped**, not failed.
+  are **skipped**, not failed. An `after` input (only sets the order) runs when any of
+  its edges delivers, so two paths can meet after an If; but nothing downstream of a
+  failed block ever runs, even through such an input.
 - **Retry policy** is a setting on every block:
   `none | fixed(delay) | exponential(initial, factor, max_delay, jitter)` plus
   `max_attempts` and optional per-attempt `timeout`. Retries are logged per attempt.

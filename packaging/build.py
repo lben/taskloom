@@ -34,7 +34,8 @@ def main():
     shutil.copy(ROOT / "LICENSE", folder / "LICENSE")
 
     system = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
-    name = f"taskloom{'-runner' if args.headless else ''}-{__version__}-{system}-{platform.machine().lower()}"
+    # No version in the name, so flows that deploy it don't change with each release; it is in VERSION.
+    name = f"taskloom{'-runner' if args.headless else ''}-{system}-{platform.machine().lower()}"
     if system == "linux":  # tar keeps the programs executable
         archive = dist / f"{name}.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:

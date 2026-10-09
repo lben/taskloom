@@ -162,6 +162,7 @@ class _Runner:
         self.flow, self.registry, self.home, self.answers = flow, registry, home, answers
         self.values, self.funcs, self.emit, self.cancel, self.workspace = values, funcs, emit, cancel, workspace
         self.outputs: dict = {}
+        self.blocked: set[str] = set()  # failed, or skipped because something before them failed
 
     def run(self) -> str:
         unhandled_failure = False
@@ -170,13 +171,19 @@ class _Runner:
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
             incoming = [e for e in self.flow.edges if e.dst == block_id]
+            # A block downstream of a failure never runs, even through an any_of input.
+            if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
+                self.blocked.add(block_id)
+                self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
+                continue
             in_ports = self._input_ports(self.flow.blocks[block_id])
             inputs, ready = {}, True
             for name in dict.fromkeys(e.dst_port for e in incoming):
                 port = in_ports.get(name)
                 edges = [e for e in incoming if e.dst_port == name]
                 delivered = [self.outputs[(e.src, e.src_port)] for e in edges if (e.src, e.src_port) in self.outputs]
-                # Usually every connected edge must deliver; an any_of input needs just one (paths that meet).
+                # Usually every connected edge must deliver; an any_of input needs just one (paths that
+                # meet after an If, where the other path was not taken).
                 if not delivered or (len(delivered) < len(edges) and not getattr(port, "any_of", False)):
                     ready = False
                     break
@@ -185,6 +192,8 @@ class _Runner:
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
+            if status == "failed":
+                self.blocked.add(block_id)
             for port, value in produced.items():
                 self.outputs[(block_id, port)] = value
             handled = any(e.src == block_id and e.src_port == ERROR_PORT for e in self.flow.edges)
