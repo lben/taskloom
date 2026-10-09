@@ -171,8 +171,10 @@ class _Runner:
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
             incoming = [e for e in self.flow.edges if e.dst == block_id]
-            # A block downstream of a failure never runs, even through an any_of input.
-            if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
+            # A block downstream of a failure never runs, even through an any_of input. Only the error
+            # output of a block that really failed (and so produced it) leads on.
+            if any(e.src in self.blocked and not (e.src_port == ERROR_PORT and (e.src, ERROR_PORT) in self.outputs)
+                   for e in incoming):
                 self.blocked.add(block_id)
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue

@@ -32,7 +32,7 @@ dependencies = [
 path = "taskloom/__init__.py"
 
 [project.scripts]
-taskloom = "taskloom.cli:main"
+taskloom = "taskloom.cli:run_cli"
 
 [dependency-groups]
 dev = [

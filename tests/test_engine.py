@@ -464,3 +464,35 @@ def test_a_failed_prerequisite_still_stops_a_block_whose_paths_meet(env):
     assert (env.root / "important.txt").read_text() == "keep me"
     run_id, _ = env.last_run()
     assert env.block_status(run_id)["cleanup"] == "skipped"
+
+
+def test_error_handler_of_a_block_skipped_by_a_failure_does_not_open_a_path(env):
+    (env.root / "important.txt").write_text("keep me")
+    flow = env.write("flow.yaml", """
+        blocks:
+          backup:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('backup failed')"}
+          verify:
+            type: logic.python
+            config: {code: "output = input"}
+          on_verify_error:
+            type: logic.python
+            config: {code: "output = input"}
+          check:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          cleanup:
+            type: files.delete
+            config: {path: important.txt}
+        edges:
+          - backup.output -> verify.input
+          - verify.error -> on_verify_error.input
+          - on_verify_error.output -> cleanup.after
+          - check.output -> cleanup.after
+    """)
+
+    assert env.taskloom("run", flow).returncode == 1
+    assert (env.root / "important.txt").read_text() == "keep me"
+    run_id, _ = env.last_run()
+    assert env.block_status(run_id)["cleanup"] == "skipped"

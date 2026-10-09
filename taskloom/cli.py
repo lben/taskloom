@@ -219,5 +219,18 @@ def main(argv=None) -> int:
         return EXIT_INVALID
 
 
+def run_cli(argv=None):
+    """Entry point of the `taskloom` program."""
+    code = main(argv)
+    jpype = sys.modules.get("jpype")
+    if jpype is not None and jpype.isJVMStarted():
+        # Everything is saved by now. Python's shutdown can crash or hang once the Java bridge
+        # has run in a worker thread ("FATAL: exception not rethrown"), so leave right away.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
+    sys.exit(code)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    run_cli()
