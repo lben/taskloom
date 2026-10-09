@@ -112,6 +112,7 @@ class RunQuery(Block):
     type_id = "db.run_query"          # stable id stored in flow files
     version = 1
     title = "Run Query"
+    description = "Runs a SQL query on your database and gives you the result as a table."
     category = "Database"
 
     inputs = {"params": ports.Any(required=False)}
@@ -128,6 +129,9 @@ class RunQuery(Block):
 ```
 
 - The **properties panel is generated from `config`** — no UI code per block.
+- Every block has a `description` in plain, non-technical words; the editor shows it
+  when you hover over the block. A test enforces it for built-in blocks, and the editor
+  warns about plugin or user blocks without one.
 - Field types: Text, Int, Float, Bool, Choice, Code(language), Path, Connection(kind),
   Secret, List, KeyValue, Cron.
 - **Discovery** (all loaded into the palette at startup):

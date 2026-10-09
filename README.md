@@ -159,6 +159,7 @@ from taskloom import Block, fields, ports
 class Greet(Block):
     type_id = "my.greet"
     title = "Greet"
+    description = "Says hello to whoever you name."  # shown when hovering over the block
     inputs = {"name": ports.Any()}
     outputs = {"text": ports.Any()}
     config = {"greeting": fields.Text(default="Hello")}

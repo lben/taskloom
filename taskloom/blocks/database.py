@@ -11,6 +11,7 @@ from ..table import Table
 class RunQuery(Block):
     type_id = "db.run_query"
     title = "Run Query"
+    description = 'Runs a SQL query on your database and gives you the result as a table. Big results are saved to disk bit by bit, so they never fill your memory.'
     category = "Database"
     inputs = {"params": ports.Any(required=False)}
     outputs = {"result": ports.Table()}

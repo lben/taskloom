@@ -183,6 +183,7 @@ def _copy(ctx, source: str, destination: str, overwrite: bool, move: bool) -> li
 class CopyFiles(Block):
     type_id = "files.copy"
     title = "Copy Files"
+    description = 'Copies files or folders: on this computer, to or from a network folder, or to or from a server.'
     category = "Files"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"files": ports.Any()}
@@ -199,6 +200,7 @@ class CopyFiles(Block):
 class MoveFiles(CopyFiles):
     type_id = "files.move"
     title = "Move Files"
+    description = 'Moves files or folders: on this computer, to or from a network folder, or to or from a server.'
 
     def run(self, ctx, after=None):
         return {"files": _copy(ctx, self.config.source, self.config.destination, self.config.overwrite, move=True)}
@@ -207,6 +209,7 @@ class MoveFiles(CopyFiles):
 class DeleteFiles(Block):
     type_id = "files.delete"
     title = "Delete Files"
+    description = 'Deletes files or folders, on this computer or on a server.'
     category = "Files"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"deleted": ports.Any()}

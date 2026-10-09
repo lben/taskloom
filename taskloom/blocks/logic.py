@@ -14,6 +14,7 @@ from ..table import Table
 class PythonCode(Block):
     type_id = "logic.python"
     title = "Python Code"
+    description = 'Runs a few lines of Python that you write. Use it when no other block does what you need.'
     category = "Logic"
     config = {
         "inputs": fields.Names(default=["input"], help="Variables your code receives."),
@@ -37,6 +38,7 @@ class PythonCode(Block):
 class If(Block):
     type_id = "logic.if"
     title = "If"
+    description = "Checks a condition and sends the data down the 'true' path or the 'false' path, so different blocks run in each case."
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"true": ports.Any(), "false": ports.Any()}
@@ -50,6 +52,7 @@ class If(Block):
 class Wait(Block):
     type_id = "logic.wait"
     title = "Wait"
+    description = 'Pauses for a number of seconds, then passes its input on unchanged.'
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"value": ports.Any()}
@@ -63,6 +66,7 @@ class Wait(Block):
 class AskUser(Block):
     type_id = "logic.ask_user"
     title = "Ask User"
+    description = 'Asks you a question while you run the flow from the editor (text, password, yes/no or a choice). In scheduled runs it uses the default answer you set.'
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"answer": ports.Any()}
@@ -100,6 +104,7 @@ class AskUser(Block):
 class ForEach(Block):
     type_id = "logic.for_each"
     title = "For Each"
+    description = 'Runs another flow once for every item in a list, for example once per server or once per region.'
     category = "Logic"
     inputs = {"items": ports.Any()}
     outputs = {"results": ports.Any()}

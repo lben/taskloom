@@ -304,3 +304,15 @@ def test_dragging_several_attachments_onto_send_email_keeps_them_all(win):
     assert sorted(tab.doc.edges()) == sorted([
         (a, "file", m, "attachments"), (b, "file", m, "attachments"), (b, "file", q, "value")])
     tab.doc.dirty = False  # the window closes before fixture teardown; don't ask to save
+
+
+def test_every_block_explains_itself_on_hover(win):
+    for type_id, cls in win.registry.blocks.items():
+        assert len(cls.description) > 20, f"{type_id} needs a plain-language description"
+    tree = win.palette_panel.tree
+    item = tree.findItems("Health Check", Qt.MatchExactly | Qt.MatchRecursive)[0]
+    assert "Checks that an app is alive" in item.toolTip(0)
+    tab = win.new_flow()
+    block = tab.doc.add_block("email.send", 0, 0)
+    assert "Sends an email" in tab.scene.nodes[block].toolTip()
+    tab.doc.dirty = False

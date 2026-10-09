@@ -119,6 +119,8 @@ class Block:
     type_id: str = ""  # stable id stored in flow files, e.g. "db.run_query"
     version: int = 1
     title: str = ""
+    # What the block does, in plain words; shown when hovering over it in the editor.
+    description: str = ""
     category: str = "Other"
     inputs: dict = {}
     outputs: dict = {}

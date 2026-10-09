@@ -28,6 +28,7 @@ def _run(ctx, client, command) -> tuple[int, str, str]:
 class SSHCommand(Block):
     type_id = "servers.ssh_command"
     title = "SSH Command"
+    description = 'Runs a command on a server, like typing it in a terminal there, and gives you what it printed.'
     category = "Servers"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"stdout": ports.Any(), "exit_code": ports.Any()}
@@ -52,6 +53,7 @@ class SSHCommand(Block):
 class StartProcess(Block):
     type_id = "servers.start_process"
     title = "Start Remote Process"
+    description = 'Starts a program on a server so it keeps running after Taskloom disconnects, and checks it did not crash right away.'
     category = "Servers"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"pid": ports.Any()}
@@ -83,6 +85,7 @@ class StartProcess(Block):
 class StopProcess(Block):
     type_id = "servers.stop_process"
     title = "Stop Remote Process"
+    description = 'Stops a program on a server that was started with Start Remote Process.'
     category = "Servers"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"stopped": ports.Any()}
@@ -115,6 +118,7 @@ class StopProcess(Block):
 class HealthCheck(Block):
     type_id = "servers.health_check"
     title = "Health Check"
+    description = "Checks that an app is alive: its web address answers, its process is running, or its port is open. Continues down 'healthy' or 'unhealthy'."
     category = "Servers"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"healthy": ports.Any(), "unhealthy": ports.Any()}
@@ -171,6 +175,7 @@ class HealthCheck(Block):
 class RemoteExtract(Block):
     type_id = "servers.remote_extract"
     title = "Remote Extract"
+    description = 'Unpacks a .zip or .tar.gz file on a server into a folder.'
     category = "Servers"
     inputs = {"after": ports.Any(required=False)}
     outputs = {"folder": ports.Any()}

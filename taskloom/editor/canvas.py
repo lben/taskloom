@@ -79,6 +79,9 @@ class NodeItem(QGraphicsItem):
         cls = registry.get(spec.get("type"))
         self.known = cls is not None
         self.type_title = (cls.title or cls.type_id) if cls else f"unknown: {spec.get('type')}"
+        if cls is not None:
+            from .panels import block_tooltip
+            self.setToolTip(block_tooltip(cls))
         source = registry.sources.get(spec.get("type"), "")
         self.color = QColor(CATEGORY_COLORS.get(cls.category, USER_COLOR) if cls and source == "built-in" else USER_COLOR)
         inputs, outputs = block_ports(registry, spec)

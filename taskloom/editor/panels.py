@@ -96,6 +96,12 @@ def scheduler_icon(running: bool, size: int = 20) -> QIcon:
     return QIcon(pix)
 
 
+def block_tooltip(cls) -> str:
+    """The hover text for a block: what it does in plain words."""
+    text = cls.description or "No description yet: add description = \"...\" to this block's class."
+    return f"<p style='white-space:normal'><b>{html.escape(cls.title or cls.type_id)}</b><br>{html.escape(text)}</p>"
+
+
 # --- Blocks tree ------------------------------------------------------------------
 
 class _BlockTree(QTreeWidget):
@@ -157,7 +163,7 @@ class Palette(QWidget):
                 item = QTreeWidgetItem([cls.title or cls.type_id])
                 item.setIcon(0, _square_icon(color))
                 item.setData(0, Qt.UserRole, cls.type_id)
-                item.setToolTip(0, f"{cls.type_id}\n{(cls.__doc__ or '').strip()}".strip())
+                item.setToolTip(0, block_tooltip(cls))
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
                 folder.addChild(item)
             folder.setExpanded(True)

@@ -54,6 +54,7 @@ def to_html(value, ctx=None) -> Html:
 class HtmlTable(Block):
     type_id = "reports.html_table"
     title = "HTML Table"
+    description = 'Turns a table into a nicely formatted table for an email.'
     category = "Reports"
     inputs = {"table": ports.Table()}
     outputs = {"html": ports.Any()}
@@ -72,6 +73,7 @@ class HtmlTable(Block):
 class Chart(Block):
     type_id = "reports.chart"
     title = "Chart"
+    description = 'Draws a chart (bar, line, pie...) from a table as a picture you can put in an email.'
     category = "Reports"
     inputs = {"table": ports.Table()}
     outputs = {"image": ports.Any()}
@@ -97,6 +99,7 @@ class Chart(Block):
 class HtmlTemplate(Block):
     type_id = "reports.html_template"
     title = "HTML Template"
+    description = 'Builds an email body from your own text, mixing in tables, charts and parameters.'
     category = "Reports"
     outputs = {"html": ports.Any()}
     config = {
@@ -137,6 +140,7 @@ class HtmlTemplate(Block):
 class ToExcel(Block):
     type_id = "reports.excel"
     title = "To Excel"
+    description = 'Saves one or more tables to an Excel file, optionally with an Excel chart.'
     category = "Reports"
     outputs = {"file": ports.Any()}
     config = {
@@ -214,6 +218,7 @@ class ToExcel(Block):
 class SendEmail(Block):
     type_id = "email.send"
     title = "Send Email"
+    description = 'Sends an email with a body (text, tables, charts) and attachments, made to look right in Outlook.'
     category = "Email"
     inputs = {"body": ports.Any(required=False, many=True), "attachments": ports.Any(required=False, many=True)}
     outputs = {"sent": ports.Any()}

@@ -35,6 +35,8 @@ class Registry:
         ]
         for cls in found:
             if issubclass(cls, Block) and cls is not Block and cls.type_id:
+                if not cls.description:
+                    self.warnings.append(f"block {cls.type_id} has no description (shown when hovering over it)")
                 self.blocks[cls.type_id] = cls
                 self.sources[cls.type_id] = source
 

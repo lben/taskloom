@@ -32,6 +32,7 @@ def _sql_literal(text: str) -> str:
 class DuckDBSQL(Block):
     type_id = "data.duckdb_sql"
     title = "DuckDB SQL"
+    description = 'Lets you write SQL over tables from earlier blocks (filter, join, group, sum...). Works even on data bigger than your memory.'
     category = "Data"
     config = {
         "inputs": fields.Names(default=["input"], help="Each input table is available in SQL under this name."),
@@ -62,6 +63,7 @@ class DuckDBSQL(Block):
 class PolarsTransform(Block):
     type_id = "data.polars"
     title = "Polars Transform"
+    description = 'Changes a table with one Polars expression, for example filtering rows or adding a column.'
     category = "Data"
     inputs = {"table": ports.Table()}
     outputs = {"table": ports.Table()}
@@ -78,6 +80,7 @@ class PolarsTransform(Block):
 class ReadFile(Block):
     type_id = "data.read_file"
     title = "Read File"
+    description = 'Reads a CSV, Excel or Parquet file into a table that other blocks can use.'
     category = "Data"
     outputs = {"table": ports.Table()}
     config = {
@@ -105,6 +108,7 @@ class ReadFile(Block):
 class WriteFile(Block):
     type_id = "data.write_file"
     title = "Write File"
+    description = 'Saves a table to a CSV, Excel or Parquet file.'
     category = "Data"
     inputs = {"table": ports.Table()}
     outputs = {"file": ports.Any()}
