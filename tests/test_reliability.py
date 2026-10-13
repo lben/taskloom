@@ -122,7 +122,7 @@ edges:
 
 
 CRASHING_EDITOR = """
-import ctypes, os, sys
+import faulthandler, os, sys
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from pathlib import Path
 from PySide6.QtCore import QTimer
@@ -142,7 +142,7 @@ def broken_slot():
 QTimer.singleShot(0, broken_slot)
 QTimer.singleShot(200, lambda: print("still running, told the user:", shown, flush=True))
 if sys.argv[2] == "hard":
-    QTimer.singleShot(400, lambda: ctypes.string_at(0))  # a hard crash, like a bug inside Qt
+    QTimer.singleShot(400, faulthandler._sigsegv)  # a real hard crash on every system, like a bug inside Qt
 QTimer.singleShot(800, app.quit)
 app.exec()
 """
@@ -159,6 +159,6 @@ def test_errors_and_hard_crashes_are_written_to_the_crash_log(tmp_path, kind):
     assert "still running, told the user: ['Something went wrong']" in proc.stdout
     assert "ValueError: a bug in a button" in log
     if kind == "hard":
-        assert proc.returncode != 0 and "Fatal Python error" in log
+        assert proc.returncode != 0 and ("Fatal Python error" in log or "Windows fatal exception" in log)
     else:
         assert proc.returncode == 0
