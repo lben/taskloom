@@ -42,10 +42,6 @@ class History:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = connect(path)
         self._db.executescript(SCHEMA)
-        columns = {row[1] for row in self._db.execute("PRAGMA table_info(blocks)")}
-        for column in ("tables", "previews"):  # history files from before these columns existed
-            if column not in columns:
-                self._db.execute(f"ALTER TABLE blocks ADD COLUMN {column} TEXT")
         self._lock = threading.Lock()
 
     def _exec(self, sql, args=()):

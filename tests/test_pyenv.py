@@ -87,9 +87,6 @@ def test_secrets_never_reach_logs_or_files_through_inspect_or_the_environment(en
           ask:
             type: logic.ask_user
             config: {prompt: "Password?", kind: password, secret: db_pw}
-          old_label:
-            type: logic.inspect
-            config: {label: got}
           message:
             type: logic.inspect
             config: {message: "password is {value}"}
@@ -110,7 +107,6 @@ def test_secrets_never_reach_logs_or_files_through_inspect_or_the_environment(en
             type: logic.python
             config: {inputs: [n], outputs: [], code: "assert n == len('hunter2SECRET')"}
         edges:
-          - ask.answer -> old_label.value
           - ask.answer -> message.value
           - ask.answer -> outside.pw
           - outside.n -> check.n
@@ -124,7 +120,7 @@ def test_secrets_never_reach_logs_or_files_through_inspect_or_the_environment(en
     assert result.returncode == 0, result.stderr
     assert "hunte" not in result.stdout + result.stderr  # not even part of it (e.g. text cut to length)
     logs = " ".join(m for (m,) in env.query("SELECT message FROM logs"))
-    assert "hunter2SECRET" not in logs and "got: ***" in logs and "password is ***" in logs and "user:***" in logs
+    assert "hunter2SECRET" not in logs and "password is ***" in logs and "user:***" in logs
     stored = " ".join(str(v) for row in env.query("SELECT summary, error, previews FROM blocks") for v in row)
     assert "hunte" not in stored
     for path in (env.home / "runs").rglob("*"):

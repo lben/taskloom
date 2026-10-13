@@ -158,13 +158,6 @@ class Inspect(Block):
                                     "Healthy: {value['healthy']} {value['problems']}. Empty shows the whole value."),
     }
 
-    @classmethod
-    def migrate(cls, config, old_version):
-        if "label" in config:  # version 0.6.0 had a fixed label instead of a message
-            label = config.pop("label")
-            config.setdefault("message", f"{label}: {{value}}" if label else None)
-        return config
-
     def run(self, ctx, value=None):
         if self.config.message:
             # Secrets show as *** here: this text goes to the log and the run history.

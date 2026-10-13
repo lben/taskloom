@@ -219,8 +219,8 @@ def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
 def block_config(cls, spec: BlockSpec) -> dict:
     """Apply defaults, migrations and type coercion to a block's config."""
     config = dict(spec.config)
-    if spec.version is None or spec.version < cls.version:  # files usually do not record a version
-        config = cls.migrate(config, spec.version or 1)
+    if spec.version is not None and spec.version < cls.version:
+        config = cls.migrate(config, spec.version)
     elif spec.version is not None and spec.version > cls.version:
         raise ValueError(f"saved with version {spec.version} of {cls.type_id}, but this install has version {cls.version}")
     unknown = set(config) - set(cls.config)
