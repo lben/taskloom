@@ -6,6 +6,7 @@ import re
 from types import SimpleNamespace
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+AFTER = "after"  # every block can be connected here to run after another block or a start block
 
 
 class ports:
@@ -127,6 +128,9 @@ class Block:
     outputs: dict = {}
     config: dict = {}
 
+    # Start blocks (Manual Start, Schedule) begin a run; see taskloom/blocks/triggers.py.
+    is_trigger: bool = False
+
     def __init__(self, config: dict):
         self.config = SimpleNamespace(**config)
 
@@ -142,3 +146,11 @@ class Block:
 
     def run(self, ctx, **inputs) -> dict:
         raise NotImplementedError
+
+
+def all_ports(cls, config: dict) -> tuple[dict, dict]:
+    """A block's ports plus the `after` input every block has (it only sets the order)."""
+    inputs, outputs = cls.ports(config)
+    if not cls.is_trigger and AFTER not in inputs:
+        inputs = {**inputs, AFTER: ports.Any(required=False, any_of=True)}
+    return inputs, outputs

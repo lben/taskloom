@@ -7,14 +7,15 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStr
 from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsScene,
                                QGraphicsView)
 
+from ..block import AFTER, all_ports
 from ..flow import ERROR_PORT, BlockSpec, block_config
 from .document import FlowDocument, edge_text
 
 BLOCK_MIME = "application/x-taskloom-block"
 NODE_W, HEADER_H, ROW_H, FOOTER_H, PORT_R = 184, 28, 22, 22, 5
 CATEGORY_COLORS = {
-    "Triggers": "#6b5ca5", "Database": "#2c5d8f", "Data": "#2f7f7a", "Reports": "#9a6a1f",
-    "Email": "#a24d6b", "Servers": "#4d6a35", "Files": "#6d7682", "Logic": "#7a4f9e",
+    "Start": "#1f8a4c", "Database": "#2c5d8f", "Data": "#2f7f7a", "Reports": "#9a6a1f",
+    "Email": "#a24d6b", "Servers": "#4d6a35", "Files": "#6d7682", "Logic": "#7a4f9e", "Debug": "#b7791f",
 }
 USER_COLOR = "#b0563a"
 STATUS_COLORS = {"success": "#1f8a4c", "running": "#b7791f", "failed": "#c0392b",
@@ -32,11 +33,11 @@ def block_ports(registry, spec: dict) -> tuple[dict, dict]:
         return {}, {}
     config = spec.get("config") or {}
     try:
-        return cls.ports(block_config(cls, BlockSpec(id="x", type=cls.type_id, config=dict(config))))
+        return all_ports(cls, block_config(cls, BlockSpec(id="x", type=cls.type_id, config=dict(config))))
     except Exception:
         pass
     try:
-        return cls.ports({**{k: f.default for k, f in cls.config.items()}, **config})
+        return all_ports(cls, {**{k: f.default for k, f in cls.config.items()}, **config})
     except Exception:
         return cls.inputs, cls.outputs
 
@@ -86,11 +87,17 @@ class NodeItem(QGraphicsItem):
         self.color = QColor(CATEGORY_COLORS.get(cls.category, USER_COLOR) if cls and source == "built-in" else USER_COLOR)
         inputs, outputs = block_ports(registry, spec)
         self.input_ports = inputs
-        self.inputs, self.outputs = list(inputs), list(outputs) + [ERROR_PORT]
+        # `after` sits at the left of the header; start blocks have no error output.
+        self.inputs = [n for n in inputs if n != AFTER]
+        self.outputs = list(outputs) + ([] if cls is not None and cls.is_trigger else [ERROR_PORT])
         rows = max(len(self.inputs), len(self.outputs), 1)
         self.height = HEADER_H + 6 + rows * ROW_H + FOOTER_H
         self.status, self.status_text = None, ""
         self.ports: dict[tuple[str, bool], PortItem] = {}
+        if AFTER in inputs:
+            self.ports[(AFTER, False)] = PortItem(self, AFTER, False, HEADER_H / 2)
+            self.ports[(AFTER, False)].setToolTip("Run after: connect a start block (or any block's output) "
+                                                  "here to run this block after it")
         for i, name in enumerate(self.inputs):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
         for i, name in enumerate(self.outputs):
@@ -141,6 +148,8 @@ class NodeItem(QGraphicsItem):
         painter.setFont(font)
         muted = pal.placeholderText().color()
         for (name, is_output), port in self.ports.items():
+            if name == AFTER:
+                continue  # the header port has no label
             y = port.pos().y()
             painter.setPen(QColor("#c0392b") if name == ERROR_PORT else muted)
             box = QRectF(10, y - ROW_H / 2, NODE_W - 20, ROW_H)
@@ -339,14 +348,20 @@ class FlowView(QGraphicsView):
         self.center_on_flow()
 
     def center_on_flow(self):
-        nodes = self.scene().nodes.values()
-        if nodes:
-            rect = nodes.__iter__().__next__().sceneBoundingRect()
-            for node in nodes:
-                rect = rect.united(node.sceneBoundingRect())
-            self.centerOn(rect.center())
-        else:
+        """Show the whole flow: centred, zoomed out (not below half size) if it does not fit."""
+        nodes = list(self.scene().nodes.values())
+        if not nodes:
             self.centerOn(QPointF(400, 200))
+            return
+        rect = nodes[0].sceneBoundingRect()
+        for node in nodes:
+            rect = rect.united(node.sceneBoundingRect())
+        rect = rect.adjusted(-30, -30, 30, 30)
+        view = self.viewport().rect()
+        scale = min(1.0, view.width() / rect.width(), view.height() / rect.height())
+        self.resetTransform()
+        self.scale(max(scale, 0.5), max(scale, 0.5))
+        self.centerOn(rect.center())
 
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

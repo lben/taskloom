@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS blocks (
     run_id INTEGER NOT NULL, block TEXT NOT NULL, status TEXT NOT NULL,
     started TEXT, finished TEXT, attempts INTEGER NOT NULL DEFAULT 0,
-    error TEXT, summary TEXT, tables TEXT, PRIMARY KEY (run_id, block)
+    error TEXT, summary TEXT, tables TEXT, previews TEXT, PRIMARY KEY (run_id, block)
 );
 CREATE TABLE IF NOT EXISTS logs (
     run_id INTEGER NOT NULL, block TEXT, ts TEXT NOT NULL,
@@ -34,10 +34,11 @@ class History:
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)
-        try:  # history files from before the tables column existed
-            self._db.execute("ALTER TABLE blocks ADD COLUMN tables TEXT")
-        except sqlite3.OperationalError:
-            pass
+        for column in ("tables", "previews"):  # history files from before these columns existed
+            try:
+                self._db.execute(f"ALTER TABLE blocks ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError:
+                pass
         self._lock = threading.Lock()
 
     def _exec(self, sql, args=()):
@@ -62,12 +63,13 @@ class History:
             )
         elif kind == "block_finished":
             self._exec(
-                "INSERT INTO blocks (run_id, block, status, finished, attempts, error, summary, tables) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "INSERT INTO blocks (run_id, block, status, finished, attempts, error, summary, tables, previews) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (run_id, block) DO UPDATE SET status=excluded.status, finished=excluded.finished, "
-                "attempts=excluded.attempts, error=excluded.error, summary=excluded.summary, tables=excluded.tables",
+                "attempts=excluded.attempts, error=excluded.error, summary=excluded.summary, tables=excluded.tables, "
+                "previews=excluded.previews",
                 (run_id, event["block"], event["status"], ts, event.get("attempts", 0), event.get("error"),
-                 event.get("summary"), json.dumps(event.get("tables") or {})),
+                 event.get("summary"), json.dumps(event.get("tables") or {}), json.dumps(event.get("previews") or {})),
             )
         elif kind == "log":
             self._exec(
@@ -94,9 +96,10 @@ class History:
         return dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), row))
 
     def blocks(self, run_id: int) -> dict:
-        rows = self._exec("SELECT block, status, attempts, error, summary, tables FROM blocks WHERE run_id=?", (run_id,))
+        rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews FROM blocks WHERE run_id=?",
+                          (run_id,))
         return {r[0]: {"status": r[1], "attempts": r[2], "error": r[3], "summary": r[4],
-                       "tables": json.loads(r[5] or "{}")} for r in rows}
+                       "tables": json.loads(r[5] or "{}"), "previews": json.loads(r[6] or "{}")} for r in rows}
 
     def logs(self, run_id: int) -> list[dict]:
         rows = self._exec("SELECT block, ts, level, message FROM logs WHERE run_id=? ORDER BY rowid", (run_id,))

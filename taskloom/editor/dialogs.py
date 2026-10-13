@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import html
 import sys
 
 import yaml
+from PySide6.QtCore import QProcess, QProcessEnvironment
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolButton,
                                QVBoxLayout, QWidget)
 
+from ..block import IDENTIFIER
 from ..config import SETTINGS_DEFAULTS
+from ..launch import runner_command
 
 
 class RunDialog(QDialog):
@@ -112,93 +116,158 @@ class AskDialog(QDialog):
 class ConnectionsDialog(QDialog):
     """Edit connections.yaml. Passwords go to the secret store, never into the file."""
 
-    KINDS = ("jdbc", "ssh", "smtp")
+    KINDS = {"jdbc": "Database (JDBC)", "ssh": "Server (SSH)", "smtp": "Email server (SMTP)"}
+    FIELDS = {"jdbc": ("driver", "url", "jars", "username"), "ssh": ("host", "port", "username", "key_file"),
+              "smtp": ("host", "port", "security", "username", "sender")}
+    HELP = {
+        "jdbc": "A database you query with Run Query. Ask your database team for the driver .jar file, "
+                "the driver class and the JDBC URL. Extra settings (timeouts, …) go in the table below.",
+        "ssh": "A server you reach with SSH: for the Servers blocks, and file locations written name:path. "
+               "Use your login and password, or a key file instead of a password.",
+        "smtp": "The mail server Send Email and notifications use. Inside a company this is often a relay "
+                "on port 25 that needs no login; ask your IT team.",
+    }
+    LABELS = {"driver": "Driver class", "url": "URL", "jars": "Driver .jar file(s)", "host": "Host", "port": "Port",
+              "security": "Security", "username": "User name", "key_file": "Key file", "sender": "Send as"}
 
-    def __init__(self, home, parent=None):
+    def __init__(self, home, parent=None, select: str | None = None, new_kind: str | None = None):
         super().__init__(parent)
         self.home = home
         self.setWindowTitle("Connections")
-        self.resize(780, 480)
+        self.resize(820, 560)
         self.conns = home.connections()
+        self.passwords: dict[str, str] = {}  # typed but not saved yet
+        self.created: str | None = None
+        self.current: str | None = None
+
         layout = QHBoxLayout(self)
         left = QVBoxLayout()
         self.names = QListWidget()
-        add, remove = QPushButton("Add"), QPushButton("Remove")
+        add, rename, remove = QPushButton("New…"), QPushButton("Rename…"), QPushButton("Remove")
         left.addWidget(self.names)
         row = QHBoxLayout()
-        row.addWidget(add)
-        row.addWidget(remove)
+        for b in (add, rename, remove):
+            row.addWidget(b)
         left.addLayout(row)
-        layout.addLayout(left, 1)
+        layout.addLayout(left, 2)
 
         right = QVBoxLayout()
         self.form = QFormLayout()
         self.kind = QComboBox()
-        self.kind.addItems(self.KINDS)
-        self.edits = {key: QLineEdit() for key in
-                      ("driver", "url", "jars", "host", "port", "security", "username", "key_file", "sender")}
-        self.edits["driver"].setPlaceholderText("e.g. com.example.jdbc.Driver")
-        self.edits["url"].setPlaceholderText("jdbc:…")
-        self.edits["jars"].setPlaceholderText("driver .jar file(s), separated by ;")
-        self.edits["port"].setPlaceholderText("22 for SSH; 25, 587 or 465 for email")
-        self.edits["security"].setPlaceholderText("none, starttls or ssl")
-        self.edits["sender"].setPlaceholderText("the From address, e.g. reports@example.com")
-        self.edits["key_file"].setPlaceholderText("optional, e.g. ~/.ssh/id_ed25519 (or set a password)")
-        browse = QToolButton(text="…")
-        jar_row = QWidget()
-        jar_layout = QHBoxLayout(jar_row)
+        for key, label in self.KINDS.items():
+            self.kind.addItem(label, key)
+        self.form.addRow("Kind", self.kind)
+        self.help = QLabel()
+        self.help.setWordWrap(True)
+        self.help.setStyleSheet("color: palette(placeholder-text);")
+        self.form.addRow(self.help)
+        self.edits = {key: QLineEdit() for key in self.LABELS}
+        placeholders = {"driver": "e.g. com.example.jdbc.Driver", "url": "jdbc:…",
+                        "jars": "separate several files with ;", "port": "SSH: 22 · email: 25, 587 or 465",
+                        "security": "none, starttls or ssl", "key_file": "optional, e.g. ~/.ssh/id_ed25519",
+                        "sender": "the From address, e.g. reports@example.com", "host": "e.g. server01.example.com"}
+        for key, text in placeholders.items():
+            self.edits[key].setPlaceholderText(text)
+        self.jar_row = QWidget()
+        jar_layout = QHBoxLayout(self.jar_row)
         jar_layout.setContentsMargins(0, 0, 0, 0)
+        browse = QToolButton(text="…")
         jar_layout.addWidget(self.edits["jars"])
         jar_layout.addWidget(browse)
-        self.form.addRow("Kind", self.kind)
-        labels = {"driver": "Driver class", "url": "URL", "host": "Host", "port": "Port", "security": "Security",
-                  "username": "User name", "key_file": "Key file", "sender": "Sender"}
         for key, edit in self.edits.items():
-            self.form.addRow("Jar files" if key == "jars" else labels[key], jar_row if key == "jars" else edit)
-        self.props_label = QLabel("Driver properties (user, timeouts, …)")
-        self.form.addRow(self.props_label)
+            self.form.addRow(self.LABELS[key], self.jar_row if key == "jars" else edit)
+        self.password = QLineEdit(echoMode=QLineEdit.Password)
+        self.password_status = QLabel()
+        self.form.addRow("Password", self.password)
+        self.form.addRow("", self.password_status)
         right.addLayout(self.form)
+        self.props_label = QLabel("Extra driver settings (name and value)")
+        right.addWidget(self.props_label)
         self.props = QTableWidget(0, 2)
-        self.props.setHorizontalHeaderLabels(["Property", "Value"])
+        self.props.setHorizontalHeaderLabels(["Setting", "Value"])
         self.props.horizontalHeader().setStretchLastSection(True)
         self.props.verticalHeader().hide()
         right.addWidget(self.props)
         prop_row = QHBoxLayout()
-        self.add_prop, self.remove_prop = QPushButton("Add property"), QPushButton("Remove property")
-        password = QPushButton("Set password…")
-        for b in (self.add_prop, self.remove_prop, password):
-            prop_row.addWidget(b)
+        self.add_prop, self.remove_prop = QPushButton("Add setting"), QPushButton("Remove setting")
+        prop_row.addWidget(self.add_prop)
+        prop_row.addWidget(self.remove_prop)
+        prop_row.addStretch()
         right.addLayout(prop_row)
+        test_row = QHBoxLayout()
+        self.test_button = QPushButton("Save and test connection")
+        self.test_result = QLabel()
+        self.test_result.setWordWrap(True)
+        test_row.addWidget(self.test_button)
+        test_row.addWidget(self.test_result, 1)
+        right.addLayout(test_row)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         right.addWidget(buttons)
-        layout.addLayout(right, 3)
+        layout.addLayout(right, 5)
+        self.editor_widgets = [self.kind, *self.edits.values(), self.password, self.props, self.add_prop,
+                               self.remove_prop, self.test_button, browse]
 
-        self.current = None
         self.names.addItems(list(self.conns))
         self.names.currentTextChanged.connect(self._select)
-        self.kind.currentTextChanged.connect(self._show_kind)
-        add.clicked.connect(self._add)
+        self.kind.currentIndexChanged.connect(lambda _: self._show_kind())
+        add.clicked.connect(lambda: self._add(None))
+        rename.clicked.connect(self._rename)
         remove.clicked.connect(self._remove)
         browse.clicked.connect(self._browse)
         self.add_prop.clicked.connect(lambda: self._add_prop("", ""))
         self.remove_prop.clicked.connect(lambda: self.props.removeRow(self.props.currentRow()))
-        password.clicked.connect(self._set_password)
+        self.test_button.clicked.connect(self._test)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
-        self._show_kind(self.kind.currentText())
-        if self.conns:
+
+        if new_kind:
+            self._add(new_kind)
+        elif select in self.conns:
+            self.names.setCurrentRow(list(self.conns).index(select))
+        elif self.conns:
             self.names.setCurrentRow(0)
+        self._show_kind()
 
-    FIELDS = {"jdbc": ("driver", "url", "jars"), "ssh": ("host", "port", "username", "key_file"),
-              "smtp": ("host", "port", "security", "username", "sender")}
+    # --- showing a connection ---------------------------------------------------------
 
-    def _show_kind(self, kind):
+    def _kind(self) -> str:
+        return self.kind.currentData()
+
+    def _show_kind(self):
+        kind = self._kind()
+        enabled = self.current is not None
+        for w in self.editor_widgets:
+            w.setEnabled(enabled)
+        self.help.setText(self.HELP[kind] if enabled else "Click New… to add a connection.")
         for key, edit in self.edits.items():
-            widget = edit.parentWidget() if key == "jars" else edit
-            self.form.setRowVisible(widget, key in self.FIELDS[kind])
-        for w in (self.props, self.add_prop, self.remove_prop):
-            w.setVisible(kind == "jdbc")
-        self.form.setRowVisible(self.props_label, kind == "jdbc")
+            self.form.setRowVisible(self.jar_row if key == "jars" else edit, enabled and key in self.FIELDS[kind])
+        self.edits["port"].setPlaceholderText({"ssh": "22", "smtp": "25 (or 587 with starttls, 465 with ssl)"}.get(kind, ""))
+        for w in (self.props, self.props_label, self.add_prop, self.remove_prop):
+            w.setVisible(enabled and kind == "jdbc")
+        self.form.setRowVisible(self.password, enabled)
+        self.form.setRowVisible(self.password_status, enabled)
+        self._show_password_status()
+
+    def _password_ref(self, conn: dict):
+        return (conn.get("properties") or {}).get("password") if conn.get("kind") == "jdbc" else conn.get("password")
+
+    def _show_password_status(self):
+        if self.current is None:
+            return
+        if self.current in self.passwords:
+            text = "A new password will be saved when you click Save."
+        else:
+            ref = self._password_ref(self.conns.get(self.current, {}))
+            saved = False
+            if isinstance(ref, str) and ref.startswith("secret:"):
+                try:
+                    self.home.get_secret(ref[len("secret:"):])
+                    saved = True
+                except (KeyError, PermissionError):
+                    pass
+            text = ("A password is saved. Type here only to change it." if saved else
+                    "No password saved. Type it here; it is stored securely, never in the connections file.")
+        self.password_status.setText(f"<span style='color:gray'>{text}</span>")
 
     def _add_prop(self, key, value):
         row = self.props.rowCount()
@@ -207,85 +276,158 @@ class ConnectionsDialog(QDialog):
         self.props.setItem(row, 1, QTableWidgetItem(str(value)))
 
     def _store_current(self):
+        """Copy the form into self.conns (nothing is written to disk until Save)."""
         if self.current is None or self.current not in self.conns:
             return
-        kind = self.kind.currentText()
-        old = self.conns[self.current]
+        kind, old = self._kind(), self.conns[self.current]
         conn = {"kind": kind}
+        for key in self.FIELDS[kind]:
+            text = self.edits[key].text().strip()
+            if key == "jars":
+                conn["jars"] = [j.strip() for j in text.split(";") if j.strip()]
+            elif key == "username" and kind == "jdbc":
+                continue  # a JDBC user name is a driver setting
+            elif text:
+                conn[key] = int(text) if key == "port" and text.isdigit() else text
         if kind == "jdbc":
-            conn.update(driver=self.edits["driver"].text().strip(), url=self.edits["url"].text().strip(),
-                        jars=[j.strip() for j in self.edits["jars"].text().split(";") if j.strip()])
             props = {}
+            if self.edits["username"].text().strip():
+                props["user"] = self.edits["username"].text().strip()
             for r in range(self.props.rowCount()):
                 key = self.props.item(r, 0) and self.props.item(r, 0).text().strip()
-                if key:
+                if key and key not in ("user", "password"):
                     props[key] = self.props.item(r, 1).text() if self.props.item(r, 1) else ""
+            if self._password_ref(old):
+                props["password"] = self._password_ref(old)
             conn["properties"] = props
-        else:
-            for key in self.FIELDS[kind]:
-                text = self.edits[key].text().strip()
-                if text:
-                    conn[key] = int(text) if key == "port" and text.isdigit() else text
-            if old.get("kind") == kind and old.get("password"):
-                conn["password"] = old["password"]
+        elif self._password_ref(old) and old.get("kind") != "jdbc":
+            conn["password"] = self._password_ref(old)
+        if self.password.text():
+            self.passwords[self.current] = self.password.text()
+            self.password.clear()
         self.conns[self.current] = conn
 
     def _select(self, name):
         self._store_current()
         self.current = name or None
         conn = self.conns.get(name, {})
-        self.kind.setCurrentText(conn.get("kind", "jdbc"))
+        self.kind.blockSignals(True)
+        self.kind.setCurrentIndex(max(self.kind.findData(conn.get("kind", "jdbc")), 0))
+        self.kind.blockSignals(False)
+        props = dict(conn.get("properties") or {})
         jars = conn.get("jars") or []
         for key, edit in self.edits.items():
-            edit.setText("; ".join([jars] if isinstance(jars, str) else jars) if key == "jars" else str(conn.get(key, "")))
+            if key == "jars":
+                edit.setText("; ".join([jars] if isinstance(jars, str) else jars))
+            elif key == "username" and conn.get("kind") == "jdbc":
+                edit.setText(str(props.get("user", "")))
+            else:
+                edit.setText(str(conn.get(key, "")))
+        self.password.clear()
         self.props.setRowCount(0)
-        for key, value in (conn.get("properties") or {}).items():
-            self._add_prop(key, value)
+        for key, value in props.items():
+            if key not in ("user", "password"):
+                self._add_prop(key, value)
+        self.test_result.clear()
+        self._show_kind()
 
-    def _add(self):
-        name, ok = QInputDialog.getText(self, "New connection", "Name (letters, digits, _):")
+    # --- buttons ----------------------------------------------------------------------
+
+    def _ask_name(self, title, text="") -> str | None:
+        name, ok = QInputDialog.getText(self, title, "Name (letters, digits and _, e.g. warehouse or appserver):", text=text)
         name = name.strip()
-        if ok and name and name not in self.conns:
-            self.conns[name] = {"kind": "jdbc", "properties": {}}
-            self.names.addItem(name)
-            self.names.setCurrentRow(self.names.count() - 1)
+        if not ok or not name:
+            return None
+        if not IDENTIFIER.match(name):
+            QMessageBox.warning(self, title, f"'{name}' can only contain letters, digits and _.")
+            return None
+        if name in self.conns:
+            QMessageBox.warning(self, title, f"There is already a connection named '{name}'.")
+            return None
+        return name
+
+    def _add(self, kind):
+        name = self._ask_name("New connection")
+        if name is None:
+            return
+        self._store_current()
+        self.conns[name] = {"kind": kind or "jdbc"}
+        self.created = name
+        self.names.addItem(name)
+        self.names.setCurrentRow(self.names.count() - 1)
+
+    def _rename(self):
+        if self.current is None:
+            return
+        old = self.current
+        new = self._ask_name("Rename connection", old)
+        if new is None:
+            return
+        self._store_current()
+        self.conns = {(new if k == old else k): v for k, v in self.conns.items()}
+        if old in self.passwords:
+            self.passwords[new] = self.passwords.pop(old)
+        self.current = new
+        self.names.currentItem().setText(new)
+        QMessageBox.information(self, "Renamed", f"Flows that use '{old}' need to be changed to '{new}'.")
 
     def _remove(self):
         item = self.names.currentItem()
         if item is not None:
             self.conns.pop(item.text(), None)
+            self.passwords.pop(item.text(), None)
             self.current = None
             self.names.takeItem(self.names.row(item))
+            self._show_kind()
 
     def _browse(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "JDBC driver jars", "", "Jar files (*.jar)")
         if paths:
             self.edits["jars"].setText("; ".join(paths))
 
-    def _set_password(self):
-        if self.current is None:
-            return
-        value, ok = QInputDialog.getText(self, "Password", f"Password for '{self.current}':", QLineEdit.Password)
-        if not ok:
-            return
-        secret = f"{self.current}_password"
-        where = self.home.set_secret(secret, value)
+    def _write(self):
+        """Save connections.yaml and any new passwords (to the secret store)."""
         self._store_current()
-        if self.kind.currentText() in ("ssh", "smtp"):
-            self.conns[self.current]["password"] = f"secret:{secret}"
-        else:
-            for r in range(self.props.rowCount()):
-                if self.props.item(r, 0).text().strip() == "password":
-                    self.props.item(r, 1).setText(f"secret:{secret}")
-                    break
+        for name, value in self.passwords.items():
+            if name not in self.conns:
+                continue
+            secret = f"{name}_password"
+            self.home.set_secret(secret, value)
+            conn = self.conns[name]
+            if conn["kind"] == "jdbc":
+                conn.setdefault("properties", {})["password"] = f"secret:{secret}"
             else:
-                self._add_prop("password", f"secret:{secret}")
-        QMessageBox.information(self, "Password saved", f"Saved in {where}.")
-
-    def _save(self):
-        self._store_current()
+                conn["password"] = f"secret:{secret}"
+        self.passwords.clear()
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "connections.yaml").write_text(yaml.safe_dump(self.conns, sort_keys=False), encoding="utf-8")
+        self._show_password_status()
+
+    def _test(self):
+        if self.current is None:
+            return
+        self._write()
+        self.test_result.setText("Testing…")
+        self.test_button.setEnabled(False)
+        proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("TASKLOOM_HOME", str(self.home.root))
+        proc.setProcessEnvironment(env)
+
+        def done(code, _status):
+            out = bytes(proc.readAllStandardOutput()).decode(errors="replace").strip()
+            err = bytes(proc.readAllStandardError()).decode(errors="replace").strip().removeprefix("error: ")
+            ok = code == 0
+            self.test_result.setText(f"<span style='color:{'#1f8a4c' if ok else '#c0392b'}'>"
+                                     f"{'✓ ' + html.escape(out) if ok else '✕ ' + html.escape(err[-400:])}</span>")
+            self.test_button.setEnabled(True)
+
+        proc.finished.connect(done)
+        program, *args = runner_command()
+        proc.start(program, args + ["connection", "test", self.current])
+
+    def _save(self):
+        self._write()
         self.accept()
 
 

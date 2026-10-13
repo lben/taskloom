@@ -98,7 +98,7 @@ class Scheduler:
             if flow is None:
                 continue
             for i, trigger in enumerate(flow.triggers):
-                key = f"{path}#{i}#{trigger.text}"
+                key = f"{path}#{trigger.block or i}#{trigger.text}"
                 last = self._last(key)
                 if last is None:  # a new schedule starts from now; nothing is "missed"
                     self._set_last(key, now)
@@ -117,30 +117,34 @@ class Scheduler:
                     self._tell(flow, "skipped", "Missed runs skipped",
                                f"{flow.name}: {len(missed)} run(s) were due while the scheduler was off")
                 for n, as_of in enumerate(to_run):
-                    self._request(str(path), flow, as_of, force_queue=n > 0)
+                    self._request(str(path), flow, (as_of, trigger.block), force_queue=n > 0)
         self._write_heartbeat()
 
-    def _request(self, path: str, flow, as_of: dt.datetime, force_queue: bool = False):
+    def _request(self, path: str, flow, when: tuple, force_queue: bool = False):
+        """`when` is (due time, Schedule block or None)."""
         if any(r.flow == path for r in self.runs) or self.queued.get(path):
             policy = "queue" if force_queue else flow.overlap
             if policy == "skip":
                 self._tell(flow, "skipped", "Run skipped", f"{flow.name}: the previous run is still going")
                 return
             if policy == "queue":
-                self.queued.setdefault(path, []).append(as_of)
+                self.queued.setdefault(path, []).append(when)
                 return
-        self._start_or_wait(path, as_of)
+        self._start_or_wait(path, when)
 
-    def _start_or_wait(self, path: str, as_of: dt.datetime):
+    def _start_or_wait(self, path: str, when: tuple):
         limit = self.home.settings()["max_concurrent_runs"]
         if limit and len(self.runs) >= int(limit):
-            self.waiting.append((path, as_of))
+            self.waiting.append((path, when))
         else:
-            self._start(path, as_of)
+            self._start(path, when)
 
-    def _start(self, path: str, as_of: dt.datetime):
+    def _start(self, path: str, when: tuple):
+        as_of, block = when
         command = runner_command() + ["run", path, "--json-events", "--notify",
                                       "--as-of", as_of.isoformat(sep=" ", timespec="minutes")]
+        if block:
+            command += ["--trigger", block]
         proc = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},

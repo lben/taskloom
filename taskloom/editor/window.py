@@ -17,10 +17,9 @@ from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWind
 
 from .. import params as P
 from ..config import Home
-from ..flow import FlowError, load_flow, run_clock, validate
+from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
 from ..history import History
 from ..launch import runner_command
-from ..schedule import Trigger
 from ..scheduler import acquire_lock
 from ..registry import discover
 from .canvas import FlowScene, FlowView
@@ -120,8 +119,6 @@ class MainWindow(QMainWindow):
         self.flows_panel.activated.connect(lambda tab: self.tabs.setCurrentWidget(tab))
         self.flows_panel.run_requested.connect(self.run_flow)
         self.flows_panel.last_run_requested.connect(self._open_last_run)
-        self.flows_panel.schedule_toggled.connect(self.set_scheduled)
-        self.flow_settings.schedule_toggled.connect(lambda on: self.current and self.set_scheduled(self.current, on))
         self.history_panel.open_run.connect(self.show_history_run)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
         self._poll = QTimer(self, interval=2000)
@@ -137,7 +134,7 @@ class MainWindow(QMainWindow):
             self._sized = True
             self.resizeDocks([self.output], [220], Qt.Vertical)
             self.resizeDocks([self.inspector], [470], Qt.Horizontal)
-            QTimer.singleShot(0, lambda: self.current and self.current.view.center_on_flow())
+            QTimer.singleShot(0, self, lambda: self.current and self.current.view.center_on_flow())
 
     def _dock(self, title, widget, area) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -177,11 +174,11 @@ class MainWindow(QMainWindow):
         delete.setShortcutContext(Qt.WidgetWithChildrenShortcut)
         self.tabs.addAction(delete)
         m = bar.addMenu("&Run")
-        self.run_action = act(m, "▶ Run", lambda: self.run_flow(self.current), "F5")
+        self.run_action = act(m, "▶ Run now", lambda: self.run_flow(self.current), "F5")
         self.stop_action = act(m, "Stop", lambda: self.stop(self.current), "Shift+F5")
         self.validate_action = act(m, "Validate", lambda: self.validate(self.current), "F7")
         m = bar.addMenu("&Tools")
-        act(m, "Connections…", lambda: ConnectionsDialog(self.home, self).exec())
+        act(m, "Connections…", self.edit_connections)
         act(m, "Settings…", lambda: SettingsDialog(self.home, self).exec())
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
@@ -252,7 +249,12 @@ class MainWindow(QMainWindow):
             path = Path(chosen)
         tab.doc.save(path.resolve())
         self._load_last_run(tab)
+        self._sync_schedule(tab)
         return True
+
+    def edit_connections(self):
+        ConnectionsDialog(self.home, self).exec()
+        self.properties.refresh()  # new or renamed connections show up in the block's lists
 
     def close_tab(self, tab: FlowTab | None) -> bool:
         if tab is None:
@@ -301,7 +303,7 @@ class MainWindow(QMainWindow):
             self.right_tabs.setCurrentWidget(self.properties)
         self.log.set_filter(block_id)
         if block_id is not None:
-            self.preview.show_tables(block_id, tab.block_info.get(block_id, {}).get("tables"))
+            self.preview.show_outputs(block_id, tab.block_info.get(block_id))
 
     # --- copy and paste -------------------------------------------------------------
 
@@ -456,7 +458,8 @@ class MainWindow(QMainWindow):
 
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
         status = info.get("status")
-        tab.block_info[block] = {"status": status, "tables": info.get("tables") or {}}
+        tab.block_info[block] = {"status": status, "tables": info.get("tables") or {},
+                                 "previews": info.get("previews") or {}, "error": info.get("error")}
         attempts = info.get("attempts") or 0
         if status == "success":
             text = "✓ " + _short(info.get("summary") or "done", 48) + (f" · retried {attempts - 1}×" if attempts > 1 else "")
@@ -466,7 +469,7 @@ class MainWindow(QMainWindow):
             text = status
         tab.scene.set_status(block, status, text)
         if tab is self.current and block in tab.scene.selected_block_ids():
-            self.preview.show_tables(block, tab.block_info[block]["tables"])
+            self.preview.show_outputs(block, tab.block_info[block])
 
     def _ask(self, run: RunProcess, e: dict):
         dialog = AskDialog(e.get("block", ""), e.get("prompt", ""), e.get("kind", "text"),
@@ -515,30 +518,23 @@ class MainWindow(QMainWindow):
             tab.scheduled = tab.doc.path is not None and tab.doc.path in self.home.scheduled_flows()
         except ValueError:
             tab.scheduled = False
-        times = []
-        if tab.scheduled:
-            now = dt.datetime.now()
-            for data in tab.doc.data.get("triggers") or []:
-                try:
-                    times.append(Trigger(data).next_after(now))
-                except ValueError:
-                    pass
+        now = dt.datetime.now()
+        times = [t.next_after(now) for t in schedules_of(tab.doc.data)[0]] if tab.scheduled else []
         tab.next_run = min((t for t in times if t), default=None)
         self.flows_panel.update_tab(tab)
 
-    def set_scheduled(self, tab: FlowTab, enabled: bool):
-        if enabled and (tab.doc.dirty or tab.doc.path is None) and not self.save(tab):
-            return
-        if enabled and not tab.doc.data.get("triggers"):
-            QMessageBox.information(self, "No schedule yet", "Add a schedule in the Flow tab first.")
-            self.flow_settings.refresh()
-            return
-        self.home.set_scheduled(tab.doc.path, enabled)
+    def _sync_schedule(self, tab: FlowTab):
+        """A saved flow with a Schedule block is run by the scheduler; without one it is not."""
+        scheduled = bool(schedules_of(tab.doc.data)[0])
+        try:
+            was = tab.doc.path in self.home.scheduled_flows()
+        except ValueError:
+            was = False
+        if scheduled != was:
+            self.home.set_scheduled(tab.doc.path, scheduled)
         self._refresh_schedule(tab)
-        if tab is self.current:
-            self.flow_settings.refresh()
-        if enabled and not self.scheduler_running():
-            self.statusBar().showMessage("Scheduled. Start the scheduler (button at the top right) so it runs.", 8000)
+        if scheduled and not self.scheduler_running():
+            self.statusBar().showMessage("This flow has a schedule. Turn the scheduler on (top right) so it runs.", 10000)
 
     def scheduler_running(self) -> bool:
         """The scheduler holds its lock file while it runs."""
@@ -571,7 +567,7 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError) as e:
             QMessageBox.warning(self, "Cannot stop the scheduler", str(e))
             return
-        QTimer.singleShot(1500, lambda: self._show_scheduler_state(self.scheduler_running()))
+        QTimer.singleShot(1500, self, lambda: self._show_scheduler_state(self.scheduler_running()))
         self.statusBar().showMessage("Scheduler stopped", 5000)
 
     def start_scheduler(self):
@@ -585,7 +581,7 @@ class MainWindow(QMainWindow):
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self.statusBar().showMessage("Scheduler started", 5000)
-        QTimer.singleShot(2000, lambda: self._show_scheduler_state(self.scheduler_running()))
+        QTimer.singleShot(2000, self, lambda: self._show_scheduler_state(self.scheduler_running()))
 
     def _refresh_history(self, tab: FlowTab):
         if tab.doc.path is None or not self.home.history_db.exists():
@@ -652,4 +648,4 @@ def _smoke_test(app, window: MainWindow, tab: FlowTab):
     """Run the flow from the editor (through the runner program) and quit with 0 if it succeeded."""
     run = window.start_run(tab, {})
     run.finished.connect(lambda status: app.exit(0 if status == "success" else 1))
-    QTimer.singleShot(120_000, lambda: app.exit(2))
+    QTimer.singleShot(120_000, window, lambda: app.exit(2))

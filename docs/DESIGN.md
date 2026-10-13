@@ -38,7 +38,7 @@ workstation or on a Linux server, without admin/root rights.
 | **Block** | A unit of work (Run Query, Send Email, …) with typed inputs, outputs and config. |
 | **Port** | A named, typed input or output on a block. |
 | **Edge** | Connects an output port to an input port; data travels along it. |
-| **Trigger** | How a flow starts: manual or schedule. Part of the flow file. |
+| **Start block** | How a flow starts: Manual Start (Run now) or Schedule (cron or one time), on the canvas. Every block has an `after` input (the connector at the top left of its header) to run after a start block or another block. |
 | **Connection** | A named, reusable endpoint (JDBC database, SMTP, SSH host). Flows refer to it by name only. |
 | **Secret** | Password or token, stored outside flows and connections. |
 | **Run** | One execution of a flow: status, per-block logs, outputs, timings. |
@@ -276,9 +276,9 @@ flows can email you directly.
   A run counts as missed when it starts more than 2 minutes late. Every scheduled
   run computes its parameters as of the time it was due (`taskloom run --as-of`), so
   a caught-up Monday 07:00 run reports on Monday even when it runs on Tuesday.
-- Schedules live in the flow file (`triggers:`, edited in the editor's Flow tab) and
+- Schedules come from Schedule blocks (or a `triggers:` list in the flow file) and
   use the machine's local time; `scheduled.yaml` in the Taskloom folder lists the
-  flows the scheduler runs (the editor's "Run on schedule" switch).
+  flows the scheduler runs (kept up to date when you save a flow in the editor).
 - Single-instance lock so it never runs twice; `scheduler.heartbeat` shows it is alive.
 
 **Linux server** (works even without root, crontab or systemd user lingering)
@@ -365,7 +365,7 @@ PySide6 (Qt) application:
 | Servers | SSH Command, Remote Extract, Start Remote Process, Stop Remote Process, Health Check (URL/PID/port) | M3 |
 | Files | Copy/Move/Delete Files between local folders, network shares and servers (SFTP); `server:path` locations make uploads and downloads plain copies | M3 |
 
-Schedules are flow settings (Flow tab) rather than blocks on the canvas.
+Start blocks (Manual Start, Schedule) begin a run; a flow-level `triggers:` list in the file is also read.
 
 ---
 

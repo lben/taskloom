@@ -20,8 +20,7 @@ from .. import params as P
 from ..block import IDENTIFIER, fields
 from ..calendars import load_calendar
 from ..expr import functions
-from ..flow import OVERLAP_POLICIES, BlockSpec, Retry, block_config, parse_duration
-from ..schedule import MISFIRE_POLICIES, Trigger
+from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
 from .canvas import BLOCK_MIME, CATEGORY_COLORS, STATUS_COLORS, USER_COLOR
 
 MONO = QFontDatabase.systemFont(QFontDatabase.FixedFont)
@@ -195,7 +194,6 @@ class FlowsPanel(QWidget):
     activated = Signal(object)  # the FlowTab
     run_requested = Signal(object)
     last_run_requested = Signal(object)
-    schedule_toggled = Signal(object, bool)
 
     def __init__(self):
         super().__init__()
@@ -265,12 +263,6 @@ class FlowsPanel(QWidget):
         menu.addAction("Run now", lambda: self.run_requested.emit(tab))
         menu.addAction("Open", lambda: self.activated.emit(tab))
         menu.addAction("Open last run", lambda: self.last_run_requested.emit(tab))
-        if tab.doc.path is not None:
-            menu.addSeparator()
-            if tab.scheduled:
-                menu.addAction("Disable schedule", lambda: self.schedule_toggled.emit(tab, False))
-            else:
-                menu.addAction("Enable schedule", lambda: self.schedule_toggled.emit(tab, True))
         menu.exec(self.list.mapToGlobal(pos))
 
 
@@ -366,7 +358,8 @@ class PropertiesPanel(QScrollArea):
         config = spec.get("config") or {}
         for key, f in cls.config.items():
             widget = self._field_widget(key, f, config.get(key))
-            label = QLabel(key.replace("_", " ").capitalize())
+            words = key.replace("_", " ").capitalize().split(" ")
+            label = QLabel(" ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words))
             if f.help:
                 label.setToolTip(f.help)
                 widget.setToolTip(f.help)
@@ -407,16 +400,7 @@ class PropertiesPanel(QScrollArea):
             w.toggled.connect(lambda checked: self._set(key, None if checked == default else checked))
             return w
         if isinstance(f, fields.Connection):
-            w = QComboBox(editable=True)
-            try:
-                names = [n for n, c in self.home.connections().items() if c.get("kind") == f.kind]
-            except ValueError:
-                names = []
-            w.addItems(names)
-            w.setCurrentText(_to_text(value))
-            w.lineEdit().editingFinished.connect(lambda: self._set(key, w.currentText().strip() or None))
-            w.activated.connect(lambda _: self._set(key, w.currentText().strip() or None))
-            return w
+            return self._connection_widget(key, f, value)
         if isinstance(f, fields.Code):
             w = CodeEdit(_to_text(value))
             w.setPlaceholderText(_to_text(default))
@@ -455,6 +439,40 @@ class PropertiesPanel(QScrollArea):
             row.addWidget(browse)
             return box
         return w
+
+    def _connection_widget(self, key, f, value):
+        """A list of the connections of the right kind, with buttons to edit one or create one."""
+        try:
+            names = [n for n, c in self.home.connections().items() if c.get("kind") == f.kind]
+        except ValueError:
+            names = []
+        combo = QComboBox()
+        combo.addItem("" if names else "(no connections yet: click New…)", "")
+        for name in names:
+            combo.addItem(name, name)
+        if value and value not in names:
+            combo.addItem(f"{value} (missing)", value)
+        combo.setCurrentIndex(max(combo.findData(value or ""), 0))
+        combo.activated.connect(lambda _: self._set(key, combo.currentData() or None))
+        edit_button, new_button = QToolButton(text="Edit…"), QToolButton(text="New…")
+        edit_button.setEnabled(bool(value))
+        edit_button.clicked.connect(lambda: self._open_connections(key, select=combo.currentData()))
+        new_button.clicked.connect(lambda: self._open_connections(key, new_kind=f.kind))
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(combo, 1)
+        row.addWidget(edit_button)
+        row.addWidget(new_button)
+        return box
+
+    def _open_connections(self, key, select=None, new_kind=None):
+        from .dialogs import ConnectionsDialog
+
+        dialog = ConnectionsDialog(self.home, self.window(), select=select, new_kind=new_kind)
+        if dialog.exec() and new_kind and dialog.created in dialog.conns:
+            self._set(key, dialog.created)  # use the connection just created
+        self.refresh()
 
     def _browse(self, line_edit, commit):
         path, _ = QFileDialog.getSaveFileName(self, "Choose a file", line_edit.text(),
@@ -676,9 +694,7 @@ class ParametersPanel(QWidget):
 # --- Flow settings ----------------------------------------------------------------
 
 class FlowSettingsPanel(QWidget):
-    """Name, calendar and time zone of the flow, and when the scheduler runs it."""
-
-    schedule_toggled = Signal(bool)
+    """Name, calendar and time zone of the flow, and what happens when scheduled runs overlap."""
 
     def __init__(self, home):
         super().__init__()
@@ -690,58 +706,27 @@ class FlowSettingsPanel(QWidget):
         self.calendar = QComboBox(editable=True)
         self.calendar.lineEdit().setPlaceholderText("default from settings")
         self.timezone = QLineEdit(placeholderText="machine local, e.g. Europe/Madrid")
+        self.overlap = QComboBox()
+        for value, label in (("skip", "skip the new run"), ("queue", "run it after the current one"),
+                             ("allow", "run both at the same time")):
+            self.overlap.addItem(label, value)
         self.form.addRow("Name", self.name)
         self.form.addRow("Description", self.description)
         self.form.addRow("Calendar", self.calendar)
         self.form.addRow("Time zone", self.timezone)
+        self.form.addRow("If a scheduled run starts while the last one is still going", self.overlap)
         layout.addLayout(self.form)
-
-        box = QGroupBox("Schedule")
-        schedule = QVBoxLayout(box)
-        self.scheduled = QCheckBox("Run on schedule (the scheduler must be running)")
-        schedule.addWidget(self.scheduled)
-        self.triggers = QTableWidget(0, 3)
-        self.triggers.setHorizontalHeaderLabels(["When", "Cron or date and time", "If missed"])
-        header = self.triggers.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.triggers.verticalHeader().hide()
-        self.triggers.setMinimumHeight(110)
-        schedule.addWidget(self.triggers)
-        buttons = QHBoxLayout()
-        add, remove = QPushButton("Add"), QPushButton("Remove")
-        buttons.addWidget(add)
-        buttons.addWidget(remove)
-        buttons.addStretch()
-        schedule.addLayout(buttons)
-        overlap_row = QFormLayout()
-        self.overlap = QComboBox()
-        self.overlap.addItems(OVERLAP_POLICIES)
-        overlap_row.addRow("If the previous run is still going", self.overlap)
-        schedule.addLayout(overlap_row)
-        self.next_label = QLabel()
-        self.next_label.setWordWrap(True)
-        schedule.addWidget(self.next_label)
-        hint = QLabel("Cron: minute hour day month weekday, e.g. <code>0 7 * * MON-FRI</code> (07:00 on weekdays), "
-                      "<code>*/5 * * * *</code> (every 5 minutes). Once: <code>2026-10-08 15:30</code>. "
-                      "If missed: what to do with runs due while the computer was off.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: palette(placeholder-text);")
-        schedule.addWidget(hint)
-        layout.addWidget(box)
+        self.schedule = QLabel()
+        self.schedule.setWordWrap(True)
+        layout.addWidget(self.schedule)
         layout.addStretch()
-
         self.name.editingFinished.connect(lambda: self._set("name", self.name.text().strip()))
         self.description.editingFinished.connect(lambda: self._set("description", self.description.text().strip()))
         self.calendar.lineEdit().editingFinished.connect(lambda: self._set("calendar", self.calendar.currentText().strip()))
         self.calendar.activated.connect(lambda _: self._set("calendar", self.calendar.currentText().strip()))
         self.timezone.editingFinished.connect(lambda: self._set("timezone", self.timezone.text().strip()))
-        self.overlap.activated.connect(lambda _: self._set("overlap", None if self.overlap.currentText() == "skip" else self.overlap.currentText()))
-        self.scheduled.clicked.connect(lambda: self.schedule_toggled.emit(self.scheduled.isChecked()))
-        add.clicked.connect(lambda: (self._add_trigger("cron", "0 7 * * MON-FRI", "run_once"), self._commit_triggers()))
-        remove.clicked.connect(lambda: (self.triggers.removeRow(self.triggers.currentRow()), self._commit_triggers()))
-        self.triggers.itemChanged.connect(lambda _: self._commit_triggers())
+        self.overlap.activated.connect(lambda _: self._set("overlap", None if self.overlap.currentData() == "skip"
+                                                           else self.overlap.currentData()))
 
     def _set(self, key, value):
         if self.doc is not None:
@@ -751,49 +736,19 @@ class FlowSettingsPanel(QWidget):
         self.doc = doc
         self.refresh()
 
-    def _add_trigger(self, kind, value, misfire):
-        self.triggers.blockSignals(True)
-        r = self.triggers.rowCount()
-        self.triggers.insertRow(r)
-        kinds = QComboBox()
-        kinds.addItems(["cron", "once"])
-        kinds.setCurrentText(kind)
-        misfires = QComboBox()
-        misfires.addItems(MISFIRE_POLICIES)
-        misfires.setCurrentText(misfire)
-        self.triggers.setCellWidget(r, 0, kinds)
-        self.triggers.setItem(r, 1, QTableWidgetItem(value))
-        self.triggers.setCellWidget(r, 2, misfires)
-        kinds.activated.connect(lambda _: self._commit_triggers())
-        misfires.activated.connect(lambda _: self._commit_triggers())
-        self.triggers.blockSignals(False)
-
-    def _commit_triggers(self):
-        triggers = []
-        for r in range(self.triggers.rowCount()):
-            kind = self.triggers.cellWidget(r, 0).currentText()
-            value = self.triggers.item(r, 1).text().strip() if self.triggers.item(r, 1) else ""
-            spec = {"cron" if kind == "cron" else "at": value}
-            misfire = self.triggers.cellWidget(r, 2).currentText()
-            if misfire != "run_once":
-                spec["misfire"] = misfire
-            triggers.append({"schedule": spec})
-        self._set("triggers", triggers or None)
-
-    def _show_next(self):
-        problems, upcoming = [], []
+    def _show_schedule(self):
+        triggers, problems = schedules_of(self.doc.data)
         now = dt.datetime.now()
-        for i, data in enumerate(self.doc.data.get("triggers") or []):
-            try:
-                t = Trigger(data).next_after(now)
-                if t:
-                    upcoming.append(t)
-            except ValueError as e:
-                problems.append(f"Schedule {i + 1}: {e}")
-        text = "Next run: " + min(upcoming).strftime("%a %Y-%m-%d %H:%M") if upcoming else "No upcoming runs."
+        upcoming = [t for t in (tr.next_after(now) for tr in triggers) if t]
         if problems:
             text = "<span style='color:%s'>%s</span>" % (STATUS_COLORS["failed"], html.escape("; ".join(problems)))
-        self.next_label.setText(text)
+        elif upcoming:
+            text = (f"Next scheduled run: <b>{min(upcoming):%a %Y-%m-%d %H:%M}</b> (when the scheduler is on). "
+                    "Change it in the Schedule block.")
+        else:
+            text = ("This flow runs only when you press Run. To run it by itself at set times, add a "
+                    "<b>Schedule</b> block (in Start) and connect it to the first block.")
+        self.schedule.setText(text)
 
     def refresh(self):
         if self.doc is None:
@@ -805,19 +760,8 @@ class FlowSettingsPanel(QWidget):
         self.calendar.addItems(list(dict.fromkeys(names)))
         self.calendar.setCurrentText(self.doc.data.get("calendar") or "")
         self.timezone.setText(self.doc.data.get("timezone") or "")
-        self.overlap.setCurrentText(self.doc.data.get("overlap") or "skip")
-        self.scheduled.setEnabled(self.doc.path is not None)
-        self.scheduled.setToolTip("" if self.doc.path else "Save the flow first")
-        try:
-            self.scheduled.setChecked(self.doc.path in self.home.scheduled_flows())
-        except ValueError:
-            self.scheduled.setChecked(False)
-        self.triggers.setRowCount(0)
-        for data in self.doc.data.get("triggers") or []:
-            spec = (data or {}).get("schedule") or {}
-            kind = "cron" if "cron" in spec else "once"
-            self._add_trigger(kind, str(spec.get("cron", spec.get("at", ""))), spec.get("misfire", "run_once"))
-        self._show_next()
+        self.overlap.setCurrentIndex(max(self.overlap.findData(self.doc.data.get("overlap") or "skip"), 0))
+        self._show_schedule()
 
 
 # --- Log ----------------------------------------------------------------------------
@@ -906,7 +850,10 @@ class FrameModel(QAbstractTableModel):
 
 
 class PreviewPanel(QWidget):
+    """What the selected block produced in the run on screen: tables as a grid, anything else as text."""
+
     PREVIEW_ROWS = 200
+    HINT = "Select a block to see what it produced in the last run (run the flow first)."
 
     def __init__(self):
         super().__init__()
@@ -914,7 +861,7 @@ class PreviewPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 2, 6, 0)
-        self.label = QLabel("Select a block that produced a table in the last run.")
+        self.label = QLabel(self.HINT)
         self.ports = QComboBox()
         self.ports.hide()
         bar.addWidget(self.label)
@@ -923,28 +870,48 @@ class PreviewPanel(QWidget):
         layout.addLayout(bar)
         self.view = QTableView()
         self.view.setFont(MONO)
+        self.text = QPlainTextEdit(readOnly=True)
+        self.text.setFont(MONO)
+        self.text.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self.view)
+        layout.addWidget(self.text)
+        self.text.hide()
         self.tables: dict[str, str] = {}
+        self.previews: dict[str, str] = {}
+        self.block_id = None
         self.ports.currentTextChanged.connect(self._load)
 
-    def show_tables(self, block_id, tables: dict):
-        self.tables = tables or {}
+    def show_outputs(self, block_id, info: dict | None):
+        info = info or {}
+        self.block_id = block_id
+        self.tables, self.previews = info.get("tables") or {}, info.get("previews") or {}
+        names = list(self.tables) + [p for p in self.previews if p not in self.tables]
         self.ports.blockSignals(True)
         self.ports.clear()
-        self.ports.addItems(list(self.tables))
+        self.ports.addItems(names)
         self.ports.blockSignals(False)
-        self.ports.setVisible(len(self.tables) > 1)
-        if not self.tables:
+        self.ports.setVisible(len(names) > 1)
+        if not names:
             self.view.setModel(None)
-            self.label.setText(f"{block_id}: no table output in this run." if block_id else
-                               "Select a block that produced a table in the last run.")
+            self.text.hide()
+            self.view.show()
+            status = info.get("status")
+            self.label.setText(self.HINT if not block_id or not status else
+                               f"{block_id}: {status}, no output" + (f" ({info['error']})" if info.get("error") else ""))
             return
-        self.block_id = block_id
-        self._load(next(iter(self.tables)))
+        self._load(names[0])
 
     def _load(self, port):
         if not port:
             return
+        if port not in self.tables:
+            self.view.hide()
+            self.text.show()
+            self.text.setPlainText(self.previews[port])
+            self.label.setText(f"{self.block_id}.{port}:")
+            return
+        self.text.hide()
+        self.view.show()
         try:
             lazy = pl.scan_parquet(self.tables[port])
             total = lazy.select(pl.len()).collect().item()

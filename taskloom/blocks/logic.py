@@ -6,7 +6,7 @@ import polars as pl
 
 from ..block import Block, fields, ports
 from ..expr import evaluate
-from ..engine import SecretStr, run_flow
+from ..engine import SecretStr, preview, run_flow
 from ..flow import load_flow
 from ..table import Table
 
@@ -134,3 +134,18 @@ class ForEach(Block):
             raise RuntimeError(f"{len(failed)} of {len(results)} run(s) did not succeed: "
                                + ", ".join(f"{r['item']} (run #{r['run_id']})" for r in failed[:10]))
         return {"results": results}
+
+
+class Inspect(Block):
+    type_id = "logic.inspect"
+    title = "Inspect"
+    description = ("For checking your flow: put it between two blocks to see the data passing through "
+                   "(in the Log and in Data preview). It passes the data on unchanged.")
+    category = "Debug"
+    inputs = {"value": ports.Any(required=False)}
+    outputs = {"value": ports.Any()}
+    config = {"label": fields.Text(required=False, help="A name to recognise this check in the log")}
+
+    def run(self, ctx, value=None):
+        ctx.log((f"{self.config.label}: " if self.config.label else "") + preview(value))
+        return {"value": value}

@@ -55,13 +55,24 @@ taskloom editor examples/daily-sales-report.yaml
 
 - Drag blocks from the tree on the left onto the canvas (or double-click them); drag
   from an output port (right side of a block) to an input port (left side) to connect.
+  Hover over a block to see what it does.
+- **Start blocks** say how a flow starts. Connect their `start` output to the small
+  connector at the top left of the first block:
+  - **Manual Start**: the flow runs when you press **Run now** (F5).
+  - **Schedule**: the flow runs by itself at the times you set (e.g. `0 7 * * MON-FRI`)
+    while the scheduler is on. Saving a flow with a Schedule block schedules it.
+  A flow can have both. Without start blocks, Run now runs every block.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name and calendar.
-- **Run** (F5) saves, checks and runs the flow in a separate process: blocks show their
-  status live, the **Log** shows the selected block's output, **Data preview** shows
-  the tables it produced, and **Run history** reopens any past run. **Stop** cancels.
-- **Tools → Connections** and **Tools → Settings** edit your connections (passwords go
-  to the secret store) and settings such as the Java folder.
+- **Run now** saves, checks and runs the flow in a separate process: blocks show their
+  status live, the **Log** shows the selected block's messages, **Data preview** shows
+  everything the selected block produced (tables as a grid, other values as text), and
+  **Run history** reopens any past run. **Stop** cancels.
+- To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
+  the data on and shows it in the Log and Data preview.
+- Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
+  Connections**. Type the password in the Password field (it is stored in the system's
+  secure store, never in a file) and click **Save and test connection**.
 
 ## Flows
 

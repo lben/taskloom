@@ -78,7 +78,8 @@ class At:
 
 
 class Trigger:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, block: str | None = None):
+        self.block = block  # the Schedule block it comes from, or None for a flow-level trigger
         spec = data.get("schedule") if isinstance(data, dict) else None
         if not isinstance(spec, dict) or ("cron" in spec) == ("at" in spec):
             raise ValueError("a trigger looks like {schedule: {cron: '0 7 * * MON-FRI'}} or {schedule: {at: '2026-10-08 15:30'}}")

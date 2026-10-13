@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import params as P
+from .block import AFTER, all_ports
 from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
 from .history import History
 from .table import Table
@@ -112,6 +113,33 @@ def _now() -> str:
     return dt.datetime.now().isoformat(timespec="milliseconds")
 
 
+def preview(value, limit: int = 4000) -> str:
+    """A readable look at any value: a table's first rows, text, or a list/dict as JSON."""
+    import json
+
+    import polars as pl
+
+    if isinstance(value, Table):
+        with pl.Config(tbl_rows=20, tbl_cols=20, fmt_str_lengths=60, tbl_width_chars=200):
+            return f"{value.summary()}\n{value.head(20)}"
+    if isinstance(value, SecretStr):
+        return "***"
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(_masked(value), indent=2, default=str)[:limit]
+    return str(value)[:limit]
+
+
+def _masked(value):
+    """A copy with every secret, however deeply nested, replaced by ***."""
+    if isinstance(value, SecretStr):
+        return "***"
+    if isinstance(value, dict):
+        return {("***" if isinstance(k, SecretStr) else str(k)): _masked(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_masked(v) for v in value]
+    return value
+
+
 def _summary(produced: dict) -> str:
     parts = []
     for port, value in produced.items():
@@ -121,8 +149,11 @@ def _summary(produced: dict) -> str:
 
 
 def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
-             answers=None, as_of: dt.datetime | None = None) -> RunResult:
-    """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions."""
+             answers=None, as_of: dt.datetime | None = None, trigger: str | None = None) -> RunResult:
+    """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions.
+
+    `trigger` is the Schedule block that started a scheduled run; None means a manual run.
+    """
     errors, warnings = validate(flow, registry, home)
     if errors:
         raise FlowError(errors)
@@ -144,6 +175,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         for message in registry.warnings + warnings:
             emit({"event": "log", "level": "WARNING", "message": message})
         runner = _Runner(flow, registry, home, values, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
+        runner.fired = _fired_triggers(flow, registry, trigger)
         try:
             status = runner.run()
         except BaseException:
@@ -167,6 +199,10 @@ class _Runner:
     def run(self) -> str:
         unhandled_failure = False
         for block_id in order(self.flow):
+            cls = self.registry.get(self.flow.blocks[block_id].type)
+            if cls is not None and cls.is_trigger and block_id not in self.fired:
+                self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
+                continue
             if self.cancel.is_set():
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
@@ -208,7 +244,7 @@ class _Runner:
     def _input_ports(self, spec) -> dict:
         cls = self.registry.get(spec.type)
         try:
-            return cls.ports(block_config(cls, spec))[0]
+            return all_ports(cls, block_config(cls, spec))[0]
         except Exception:
             return {}  # the block reports its config problem when it runs
 
@@ -238,7 +274,8 @@ class _Runner:
             )
             started = time.monotonic()
             try:
-                result = self._attempt(cls(config), ctx, inputs, spec.timeout, attempt_cancel)
+                own = inputs if AFTER in in_ports else {k: v for k, v in inputs.items() if k != AFTER}
+                result = self._attempt(cls(config), ctx, own, spec.timeout, attempt_cancel)
                 produced = self._check_outputs(result, out_ports, ctx)
                 summary = _summary(produced)
             except Cancelled:
@@ -258,7 +295,8 @@ class _Runner:
                 continue
             self.emit({"event": "block_finished", "block": spec.id, "status": "success", "attempts": attempt,
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
-                       "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)}})
+                       "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)},
+                       "previews": {p: preview(v) for p, v in produced.items() if not isinstance(v, Table)}})
             return "success", produced
         raise AssertionError("unreachable")
 
@@ -312,6 +350,17 @@ class _Runner:
                 raise TypeError(f"output '{port}' must be a table, got {type(value).__name__}")
             produced[port] = value
         return produced
+
+
+def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:
+    """Start blocks that fire: the Schedule block of a scheduled run; Manual Start blocks of a manual
+    run, or every start block when the flow has no Manual Start (so pressing Run always runs it)."""
+    starts = {b: registry.get(s.type) for b, s in flow.blocks.items()}
+    starts = {b: cls for b, cls in starts.items() if cls is not None and cls.is_trigger}
+    if trigger is not None:
+        return {trigger} & set(starts)
+    manual = {b for b, cls in starts.items() if cls.type_id == "trigger.manual"}
+    return manual or set(starts)
 
 
 def _apply_retention(home, history: History):

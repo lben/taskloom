@@ -174,3 +174,13 @@ def test_a_changed_server_key_is_refused(tmp_path):
             ssh.connect(conn, home)
     finally:
         impostor.stop()
+
+
+def test_connection_test_reports_success_and_a_wrong_password(env, server, smtp):
+    ok = env.taskloom("connection", "test", "appserver")
+    assert ok.returncode == 0 and "Connected to 127.0.0.1 as tester" in ok.stdout
+    assert env.taskloom("connection", "test", "mailer").returncode == 0
+
+    env.write("home/secrets.yaml", "appserver_password: wrong\n").chmod(0o600)
+    bad = env.taskloom("connection", "test", "appserver")
+    assert bad.returncode == 1 and "Authentication" in bad.stderr

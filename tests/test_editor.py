@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QDialogButtonBox, QFileDialog, QMessageBox, QPushButton  # noqa: E402
+from PySide6.QtWidgets import QComboBox, QDialogButtonBox, QFileDialog, QMessageBox, QToolButton  # noqa: E402
 
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor.dialogs import AskDialog, OverlapDialog, RunDialog, SettingsDialog  # noqa: E402
@@ -240,7 +240,7 @@ def test_undo_restores_deleted_blocks_and_their_edges(tmp_path):
     assert list(doc.blocks) == [b]
 
 
-def test_schedule_a_flow_from_the_flow_tab(win, tmp_path):
+def test_a_schedule_block_schedules_the_flow_when_saved(win, tmp_path):
     flow = write_flow(tmp_path / "daily.yaml", """
         blocks:
           note:
@@ -248,14 +248,20 @@ def test_schedule_a_flow_from_the_flow_tab(win, tmp_path):
             config: {inputs: [], outputs: [], code: "pass"}
     """)
     tab = win.open_flow(flow)
-    panel = win.flow_settings
-    next(b for b in panel.findChildren(QPushButton) if b.text() == "Add").click()  # adds "0 7 * * MON-FRI"
-    panel.scheduled.click()
+    add_from_palette(win, "Schedule")
+    schedule = next(b for b, spec in tab.doc.blocks.items() if spec["type"] == "trigger.schedule")
+    drag_port_to_port(tab, schedule, "start", "note", "after")  # onto the block's header connector
+    tab.doc.set_block_value(schedule, "cron", "0 7 * * MON-FRI")
+    assert win.save(tab)
 
-    assert tab.doc.data["triggers"] == [{"schedule": {"cron": "0 7 * * MON-FRI"}}]
-    assert not tab.doc.dirty  # enabling the schedule saved the flow
+    assert (schedule, "start", "note", "after") in tab.doc.edges()
     assert win.home.scheduled_flows() == [flow.resolve()]
     assert tab.next_run is not None and tab.next_run.hour == 7 and tab.next_run.weekday() < 5
+
+    tab.doc.remove([schedule])  # no schedule left: no longer scheduled
+    assert win.save(tab)
+    assert win.home.scheduled_flows() == []
+    assert tab.next_run is None
 
 
 def test_settings_dialog_keeps_settings_it_does_not_show(win):
@@ -316,3 +322,48 @@ def test_every_block_explains_itself_on_hover(win):
     block = tab.doc.add_block("email.send", 0, 0)
     assert "Sends an email" in tab.scene.nodes[block].toolTip()
     tab.doc.dirty = False
+
+
+def test_new_connection_from_a_block_is_created_selected_and_listed(win, monkeypatch):
+    from taskloom.editor.dialogs import ConnectionsDialog
+
+    tab = win.new_flow()
+    block = tab.doc.add_block("servers.health_check", 0, 0)
+    tab.scene.nodes[block].setSelected(True)
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", staticmethod(lambda *a, **k: ("appserver", True)))
+
+    def fill_in(dialog):
+        assert dialog._kind() == "ssh"  # opened from an SSH field: the new connection is an SSH one
+        dialog.edits["host"].setText("server01.example.com")
+        dialog.edits["username"].setText("me")
+        dialog.password.setText("s3cret")
+        dialog._save()
+        return True
+
+    monkeypatch.setattr(ConnectionsDialog, "exec", fill_in)
+    new_button = next(b for b in win.properties.findChildren(QToolButton) if b.text() == "New…")
+    new_button.click()
+
+    assert tab.doc.blocks[block]["config"]["connection"] == "appserver"
+    combo = next(c for c in win.properties.findChildren(QComboBox) if c.findData("appserver") >= 0)
+    assert combo.currentData() == "appserver"
+    conn = win.home.connections()["appserver"]
+    assert conn == {"kind": "ssh", "host": "server01.example.com", "username": "me",
+                    "password": "secret:appserver_password"}
+    assert win.home.get_secret("appserver_password") == "s3cret"
+    tab.doc.dirty = False
+
+
+def test_data_preview_shows_any_output(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "out.yaml", """
+        blocks:
+          make:
+            type: logic.python
+            config: {inputs: [], code: "output = {'status': 'ok', 'rows': 3}"}
+    """)
+    tab = win.open_flow(flow)
+    win.run_flow(tab)
+    wait_done(qtbot, tab)
+    tab.scene.nodes["make"].setSelected(True)
+
+    assert "\"status\": \"ok\"" in win.preview.text.toPlainText() and not win.preview.text.isHidden()

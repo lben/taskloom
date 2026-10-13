@@ -112,7 +112,7 @@ def cmd_run(args, home: Home) -> int:
     answers = StdinControl(cancel) if args.interactive else None
     as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
     result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel,
-                      answers=answers, as_of=as_of)
+                      answers=answers, as_of=as_of, trigger=args.trigger)
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
@@ -169,6 +169,17 @@ def cmd_scheduler(args, home: Home) -> int:
         return EXIT_FAILED
 
 
+def cmd_connection_test(args, home: Home) -> int:
+    from .check import test_connection
+
+    try:
+        print(test_connection(home, args.name))
+    except Exception as e:  # report any failure plainly: wrong password, unknown host, missing jar…
+        print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
+        return EXIT_FAILED
+    return EXIT_OK
+
+
 def cmd_editor(args, home: Home) -> int:
     from .editor.window import main as editor_main  # Qt is only needed for the editor
 
@@ -186,6 +197,7 @@ def main(argv=None) -> int:
     p.add_argument("--param", action="append", metavar="NAME=VALUE", help="override a parameter (repeatable)")
     p.add_argument("--json-events", action="store_true", help="print events as JSON lines on stdout")
     p.add_argument("--as-of", metavar="DATETIME", help="compute parameters as if it were this local time (YYYY-MM-DD HH:MM)")
+    p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",
@@ -201,6 +213,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("editor", help="open the visual editor")
     p.add_argument("flows", nargs="*", help="flow files to open")
     p.set_defaults(func=cmd_editor)
+    p = sub.add_parser("connection", help="manage connections")
+    connection_sub = p.add_subparsers(dest="connection_command", required=True)
+    c = connection_sub.add_parser("test", help="check that a connection connects and logs in")
+    c.add_argument("name")
+    c.set_defaults(func=cmd_connection_test)
     p = sub.add_parser("secret", help="manage secrets")
     secret_sub = p.add_subparsers(dest="secret_command", required=True)
     s = secret_sub.add_parser("set", help="store a secret (prompts for the value)")

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from . import params as P
-from .block import IDENTIFIER, fields
+from .block import IDENTIFIER, all_ports, fields
 from .calendars import load_calendar
 from .expr import functions
 from .schedule import Trigger
@@ -164,12 +164,8 @@ def load_flow(path) -> Flow:
         except (ValueError, TypeError) as e:
             errors.append(f"{where}: {e}")
 
-    triggers = []
-    for i, trigger in enumerate(data.get("triggers") or []):
-        try:
-            triggers.append(Trigger(trigger))
-        except ValueError as e:
-            errors.append(f"triggers[{i}]: {e}")
+    triggers, trigger_errors = schedules_of(data)
+    errors += trigger_errors
     notify = data.get("notify")
     if notify is not None:
         if not isinstance(notify, dict) or set(notify) - {"when", "to"}:
@@ -195,6 +191,29 @@ def load_flow(path) -> Flow:
         calendar=data.get("calendar"), timezone=data.get("timezone"),
         triggers=triggers, overlap=overlap, notify=notify, blocks=blocks, edges=edges,
     )
+
+
+def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
+    """The flow's schedules: active Schedule blocks and the flow-level `triggers:` list."""
+    triggers, errors = [], []
+    for i, trigger in enumerate(data.get("triggers") or []):
+        try:
+            triggers.append(Trigger(trigger))
+        except ValueError as e:
+            errors.append(f"triggers[{i}]: {e}")
+    for block_id, spec in (data.get("blocks") or {}).items():
+        if not isinstance(spec, dict) or spec.get("type") != "trigger.schedule":
+            continue
+        config = spec.get("config") or {}
+        if config.get("active", True) is False:
+            continue
+        timing = {k: config[k] for k in ("cron", "at", "misfire") if config.get(k) not in (None, "")}
+        try:
+            triggers.append(Trigger({"schedule": timing}, block=block_id))
+        except ValueError:
+            errors.append(f"blocks.{block_id}: a Schedule block needs either cron (e.g. 0 7 * * MON-FRI) "
+                          "or at (e.g. 2026-10-08 15:30), and a valid misfire")
+    return triggers, errors
 
 
 def block_config(cls, spec: BlockSpec) -> dict:
@@ -259,7 +278,7 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
             continue
         try:
             config = block_config(cls, spec)
-            inputs, outputs = cls.ports(config)
+            inputs, outputs = all_ports(cls, config)
         except Exception as e:
             errors.append(f"{where}: {e}")
             continue
