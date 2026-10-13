@@ -17,8 +17,8 @@ unzip it anywhere you can write (no admin needed) and run `taskloomw.exe` for th
 editor. `taskloom.exe` is the command line (`taskloom.exe run flow.yaml`).
 
 **Linux server (no root, no system Python needed):** the runner is
-`taskloom-runner-linux-x86_64.tar.gz`, built on Enterprise Linux 8 so it runs
-on RHEL 8 and newer. Install it with the `examples/deploy-runner.yaml` flow from your PC,
+`taskloom-runner-linux-x86_64.tar.gz`. It runs on Linux with glibc 2.28 or newer
+(for example AlmaLinux or Rocky 8+, Ubuntu 20.04+, Debian 10+). Install it with the `examples/deploy-runner.yaml` flow from your PC,
 or by hand: copy it to the server, `tar -xzf` it in your home folder and run
 `~/taskloom/taskloom scheduler --headless`.
 

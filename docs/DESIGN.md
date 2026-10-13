@@ -403,10 +403,10 @@ taskloom editor
   using only the packaged programs.
 - Artifacts:
   - `taskloom` for Windows (editor + runner + scheduler);
-  - `taskloom-runner` for Linux, built on an Enterprise Linux 8–compatible base (glibc 2.28),
+  - `taskloom-runner` for Linux, built against glibc 2.28 (runs on any newer glibc),
     bundling its own Python — no system Python needed.
 - Windows builds are produced on Windows (GitHub Actions `windows-latest`), Linux
-  builds in an Alma/Rocky 8 container.
+  builds in an AlmaLinux 8 container (glibc 2.28).
 - Installing from a private package index is a user-level pip config; nothing
   index-specific lives in the repo.
 - Sharing with teammates: either the full app, or the runner + a flow file
@@ -457,7 +457,7 @@ policies.
 correctly in desktop Outlook.
 
 **M5 — Packaging**
-PyInstaller builds (Windows, Enterprise Linux 8–compatible), zips, the deploy-to-server
+PyInstaller builds (Windows, Linux with glibc 2.28+), zips, the deploy-to-server
 example flow, user documentation.
 *Accept*: fresh Windows machine (no Python) runs the editor; fresh Linux user
 account runs the runner; deploy flow installs and re-run asks before overwriting.
