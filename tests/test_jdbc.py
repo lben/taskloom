@@ -17,9 +17,9 @@ import pytest
 
 H2_URL = "https://repo1.maven.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar"
 H2_SHA1 = "4fcc05d966ccdb2812ae8b9a718f69226c0cf4e2"
-MAXRSS_SCRIPT = (
-    "import resource, sys; from taskloom.cli import main; rc = main(sys.argv[1:]); "
-    "print('MAXRSS', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss); sys.exit(rc)"
+MAXRSS_SCRIPT = (  # like the taskloom program (cli.run_cli): exit right away once the Java bridge has run
+    "import os, resource, sys; from taskloom.cli import main; rc = main(sys.argv[1:]); "
+    "print('MAXRSS', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, flush=True); os._exit(rc)"
 )
 
 
