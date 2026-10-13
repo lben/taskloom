@@ -46,7 +46,7 @@ edges:
   - confirm.answer -> replace.value
   - installed.false -> stop_old.after
   - replace.true -> stop_old.after
-  - stop_old.stopped -> upload.after
-  - upload.files -> extract.after
-  - extract.folder -> start.after
-  - start.pid -> running.after
+  - stop_old.done -> upload.after
+  - upload.done -> extract.after
+  - extract.done -> start.after
+  - start.done -> running.after

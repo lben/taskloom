@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStr
 from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsScene,
                                QGraphicsView)
 
-from ..block import AFTER, all_ports
+from ..block import AFTER, DONE, all_ports
 from ..flow import ERROR_PORT, BlockSpec, block_config
 from .document import FlowDocument, edge_text
 
@@ -59,7 +59,8 @@ class PortItem(QGraphicsItem):
         painter.setPen(QPen(color, 2))
         painter.setBrush(color if self._hover else QApplication.palette().base())
         r = PORT_R + (1 if self._hover else 0)
-        if self.name == AFTER and not self.is_output:  # a diamond: it sets the order, it carries no data
+        if (self.name == AFTER and not self.is_output) or (self.name == DONE and self.is_output):
+            # a diamond: it sets the order, it carries no data
             painter.drawPolygon([QPointF(0, -r - 1), QPointF(r + 1, 0), QPointF(0, r + 1), QPointF(-r - 1, 0)])
         else:
             painter.drawEllipse(QPointF(0, 0), r, r)
@@ -93,7 +94,8 @@ class NodeItem(QGraphicsItem):
         # `after` is the first row, drawn differently (it only sets when the block runs);
         # start blocks have neither it nor an error output.
         self.inputs = ([AFTER] if AFTER in inputs else []) + [n for n in inputs if n != AFTER]
-        self.outputs = list(outputs) + ([] if cls is not None and cls.is_trigger else [ERROR_PORT])
+        self.outputs = ([DONE] if DONE in outputs else []) + [n for n in outputs if n != DONE] + \
+            ([] if cls is not None and cls.is_trigger else [ERROR_PORT])
         rows = max(len(self.inputs), len(self.outputs), 1)
         self.height = HEADER_H + 6 + rows * ROW_H + FOOTER_H
         self.status, self.status_text = None, ""
@@ -102,10 +104,14 @@ class NodeItem(QGraphicsItem):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
         if AFTER in inputs:
             self.ports[(AFTER, False)].setToolTip(
-                "Run after: connect a start block, or another block, here to make this block wait for it. "
+                "Run after: connect another block's 'done' (or a start block) here to make this block wait for it. "
                 "No data comes in through here; use the other inputs for data.")
         for i, name in enumerate(self.outputs):
             self.ports[(name, True)] = PortItem(self, name, True, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
+        if DONE in outputs:
+            self.ports[(DONE, True)].setToolTip(
+                "Done: fires when this block has finished successfully. Connect it to another block's "
+                "'run after' to run that block next. No data goes out through here.")
         ui = spec.get("ui") or {}
         self.setPos(ui.get("x", 0), ui.get("y", 0))
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
@@ -156,10 +162,10 @@ class NodeItem(QGraphicsItem):
             painter.setPen(QColor("#c0392b") if name == ERROR_PORT else muted)
             box = QRectF(10, y - ROW_H / 2, NODE_W - 20, ROW_H)
             label = name
-            if name == AFTER and not is_output:
+            if (name == AFTER and not is_output) or (name == DONE and is_output):
                 font.setItalic(True)
                 painter.setFont(font)
-                label = "run after"
+                label = "run after" if name == AFTER else "done"
             painter.drawText(box, Qt.AlignVCenter | (Qt.AlignRight if is_output else Qt.AlignLeft), label)
             if font.italic():
                 font.setItalic(False)

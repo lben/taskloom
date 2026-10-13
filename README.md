@@ -56,9 +56,13 @@ taskloom editor examples/daily-sales-report.yaml
 - Drag blocks from the tree on the left onto the canvas (or double-click them); drag
   from an output port (right side of a block) to an input port (left side) to connect.
   Hover over a block to see what it does.
+- Two kinds of connectors: **circles carry data** (an output into an input), **diamonds set
+  the order**. Every block has a **done** diamond output (it fires when the block succeeded)
+  and a **run after** diamond input: connect `done` → `run after` to run blocks one after
+  another, even when no data passes between them. A block with data inputs also waits for
+  its data. You can use both lines between two blocks; each has its own purpose.
 - **Start blocks** say how a flow starts. Connect their `start` output to the **run
-  after** connector (the diamond in the first row) of the first block. "Run after" only
-  sets *when* a block runs; data goes through the other inputs:
+  after** diamond of the first block:
   - **Manual Start**: the flow runs when you press **Run now** (F5).
   - **Schedule**: the flow runs by itself at the times you set (e.g. `0 7 * * MON-FRI`)
     while the scheduler is on. Saving a flow with a Schedule block schedules it.

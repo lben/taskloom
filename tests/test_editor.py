@@ -437,3 +437,15 @@ def test_python_environment_dialog_creates_it_and_installs_packages(win, qtbot, 
     qtbot.waitUntil(lambda: dialog.proc is None, timeout=180_000)
 
     assert "tinypkg" in dialog.output.toPlainText() and "failed" not in dialog.output.toPlainText()
+
+
+def test_connecting_done_to_run_after_by_dragging(win):
+    tab = win.new_flow()
+    a = tab.doc.add_block("files.delete", 0, 0)
+    b = tab.doc.add_block("logic.python", 300, 0)
+    assert tab.scene.nodes[a].outputs[0] == "done" and tab.scene.nodes[b].inputs[0] == "after"
+
+    drag_port_to_port(tab, a, "done", b, "after")
+
+    assert tab.doc.edges() == [(a, "done", b, "after")]
+    tab.doc.dirty = False

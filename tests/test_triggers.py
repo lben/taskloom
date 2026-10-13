@@ -127,3 +127,42 @@ def test_secrets_inside_outputs_never_reach_previews_logs_or_output(env):
     stored = env.query("SELECT group_concat(coalesce(previews, '') || coalesce(summary, ''), ' ') FROM blocks")[0][0]
     stored += env.query("SELECT group_concat(message, ' ') FROM logs")[0][0]
     assert "hunter2SECRET" not in stored and '"password": "***"' in stored
+
+
+def test_done_to_run_after_sets_the_order_and_stops_after_a_failure(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          first:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('order.txt', 'a').write('1')"}
+          second:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('order.txt', 'a').write('2')"}
+          third:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('order.txt', 'a').write('3')"}
+        edges:
+          - first.done -> second.after
+          - second.done -> third.after
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    assert (env.root / "order.txt").read_text() == "123"
+
+    failing = flow.read_text().replace("open('order.txt', 'a').write('2')", "raise RuntimeError('stop')")
+    flow.write_text(failing)
+    (env.root / "order.txt").unlink()
+    assert env.taskloom("run", flow).returncode == 1
+    assert (env.root / "order.txt").read_text() == "1"
+    run_id, _ = env.last_run()
+    assert env.block_status(run_id)["third"] == "skipped"
+
+
+def test_done_and_after_are_reserved_names(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          code:
+            type: logic.python
+            config: {inputs: [after], outputs: [done], code: "done = 1"}
+    """)
+    result = env.taskloom("validate", flow)
+    assert result.returncode == 2 and "every block already has these" in result.stderr

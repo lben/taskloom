@@ -18,7 +18,8 @@ class PythonCode(Block):
     category = "Logic"
     config = {
         "inputs": fields.Names(default=["input"], help="Variables your code receives."),
-        "outputs": fields.Names(default=["output"], help="Variables your code sets; unset ones are not produced."),
+        "outputs": fields.Names(default=["output"], outputs=True,
+                                help="Variables your code sets; unset ones are not produced."),
         "code": fields.Code("python"),
         "use_environment": fields.Bool(default=False, help="Run in your own Python environment, with the packages "
                                                            "you installed (Tools → Python environment)"),

@@ -6,7 +6,9 @@ import re
 from types import SimpleNamespace
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-AFTER = "after"  # every block can be connected here to run after another block or a start block
+AFTER = "after"  # input of every block: run after another block (its `done`) or a start block
+DONE = "done"  # output of every block: fires when it succeeded, to connect to another block's `after`
+RESERVED_INPUTS, RESERVED_OUTPUTS = {AFTER}, {DONE, "error"}
 
 
 class ports:
@@ -108,13 +110,20 @@ class fields:
             return [str(v) for v in value]
 
     class Names(Field):
-        """A list of identifiers, e.g. the input names of a code block."""
+        """A list of identifiers, e.g. the input names of a code block (the names of its ports)."""
+
+        def __init__(self, default=None, outputs: bool = False, **kw):
+            super().__init__(default=default, **kw)
+            self.reserved = RESERVED_OUTPUTS if outputs else RESERVED_INPUTS
 
         def coerce(self, value):
             if not isinstance(value, list) or not all(isinstance(v, str) and IDENTIFIER.match(v) for v in value):
                 raise ValueError(f"expected a list of names (letters, digits, _), got {value!r}")
             if len(set(value)) != len(value):
                 raise ValueError(f"duplicate names in {value!r}")
+            taken = self.reserved & set(value)
+            if taken:
+                raise ValueError(f"{', '.join(sorted(taken))}: every block already has these; choose other names")
             return list(value)
 
 
@@ -152,8 +161,10 @@ class Block:
 
 
 def all_ports(cls, config: dict) -> tuple[dict, dict]:
-    """A block's ports plus the `after` input every block has (it only sets the order)."""
+    """A block's ports plus the `after` input and `done` output every block has (they only set the order)."""
     inputs, outputs = cls.ports(config)
-    if not cls.is_trigger and AFTER not in inputs:
-        inputs = {**inputs, AFTER: ports.Any(required=False, any_of=True)}
+    if not cls.is_trigger:
+        if AFTER not in inputs:
+            inputs = {**inputs, AFTER: ports.Any(required=False, any_of=True)}
+        outputs = {DONE: ports.Any(), **outputs}
     return inputs, outputs

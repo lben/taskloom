@@ -38,7 +38,7 @@ workstation or on a Linux server, without admin/root rights.
 | **Block** | A unit of work (Run Query, Send Email, …) with typed inputs, outputs and config. |
 | **Port** | A named, typed input or output on a block. |
 | **Edge** | Connects an output port to an input port; data travels along it. |
-| **Start block** | How a flow starts: Manual Start (Run now) or Schedule (cron or one time), on the canvas. Every block has an `after` input (the connector at the top left of its header) to run after a start block or another block. |
+| **Start block** | How a flow starts: Manual Start (Run now) or Schedule (cron or one time), on the canvas. Every block has a `run after` diamond input and a `done` diamond output (fires on success): `done → run after` sets the order without passing data. |
 | **Connection** | A named, reusable endpoint (JDBC database, SMTP, SSH host). Flows refer to it by name only. |
 | **Secret** | Password or token, stored outside flows and connections. |
 | **Run** | One execution of a flow: status, per-block logs, outputs, timings. |

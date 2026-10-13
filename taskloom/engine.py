@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import params as P
-from .block import AFTER, all_ports
+from .block import AFTER, DONE, all_ports
 from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
 from .config import REVEALED
 from .history import History
@@ -321,6 +321,8 @@ class _Runner:
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
                        "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)},
                        "previews": {p: preview(v) for p, v in produced.items() if not isinstance(v, Table)}})
+            if not cls.is_trigger:
+                produced[DONE] = True  # for blocks connected done -> after
             return "success", produced
         raise AssertionError("unreachable")
 
