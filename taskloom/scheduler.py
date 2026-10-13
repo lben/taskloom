@@ -230,26 +230,26 @@ class Scheduler:
             name = entry.get("connection")
             remote_home = entry.get("home", "~/.taskloom")
             try:
-                client = ssh.connect(self.home.resolve_secrets(self.home.connections()[name]), self.home)
+                session = ssh.Session(self.home.resolve_secrets(self.home.connections()[name]), self.home)
                 try:
-                    if self._remote_alive(client, remote_home):
+                    if self._remote_alive(session, remote_home):
                         continue
                     command = f"env TASKLOOM_HOME={ssh.remote_path(remote_home)} {entry['command']} scheduler --headless"
-                    code, _, err = ssh.run(client, ssh.start_detached(
+                    code, _, err = session.run(ssh.start_detached(
                         command, "~", f"{remote_home}/scheduler.log", f"{remote_home}/scheduler.pid"))
                     if code != 0:
                         raise RuntimeError(err.strip())
                     self.messages.put(("Server scheduler restarted", f"{name}: the scheduler was not running and was started"))
                 finally:
-                    client.close()
+                    session.close()
             except Exception as e:
                 self.messages.put(("Cannot check server", f"{name}: {e}"))
 
     @staticmethod
-    def _remote_alive(client, remote_home: str) -> bool:
+    def _remote_alive(session, remote_home: str) -> bool:
         """Its process is running and its heartbeat is recent (a hung scheduler counts as dead)."""
         pid_file, heartbeat = (ssh.remote_path(f"{remote_home}/{name}") for name in ("scheduler.pid", "scheduler.heartbeat"))
-        _, out, _ = ssh.run(client, f'kill -0 "$(cat {pid_file} 2>/dev/null)" 2>/dev/null && echo up || echo down; '
+        _, out, _ = session.run(f'kill -0 "$(cat {pid_file} 2>/dev/null)" 2>/dev/null && echo up || echo down; '
                                     f"cat {heartbeat} 2>/dev/null; echo; date +%s")
         lines = out.split()
         numbers = [int(x) for x in lines[1:] if x.isdigit()]

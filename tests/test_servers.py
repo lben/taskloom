@@ -184,3 +184,52 @@ def test_connection_test_reports_success_and_a_wrong_password(env, server, smtp)
     env.write("home/secrets.yaml", "appserver_password: wrong\n").chmod(0o600)
     bad = env.taskloom("connection", "test", "appserver")
     assert bad.returncode == 1 and "Authentication" in bad.stderr
+
+
+def test_servers_that_allow_one_command_per_connection(env, server, monkeypatch):
+    """Some servers refuse a second session on the same SSH connection (ChannelException 'Connect failed')."""
+    import yaml
+
+    from taskloom.engine import run_flow
+    from taskloom.flow import load_flow
+    from taskloom.registry import discover
+
+    original = paramiko.SSHClient.exec_command
+
+    def one_session_per_connection(self, *args, **kwargs):
+        self._sessions = getattr(self, "_sessions", 0) + 1
+        if self._sessions > 1:
+            raise paramiko.ChannelException(2, "Connect failed")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(paramiko.SSHClient, "exec_command", one_session_per_connection)
+    pid_file = server.home_path / "app" / "app.pid"
+    flow = env.root / "flow.yaml"
+    flow.write_text(yaml.safe_dump({
+        "blocks": {
+            "start": {"type": "servers.start_process", "config": {
+                "connection": "appserver", "command": "sleep 60", "pid_file": "~/app/app.pid",
+                "log_file": "~/app/app.log", "check_after": 0.5}},
+            "check": {"type": "servers.health_check", "config": {"connection": "appserver", "pid_file": "~/app/app.pid"}},
+            "stop": {"type": "servers.stop_process", "config": {"connection": "appserver", "pid_file": "~/app/app.pid"}},
+        },
+        "edges": ["start.done -> check.after", "check.healthy -> stop.after"],
+    }))
+    try:
+        home = Home(env.home)
+        result = run_flow(load_flow(flow), discover(None), home)
+        from taskloom.history import History
+        history = History(home.history_db)
+        blocks = history.blocks(result.run_id)
+        history.close()
+        assert result.status == "success", blocks
+        assert {b: i["status"] for b, i in blocks.items()} == {"start": "success", "check": "success", "stop": "success"}
+
+        # The keeper also runs two commands per server: it must cope too.
+        env.write("home/settings.yaml", f"keeper:\n  - {{connection: appserver, command: '{sys.executable} -m taskloom.cli', home: '~/.taskloom'}}\n")
+        scheduler = Scheduler(home)
+        scheduler.check_servers()
+        assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
+    finally:
+        _kill_from_pid_file(pid_file)
+        _kill_from_pid_file(server.home_path / ".taskloom" / "scheduler.pid")

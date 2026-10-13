@@ -44,19 +44,41 @@ def run(client: paramiko.SSHClient, command: str, cancelled=lambda: False) -> tu
     """Run a shell command; returns (exit code, stdout, stderr). Stops waiting if cancelled()."""
     _, stdout, stderr = client.exec_command(command)
     channel = stdout.channel
-    out, err = bytearray(), bytearray()
-    while True:
-        while channel.recv_ready():
-            out += channel.recv(65536)
-        while channel.recv_stderr_ready():
-            err += channel.recv_stderr(65536)
-        if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
-            break
-        if cancelled():
-            channel.close()
-            raise InterruptedError("cancelled")
-        time.sleep(0.05)
-    return channel.recv_exit_status(), out.decode(errors="replace"), err.decode(errors="replace")
+    try:
+        out, err = bytearray(), bytearray()
+        while True:
+            while channel.recv_ready():
+                out += channel.recv(65536)
+            while channel.recv_stderr_ready():
+                err += channel.recv_stderr(65536)
+            if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                break
+            if cancelled():
+                raise InterruptedError("cancelled")
+            time.sleep(0.05)
+        return channel.recv_exit_status(), out.decode(errors="replace"), err.decode(errors="replace")
+    finally:
+        channel.close()  # some servers allow only one open session per connection
+
+
+class Session:
+    """An SSH connection for several commands. Some servers refuse a second command on the same
+    connection ("Connect failed"); then it reconnects and tries again once."""
+
+    def __init__(self, conn: dict, home):
+        self.conn, self.home = conn, home
+        self.client = connect(conn, home)
+
+    def run(self, command: str, cancelled=lambda: False) -> tuple[int, str, str]:
+        try:
+            return run(self.client, command, cancelled)
+        except paramiko.ChannelException:
+            self.client.close()
+            self.client = connect(self.conn, self.home)
+            return run(self.client, command, cancelled)
+
+    def close(self):
+        self.client.close()
 
 
 def remote_path(path: str) -> str:

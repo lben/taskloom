@@ -14,15 +14,15 @@ from ..block import Block, fields, ports
 
 @contextmanager
 def _client(ctx, name):
-    client = ssh.connect(ctx.connection(name), ctx.home)
+    session = ssh.Session(ctx.connection(name), ctx.home)
     try:
-        yield client
+        yield session
     finally:
-        client.close()
+        session.close()
 
 
-def _run(ctx, client, command) -> tuple[int, str, str]:
-    return ssh.run(client, command, lambda: ctx.cancelled)
+def _run(ctx, session, command) -> tuple[int, str, str]:
+    return session.run(command, lambda: ctx.cancelled)
 
 
 class SSHCommand(Block):
@@ -68,17 +68,21 @@ class StartProcess(Block):
 
     def run(self, ctx, after=None):
         c = self.config
-        with _client(ctx, c.connection) as client:
-            code, out, err = _run(ctx, client, ssh.start_detached(c.command, c.workdir, c.log_file, c.pid_file))
-            if code != 0:
-                raise RuntimeError(f"could not start the process: {err.strip()}")
-            pid = int(out.strip().splitlines()[-1])
-            ctx.log(f"started process {pid}")
-            ctx.wait(c.check_after)
-            alive, _, _ = _run(ctx, client, f"kill -0 {pid}")
-            if alive != 0:
-                _, log, _ = _run(ctx, client, f"tail -n 20 {ssh.remote_path(c.log_file)}")
-                raise RuntimeError(f"the process exited right after starting; last log lines:\n{log}")
+        # Start it, wait, and check it is still running, all in one command: some servers allow
+        # only one command per connection.
+        script = (f"{ssh.start_detached(c.command, c.workdir, c.log_file, c.pid_file)} && sleep {c.check_after:g} && "
+                  f"if kill -0 \"$(cat {ssh.remote_path(c.pid_file)})\" 2>/dev/null; then echo TASKLOOM_RUNNING; "
+                  f"else echo TASKLOOM_EXITED; tail -n 20 {ssh.remote_path(c.log_file)}; fi")
+        with _client(ctx, c.connection) as session:
+            code, out, err = _run(ctx, session, script)
+        lines = out.strip().splitlines()
+        if code != 0 or len(lines) < 2 or not lines[0].strip().isdigit():
+            raise RuntimeError(f"could not start the process: {(err or out).strip()[-1000:]}")
+        pid = int(lines[0])
+        ctx.log(f"started process {pid}")
+        if lines[1].strip() != "TASKLOOM_RUNNING":
+            log = "\n".join(lines[2:])
+            raise RuntimeError(f"the process exited right after starting; last log lines:\n{log}")
         return {"pid": pid}
 
 
