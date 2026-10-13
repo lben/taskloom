@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsScene,
                                QGraphicsView)
@@ -59,7 +59,10 @@ class PortItem(QGraphicsItem):
         painter.setPen(QPen(color, 2))
         painter.setBrush(color if self._hover else QApplication.palette().base())
         r = PORT_R + (1 if self._hover else 0)
-        painter.drawEllipse(QPointF(0, 0), r, r)
+        if self.name == AFTER and not self.is_output:  # a diamond: it sets the order, it carries no data
+            painter.drawPolygon([QPointF(0, -r - 1), QPointF(r + 1, 0), QPointF(0, r + 1), QPointF(-r - 1, 0)])
+        else:
+            painter.drawEllipse(QPointF(0, 0), r, r)
 
     def hoverEnterEvent(self, event):
         self._hover = True
@@ -87,19 +90,20 @@ class NodeItem(QGraphicsItem):
         self.color = QColor(CATEGORY_COLORS.get(cls.category, USER_COLOR) if cls and source == "built-in" else USER_COLOR)
         inputs, outputs = block_ports(registry, spec)
         self.input_ports = inputs
-        # `after` sits at the left of the header; start blocks have no error output.
-        self.inputs = [n for n in inputs if n != AFTER]
+        # `after` is the first row, drawn differently (it only sets when the block runs);
+        # start blocks have neither it nor an error output.
+        self.inputs = ([AFTER] if AFTER in inputs else []) + [n for n in inputs if n != AFTER]
         self.outputs = list(outputs) + ([] if cls is not None and cls.is_trigger else [ERROR_PORT])
         rows = max(len(self.inputs), len(self.outputs), 1)
         self.height = HEADER_H + 6 + rows * ROW_H + FOOTER_H
         self.status, self.status_text = None, ""
         self.ports: dict[tuple[str, bool], PortItem] = {}
-        if AFTER in inputs:
-            self.ports[(AFTER, False)] = PortItem(self, AFTER, False, HEADER_H / 2)
-            self.ports[(AFTER, False)].setToolTip("Run after: connect a start block (or any block's output) "
-                                                  "here to run this block after it")
         for i, name in enumerate(self.inputs):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
+        if AFTER in inputs:
+            self.ports[(AFTER, False)].setToolTip(
+                "Run after: connect a start block, or another block, here to make this block wait for it. "
+                "No data comes in through here; use the other inputs for data.")
         for i, name in enumerate(self.outputs):
             self.ports[(name, True)] = PortItem(self, name, True, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
         ui = spec.get("ui") or {}
@@ -148,12 +152,18 @@ class NodeItem(QGraphicsItem):
         painter.setFont(font)
         muted = pal.placeholderText().color()
         for (name, is_output), port in self.ports.items():
-            if name == AFTER:
-                continue  # the header port has no label
             y = port.pos().y()
             painter.setPen(QColor("#c0392b") if name == ERROR_PORT else muted)
             box = QRectF(10, y - ROW_H / 2, NODE_W - 20, ROW_H)
-            painter.drawText(box, Qt.AlignVCenter | (Qt.AlignRight if is_output else Qt.AlignLeft), name)
+            label = name
+            if name == AFTER and not is_output:
+                font.setItalic(True)
+                painter.setFont(font)
+                label = "run after"
+            painter.drawText(box, Qt.AlignVCenter | (Qt.AlignRight if is_output else Qt.AlignLeft), label)
+            if font.italic():
+                font.setItalic(False)
+                painter.setFont(font)
         # footer: type, or the run status
         text = self.status_text if self.status else self.type_title
         painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS and self.status != "skipped" else muted)
@@ -214,6 +224,10 @@ class FlowScene(QGraphicsScene):
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsPathItem | None = None
         self._rebuilding = False
+        # Rebuilding deletes every item; never do that while Qt is still delivering a mouse event
+        # to one of them (it would use a deleted item and crash). Such rebuilds wait until after.
+        self._in_mouse_event = False
+        self._rebuild_pending = False
         self.setSceneRect(-5000, -5000, 10000, 10000)
         self.selectionChanged.connect(self._on_selection)
         doc.changed.connect(self.rebuild)
@@ -222,6 +236,11 @@ class FlowScene(QGraphicsScene):
     # --- building from the document ---------------------------------------------
 
     def rebuild(self):
+        if self._in_mouse_event:
+            if not self._rebuild_pending:
+                self._rebuild_pending = True
+                QTimer.singleShot(0, self, self._deferred_rebuild)
+            return
         selected = set(self.selected_block_ids())
         self._rebuilding = True
         self.clear()
@@ -285,6 +304,20 @@ class FlowScene(QGraphicsScene):
                 return item
         return None
 
+    def _deferred_rebuild(self):
+        self._rebuild_pending = False
+        self.rebuild()
+
+    def _mouse(handler):  # noqa: N805 - a decorator used inside the class body
+        def wrapped(self, event):
+            self._in_mouse_event = True
+            try:
+                handler(self, event)
+            finally:
+                self._in_mouse_event = False
+        return wrapped
+
+    @_mouse
     def mousePressEvent(self, event):
         port = self._port_at(event.scenePos()) if event.button() == Qt.LeftButton else None
         if port is not None:
@@ -297,6 +330,7 @@ class FlowScene(QGraphicsScene):
             return
         super().mousePressEvent(event)
 
+    @_mouse
     def mouseMoveEvent(self, event):
         if self._drag_from is not None:
             a, b = self._drag_from.anchor(), event.scenePos()
@@ -305,6 +339,7 @@ class FlowScene(QGraphicsScene):
             return
         super().mouseMoveEvent(event)
 
+    @_mouse
     def mouseReleaseEvent(self, event):
         if self._drag_from is not None:
             start, target = self._drag_from, self._port_at(event.scenePos())
@@ -312,7 +347,8 @@ class FlowScene(QGraphicsScene):
             self._drag_from = self._drag_line = None
             if target is not None and target.is_output != start.is_output and target.node is not start.node:
                 out, inp = (start, target) if start.is_output else (target, start)
-                many = getattr(inp.node.input_ports.get(inp.name), "many", False)
+                port = inp.node.input_ports.get(inp.name)
+                many = getattr(port, "many", False) or getattr(port, "any_of", False)
                 self.doc.connect(out.node.block_id, out.name, inp.node.block_id, inp.name, many)
             event.accept()
             return

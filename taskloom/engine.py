@@ -14,6 +14,7 @@ from pathlib import Path
 from . import params as P
 from .block import AFTER, all_ports
 from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
+from .config import REVEALED
 from .history import History
 from .table import Table
 
@@ -28,8 +29,27 @@ class Cancelled(Exception):
 class SecretStr(str):
     """A string that never shows its value in logs, summaries or run history."""
 
+    def __new__(cls, value):
+        REVEALED.add(str.__str__(value))
+        return super().__new__(cls, value)
+
     def __repr__(self):
         return "'***'"
+
+
+def redact(value):
+    """Replace every secret seen in this process, wherever it appears (also inside text that code built
+    from it, like f"user:{password}"), before anything is logged, stored or printed."""
+    if isinstance(value, str):
+        for secret in REVEALED:
+            if len(secret) >= 4 and secret in value:
+                value = value.replace(secret, "***")
+        return value
+    if isinstance(value, dict):
+        return {k: redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    return value
 
 
 class Context:
@@ -125,8 +145,8 @@ def preview(value, limit: int = 4000) -> str:
     if isinstance(value, SecretStr):
         return "***"
     if isinstance(value, (dict, list, tuple)):
-        return json.dumps(_masked(value), indent=2, default=str)[:limit]
-    return str(value)[:limit]
+        return redact(json.dumps(_masked(value), indent=2, default=str))[:limit]  # scrub, then cut
+    return redact(str(value))[:limit]
 
 
 def _masked(value):
@@ -143,7 +163,7 @@ def _masked(value):
 def _summary(produced: dict) -> str:
     parts = []
     for port, value in produced.items():
-        text = value.summary() if isinstance(value, Table) else repr(value)
+        text = value.summary() if isinstance(value, Table) else redact(repr(value))  # scrub, then cut
         parts.append(f"{port}: {text[:200]}")
     return "; ".join(parts)
 
@@ -166,7 +186,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     all_sinks = (history, *sinks)
 
     def emit(event: dict):
-        event = {"event": event.pop("event"), "run_id": run_id, "ts": _now(), **event}
+        event = redact({"event": event.pop("event"), "run_id": run_id, "ts": _now(), **event})
         for sink in all_sinks:
             sink(event)
 
@@ -207,26 +227,30 @@ class _Runner:
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
             incoming = [e for e in self.flow.edges if e.dst == block_id]
-            # A block downstream of a failure never runs, even through an any_of input. Only the error
-            # output of a block that really failed (and so produced it) leads on.
-            if any(e.src in self.blocked and not (e.src_port == ERROR_PORT and (e.src, ERROR_PORT) in self.outputs)
-                   for e in incoming):
+            # Nothing downstream of a failure runs: an edge from a normal output of a failed block (or of
+            # a block skipped because of a failure) stops this block. Error outputs are the way out.
+            if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
                 self.blocked.add(block_id)
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
             in_ports = self._input_ports(self.flow.blocks[block_id])
-            inputs, ready = {}, True
+            inputs, ready, after_failure = {}, True, False
             for name in dict.fromkeys(e.dst_port for e in incoming):
                 port = in_ports.get(name)
                 edges = [e for e in incoming if e.dst_port == name]
                 delivered = [self.outputs[(e.src, e.src_port)] for e in edges if (e.src, e.src_port) in self.outputs]
+                missing = [e for e in edges if (e.src, e.src_port) not in self.outputs]
                 # Usually every connected edge must deliver; an any_of input needs just one (paths that
-                # meet after an If, where the other path was not taken).
-                if not delivered or (len(delivered) < len(edges) and not getattr(port, "any_of", False)):
+                # meet after an If, or the error outputs of several blocks going to one handler).
+                if not delivered or (missing and not getattr(port, "any_of", False)):
                     ready = False
-                    break
-                inputs[name] = delivered if getattr(port, "many", False) else delivered[0]
+                    after_failure |= any(e.src in self.blocked for e in missing)
+                    continue
+                # Several edges into one input give a list (in edge order), one edge gives the value.
+                inputs[name] = delivered if getattr(port, "many", False) or len(edges) > 1 else delivered[0]
             if not ready:
+                if after_failure:  # it did not get its input because something before it failed
+                    self.blocked.add(block_id)
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
@@ -301,8 +325,9 @@ class _Runner:
         raise AssertionError("unreachable")
 
     def _fail(self, block_id, attempts, error) -> tuple[str, dict]:
-        message = f"{type(error).__name__}: {error}"
-        tb = "".join(traceback.format_exception(error))
+        # Scrubbed here too: the error goes on to error handlers, which may email it.
+        message = redact(f"{type(error).__name__}: {error}")
+        tb = redact("".join(traceback.format_exception(error)))
         self.emit({"event": "log", "block": block_id, "level": "ERROR", "message": f"failed: {message}\n{tb}"})
         self.emit({"event": "block_finished", "block": block_id, "status": "failed", "attempts": attempts, "error": message})
         return "failed", {ERROR_PORT: {"block": block_id, "error": message, "traceback": tb, "attempts": attempts}}

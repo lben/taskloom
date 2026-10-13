@@ -26,19 +26,26 @@ CREATE INDEX IF NOT EXISTS logs_run ON logs (run_id, block);
 """
 
 
+def connect(path: Path) -> sqlite3.Connection:
+    """Several runs, the scheduler and the editor share one history file: wait for your turn
+    (up to 30 s) instead of failing with "database is locked"."""
+    db = sqlite3.connect(path, timeout=30, check_same_thread=False, isolation_level=None)
+    if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+        db.execute("PRAGMA journal_mode=WAL")  # needs the file to itself, so only once
+    return db
+
+
 class History:
     """Thread-safe: blocks log from worker threads."""
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db = connect(path)
         self._db.executescript(SCHEMA)
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(blocks)")}
         for column in ("tables", "previews"):  # history files from before these columns existed
-            try:
+            if column not in columns:
                 self._db.execute(f"ALTER TABLE blocks ADD COLUMN {column} TEXT")
-            except sqlite3.OperationalError:
-                pass
         self._lock = threading.Lock()
 
     def _exec(self, sql, args=()):

@@ -15,9 +15,11 @@ import yaml
 
 SETTINGS_DEFAULTS = {
     "calendar": None, "keep_runs": 20, "java_home": None, "max_concurrent_runs": None, "keeper": [],
-    "notify_email": None, "notify_on": ["failure"], "smtp_connection": None,
+    "notify_email": None, "notify_on": ["failure"], "smtp_connection": None, "python": None,
 }
 SECRET_PREFIX = "secret:"
+# Every secret value this process has seen; run output is scrubbed of them (see engine.redact).
+REVEALED: set[str] = set()
 KEYRING_SERVICE = "taskloom"
 
 
@@ -88,14 +90,13 @@ class Home:
 
     def get_secret(self, name: str) -> str:
         keyring = _keyring()
-        if keyring is not None:
-            value = keyring.get_password(KEYRING_SERVICE, name)
-            if value is not None:
-                return value
-        self._check_secrets_file_permissions()
-        value = _load_yaml(self._secrets_file).get(name)
+        value = keyring.get_password(KEYRING_SERVICE, name) if keyring is not None else None
+        if value is None:
+            self._check_secrets_file_permissions()
+            value = _load_yaml(self._secrets_file).get(name)
         if value is None:
             raise KeyError(f"secret '{name}' is not set (run: taskloom secret set {name})")
+        REVEALED.add(str(value))
         return str(value)
 
     def set_secret(self, name: str, value: str) -> str:

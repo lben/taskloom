@@ -56,8 +56,9 @@ taskloom editor examples/daily-sales-report.yaml
 - Drag blocks from the tree on the left onto the canvas (or double-click them); drag
   from an output port (right side of a block) to an input port (left side) to connect.
   Hover over a block to see what it does.
-- **Start blocks** say how a flow starts. Connect their `start` output to the small
-  connector at the top left of the first block:
+- **Start blocks** say how a flow starts. Connect their `start` output to the **run
+  after** connector (the diamond in the first row) of the first block. "Run after" only
+  sets *when* a block runs; data goes through the other inputs:
   - **Manual Start**: the flow runs when you press **Run now** (F5).
   - **Schedule**: the flow runs by itself at the times you set (e.g. `0 7 * * MON-FRI`)
     while the scheduler is on. Saving a flow with a Schedule block schedules it.
@@ -69,7 +70,18 @@ taskloom editor examples/daily-sales-report.yaml
   everything the selected block produced (tables as a grid, other values as text), and
   **Run history** reopens any past run. **Stop** cancels.
 - To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
-  the data on and shows it in the Log and Data preview.
+  the data on and shows it in the Log and Data preview. Its **message** is written like a
+  Python f-string, e.g. `Healthy: {value['healthy']}`. Example:
+  `examples/check-app-health.yaml` (Health Check's `result` output says healthy or not).
+- **One error handler for many blocks:** connect the red `error` output of every block you
+  want covered to one input of one block (e.g. a Python Code block); it runs once and gets
+  the errors, each naming its `block`. Example: `examples/shared-error-handler.yaml`.
+- **Python packages:** Tools → Python environment creates your own Python environment and
+  installs packages with pip. Tick **Run in my Python environment** on a Python Code
+  block to use them (`taskloom env create`, `taskloom env pip install NAME` from a terminal).
+- **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
+  the flows you had open come back with them after a crash or a restart. If the editor
+  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
   secure store, never in a file) and click **Save and test connection**.
@@ -170,6 +182,9 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | `editor.ini` | Editor preferences, e.g. remembered choices for overlapping runs |
 | `scheduled.yaml` | Flows the scheduler runs |
 | `known_hosts` | SSH server keys trusted on first connection |
+| `python-env/` | Your Python environment for Python Code blocks |
+| `recovery/` | Autosaved copies of unsaved flows |
+| `crash.log` | What happened if the editor ever stopped unexpectedly |
 
 ```yaml
 # connections.yaml

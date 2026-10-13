@@ -17,8 +17,11 @@ class ports:
 
         def __init__(self, required: bool = True, many: bool = False, any_of: bool = False):
             self.required = required
-            self.many = many or any_of  # an input that takes several edges and receives a list, in edge order
-            self.any_of = any_of  # runs when any one of its edges delivers (e.g. two paths that meet)
+            # many: takes several edges and always receives a list, in edge order.
+            self.many = many
+            # any_of: takes several edges and runs when any one of them delivers (two paths that meet,
+            # or several blocks' errors going to one handler). With several edges it receives a list.
+            self.any_of = any_of
 
     class Any(Port):
         kind = "any"

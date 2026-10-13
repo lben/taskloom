@@ -6,7 +6,7 @@ import polars as pl
 
 from ..block import Block, fields, ports
 from ..expr import evaluate
-from ..engine import SecretStr, preview, run_flow
+from ..engine import SecretStr, _masked, preview, run_flow
 from ..flow import load_flow
 from ..table import Table
 
@@ -20,14 +20,22 @@ class PythonCode(Block):
         "inputs": fields.Names(default=["input"], help="Variables your code receives."),
         "outputs": fields.Names(default=["output"], help="Variables your code sets; unset ones are not produced."),
         "code": fields.Code("python"),
+        "use_environment": fields.Bool(default=False, help="Run in your own Python environment, with the packages "
+                                                           "you installed (Tools → Python environment)"),
     }
 
     @classmethod
     def ports(cls, config):
-        return ({n: ports.Any(required=False) for n in config["inputs"]},
+        # Inputs can take several edges (e.g. the errors of many blocks); then they receive a list.
+        return ({n: ports.Any(required=False, any_of=True) for n in config["inputs"]},
                 {n: ports.Any() for n in config["outputs"]})
 
     def run(self, ctx, **inputs):
+        if self.config.use_environment:
+            from ..pyenv import run_code
+
+            values = {name: inputs.get(name) for name in self.config.inputs}
+            return run_code(ctx, self.config.code, values, self.config.outputs)
         namespace = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table}
         namespace.update({name: inputs.get(name) for name in self.config.inputs})
         exec(compile(self.config.code, f"<block {ctx.block_id}>", "exec"), namespace)
@@ -142,10 +150,30 @@ class Inspect(Block):
     description = ("For checking your flow: put it between two blocks to see the data passing through "
                    "(in the Log and in Data preview). It passes the data on unchanged.")
     category = "Debug"
-    inputs = {"value": ports.Any(required=False)}
+    inputs = {"value": ports.Any(required=False, any_of=True)}
     outputs = {"value": ports.Any()}
-    config = {"label": fields.Text(required=False, help="A name to recognise this check in the log")}
+    config = {
+        "message": fields.Code("f-string", required=False,
+                               help="Optional text written like a Python f-string, e.g. "
+                                    "Healthy: {value['healthy']} {value['problems']}. Empty shows the whole value."),
+    }
+
+    @classmethod
+    def migrate(cls, config, old_version):
+        if "label" in config:  # version 0.6.0 had a fixed label instead of a message
+            label = config.pop("label")
+            config.setdefault("message", f"{label}: {{value}}" if label else None)
+        return config
 
     def run(self, ctx, value=None):
-        ctx.log((f"{self.config.label}: " if self.config.label else "") + preview(value))
+        if self.config.message:
+            # Secrets show as *** here: this text goes to the log and the run history.
+            namespace = {**ctx.functions, "value": _masked(value), "params": _masked(ctx.params)}
+            try:
+                text = eval(compile("f" + repr(self.config.message), f"<block {ctx.block_id}>", "eval"), namespace)
+            except Exception as e:
+                raise ValueError(f"the message could not be filled in: {type(e).__name__}: {e}") from None
+            ctx.log(text)
+        else:
+            ctx.log(preview(value))
         return {"value": value}

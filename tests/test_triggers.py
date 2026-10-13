@@ -86,21 +86,26 @@ def test_inspect_shows_what_passes_through(env):
             config: {inputs: [], code: "output = {'rows': 3, 'region': 'EU'}"}
           look:
             type: logic.inspect
+            config: {message: "{len(value)} fields, region {value['region']}"}
+          old_style:
+            type: logic.inspect
             config: {label: before saving}
           use:
             type: logic.python
             config: {outputs: [], code: "assert input['rows'] == 3"}
         edges:
           - make.output -> look.value
+          - make.output -> old_style.value
           - look.value -> use.input
     """)
     assert env.taskloom("run", flow).returncode == 0
     run_id, _ = env.last_run()
     history = History(env.home / "history.db")
-    logs = [entry["message"] for entry in history.logs(run_id) if entry["block"] == "look"]
+    logs = {entry["block"]: entry["message"] for entry in history.logs(run_id) if entry["block"]}
     previews = history.blocks(run_id)["make"]["previews"]
     history.close()
-    assert logs[0].startswith("before saving: {") and '"region": "EU"' in logs[0]
+    assert logs["look"] == "2 fields, region EU"
+    assert logs["old_style"].startswith("before saving: {") and "'region': 'EU'" in logs["old_style"]
     assert json.loads(previews["output"]) == {"rows": 3, "region": "EU"}
 
 

@@ -1,0 +1,26 @@
+taskloom: 1
+name: check-app-health
+description: Checks whether an app on a server is healthy and shows the answer.
+
+# Needs an SSH connection named "appserver" (for the PID file check). Press Run now and
+# look at the Log, or select the "show" block and open Data preview.
+blocks:
+  start:
+    type: trigger.manual
+    ui: {x: 0, y: 40}
+  check:
+    type: servers.health_check
+    config:
+      url: "http://server01.example.com:8501/"
+      connection: appserver
+      pid_file: "~/app/app.pid"
+    ui: {x: 250, y: 0}
+  show:
+    type: logic.inspect
+    config:
+      message: "Healthy: {value['healthy']}. Checked: {', '.join(value['checks'])}. Problems: {value['problems'] or 'none'}"
+    ui: {x: 520, y: 40}
+
+edges:
+  - start.start -> check.after
+  - check.result -> show.value

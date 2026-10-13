@@ -219,8 +219,8 @@ def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
 def block_config(cls, spec: BlockSpec) -> dict:
     """Apply defaults, migrations and type coercion to a block's config."""
     config = dict(spec.config)
-    if spec.version is not None and spec.version < cls.version:
-        config = cls.migrate(config, spec.version)
+    if spec.version is None or spec.version < cls.version:  # files usually do not record a version
+        config = cls.migrate(config, spec.version or 1)
     elif spec.version is not None and spec.version > cls.version:
         raise ValueError(f"saved with version {spec.version} of {cls.type_id}, but this install has version {cls.version}")
     unknown = set(config) - set(cls.config)
@@ -314,7 +314,8 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
             errors.append(f"edge {edge}: '{edge.src}' has no output '{edge.src_port}'")
         if edge.dst in ports and edge.dst_port not in ports[edge.dst][0]:
             errors.append(f"edge {edge}: '{edge.dst}' has no input '{edge.dst_port}'")
-        many = edge.dst in ports and getattr(ports[edge.dst][0].get(edge.dst_port), "many", False)
+        port = ports[edge.dst][0].get(edge.dst_port) if edge.dst in ports else None
+        many = getattr(port, "many", False) or getattr(port, "any_of", False)
         if (edge.dst, edge.dst_port) in connected and not many:
             errors.append(f"edge {edge}: input '{edge.dst}.{edge.dst_port}' is already connected")
         connected.add((edge.dst, edge.dst_port))

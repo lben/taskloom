@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import yaml
@@ -23,11 +24,12 @@ from ..launch import runner_command
 from ..scheduler import acquire_lock
 from ..registry import discover
 from .canvas import FlowScene, FlowView
-from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, RunDialog, SettingsDialog
+from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowsPanel, HistoryPanel, LogPanel, Palette, ParametersPanel,
                      PreviewPanel, PropertiesPanel, scheduler_icon)
 from .runs import RunProcess
+from .safety import CRASH_LOG, Safety
 
 CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
@@ -51,6 +53,8 @@ class FlowTab(QWidget):
         layout.addWidget(self.view)
         self.runs: list[RunProcess] = []
         self.queued: list[dict] = []
+        self.tab_id = uuid.uuid4().hex[:12]  # names this tab's autosaved copy
+        self.autosave = QTimer(self, singleShot=True, interval=1500)
         self.entries: list[dict] = []  # log of the run shown on the canvas
         self.block_info: dict[str, dict] = {}  # block -> status, tables, … of the run shown
         self.shown_run: RunProcess | None = None
@@ -81,6 +85,8 @@ class MainWindow(QMainWindow):
         self.registry = discover(self.home.blocks_dir)
         # Editor preferences live next to the rest of the user's Taskloom files.
         self.settings = QSettings(str(self.home.root / "editor.ini"), QSettings.IniFormat)
+        self.safety = Safety(self.home.root)
+        self._quitting = False
         self.resize(1440, 900)
 
         self.tabs = QTabWidget(tabsClosable=True, movable=True, documentMode=True)
@@ -180,6 +186,7 @@ class MainWindow(QMainWindow):
         m = bar.addMenu("&Tools")
         act(m, "Connections…", self.edit_connections)
         act(m, "Settings…", lambda: SettingsDialog(self.home, self).exec())
+        act(m, "Python environment…", lambda: PythonEnvDialog(self.home, self).exec())
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
@@ -208,13 +215,65 @@ class MainWindow(QMainWindow):
         tab = FlowTab(doc, self.registry)
         tab.scene.block_selected.connect(lambda block_id, t=tab: self._on_block_selected(t, block_id))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
+        doc.changed.connect(tab.autosave.start)
+        tab.autosave.timeout.connect(lambda t=tab: self._autosave(t))
         self.tabs.addTab(tab, doc.title)
         self._refresh_schedule(tab)
         self.flows_panel.add(tab)
         self._load_last_run(tab)
         self.tabs.setCurrentWidget(tab)
         QTimer.singleShot(0, tab.view.center_on_flow)
+        self._save_session()
         return tab
+
+    # --- keeping work safe ------------------------------------------------------------
+
+    def _autosave(self, tab: FlowTab):
+        """Copy unsaved changes to the recovery folder (the flow file is only written on Save)."""
+        if tab.doc.dirty:
+            self.safety.write_copy(tab.tab_id, tab.doc.path, tab.doc.data)
+        else:
+            self.safety.drop_copy(tab.tab_id)
+
+    def _save_session(self):
+        if not self._quitting:
+            self.settings.setValue("session/flows", [str(t.doc.path) for t in self.tabs_list() if t.doc.path])
+
+    def restore_session(self, paths=()):
+        """Reopen the flows that were open last time, then bring back unsaved changes left by an
+        editor that did not close normally (a crash, or the computer restarting)."""
+        crashed = self.safety.start()
+        previous = self.settings.value("session/flows") or []
+        previous = [previous] if isinstance(previous, str) else list(previous)
+        for path in dict.fromkeys([*previous, *map(str, paths)]):
+            if Path(path).exists():
+                self.open_flow(Path(path))
+        recovered = []
+        for copy in self.safety.orphaned_copies():
+            path = Path(copy["path"]) if copy.get("path") else None
+            tab = next((t for t in self.tabs_list() if path and t.doc.path == path), None)
+            if tab is None:
+                tab = self.add_tab(FlowDocument(copy["data"], path))
+                tab.doc.dirty = True
+            else:
+                tab.doc.restore(copy["data"])
+            self._on_doc_changed(tab)
+            self._autosave(tab)
+            copy["file"].unlink(missing_ok=True)
+            recovered.append(tab.doc.title)
+        if crashed or recovered:
+            text = "Taskloom did not close normally last time." if crashed else ""
+            if recovered:
+                text += f" Unsaved changes were recovered in: {', '.join(recovered)} (not saved yet)."
+            if crashed:
+                text += f" Details, if any, are in {self.home.root / CRASH_LOG}."
+            QMessageBox.information(self, "Work recovered", text.strip())
+
+    def show_error(self, details: str):
+        """An unexpected error: tell the user instead of disappearing (it is also in crash.log)."""
+        QMessageBox.warning(self, "Something went wrong",
+                            "Taskloom hit an unexpected error but is still running. Save your work.\n\n"
+                            f"{details[-1500:]}\n\nThe details are in {self.home.root / CRASH_LOG}.")
 
     def new_flow(self) -> FlowTab:
         return self.add_tab(FlowDocument())
@@ -248,8 +307,10 @@ class MainWindow(QMainWindow):
                 return False
             path = Path(chosen)
         tab.doc.save(path.resolve())
+        self.safety.drop_copy(tab.tab_id)
         self._load_last_run(tab)
         self._sync_schedule(tab)
+        self._save_session()
         return True
 
     def edit_connections(self):
@@ -264,8 +325,11 @@ class MainWindow(QMainWindow):
                                           QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if answer == QMessageBox.Cancel or answer == QMessageBox.Save and not self.save(tab):
                 return False
+        tab.autosave.stop()
+        self.safety.drop_copy(tab.tab_id)
         self.flows_panel.remove(tab)
         self.tabs.removeTab(self.tabs.indexOf(tab))
+        self._save_session()
         return True
 
     def _on_tab_changed(self, index):
@@ -623,10 +687,14 @@ class MainWindow(QMainWindow):
             for run in running:
                 if not run.proc.waitForFinished(8000):
                     run.proc.kill()
+        self._save_session()
+        self._quitting = True  # closing the tabs below must not empty the remembered session
         for tab in self.tabs_list():
             if not self.close_tab(tab):
+                self._quitting = False
                 event.ignore()
                 return
+        self.safety.stop()
         event.accept()
 
 
@@ -635,12 +703,13 @@ def main(paths=()) -> int:
     app.setApplicationName("Taskloom")
     app.setOrganizationName("Taskloom")
     window = MainWindow()
-    opened = [window.open_flow(Path(p)) for p in paths]
-    if not any(opened):
-        window.new_flow()
+    window.safety.install_crash_log(on_error=window.show_error)
     window.show()
-    if os.environ.get("TASKLOOM_EDITOR_SMOKE") and opened and opened[0]:
-        _smoke_test(app, window, opened[0])  # used by packaging/smoke.py to check a packaged build
+    window.restore_session(paths)
+    if not window.tabs_list():
+        window.new_flow()
+    if os.environ.get("TASKLOOM_EDITOR_SMOKE") and paths:
+        _smoke_test(app, window, window.open_flow(Path(paths[0])))  # used by packaging/smoke.py
     return app.exec()
 
 

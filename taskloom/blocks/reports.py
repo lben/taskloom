@@ -220,19 +220,23 @@ class SendEmail(Block):
     title = "Send Email"
     description = 'Sends an email with a body (text, tables, charts) and attachments, made to look right in Outlook.'
     category = "Email"
-    inputs = {"body": ports.Any(required=False, many=True), "attachments": ports.Any(required=False, many=True)}
+    inputs = {"body": ports.Any(required=False, many=True), "attachments": ports.Any(required=False, many=True),
+              "subject": ports.Any(required=False)}
     outputs = {"sent": ports.Any()}
     config = {
         "connection": fields.Connection(kind="smtp"),
         "to": fields.List(default=[], help="Addresses; empty means notify_email from settings"),
         "cc": fields.List(default=[]),
-        "subject": fields.Text(help="e.g. Daily sales {day:%Y-%m-%d}"),
+        "subject": fields.Text(required=False, help="e.g. Daily sales {day:%Y-%m-%d}; a connected 'subject' input wins"),
         "message": fields.Text(required=False, help="Text shown above the body"),
         "save_copy": fields.Path(required=False, help="Also save the email as a .eml file"),
     }
 
-    def run(self, ctx, body=None, attachments=None):
+    def run(self, ctx, body=None, attachments=None, subject=None):
         c = self.config
+        subject = str(subject) if subject is not None else c.subject
+        if not subject:
+            raise ValueError("set a subject, or connect one to the 'subject' input")
         content = to_html(([c.message] if c.message else []) + list(body or []))
         files = []
         for item in attachments or []:
@@ -246,10 +250,10 @@ class SendEmail(Block):
                 files.append(Path(value))
         to = c.to or ctx.home.settings()["notify_email"]
         conn = ctx.connection(c.connection)
-        msg = mail.build_message(conn.get("sender", ""), to, c.subject, content, files, c.cc)
+        msg = mail.build_message(conn.get("sender", ""), to, subject, content, files, c.cc)
         if c.save_copy:
             Path(c.save_copy).parent.mkdir(parents=True, exist_ok=True)
             Path(c.save_copy).write_bytes(bytes(msg))
         mail.send(conn, msg)
-        ctx.log(f"sent '{c.subject}' to {msg['To']} with {len(files)} attachment(s)")
-        return {"sent": {"to": msg["To"], "subject": c.subject, "attachments": [str(f) for f in files]}}
+        ctx.log(f"sent '{subject}' to {msg['To']} with {len(files)} attachment(s)")
+        return {"sent": {"to": msg["To"], "subject": subject, "attachments": [str(f) for f in files]}}

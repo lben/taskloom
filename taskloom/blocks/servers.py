@@ -118,10 +118,11 @@ class StopProcess(Block):
 class HealthCheck(Block):
     type_id = "servers.health_check"
     title = "Health Check"
-    description = "Checks that an app is alive: its web address answers, its process is running, or its port is open. Continues down 'healthy' or 'unhealthy'."
+    description = ("Checks that an app is alive: its web address answers, its process is running, or its port is "
+                   "open. Continues down 'healthy' or 'unhealthy'; 'result' always says which, for checking or emails.")
     category = "Servers"
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
-    outputs = {"healthy": ports.Any(), "unhealthy": ports.Any()}
+    outputs = {"healthy": ports.Any(), "unhealthy": ports.Any(), "result": ports.Any()}
     config = {
         "url": fields.Text(required=False, help="Checked from this machine"),
         "expect_status": fields.Int(default=200),
@@ -164,12 +165,12 @@ class HealthCheck(Block):
                 problems.append(f"port {c.port} on {conn['host']}: {e}")
         if not checks:
             raise ValueError("configure at least one check: url, pid_file or port")
-        details = {"checks": checks, "problems": problems}
+        details = {"healthy": not problems, "checks": checks, "problems": problems}
         if problems:
             ctx.warn("unhealthy: " + "; ".join(problems))
-            return {"unhealthy": details}
+            return {"unhealthy": details, "result": details}
         ctx.log(f"healthy ({', '.join(checks)})")
-        return {"healthy": details}
+        return {"healthy": details, "result": details}
 
 
 class RemoteExtract(Block):

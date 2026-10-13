@@ -180,6 +180,23 @@ def cmd_connection_test(args, home: Home) -> int:
     return EXIT_OK
 
 
+def cmd_env(args, home: Home) -> int:
+    from . import pyenv
+
+    try:
+        if args.env_command == "create":
+            print(pyenv.create(home, args.python))
+            return EXIT_OK
+        if args.env_command == "pip":
+            return pyenv.pip(home, args.pip_args)
+        python = pyenv.env_python(home)
+        print(f"{pyenv.env_dir(home)}: " + ("ready" if python.exists() else "not created yet"))
+        return EXIT_OK
+    except (OSError, RuntimeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_FAILED
+
+
 def cmd_editor(args, home: Home) -> int:
     from .editor.window import main as editor_main  # Qt is only needed for the editor
 
@@ -218,6 +235,14 @@ def main(argv=None) -> int:
     c = connection_sub.add_parser("test", help="check that a connection connects and logs in")
     c.add_argument("name")
     c.set_defaults(func=cmd_connection_test)
+    p = sub.add_parser("env", help="your Python environment for Python Code blocks")
+    env_sub = p.add_subparsers(dest="env_command", required=True)
+    e = env_sub.add_parser("create", help="create it (from the python setting, or a Python found here)")
+    e.add_argument("--python", help="the Python to create it from")
+    e = env_sub.add_parser("pip", help="run pip in it, e.g. taskloom env pip install requests")
+    e.add_argument("pip_args", nargs=argparse.REMAINDER)
+    env_sub.add_parser("info", help="where it is and whether it exists")
+    p.set_defaults(func=cmd_env)
     p = sub.add_parser("secret", help="manage secrets")
     secret_sub = p.add_subparsers(dest="secret_command", required=True)
     s = secret_sub.add_parser("set", help="store a secret (prompts for the value)")

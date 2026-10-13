@@ -367,3 +367,73 @@ def test_data_preview_shows_any_output(win, qtbot, tmp_path):
     tab.scene.nodes["make"].setSelected(True)
 
     assert "\"status\": \"ok\"" in win.preview.text.toPlainText() and not win.preview.text.isHidden()
+
+
+KILLED_EDITOR = """
+import os, signal, sys, time
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from pathlib import Path
+from PySide6.QtWidgets import QApplication
+from taskloom.config import Home
+from taskloom.editor.window import MainWindow
+app = QApplication([])
+w = MainWindow(Home(Path(sys.argv[1])))
+w.show()
+w.restore_session([sys.argv[2]])
+w.current.doc.add_block("logic.wait", 300, 0)        # an unsaved change to a saved flow
+w.new_flow().doc.add_block("logic.python", 0, 0)   # and a flow that was never saved
+end = time.monotonic() + 3
+while time.monotonic() < end:                        # long enough for the autosave
+    app.processEvents()
+    time.sleep(0.05)
+os.kill(os.getpid(), signal.SIGKILL)                 # no chance to clean up, like a crash
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="kills the editor with SIGKILL")
+def test_unsaved_work_comes_back_after_the_editor_is_killed(win, tmp_path):
+    import subprocess
+
+    flow = write_flow(tmp_path / "work.yaml", """
+        blocks:
+          first:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    script = tmp_path / "killed.py"
+    script.write_text(KILLED_EDITOR)
+    proc = subprocess.run([sys.executable, str(script), str(win.home.root), str(flow)], timeout=60)
+    assert proc.returncode == -signal.SIGKILL
+    assert "first" in flow.read_text() and "wait" not in flow.read_text()  # the file itself was not overwritten
+
+    win.restore_session()
+
+    restored = {t.doc.title: t for t in win.tabs_list()}
+    work = restored["work.yaml"]
+    assert work.doc.dirty and {s["type"] for s in work.doc.blocks.values()} == {"logic.python", "logic.wait"}
+    untitled = next(t for t in win.tabs_list() if t.doc.path is None)
+    assert untitled.doc.dirty and [s["type"] for s in untitled.doc.blocks.values()] == ["logic.python"]
+    assert win.message_boxes and win.message_boxes[0][1][0] == "Work recovered"
+    win.message_boxes.clear()
+    for tab in win.tabs_list():
+        tab.doc.dirty = False
+
+
+def test_python_environment_dialog_creates_it_and_installs_packages(win, qtbot, tmp_path):
+    from taskloom.editor.dialogs import PythonEnvDialog
+    from test_pyenv import _tiny_wheel
+
+    dialog = PythonEnvDialog(win.home, win)
+    assert not dialog.install_button.isEnabled()  # nothing to install into yet
+    dialog.python.setText(sys.executable)
+    dialog.create_button.click()
+    qtbot.waitUntil(lambda: dialog.proc is None, timeout=180_000)
+    assert dialog.install_button.isEnabled() and win.home.settings()["python"] == sys.executable
+
+    dialog.packages.setText(f"--no-index {_tiny_wheel(tmp_path)}")
+    dialog.install_button.click()
+    qtbot.waitUntil(lambda: dialog.proc is None, timeout=180_000)
+    dialog.list_button.click()
+    qtbot.waitUntil(lambda: dialog.proc is None, timeout=180_000)
+
+    assert "tinypkg" in dialog.output.toPlainText() and "failed" not in dialog.output.toPlainText()

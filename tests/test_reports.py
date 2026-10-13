@@ -165,3 +165,19 @@ def test_scheduler_emails_skipped_runs_when_asked(env, smtp):
 
     [msg] = smtp.messages
     assert msg["Subject"] == "[Taskloom] Run skipped" and msg["To"] == "me@example.com"
+
+
+def test_one_handler_emails_the_errors_of_several_blocks(env, smtp):
+    flow = env.root / "errors.yaml"
+    flow.write_text((REPO / "examples" / "shared-error-handler.yaml").read_text().replace("you@example.com", "me@example.com"))
+
+    result = env.taskloom("run", flow)
+
+    assert result.returncode == 0, result.stderr  # the failures were handled
+    [msg] = smtp.messages
+    assert msg["Subject"] == "[Taskloom] flow: load_sales, compute failed"
+    text = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "FileNotFoundError" in text and "ZeroDivisionError" in text
+    run_id, _ = env.last_run()
+    assert env.block_status(run_id) == {"start": "success", "load_sales": "failed", "compute": "failed",
+                                        "describe": "success", "email": "success"}

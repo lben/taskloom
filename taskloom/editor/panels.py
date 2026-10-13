@@ -327,6 +327,12 @@ class PropertiesPanel(QScrollArea):
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setAlignment(Qt.AlignTop)
+        old = self.takeWidget()
+        if old is not None:
+            # Its fields may still report an edit (e.g. losing focus): it no longer belongs to any block.
+            for child in old.findChildren(QWidget):
+                child.blockSignals(True)
+            old.deleteLater()  # not now: refresh may run inside a click on one of its buttons
         self.setWidget(body)
         if self.doc is None or self.block_id is None:
             hint = QLabel("Select a block to see its properties.\n\nDrag blocks from the tree on the left, "
@@ -384,6 +390,8 @@ class PropertiesPanel(QScrollArea):
             raise
 
     def _set(self, key, value, section="config"):
+        if self.doc is None or self.block_id not in self.doc.blocks:
+            return  # the block was deleted while its field was being edited
         self._commit(lambda: self.doc.set_block_value(self.block_id, key, value, section))
 
     def _field_widget(self, key, f, value):

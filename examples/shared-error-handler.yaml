@@ -1,0 +1,43 @@
+taskloom: 1
+name: shared-error-handler
+description: One block handles the errors of every step and emails them, naming the step that failed.
+
+# Needs an SMTP connection named "mailer" and your address below. Both steps fail on
+# purpose so you can see it work. Connect the error output (red) of any block you want
+# covered to the handler's "errors" input: one handler for the whole flow.
+blocks:
+  start:
+    type: trigger.manual
+    ui: {x: 0, y: 80}
+  load_sales:
+    type: data.read_file
+    config: {path: data/this-file-does-not-exist.csv}
+    ui: {x: 230, y: 0}
+  compute:
+    type: logic.python
+    config: {inputs: [], code: "output = 1 / 0"}
+    ui: {x: 230, y: 170}
+  describe:
+    type: logic.python
+    config:
+      inputs: [errors]
+      outputs: [subject, body]
+      code: |
+        # One error gives a dict; errors from several blocks give a list of dicts.
+        errors = errors if isinstance(errors, list) else [errors]
+        steps = ", ".join(e["block"] for e in errors)
+        subject = f"[Taskloom] {params.get('flow', 'flow')}: {steps} failed"
+        body = "\n\n".join(f"{e['block']} failed after {e['attempts']} attempt(s):\n{e['error']}" for e in errors)
+    ui: {x: 520, y: 80}
+  email:
+    type: email.send
+    config: {connection: mailer, to: [you@example.com]}
+    ui: {x: 790, y: 80}
+
+edges:
+  - start.start -> load_sales.after
+  - start.start -> compute.after
+  - load_sales.error -> describe.errors
+  - compute.error -> describe.errors
+  - describe.subject -> email.subject
+  - describe.body -> email.body

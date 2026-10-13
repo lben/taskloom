@@ -13,7 +13,6 @@ import json
 import os
 import queue
 import signal
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -25,6 +24,7 @@ from . import mail, ssh
 from .config import Home
 from .flow import FlowError, load_flow
 from .history import History
+from .history import connect as history_connect
 from .launch import runner_command, windowed_command
 from .report import Html
 
@@ -56,7 +56,7 @@ class Scheduler:
         self.messages: queue.Queue = queue.Queue()  # from the keeper thread
         self._flows: dict[str, tuple[float, object]] = {}
         home.root.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(home.history_db, isolation_level=None)
+        self._db = history_connect(home.history_db)
         self._db.execute("CREATE TABLE IF NOT EXISTS schedule_state (trigger TEXT PRIMARY KEY, last TEXT NOT NULL)")
 
     # --- state ------------------------------------------------------------------

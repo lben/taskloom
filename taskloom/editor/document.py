@@ -220,6 +220,15 @@ class FlowDocument(QObject):
             self.data[key] = value
         self._done()
 
+    def restore(self, data: dict):
+        """Put back recovered unsaved changes (they stay unsaved until you save)."""
+        self._change()
+        self.data = data
+        self.data.setdefault("params", {})
+        self.data.setdefault("blocks", {})
+        self.data.setdefault("edges", [])
+        self._done()
+
     def set_params(self, params: dict):
         if params == self.data["params"]:
             return

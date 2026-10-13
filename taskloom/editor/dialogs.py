@@ -10,7 +10,7 @@ from PySide6.QtCore import QProcess, QProcessEnvironment
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolButton,
+                               QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolButton,
                                QVBoxLayout, QWidget)
 
 from ..block import IDENTIFIER
@@ -535,3 +535,93 @@ class SettingsDialog(QDialog):
             from ..scheduler import set_start_at_login
             set_start_at_login(self.home, self.at_login.isChecked())
         self.accept()
+
+
+class PythonEnvDialog(QDialog):
+    """Create your Python environment and install packages into it with pip."""
+
+    def __init__(self, home, parent=None):
+        from ..pyenv import env_dir, env_python
+
+        super().__init__(parent)
+        self.home, self.env_python = home, env_python(home)
+        self.setWindowTitle("Python environment")
+        self.resize(720, 520)
+        layout = QVBoxLayout(self)
+        intro = QLabel("Python Code blocks with <b>Run in my Python environment</b> ticked run here, so they can use "
+                       "packages that Taskloom does not include. Install them with pip below; your pip settings "
+                       f"(e.g. a company package mirror) apply.<br>Folder: {html.escape(str(env_dir(home)))}")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.status = QLabel()
+        layout.addWidget(self.status)
+        create_row = QHBoxLayout()
+        self.python = QLineEdit(home.settings().get("python") or "",
+                                placeholderText="Python to create it from (empty: find one on this computer)")
+        browse, self.create_button = QToolButton(text="…"), QPushButton("Create environment")
+        create_row.addWidget(self.python, 1)
+        create_row.addWidget(browse)
+        create_row.addWidget(self.create_button)
+        layout.addLayout(create_row)
+        install_row = QHBoxLayout()
+        self.packages = QLineEdit(placeholderText="packages, e.g. requests openpyxl==3.1.2")
+        self.install_button, self.list_button = QPushButton("Install"), QPushButton("Show installed")
+        install_row.addWidget(self.packages, 1)
+        install_row.addWidget(self.install_button)
+        install_row.addWidget(self.list_button)
+        layout.addLayout(install_row)
+        self.output = QPlainTextEdit(readOnly=True)
+        layout.addWidget(self.output, 1)
+        close = QDialogButtonBox(QDialogButtonBox.Close)
+        close.rejected.connect(self.reject)
+        layout.addWidget(close)
+        browse.clicked.connect(self._browse)
+        self.create_button.clicked.connect(self._create)
+        self.install_button.clicked.connect(lambda: self._run(["env", "pip", "install", *self.packages.text().split()]))
+        self.packages.returnPressed.connect(self.install_button.click)
+        self.list_button.clicked.connect(lambda: self._run(["env", "pip", "list"]))
+        self.proc = None
+        self._show_status()
+
+    def _show_status(self):
+        ready = self.env_python.exists()
+        self.status.setText("<b>Ready.</b>" if ready else "<b>Not created yet.</b> Create it first.")
+        for w in (self.packages, self.install_button, self.list_button):
+            w.setEnabled(ready and self.proc is None)
+        self.create_button.setEnabled(self.proc is None)
+        self.create_button.setText("Create again" if ready else "Create environment")
+
+    def _browse(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Python program", self.python.text())
+        if path:
+            self.python.setText(path)
+
+    def _create(self):
+        settings = self.home.settings()
+        python = self.python.text().strip() or None
+        if python != settings.get("python"):  # remember it as the python setting
+            data = {k: v for k, v in {**settings, "python": python}.items() if v != SETTINGS_DEFAULTS[k]}
+            (self.home.root / "settings.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        self._run(["env", "create"] + (["--python", python] if python else []))
+
+    def _run(self, args):
+        if self.proc is not None:
+            return
+        self.output.appendPlainText(f"$ taskloom {' '.join(args)}")
+        self.proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("TASKLOOM_HOME", str(self.home.root))
+        env.insert("PYTHONUNBUFFERED", "1")
+        self.proc.setProcessEnvironment(env)
+        self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(
+            lambda: self.output.appendPlainText(bytes(self.proc.readAllStandardOutput()).decode(errors="replace").rstrip()))
+        self.proc.finished.connect(self._finished)
+        program, *rest = runner_command()
+        self.proc.start(program, rest + args)
+        self._show_status()
+
+    def _finished(self, code, _status):
+        self.output.appendPlainText("done" if code == 0 else f"failed (exit code {code})")
+        self.proc = None
+        self._show_status()
