@@ -569,10 +569,9 @@ class PythonEnvDialog(QDialog):
         layout.addLayout(create_row)
         install_row = QHBoxLayout()
         self.packages = QLineEdit(placeholderText="packages, e.g. requests openpyxl==3.1.2")
-        self.install_button, self.list_button = QPushButton("Install"), QPushButton("Show installed")
+        self.install_button = QPushButton("Install")
         install_row.addWidget(self.packages, 1)
         install_row.addWidget(self.install_button)
-        install_row.addWidget(self.list_button)
         layout.addLayout(install_row)
         self.output = QPlainTextEdit(readOnly=True)
         layout.addWidget(self.output, 1)
@@ -582,13 +581,13 @@ class PythonEnvDialog(QDialog):
         browse.clicked.connect(self._browse)
         self.create_button.clicked.connect(self._create)
         self.existing_button.clicked.connect(self._use_existing)
-        self.install_button.clicked.connect(lambda: self._run(["env", "pip", "install", *self.packages.text().split()]))
+        self.install_button.clicked.connect(
+            lambda: self._run(["env", "pip", "install", *self.packages.text().split()], then=self._list))
         self.packages.returnPressed.connect(self.install_button.click)
-        self.list_button.clicked.connect(lambda: self._run(["env", "pip", "list"]))
-        self.proc = None
+        self.proc, self._partial, self._then = None, b"", None
         self._show_status()
         if self._env_python().exists():
-            self.list_button.click()  # show what it has straight away
+            self._list()  # show what it has straight away
 
     def _env_python(self):
         from ..pyenv import env_python
@@ -606,7 +605,7 @@ class PythonEnvDialog(QDialog):
         else:
             self.status.setText(f"<b>Not created yet:</b> {html.escape(str(env_dir(self.home)))}. Create one, or use "
                                 "an environment you already have.")
-        for w in (self.packages, self.install_button, self.list_button):
+        for w in (self.packages, self.install_button):
             w.setEnabled(ready and self.proc is None)
         for w in (self.create_button, self.existing_button):
             w.setEnabled(self.proc is None)
@@ -636,16 +635,28 @@ class PythonEnvDialog(QDialog):
         self._save_setting("python_env", folder)
         self.output.appendPlainText(f"using {folder}")
         self._show_status()
-        self.list_button.click()
+        self._list()
 
     def _create(self):
         self._save_setting("python", self.python.text().strip() or None)
         self._save_setting("python_env", None)  # create the default one in the Taskloom folder
-        self._run(["env", "create"] + (["--python", self.python.text().strip()] if self.python.text().strip() else []))
+        self._run(["env", "create"] + (["--python", self.python.text().strip()] if self.python.text().strip() else []),
+                  then=self._list)
 
-    def _run(self, args):
+    def _list(self):
+        self._run(["env", "pip", "list"])
+
+    def _add_output(self, data: bytes):
+        """Show whole lines only (output arrives in pieces), with Windows line ends counted once."""
+        *lines, self._partial = (self._partial + data).replace(b"\r\n", b"\n").split(b"\n")
+        for line in lines:
+            self.output.appendPlainText(line.decode(errors="replace").rstrip())
+
+    def _run(self, args, then=None):
+        """Run `taskloom ARGS`, showing its output; `then` runs after it succeeds (e.g. list the packages)."""
         if self.proc is not None:
             return
+        self._then = then
         self.output.appendPlainText(f"$ taskloom {' '.join(args)}")
         self.proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
@@ -653,14 +664,19 @@ class PythonEnvDialog(QDialog):
         env.insert("PYTHONUNBUFFERED", "1")
         self.proc.setProcessEnvironment(env)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
-        self.proc.readyReadStandardOutput.connect(
-            lambda: self.output.appendPlainText(bytes(self.proc.readAllStandardOutput()).decode(errors="replace").rstrip()))
+        self.proc.readyReadStandardOutput.connect(lambda: self._add_output(bytes(self.proc.readAllStandardOutput())))
         self.proc.finished.connect(self._finished)
         program, *rest = runner_command()
         self.proc.start(program, rest + args)
         self._show_status()
 
     def _finished(self, code, _status):
+        self._add_output(bytes(self.proc.readAllStandardOutput()))
+        if self._partial:  # a last line without a line end
+            self._add_output(b"\n")
         self.output.appendPlainText("done" if code == 0 else f"failed (exit code {code})")
         self.proc = None
         self._show_status()
+        then, self._then = self._then, None
+        if code == 0 and then is not None:
+            then()

@@ -76,7 +76,8 @@ taskloom editor examples/daily-sales-report.yaml
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it. Every run's values are kept in **Run history** (double-click a run, then
   hover) for `history_days` (365 by default). The canvas always shows the newest run of
-  the flow, including scheduled ones, unless you opened an older run from Run history.
+  the flow, including scheduled ones, unless you opened an older run from Run history. The
+  Log keeps the messages of the earlier runs above it, each run starting with a bold line.
 - **Retry one block after a fix:** right-click it → **Run this block again with the same
   inputs**. Only that block runs, with what reached it in the run on the canvas; the other
   blocks keep their results. (`taskloom run FLOW --only BLOCK --inputs-from RUN`.) Inputs

@@ -807,8 +807,12 @@ class LogPanel(QWidget):
 
     def append(self, entry: dict):
         self.entries.append(entry)
-        if self.block is None or entry.get("block") == self.block:
+        if self._shown(entry):
             self.text.appendHtml(self._line(entry))
+
+    def _shown(self, e: dict) -> bool:
+        # A run's start and end lines stay visible with a block filter: they split the runs apart.
+        return self.block is None or e.get("block") == self.block or e.get("header", False)
 
     def set_filter(self, block_id):
         self.block = block_id
@@ -823,12 +827,12 @@ class LogPanel(QWidget):
         # Keep spaces as they are: reports such as Python tracebacks are laid out in columns.
         message = html.escape(e.get("message", "")).replace(" ", "&nbsp;").replace("\n", "<br>")
         level_html = f"<span style='color:{color}'>{level}</span>" if color else level
-        return f"<span style='color:gray'>{e.get('ts', '')[11:19]}</span> {block}{level_html} {message}"
+        line = f"<span style='color:gray'>{e.get('ts', '')[11:19]}</span> {block}{level_html} {message}"
+        return f"<b>{line}</b>" if e.get("header") else line
 
     def _render(self):
         self.text.clear()
-        self.text.appendHtml("<br>".join(self._line(e) for e in self.entries
-                                          if self.block is None or e.get("block") == self.block))
+        self.text.appendHtml("<br>".join(self._line(e) for e in self.entries if self._shown(e)))
 
 
 # --- Data preview -------------------------------------------------------------------

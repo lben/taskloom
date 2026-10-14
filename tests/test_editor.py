@@ -432,11 +432,22 @@ def test_python_environment_dialog_creates_it_and_installs_packages(win, qtbot, 
 
     dialog.packages.setText(f"--no-index {_tiny_wheel(tmp_path)}")
     dialog.install_button.click()
-    qtbot.waitUntil(lambda: dialog.proc is None, timeout=180_000)
-    dialog.list_button.click()
-    qtbot.waitUntil(lambda: dialog.proc is None, timeout=180_000)
+    qtbot.waitUntil(lambda: dialog.proc is None and dialog.output.toPlainText().count("done") >= 3,
+                    timeout=180_000)  # create, install, then the list of packages again
 
-    assert "tinypkg" in dialog.output.toPlainText() and "failed" not in dialog.output.toPlainText()
+    assert "tinypkg" in dialog.output.toPlainText().split("$ taskloom env pip list")[-1]
+    assert "failed" not in dialog.output.toPlainText()
+
+
+def test_python_environment_output_has_no_blank_lines_between_windows_lines(win):
+    from taskloom.editor.dialogs import PythonEnvDialog
+
+    dialog = PythonEnvDialog(win.home, win)
+    dialog.output.clear()
+    dialog._add_output(b"Package Version\r\n------- -------\r\npip     24.")  # pieces can end mid-line
+    dialog._add_output(b"0\r\n")
+
+    assert dialog.output.toPlainText() == "Package Version\n------- -------\npip     24.0"
 
 
 def test_connecting_done_to_run_after_by_dragging(win):
@@ -531,6 +542,34 @@ def test_the_canvas_shows_runs_started_elsewhere(win, qtbot, tmp_path):
     win._refresh_statuses()
 
     assert "7" in tab.scene.nodes["make"].ports[("output", True)].toolTip()
+
+
+def test_the_log_keeps_earlier_runs_including_scheduled_ones(win, qtbot, tmp_path):
+    import subprocess
+
+    flow = write_flow(tmp_path / "kept.yaml", """
+        params:
+          n: {type: int, value: 1}
+        blocks:
+          make:
+            type: logic.python
+            config: {inputs: [], code: "print('got', params['n'])"}
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+    for n in (7, 8):  # e.g. two scheduled runs between two looks at the history
+        subprocess.run([sys.executable, "-m", "taskloom.cli", "run", str(flow), "--param", f"n={n}"], env=env,
+                       check=True, capture_output=True)
+
+    win._refresh_statuses()
+
+    text = win.log.text.toPlainText()
+    assert text.index("got 1") < text.index("run #2 started") < text.index("got 7") < text.index("got 8")
+    win.log.set_filter("make")  # one block's messages, still split by run
+    text = win.log.text.toPlainText()
+    assert "run #3 started" in text and "got 8" in text
 
 
 def test_python_environment_screen_shows_an_existing_environment(win, tmp_path, monkeypatch, qtbot):

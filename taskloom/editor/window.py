@@ -40,6 +40,14 @@ def _short(text: str, n: int = 60) -> str:
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
+MAX_LOG_ENTRIES = 20000  # the Log keeps earlier runs' messages, up to this many lines
+
+
+def _finished_line(run_id: int, status: str, ts: str) -> dict:
+    return {"ts": ts, "level": "DONE" if status == "success" else "ERROR", "message": f"run #{run_id} {status}",
+            "header": True}
+
+
 class FlowTab(QWidget):
     """One open flow: its document, canvas, runs and what they reported."""
 
@@ -469,7 +477,7 @@ class MainWindow(QMainWindow):
         run.finished.connect(lambda status, t=tab, r=run: self._on_finished(t, r, status))
         tab.runs.append(run)
         if only is None:
-            self._show_run(tab, run)
+            self._show_run(tab, run, keep_log=True)
         else:  # re-running one block: the rest of the canvas keeps the run it showed
             tab.shown_run = run
             tab.block_info.pop(only, None)
@@ -487,12 +495,13 @@ class MainWindow(QMainWindow):
         rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
         menu.exec(pos)
 
-    def _show_run(self, tab: FlowTab, run: RunProcess | None):
+    def _show_run(self, tab: FlowTab, run: RunProcess | None, keep_log=False):
+        """Put a run on the canvas. Its Log follows the earlier runs' messages (keep_log), or replaces them."""
         tab.shown_run = run
-        tab.entries, tab.block_info = [], {}
+        tab.entries, tab.block_info = (tab.entries[-MAX_LOG_ENTRIES:] if keep_log else []), {}
         tab.scene.clear_statuses()
         if tab is self.current:
-            self.log.set_entries([])
+            self.log.set_entries(list(tab.entries))
             self.bottom_tabs.setCurrentWidget(self.log)
 
     def rerun_block(self, tab: FlowTab, block_id: str):
@@ -536,7 +545,8 @@ class MainWindow(QMainWindow):
         if kind == "run_started":
             tab.shown_run_id, tab.following_latest = e["run_id"], True
             params = " ".join(f"{k}={v}" for k, v in e.get("params", {}).items())
-            self._log(tab, {"ts": e["ts"], "level": "INFO", "message": f"run #{e['run_id']} started {params}"})
+            self._log(tab, {"ts": e["ts"], "level": "INFO", "message": f"run #{e['run_id']} started {params}",
+                            "header": True})
         elif kind == "block_started":
             tab.block_info[block] = {"status": "running"}
             text = "running" if e["attempt"] == 1 else f"running · attempt {e['attempt']}"
@@ -546,8 +556,7 @@ class MainWindow(QMainWindow):
         elif kind == "block_finished":
             self._apply_block_result(tab, block, e)
         elif kind == "run_finished":
-            self._log(tab, {"ts": e["ts"], "level": "DONE" if e["status"] == "success" else "ERROR",
-                            "message": f"run #{e['run_id']} {e['status']}"})
+            self._log(tab, _finished_line(e["run_id"], e["status"], e["ts"]))
         self.flows_panel.update_tab(tab)
 
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
@@ -599,13 +608,16 @@ class MainWindow(QMainWindow):
         if tab.doc.path is None or not self.home.history_db.exists():
             return
         history = self._history()
-        runs = [r for r in history.runs(str(tab.doc.path), limit=5) if r["status"] != "running"]
+        runs = [r for r in history.runs(str(tab.doc.path), limit=20) if r["status"] != "running"]
         history.close()
         tab.last = runs[0] if runs else None
         self.flows_panel.update_tab(tab)
-        newest = tab.last["id"] if tab.last else None
-        if newest and tab.following_latest and not tab.running and newest > (tab.shown_run_id or 0):
-            self.show_history_run(newest, tab)  # e.g. a run the scheduler started
+        if tab.following_latest and not tab.running and runs:
+            # Just opened: the newest run. Afterwards: each new one (e.g. started by the scheduler), oldest
+            # first, its messages after the ones already shown.
+            new = runs[:1] if tab.shown_run_id is None else [r for r in runs if r["id"] > tab.shown_run_id]
+            for r in reversed(new):
+                self.show_history_run(r["id"], tab, keep_log=True)
 
     def _refresh_statuses(self):
         for tab in self.tabs_list():
@@ -699,21 +711,26 @@ class MainWindow(QMainWindow):
         if tab.last:
             self.show_history_run(tab.last["id"])
 
-    def show_history_run(self, run_id: int, tab: FlowTab | None = None):
+    def show_history_run(self, run_id: int, tab: FlowTab | None = None, keep_log=False):
+        """Show a past run: its results on the canvas, its messages in the Log (after the earlier
+        runs' messages with keep_log, else on their own)."""
         tab = tab or self.current
         if tab is None:
             return
         history = self._history()
-        blocks, logs = history.blocks(run_id), history.logs(run_id)
+        run, blocks, logs = history.run(run_id), history.blocks(run_id), history.logs(run_id)
         history.close()
-        self._show_run(tab, None)
+        self._show_run(tab, None, keep_log)
         tab.shown_run_id = run_id
         tab.following_latest = tab.last is None or run_id >= tab.last["id"]
         for block, info in blocks.items():
             self._apply_block_result(tab, block, info)
-        tab.entries = logs
+        if run:
+            logs = [{"ts": run["started"], "level": "INFO", "message": f"run #{run_id} started", "header": True},
+                    *logs, _finished_line(run_id, run["status"], run["finished"] or run["started"])]
+        tab.entries += logs
         if tab is self.current:
-            self.log.set_entries(list(logs))
+            self.log.set_entries(list(tab.entries))
             self.statusBar().showMessage(f"Showing run #{run_id}", 5000)
 
     def closeEvent(self, event):
