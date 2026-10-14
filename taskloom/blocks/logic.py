@@ -6,6 +6,7 @@ import inspect
 import io
 import linecache
 import os
+import sys
 import types
 
 import polars as pl
@@ -84,7 +85,8 @@ class PythonCode(Block):
 
             values = {name: inputs.get(name) for name in self.config.inputs}
             return run_code(ctx, self.config.code, values, self.config.outputs)
-        helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table}
+        helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table,
+                   "print": _printer(ctx), "log": lambda *values: ctx.log(" ".join(map(str, values)))}
         namespace = {**helpers, **{name: inputs.get(name) for name in self.config.inputs}}
         # Registered with linecache under a short name, so error reports can show the code around the
         # failing line (rich looks the name up relative to the folder it was imported in).
@@ -98,6 +100,18 @@ class PythonCode(Block):
             raise CodeError(e, filename, namespace, set(helpers)) from None
         # Outputs your code does not assign are not produced, so blocks after them are skipped.
         return {name: namespace[name] for name in self.config.outputs if name in namespace}
+
+
+def _printer(ctx):
+    """print() for your code: what it prints goes to the block's Log (and run history)."""
+
+    def print_to_log(*values, sep=" ", end="\n", file=None, flush=False):
+        if file is not None and file not in (sys.stdout, sys.stderr):
+            print(*values, sep=sep, end=end, file=file, flush=flush)  # e.g. into a file you opened
+        else:
+            ctx.log(sep.join(map(str, values)).rstrip("\n"))
+
+    return print_to_log
 
 
 class If(Block):

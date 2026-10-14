@@ -768,3 +768,19 @@ def test_retrying_the_only_block_of_a_flow(env):
     assert result.returncode == 0, result.stderr
     assert (env.root / "ran.txt").read_text() == "xx"
     assert env.query("SELECT count(*) FROM runs WHERE status = 'running'") == [(0,)]
+
+
+def test_print_in_a_python_block_goes_to_its_log(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          talk:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "print('rows:', 42, end='')\\nlog('also this')"}
+    """)
+    result = env.taskloom("run", flow, "--json-events")
+    run_id, status = env.last_run()
+
+    assert status == "success", result.stderr
+    logs = [m for (m,) in env.query("SELECT message FROM logs WHERE run_id=? AND block='talk'", run_id)]
+    assert "rows: 42" in logs and "also this" in logs
+    assert all(line.startswith("{") for line in result.stdout.splitlines())  # nothing mixed into the events

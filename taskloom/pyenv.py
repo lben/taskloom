@@ -128,7 +128,13 @@ def pip(home, args: list[str]) -> int:
     """Run pip in the environment, printing its output as it goes."""
     if not env_python(home).exists():
         raise FileNotFoundError("there is no Python environment yet: create it first (taskloom env create)")
-    return subprocess.call([str(env_python(home)), "-m", "pip", *args], creationflags=_no_window())
+    # Through a pipe: without a window on Windows, pip would otherwise print to a hidden console.
+    proc = subprocess.Popen([str(env_python(home)), "-m", "pip", *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, creationflags=_no_window())
+    for line in proc.stdout:
+        sys.stdout.write(line.decode(errors="replace"))
+        sys.stdout.flush()
+    return proc.wait()
 
 
 def _portable(value, table_type, secret_type):

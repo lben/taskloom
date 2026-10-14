@@ -26,6 +26,8 @@ def test_python_block_uses_packages_installed_in_your_environment(env):
     assert created.returncode == 0, created.stderr
     installed = env.taskloom("env", "pip", "install", "--no-index", str(_tiny_wheel(env.root)), timeout=180)
     assert installed.returncode == 0, installed.stdout + installed.stderr
+    listed = env.taskloom("env", "pip", "list", timeout=180)  # pip's output reaches whoever ran it
+    assert listed.returncode == 0 and "tinypkg" in listed.stdout, listed.stdout + listed.stderr
 
     flow = env.write("flow.yaml", """
         blocks:

@@ -94,6 +94,8 @@ taskloom editor examples/daily-sales-report.yaml
 - **Python packages:** Tools → Python environment creates your own Python environment and
   installs packages with pip. Tick **Run in my Python environment** on a Python Code
   block to use them (`taskloom env create`, `taskloom env pip install NAME` from a terminal).
+- **`print()` in a Python Code block** goes to that block's Log (and run history), like
+  `log("...")`.
   The screen shows the environment in use; **Use an existing environment…** picks one you
   already have (the `python_env` setting).
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
