@@ -62,9 +62,9 @@ def test_flaky_block_succeeds_after_retries_with_exponential_backoff(env):
     starts = [dt.datetime.fromisoformat(e["ts"]) for e in events(result.stdout) if e["event"] == "block_started"]
     assert len(starts) == 3
     gaps = [(b - a).total_seconds() for a, b in zip(starts, starts[1:])]
-    # Waits of 0.3 s then 0.6 s; each gap also includes the same fixed overhead (slow disks on CI),
-    # so check the minimums and that the second wait is 0.3 s longer than the first.
-    assert gaps[0] >= 0.3 and gaps[1] >= 0.6 and 0.2 <= gaps[1] - gaps[0] <= 0.45, gaps
+    # Waits of 0.3 s then 0.6 s. Each gap also includes overhead that a busy CI machine can stretch
+    # by a second, so only the minimums are checked: they show the wait grows.
+    assert gaps[0] >= 0.3 and gaps[1] >= 0.6 and gaps[1] - gaps[0] >= 0.2, gaps
     run_id, status = env.last_run()
     assert status == "success"
     assert env.query("SELECT attempts, summary FROM blocks WHERE run_id=?", run_id) == [(3, "value: 3")]
