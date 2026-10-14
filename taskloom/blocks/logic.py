@@ -20,6 +20,10 @@ from ..flow import load_flow
 from ..table import Table
 
 
+class _Utf8Text(io.StringIO):
+    encoding = "utf-8"  # so rich draws the same boxes and arrows on Windows
+
+
 class CodeError(Exception):
     """An error in a Python Code block's code, with a readable report: the code around the
     failing line (a rich traceback) and the values of the variables at that moment."""
@@ -35,7 +39,7 @@ class CodeError(Exception):
             walk = walk.tb_next
         line = next((f.tb_lineno for f in reversed(frames) if f.tb_frame.f_code.co_filename == filename), None)
         super().__init__(f"{type(error).__name__}: {error}" + (f" (line {line})" if line else ""))
-        console = Console(file=io.StringIO(), width=110, color_system=None, record=True)
+        console = Console(file=_Utf8Text(), width=110, color_system=None, record=True, legacy_windows=False)
         console.print(Traceback.from_exception(type(error), error, tb or error.__traceback__,
                                                extra_lines=2, word_wrap=True, show_locals=False))
         details = [console.export_text().rstrip()]

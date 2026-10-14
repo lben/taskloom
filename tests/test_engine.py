@@ -522,7 +522,7 @@ def test_a_failing_python_block_reports_its_name_inputs_code_and_variables(env):
     [report] = [m for (m,) in env.query("SELECT message FROM logs WHERE run_id=? AND level='ERROR'", run_id)]
     assert report.startswith("ratio (Python Code) failed: ZeroDivisionError: division by zero (line 2)")
     assert 'sales ← totals.output: { "EU": 120, "US": 0 }' in report
-    assert '❱ 2 │   return total / sales["US"]' in report      # the code around the failing line
+    assert '❱ 2 │   return total / sales["US"]' in report  # the code around the failing line, marked
     assert "Variables in share():" in report and "total = 120" in report
 
 
