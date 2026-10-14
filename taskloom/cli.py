@@ -112,6 +112,10 @@ def cmd_run(args, home: Home) -> int:
     answers = StdinControl(cancel) if args.interactive else None
     as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
     overrides = _parse_overrides(args.param)
+    if args.input and not args.only:
+        raise ValueError("--input gives a value to an input of the block that --only runs")
+    if any("=" not in i for i in args.input):
+        raise ValueError("write --input as NAME=VALUE, e.g. --input x=42")
     if args.only and args.inputs_from and not overrides:  # re-running a block: same parameters as that run
         from .history import History
 
@@ -123,7 +127,8 @@ def cmd_run(args, home: Home) -> int:
         finally:
             history.close()
     result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
-                      answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from)
+                      answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
+                      given=dict(i.split("=", 1) for i in args.input) if args.only else None)
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
@@ -227,6 +232,9 @@ def main(argv=None) -> int:
     p.add_argument("--as-of", metavar="DATETIME", help="compute parameters as if it were this local time (YYYY-MM-DD HH:MM)")
     p.add_argument("--only", metavar="BLOCK", help="run just this block, with the inputs it got in --inputs-from")
     p.add_argument("--inputs-from", metavar="RUN", type=int, help="the run whose inputs --only uses")
+    p.add_argument("--input", metavar="NAME=VALUE", action="append", default=[],
+                   help="with --only: give this input a value (a Python expression, e.g. 42, 'text', [1, 2], "
+                        "table('data.csv'); empty for no value) instead of the one it got in --inputs-from")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")

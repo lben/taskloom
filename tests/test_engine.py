@@ -784,3 +784,223 @@ def test_print_in_a_python_block_goes_to_its_log(env):
     logs = [m for (m,) in env.query("SELECT message FROM logs WHERE run_id=? AND block='talk'", run_id)]
     assert "rows: 42" in logs and "also this" in logs
     assert all(line.startswith("{") for line in result.stdout.splitlines())  # nothing mixed into the events
+
+
+def test_run_a_block_that_did_not_run_with_inputs_you_choose(env):
+    env.write("data.csv", "a,b\n1,2\n3,4\n")
+    flow = env.write("flow.yaml", """
+        blocks:
+          check:
+            type: logic.if
+            config: {condition: "False"}
+          use:
+            type: logic.python
+            config: {inputs: [x, t], outputs: [], code: "open('got.txt', 'w').write(f'{x} {len(t)} {type(t).__name__}')"}
+        edges:
+          - check.true -> use.x
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+
+    result = env.taskloom("run", flow, "--only", "use", "--input", "x=[1, 2]", "--input", "t=table('data.csv')")
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "got.txt").read_text() == "[1, 2] 2 Table"
+
+
+def test_change_one_input_of_a_block_that_ran(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 5"}
+          b:
+            type: logic.python
+            config: {inputs: [], code: "output = 'k'"}
+          use:
+            type: logic.python
+            config: {inputs: [x, y], outputs: [], code: "open('got.txt', 'w').write(f'{x} {y}')"}
+        edges:
+          - a.output -> use.x
+          - b.output -> use.y
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id, "--input", "x=41 + 1")
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "got.txt").read_text() == "42 k"
+    result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id, "--input", "y=")  # no value
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "got.txt").read_text() == "5 None"
+
+
+def test_retrying_a_run_with_chosen_inputs_uses_those_inputs(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 5"}
+          use:
+            type: logic.python
+            config: {inputs: [x], outputs: [], code: "open('got.txt', 'a').write(f'{x} ')"}
+          other:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - a.output -> use.x
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    first, _ = env.last_run()
+    assert env.taskloom("run", flow, "--only", "use", "--inputs-from", first, "--input", "x=42").returncode == 0
+    chosen, _ = env.last_run()
+    assert env.taskloom("run", flow, "--only", "other", "--inputs-from", chosen).returncode == 0  # carries it on
+    later, _ = env.last_run()
+
+    for run_id in (chosen, later):
+        result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id)
+        assert result.returncode == 0, result.stderr
+    assert (env.root / "got.txt").read_text() == "5 42 42 42 "
+
+
+def test_retrying_after_fixing_an_earlier_block_uses_its_new_output(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 'x'"}
+          b:
+            type: logic.python
+            config: {inputs: [input], code: "import os; output = input + ('2' if os.path.exists('fix.txt') else '1')"}
+          c:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('got.txt', 'a').write(input + ' ')"}
+        edges:
+          - a.output -> b.input
+          - b.output -> c.input
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    for block in ("c", "b", "c"):  # retry c; fix b and retry it; retry c with b's new output
+        if block == "b":
+            (env.root / "fix.txt").write_text("")
+        run_id, _ = env.last_run()
+        result = env.taskloom("run", flow, "--only", block, "--inputs-from", run_id)
+        assert result.returncode == 0, result.stderr
+
+    assert (env.root / "got.txt").read_text() == "x1 x1 x2 "
+
+
+def test_retries_of_a_block_that_takes_several_tables_survive_cleanup(env):
+    env.write("home/settings.yaml", "keep_runs: 2\n")
+    flow = env.write("flow.yaml", """
+        blocks:
+          l1:
+            type: data.duckdb_sql
+            config: {inputs: [], sql: "select 1 as n"}
+          l2:
+            type: data.duckdb_sql
+            config: {inputs: [], sql: "select 2 as n"}
+          u:
+            type: logic.python
+            config: {inputs: [tables], outputs: [], code: "open('got.txt', 'a').write(str(sum(len(t) for t in tables)))"}
+        edges:
+          - l1.result -> u.tables
+          - l2.result -> u.tables
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    for _ in range(4):  # more retries than keep_runs: older run folders get deleted meanwhile
+        run_id, _ = env.last_run()
+        result = env.taskloom("run", flow, "--only", "u", "--inputs-from", run_id)
+        assert result.returncode == 0, result.stderr
+
+    assert (env.root / "got.txt").read_text() == "22222"
+
+
+def test_giving_one_input_does_not_drop_one_that_held_a_password(env):
+    env.write("home/secrets.yaml", "pw: hunter2SECRET\n").chmod(0o600)
+    flow = env.write("flow.yaml", """
+        blocks:
+          ask:
+            type: logic.ask_user
+            config: {prompt: "Password?", kind: password, secret: pw}
+          use:
+            type: logic.python
+            config: {inputs: [pw, n], outputs: [], code: "pass"}
+        edges:
+          - ask.answer -> use.pw
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id, "--input", "n=1")
+
+    assert result.returncode == 2 and "held a password" in result.stderr
+    result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id, "--input", "n=1", "--input", "pw=")
+    assert result.returncode == 0, result.stderr  # leaving it empty on purpose is fine
+
+
+def test_running_one_block_needs_a_run_or_values_for_its_inputs(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 5"}
+          use:
+            type: logic.python
+            config: {inputs: [x], outputs: [], code: "pass"}
+        edges:
+          - a.output -> use.x
+    """)
+
+    result = env.taskloom("run", flow, "--only", "use")
+
+    assert result.returncode == 2 and "--inputs-from" in result.stderr
+    assert env.taskloom("run", flow, "--only", "a").returncode == 0  # nothing comes into it
+
+
+def test_a_value_that_is_not_python_is_refused(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          use:
+            type: logic.python
+            config: {inputs: [x], outputs: [], code: "pass"}
+    """)
+
+    result = env.taskloom("run", flow, "--only", "use", "--input", "x=[1, 2")
+
+    assert result.returncode == 2 and "the value for x" in result.stderr
+    assert not (env.home / "history.db").exists()  # refused before a run was recorded
+
+
+def test_retry_gets_the_inputs_as_given_even_if_the_block_changed_them(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          use:
+            type: logic.python
+            config: {inputs: [x], outputs: [], code: "open('got.txt', 'a').write(f'{x} '); x.append(9)"}
+    """)
+    assert env.taskloom("run", flow, "--only", "use", "--input", "x=[1]").returncode == 0
+    for _ in range(2):
+        run_id, _ = env.last_run()
+        assert env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id).returncode == 0
+
+    assert (env.root / "got.txt").read_text() == "[1] [1] [1] "
+
+
+def test_a_table_file_you_give_is_copied_into_the_run(env):
+    import polars as pl
+
+    pl.DataFrame({"a": [1, 2]}).write_parquet(env.root / "d.parquet")
+    flow = env.write("flow.yaml", """
+        blocks:
+          use:
+            type: logic.python
+            config: {inputs: [t], outputs: [], code: "open('got.txt', 'a').write(f'{len(t)} ')"}
+    """)
+    assert env.taskloom("run", flow, "--only", "use", "--input", "t=table('d.parquet')").returncode == 0
+    run_id, _ = env.last_run()
+    pl.DataFrame({"a": [1, 2, 3, 4, 5]}).write_parquet(env.root / "d.parquet")  # your file changes later
+
+    result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "got.txt").read_text() == "2 2 "

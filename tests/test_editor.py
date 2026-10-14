@@ -521,6 +521,52 @@ def test_rerun_a_fixed_block_from_the_canvas(win, qtbot, tmp_path):
     assert tab.shown_run_id != first_run and not tab.doc.dirty  # the fix was saved before running
 
 
+def test_run_a_block_with_inputs_you_choose_from_the_canvas(win, qtbot, tmp_path, monkeypatch):
+    from taskloom.editor import dialogs
+
+    flow = write_flow(tmp_path / "choose.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 5"}
+          check:
+            type: logic.if
+            config: {condition: "False"}
+          ran:
+            type: logic.python
+            config: {inputs: [x], outputs: [], code: "open('ran.txt', 'w').write(repr(x))"}
+          skipped:
+            type: logic.python
+            config: {inputs: [y], outputs: [], code: "open('skipped.txt', 'w').write(repr(y))"}
+        edges:
+          - a.output -> ran.x
+          - check.true -> skipped.y
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    shown = {}
+
+    def answer(values):
+        def exec_(dialog):
+            shown.update({name: field.text() for name, field in dialog.fields.items()})
+            for name, text in values.items():
+                dialog.fields[name].setText(text)
+            return True
+        return exec_
+
+    monkeypatch.setattr(dialogs.ChooseInputsDialog, "exec", answer({"y": "{'k': [1, 2]}"}))
+    win.run_block_with_inputs(tab, "skipped")  # it did not run: nothing reached it
+    qtbot.waitUntil(lambda: len(tab.runs) == 2 and not tab.running and tab.runs[1].status is not None, timeout=60_000)
+    assert shown == {"y": ""} and (tmp_path / "skipped.txt").read_text() == "{'k': [1, 2]}"
+
+    monkeypatch.setattr(dialogs.ChooseInputsDialog, "exec", answer({"x": "6"}))
+    win.run_block_with_inputs(tab, "ran")
+    qtbot.waitUntil(lambda: len(tab.runs) == 3 and not tab.running and tab.runs[2].status is not None, timeout=60_000)
+    assert shown["x"] == "5" and (tmp_path / "ran.txt").read_text() == "6"
+    assert tab.scene.nodes["ran"].status == "success"
+
+
 def test_the_canvas_shows_runs_started_elsewhere(win, qtbot, tmp_path):
     import subprocess
 

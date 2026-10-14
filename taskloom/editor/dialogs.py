@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from ..block import IDENTIFIER
 from ..config import SETTINGS_DEFAULTS
 from ..launch import runner_command
+from ..table import Table
 
 
 class RunDialog(QDialog):
@@ -537,6 +538,68 @@ class SettingsDialog(QDialog):
             from ..scheduler import set_start_at_login
             set_start_at_login(self.home, self.at_login.isChecked())
         self.accept()
+
+
+def input_text(value) -> str | None:
+    """A value as Python you can edit, or None when it is too big or cannot be written that way."""
+    if isinstance(value, Table):
+        return f"table({str(value.path)!r})"
+    text = repr(value)
+    return None if len(text) > 5000 or "\n" in text or text.startswith("<") else text
+
+
+class ChooseInputsDialog(QDialog):
+    """Values for a block's inputs, to run just that block with them (e.g. to test it)."""
+
+    def __init__(self, block_id: str, names: list[str], values: dict, missing: dict, run_id, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Run {block_id} with inputs you choose")
+        self.resize(560, 0)
+        self.values = values
+        layout = QVBoxLayout(self)
+        intro = QLabel("Write each value as Python: <code>42</code>, <code>'text'</code>, <code>[1, 2]</code>, "
+                       "<code>{'a': 1}</code>, <code>None</code>; a table: <code>table('data.csv')</code> or "
+                       "<code>pl.DataFrame({'a': [1, 2]})</code>. Leave a field empty for no value."
+                       + (f" Filled in: what reached the block in run #{run_id}." if values else ""))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        self.fields: dict[str, QLineEdit] = {}
+        for name in names:
+            field = QLineEdit()
+            if name in values:
+                text = input_text(values[name])
+                if text is None:
+                    field.setPlaceholderText(f"empty: the {type(values[name]).__name__} it got in run #{run_id}")
+                else:
+                    field.setText(text)
+            elif name in missing:
+                field.setToolTip(missing[name])
+                field.setPlaceholderText("empty: no value")
+            self.fields[name] = field
+            form.addRow(name, field)
+        if not names:
+            form.addRow(QLabel("This block has no inputs: it just runs."))
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Run")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def given(self) -> dict:
+        """{input: Python text} for each input you set; unchanged ones keep what they got in that run."""
+        given = {}
+        for name, field in self.fields.items():
+            text = field.text()
+            if name not in self.values:
+                given[name] = text  # empty: no value
+            elif (shown := input_text(self.values[name])) is None:
+                if text.strip():
+                    given[name] = text
+            elif text != shown:
+                given[name] = text
+        return given
 
 
 class PythonEnvDialog(QDialog):

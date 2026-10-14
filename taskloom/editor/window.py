@@ -17,13 +17,16 @@ from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWind
                                QTabWidget, QVBoxLayout, QWidget)
 
 from .. import params as P
+from ..block import AFTER
 from ..config import Home
+from ..engine import block_inputs, input_ports
 from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
 from ..history import History
 from ..launch import runner_command
 from ..scheduler import acquire_lock
 from ..registry import discover
 from .canvas import FlowScene, FlowView
+from . import dialogs
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowsPanel, HistoryPanel, LogPanel, Palette, ParametersPanel,
@@ -491,8 +494,12 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         rerun = menu.addAction(f"Run this block again with the same inputs (run #{tab.shown_run_id})"
                                if tab.shown_run_id else "Run this block again with the same inputs")
-        rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
+        ran = tab.block_info.get(block_id, {}).get("status") in ("success", "failed")
+        rerun.setEnabled(tab.shown_run_id is not None and ran and not tab.running)
         rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
+        choose = menu.addAction("Run this block with inputs I choose…")
+        choose.setEnabled(not tab.running)
+        choose.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id))
         menu.exec(pos)
 
     def _show_run(self, tab: FlowTab, run: RunProcess | None, keep_log=False):
@@ -515,6 +522,33 @@ class MainWindow(QMainWindow):
         if self._ready_to_run(tab) is None:  # saves your fix and checks the flow
             return
         self.start_run(tab, {}, ["--only", block_id, "--inputs-from", str(tab.shown_run_id)], only=block_id)
+
+    def run_block_with_inputs(self, tab: FlowTab, block_id: str):
+        """Run one block with input values you type (filled in with what reached it in the run on the canvas)."""
+        if tab.running:
+            QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
+            return
+        flow = self._ready_to_run(tab)
+        if flow is None:
+            return
+        names = [name for name in input_ports(flow, self.registry, block_id) if name != AFTER]
+        run_id, values, missing = tab.shown_run_id, {}, {}
+        if run_id is not None:
+            try:
+                values, missing = block_inputs(flow, self.registry, self.home, block_id, run_id)
+            except Exception:  # e.g. that run's files were cleaned up: start from nothing
+                run_id = None
+        dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing, run_id, self)
+        if not dialog.exec():
+            return
+        args = ["--only", block_id]
+        # Start from the run on the canvas (the rest of the flow's results carry over), unless that run has
+        # nothing for a block without inputs: running it as it was then would be refused.
+        if run_id is not None and (names or not missing):
+            args += ["--inputs-from", str(run_id)]
+        for name, text in dialog.given().items():
+            args += ["--input", f"{name}={text}"]
+        self.start_run(tab, {}, args, only=block_id)
 
     def stop(self, tab: FlowTab | None):
         if tab is None:
