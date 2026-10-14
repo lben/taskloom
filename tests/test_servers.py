@@ -1,7 +1,5 @@
 """Server and file blocks against a real SSH server on localhost."""
 
-import os
-import signal
 import sys
 import time
 import urllib.request
@@ -18,10 +16,16 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the test server
 
 
 def _kill_from_pid_file(path):
+    """Kill a process started by Start Remote Process: the app and the small shell that runs it."""
+    import subprocess
+
     try:
-        os.kill(int(path.read_text().strip()), signal.SIGKILL)
+        pid = int(path.read_text().strip())
     except (OSError, ValueError):
-        pass
+        return
+    members = subprocess.run(["sh", "-c", ssh.processes(str(pid))], capture_output=True, text=True).stdout.split()
+    if members:
+        subprocess.run(["kill", "-KILL", *members], capture_output=True)
 
 
 def test_watchdog_flow_restarts_a_killed_app(env, server):
@@ -233,3 +237,82 @@ def test_servers_that_allow_one_command_per_connection(env, server, monkeypatch)
     finally:
         _kill_from_pid_file(pid_file)
         _kill_from_pid_file(server.home_path / ".taskloom" / "scheduler.pid")
+
+
+def _start_flow(env, command, **config):
+    import yaml
+
+    flow = env.root / "start.yaml"
+    flow.write_text(yaml.safe_dump({"blocks": {"start": {"type": "servers.start_process", "config": {
+        "connection": "appserver", "command": command, "pid_file": "~/app/app.pid", "log_file": "~/app/app.log",
+        "check_after": 0.5, **config}}}}))
+    result = env.taskloom("run", flow)
+    run_id, _ = env.last_run()
+    error = env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]
+    return result.returncode, error
+
+
+@pytest.mark.parametrize("command", [
+    "cd ~ && sleep 60 >> mine.log 2>&1",   # a chain, with its own output file
+    "sleep 60 >> mine.log 2>&1 &",         # ending with &: the block keeps track anyway
+])
+def test_start_process_runs_commands_as_written(env, server, command):
+    pid_file = server.home_path / "app" / "app.pid"
+    try:
+        code, error = _start_flow(env, command)
+        assert code == 0, error
+    finally:
+        _kill_from_pid_file(pid_file)
+
+
+def test_start_process_explains_a_command_that_ends(env, server):
+    code, error = _start_flow(env, "echo started a service >> mine.log 2>&1")
+    assert code == 1 and "finished right away (exit code 0)" in error and "its own file" in error
+
+    code, error = _start_flow(env, "echo started a service", must_keep_running=False)
+    assert code == 0
+
+    code, error = _start_flow(env, "echo cannot find the app; exit 3")
+    assert code == 1 and "exited with code 3" in error and "cannot find the app" in error
+
+
+def test_stop_process_stops_the_app_not_just_its_shell(env, server):
+    import subprocess
+
+    import yaml
+
+    pid_file = server.home_path / "app" / "app.pid"
+    try:
+        assert _start_flow(env, "sleep 61")[0] == 0
+        assert subprocess.run(["pgrep", "-f", "sleep 61"], capture_output=True).returncode == 0
+        flow = env.root / "stop.yaml"
+        flow.write_text(yaml.safe_dump({"blocks": {"stop": {"type": "servers.stop_process", "config": {
+            "connection": "appserver", "pid_file": "~/app/app.pid"}}}}))
+        assert env.taskloom("run", flow).returncode == 0
+        assert subprocess.run(["pgrep", "-f", "sleep 61"], capture_output=True).returncode == 1
+    finally:
+        _kill_from_pid_file(pid_file)
+
+
+def test_stop_process_forces_an_app_that_ignores_the_stop_signal(env, server):
+    import subprocess
+    import sys as _sys
+
+    import yaml
+
+    pid_file = server.home_path / "app" / "app.pid"
+    stubborn = f"{_sys.executable} -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(62)'"
+    try:
+        assert _start_flow(env, stubborn)[0] == 0
+        assert subprocess.run(["pgrep", "-f", "time.sleep\\(62\\)"], capture_output=True).returncode == 0
+        flow = env.root / "stop.yaml"
+        flow.write_text(yaml.safe_dump({"blocks": {"stop": {"type": "servers.stop_process", "config": {
+            "connection": "appserver", "pid_file": "~/app/app.pid", "grace": 1}}}}))
+        result = env.taskloom("run", flow)
+
+        assert result.returncode == 0, result.stderr
+        assert "did not stop in 1 s; forcing them" in result.stderr
+        assert subprocess.run(["pgrep", "-f", "time.sleep\\(62\\)"], capture_output=True).returncode == 1
+    finally:
+        _kill_from_pid_file(pid_file)
+        subprocess.run(["pkill", "-KILL", "-f", "time.sleep\\(62\\)"], capture_output=True)

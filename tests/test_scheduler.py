@@ -106,7 +106,7 @@ def test_failed_scheduled_run_is_notified(env):
     scheduler.wait_for_runs()
     scheduler.tick(T0 + dt.timedelta(minutes=1, seconds=30))  # reports finished runs
 
-    assert notes == [("flow failed", "boom: RuntimeError: disk full")]
+    assert notes == [("flow failed", "boom: RuntimeError: disk full (line 1)")]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")

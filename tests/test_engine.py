@@ -95,7 +95,7 @@ def test_failure_goes_down_the_error_port_and_skips_dependents(env):
     result = env.taskloom("run", flow)
 
     assert result.returncode == 0, result.stderr
-    assert (env.root / "handled.txt").read_text() == "RuntimeError: database is down"
+    assert (env.root / "handled.txt").read_text() == "RuntimeError: database is down (line 1)"
     run_id, status = env.last_run()
     assert status == "success"
     assert env.block_status(run_id) == {
@@ -498,3 +498,52 @@ def test_error_handler_of_a_block_skipped_by_a_failure_does_not_open_a_path(env)
     assert (env.root / "important.txt").read_text() == "keep me"
     run_id, _ = env.last_run()
     assert env.block_status(run_id)["cleanup"] == "skipped"
+
+
+def test_a_failing_python_block_reports_its_name_inputs_code_and_variables(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          totals:
+            type: logic.python
+            config: {inputs: [], code: "output = {'EU': 120, 'US': 0}"}
+          ratio:
+            type: logic.python
+            config:
+              inputs: [sales]
+              code: |
+                def share(total):
+                    return total / sales["US"]
+                result = share(sales["EU"])
+        edges:
+          - totals.output -> ratio.sales
+    """)
+    assert env.taskloom("run", flow).returncode == 1
+    run_id, _ = env.last_run()
+    [report] = [m for (m,) in env.query("SELECT message FROM logs WHERE run_id=? AND level='ERROR'", run_id)]
+    assert report.startswith("ratio (Python Code) failed: ZeroDivisionError: division by zero (line 2)")
+    assert 'sales ← totals.output: { "EU": 120, "US": 0 }' in report
+    assert '❱ 2 │   return total / sales["US"]' in report      # the code around the failing line
+    assert "Variables in share():" in report and "total = 120" in report
+
+
+def test_old_runs_are_forgotten_after_history_days(env):
+    from taskloom.history import History
+
+    env.write("home/settings.yaml", "history_days: 30\n")
+    flow = env.write("flow.yaml", """
+        blocks:
+          b:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    env.query("UPDATE runs SET started='2020-01-01T00:00:00'")  # make it old
+    history = History(env.home / "history.db")
+    old_id = history.runs()[0]["id"]
+    history.close()
+
+    assert env.taskloom("run", flow).returncode == 0
+
+    assert [r for (r,) in env.query("SELECT id FROM runs")] == [old_id + 1]
+    assert env.query("SELECT count(*) FROM blocks WHERE run_id=?", old_id) == [(0,)]
+    assert env.query("SELECT count(*) FROM logs WHERE run_id=?", old_id) == [(0,)]

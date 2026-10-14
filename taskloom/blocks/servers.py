@@ -64,26 +64,45 @@ class StartProcess(Block):
         "log_file": fields.Text(default="~/.taskloom/apps/app.log"),
         "pid_file": fields.Text(default="~/.taskloom/apps/app.pid"),
         "check_after": fields.Float(default=2.0, help="Seconds to wait before checking it is still running"),
+        "must_keep_running": fields.Bool(default=True, help="Untick for a command that does its job and finishes "
+                                                            "(e.g. a script that starts a service): exit code 0 is then fine"),
     }
 
     def run(self, ctx, after=None):
         c = self.config
-        # Start it, wait, and check it is still running, all in one command: some servers allow
-        # only one command per connection.
-        script = (f"{ssh.start_detached(c.command, c.workdir, c.log_file, c.pid_file)} && sleep {c.check_after:g} && "
+        command = c.command.rstrip()
+        if command.endswith("&") and not command.endswith("&&"):
+            command = command[:-1].rstrip()
+            ctx.log("removed the & at the end: this block already runs the command in the background, "
+                    "and it needs to keep track of it")
+        exit_file = ssh.remote_path(ssh.exit_file(c.pid_file))
+        # Start it, wait, and check it, all in one command: some servers allow one command per connection.
+        script = (f"{ssh.start_detached(command, c.workdir, c.log_file, c.pid_file)} && sleep {c.check_after:g} && "
                   f"if kill -0 \"$(cat {ssh.remote_path(c.pid_file)})\" 2>/dev/null; then echo TASKLOOM_RUNNING; "
-                  f"else echo TASKLOOM_EXITED; tail -n 20 {ssh.remote_path(c.log_file)}; fi")
+                  f"else echo \"TASKLOOM_EXITED $(cat {exit_file} 2>/dev/null)\"; tail -n 20 {ssh.remote_path(c.log_file)}; fi")
         with _client(ctx, c.connection) as session:
             code, out, err = _run(ctx, session, script)
         lines = out.strip().splitlines()
         if code != 0 or len(lines) < 2 or not lines[0].strip().isdigit():
             raise RuntimeError(f"could not start the process: {(err or out).strip()[-1000:]}")
         pid = int(lines[0])
-        ctx.log(f"started process {pid}")
-        if lines[1].strip() != "TASKLOOM_RUNNING":
-            log = "\n".join(lines[2:])
-            raise RuntimeError(f"the process exited right after starting; last log lines:\n{log}")
-        return {"pid": pid}
+        if lines[1].strip() == "TASKLOOM_RUNNING":
+            ctx.log(f"started process {pid}; still running after {c.check_after:g} s")
+            return {"pid": pid}
+        exit_code = lines[1].split()[1] if len(lines[1].split()) > 1 else "unknown"
+        log = "\n".join(lines[2:]).strip()
+        if exit_code == "0" and not c.must_keep_running:
+            ctx.log(f"the command finished with exit code 0{': ' + log if log else ''}")
+            return {"pid": pid}
+        if exit_code == "0":
+            problem = ("the command finished right away (exit code 0), so nothing is left running. If it starts "
+                       "the program in the background itself, or is a script that starts a service, untick "
+                       "must_keep_running; otherwise check that it runs in the foreground.")
+        else:
+            problem = f"the command exited with code {exit_code} right after starting."
+        if ">" in command:
+            problem += " Your command writes its output to its own file: the reason is probably there."
+        raise RuntimeError(problem + (f"\nLast lines of {c.log_file}:\n{log}" if log else ""))
 
 
 class StopProcess(Block):
@@ -108,13 +127,18 @@ class StopProcess(Block):
             if code != 0 or not pid.isdigit() or _run(ctx, client, f"kill -0 {pid}")[0] != 0:
                 ctx.log("the process was not running")
                 return {"stopped": False}
-            _run(ctx, client, f"kill {pid}")
+            # Everything the command started, found before signalling: the shell running it can end
+            # first while the app is still shutting down (or ignores the request).
+            members = _run(ctx, client, ssh.processes(pid))[1].split()
+            _run(ctx, client, f"kill -TERM {' '.join(members)} 2>/dev/null; true")
             deadline = time.monotonic() + c.grace
-            while time.monotonic() < deadline and _run(ctx, client, f"kill -0 {pid}")[0] == 0:
+            running = members
+            while running and time.monotonic() < deadline:
                 ctx.wait(0.5)
-            if _run(ctx, client, f"kill -0 {pid}")[0] == 0:
-                ctx.warn(f"process {pid} did not stop in {c.grace:g} s; forcing it")
-                _run(ctx, client, f"kill -9 {pid}")
+                running = _run(ctx, client, ssh.alive(running))[1].split()
+            if running:
+                ctx.warn(f"{len(running)} process(es) did not stop in {c.grace:g} s; forcing them")
+                _run(ctx, client, f"kill -KILL {' '.join(running)} 2>/dev/null; true")
         ctx.log(f"stopped process {pid}")
         return {"stopped": True}
 

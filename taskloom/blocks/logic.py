@@ -2,13 +2,56 @@
 
 from __future__ import annotations
 
+import inspect
+import io
+import linecache
+import os
+import types
+
 import polars as pl
+from rich.console import Console
+from rich import traceback as rich_traceback
+from rich.traceback import Traceback
 
 from ..block import Block, fields, ports
 from ..expr import evaluate
-from ..engine import SecretStr, _masked, preview, run_flow
+from ..engine import SecretStr, _masked, inline, preview, run_flow
 from ..flow import load_flow
 from ..table import Table
+
+
+class CodeError(Exception):
+    """An error in a Python Code block's code, with a readable report: the code around the
+    failing line (a rich traceback) and the values of the variables at that moment."""
+
+    def __init__(self, error: Exception, filename: str, namespace: dict, helpers: set):
+        tb = error.__traceback__
+        while tb is not None and tb.tb_frame.f_code.co_filename != filename:
+            tb = tb.tb_next  # start at the block's own code, not Taskloom's
+        frames = []
+        walk = tb
+        while walk is not None:
+            frames.append(walk)
+            walk = walk.tb_next
+        line = next((f.tb_lineno for f in reversed(frames) if f.tb_frame.f_code.co_filename == filename), None)
+        super().__init__(f"{type(error).__name__}: {error}" + (f" (line {line})" if line else ""))
+        console = Console(file=io.StringIO(), width=110, color_system=None, record=True)
+        console.print(Traceback.from_exception(type(error), error, tb or error.__traceback__,
+                                               extra_lines=2, word_wrap=True, show_locals=False))
+        details = [console.export_text().rstrip()]
+        details += _variables("Variables", {k: v for k, v in namespace.items() if k not in helpers})
+        inner = frames[-1].tb_frame if frames else None
+        if inner is not None and inner.f_code.co_name != "<module>":
+            details += _variables(f"Variables in {inner.f_code.co_name}()", inner.f_locals)
+        self.details = "\n".join(details)
+
+
+def _variables(title: str, values: dict) -> list[str]:
+    shown = {k: v for k, v in values.items() if not k.startswith("__") and not isinstance(v, types.ModuleType)
+             and not inspect.isfunction(v) and not inspect.isclass(v)}
+    if not shown:
+        return []
+    return [f"{title}:"] + [f"  {k} = {inline(v)}" for k, v in shown.items()]
 
 
 class PythonCode(Block):
@@ -37,9 +80,18 @@ class PythonCode(Block):
 
             values = {name: inputs.get(name) for name in self.config.inputs}
             return run_code(ctx, self.config.code, values, self.config.outputs)
-        namespace = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table}
-        namespace.update({name: inputs.get(name) for name in self.config.inputs})
-        exec(compile(self.config.code, f"<block {ctx.block_id}>", "exec"), namespace)
+        helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table}
+        namespace = {**helpers, **{name: inputs.get(name) for name in self.config.inputs}}
+        # Registered with linecache under a short name, so error reports can show the code around the
+        # failing line (rich looks the name up relative to the folder it was imported in).
+        filename = f"{ctx.block_id}.py"
+        lines = (len(self.config.code), None, self.config.code.splitlines(True), filename)
+        for name in (filename, os.path.join(getattr(rich_traceback, "_IMPORT_CWD", os.getcwd()), filename)):
+            linecache.cache[name] = lines
+        try:
+            exec(compile(self.config.code, filename, "exec"), namespace)
+        except Exception as e:
+            raise CodeError(e, filename, namespace, set(helpers)) from None
         # Outputs your code does not assign are not produced, so blocks after them are skipped.
         return {name: namespace[name] for name in self.config.outputs if name in namespace}
 

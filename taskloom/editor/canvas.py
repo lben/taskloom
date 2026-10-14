@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsScene,
@@ -102,16 +104,8 @@ class NodeItem(QGraphicsItem):
         self.ports: dict[tuple[str, bool], PortItem] = {}
         for i, name in enumerate(self.inputs):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
-        if AFTER in inputs:
-            self.ports[(AFTER, False)].setToolTip(
-                "Run after: connect another block's 'done' (or a start block) here to make this block wait for it. "
-                "No data comes in through here; use the other inputs for data.")
         for i, name in enumerate(self.outputs):
             self.ports[(name, True)] = PortItem(self, name, True, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
-        if DONE in outputs:
-            self.ports[(DONE, True)].setToolTip(
-                "Done: fires when this block has finished successfully. Connect it to another block's "
-                "'run after' to run that block next. No data goes out through here.")
         ui = spec.get("ui") or {}
         self.setPos(ui.get("x", 0), ui.get("y", 0))
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
@@ -227,6 +221,7 @@ class FlowScene(QGraphicsScene):
         self.nodes: dict[str, NodeItem] = {}
         self.edge_items: list[EdgeItem] = []
         self.statuses: dict[str, tuple[str, str]] = {}
+        self.values: dict[str, dict[str, str]] = {}  # block -> port -> text, from the run on screen
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsPathItem | None = None
         self._rebuilding = False
@@ -266,7 +261,52 @@ class FlowScene(QGraphicsScene):
                 self.addItem(edge)
                 self.edge_items.append(edge)
         self._rebuilding = False
+        self.refresh_tooltips()
         self._on_selection()
+
+    # --- values from the run on screen, shown when hovering ----------------------------
+
+    def set_values(self, block_id: str, values: dict):
+        """What a block's outputs produced in the run on screen: {port: readable text}."""
+        self.values[block_id] = dict(values)
+        self.refresh_tooltips()
+
+    def clear_values(self):
+        self.values = {}
+        self.refresh_tooltips()
+
+    def _value(self, block_id, port):
+        text = self.values.get(block_id, {}).get(port)
+        return None if text is None else html.escape(text if len(text) <= 1500 else text[:1500] + "…", quote=False)
+
+    def refresh_tooltips(self):
+        for node in self.nodes.values():
+            for (name, is_output), port in node.ports.items():
+                port.setToolTip(self._port_tooltip(node, name, is_output))
+        for edge in self.edge_items:
+            value = self._value(edge.src_port.node.block_id, edge.src_port.name)
+            edge.setToolTip(f"<b>{html.escape(edge.text)}</b>" + (f"<pre>{value}</pre>" if value is not None else ""))
+
+    def _port_tooltip(self, node, name, is_output) -> str:
+        head = f"<b>{html.escape(node.block_id)}.{html.escape(name)}</b>"
+        if name == AFTER and not is_output:
+            head += ("<br>Run after: connect another block's 'done' (or a start block) here to make this block "
+                     "wait for it. No data comes in through here.")
+        elif name == DONE and is_output:
+            head += ("<br>Done: fires when this block has finished successfully. Connect it to another block's "
+                     "'run after'. No data goes out through here.")
+        if is_output:
+            value = self._value(node.block_id, name)
+            return head + (f"<pre>{value}</pre>" if value is not None else "<br><i>No value in the run on screen.</i>")
+        sources = [(s, sp) for s, sp, d, dp in self.doc.edges() if d == node.block_id and dp == name]
+        if not sources:
+            return head + "<br><i>Not connected.</i>"
+        parts = []
+        for src, sp in sources:
+            value = self._value(src, sp)
+            parts.append(f"from <b>{html.escape(src)}.{html.escape(sp)}</b>"
+                         + (f"<pre>{value}</pre>" if value is not None else ": <i>nothing arrived in the run on screen</i>"))
+        return head + "<br>" + "<br>".join(parts)
 
     def update_edges(self, block_id: str):
         for edge in self.edge_items:
@@ -284,6 +324,7 @@ class FlowScene(QGraphicsScene):
     def clear_statuses(self):
         for block_id in list(self.statuses):
             self.set_status(block_id, None)
+        self.clear_values()
 
     # --- selection ----------------------------------------------------------------
 

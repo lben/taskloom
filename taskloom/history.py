@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sqlite3
 import threading
@@ -81,6 +82,14 @@ class History:
             )
         elif kind == "run_finished":
             self._exec("UPDATE runs SET status=?, finished=? WHERE id=?", (event["status"], ts, run_id))
+
+    def prune(self, days: int):
+        """Forget runs (with their block results, values and logs) started more than `days` ago."""
+        cutoff = (dt.datetime.now() - dt.timedelta(days=days)).isoformat()
+        old = "SELECT id FROM runs WHERE started < ? AND status != 'running'"
+        self._exec(f"DELETE FROM logs WHERE run_id IN ({old})", (cutoff,))
+        self._exec(f"DELETE FROM blocks WHERE run_id IN ({old})", (cutoff,))
+        self._exec("DELETE FROM runs WHERE started < ? AND status != 'running'", (cutoff,))
 
     def running_ids(self) -> set[int]:
         return {row[0] for row in self._exec("SELECT id FROM runs WHERE status='running'")}

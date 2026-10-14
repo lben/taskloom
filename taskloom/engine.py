@@ -160,6 +160,11 @@ def _masked(value):
     return value
 
 
+def inline(value, limit: int = 300) -> str:
+    """A value on one line, for error reports."""
+    return " ".join(preview(value).split())[:limit]
+
+
 def _summary(produced: dict) -> str:
     parts = []
     for port, value in produced.items():
@@ -204,6 +209,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
             raise
         emit({"event": "run_finished", "status": status})
         _apply_retention(home, history)
+        history.prune(int(home.settings()["history_days"]))
     finally:
         history.close()
     return RunResult(run_id, status, runner.outputs)
@@ -284,7 +290,7 @@ class _Runner:
                 if port.kind == "table" and name in inputs and not isinstance(inputs[name], Table):
                     raise TypeError(f"input '{name}' expects a table, got {type(inputs[name]).__name__}")
         except Exception as e:
-            return self._fail(spec.id, 0, e)
+            return self._fail(spec, 0, e, inputs)
 
         retry = spec.retry
         for attempt in range(1, retry.max_attempts + 1):
@@ -307,7 +313,7 @@ class _Runner:
                 return "cancelled", {}
             except Exception as e:
                 if attempt == retry.max_attempts:
-                    return self._fail(spec.id, attempt, e)
+                    return self._fail(spec, attempt, e, inputs)
                 delay = retry.delay_after(attempt)
                 self.emit({"event": "log", "block": spec.id, "level": "ERROR",
                            "message": f"attempt {attempt}/{retry.max_attempts} failed: {type(e).__name__}: {e}"})
@@ -320,17 +326,31 @@ class _Runner:
             self.emit({"event": "block_finished", "block": spec.id, "status": "success", "attempts": attempt,
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
                        "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)},
-                       "previews": {p: preview(v) for p, v in produced.items() if not isinstance(v, Table)}})
+                       "previews": {p: preview(v) for p, v in produced.items()}})
             if not cls.is_trigger:
                 produced[DONE] = True  # for blocks connected done -> after
             return "success", produced
         raise AssertionError("unreachable")
 
-    def _fail(self, block_id, attempts, error) -> tuple[str, dict]:
+    def _fail(self, spec, attempts, error, inputs) -> tuple[str, dict]:
+        block_id = spec.id
+        cls = self.registry.get(spec.type)
         # Scrubbed here too: the error goes on to error handlers, which may email it.
-        message = redact(f"{type(error).__name__}: {error}")
-        tb = redact("".join(traceback.format_exception(error)))
-        self.emit({"event": "log", "block": block_id, "level": "ERROR", "message": f"failed: {message}\n{tb}"})
+        # Blocks can attach a clearer report (Python Code: the code around the line, its variables).
+        details = getattr(error, "details", None)
+        message = redact(str(error) if details else f"{type(error).__name__}: {error}")
+        tb = redact(details or "".join(traceback.format_exception(error)))
+        report = [f"{block_id} ({cls.title if cls else spec.type}) failed: {message}"]
+        incoming = [e for e in self.flow.edges if e.dst == block_id]
+        if incoming:
+            report.append("Inputs:")
+            for e in incoming:
+                if (e.src, e.src_port) in self.outputs:
+                    value = inline(self.outputs[(e.src, e.src_port)])
+                else:
+                    value = "(nothing arrived)"
+                report.append(f"  {e.dst_port} ← {e.src}.{e.src_port}: {value}")
+        self.emit({"event": "log", "block": block_id, "level": "ERROR", "message": redact("\n".join(report)) + "\n" + tb})
         self.emit({"event": "block_finished", "block": block_id, "status": "failed", "attempts": attempts, "error": message})
         return "failed", {ERROR_PORT: {"block": block_id, "error": message, "traceback": tb, "attempts": attempts}}
 

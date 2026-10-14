@@ -40,7 +40,21 @@ def load_table(path):
 namespace = {"params": job["params"], "log": lambda *a: print(*a, flush=True)}
 for name, value in job["inputs"].items():
     namespace[name] = load_table(value["__table__"]) if isinstance(value, dict) and "__table__" in value else value
-exec(compile(job["code"], "<Python Code block>", "exec"), namespace)
+import linecache
+filename = job["name"] + ".py"
+linecache.cache[filename] = (len(job["code"]), None, job["code"].splitlines(True), filename)
+try:
+    exec(compile(job["code"], filename, "exec"), namespace)
+except Exception:
+    try:
+        from rich.console import Console
+        from rich.traceback import Traceback
+        Console(width=110, color_system=None).print(Traceback(extra_lines=2, word_wrap=True))
+    except ImportError:
+        import traceback
+        traceback.print_exc(file=sys.stdout)
+    sys.stdout.flush()
+    sys.exit(1)
 
 result = {}
 for name in job["outputs"]:
@@ -140,7 +154,7 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> dict:
     helper, result_file = work / "helper.py", work / "result.pickle"
     helper.write_text(HELPER, encoding="utf-8")
     # Inputs can hold passwords (Ask User, secrets): they go through a pipe, never to a file.
-    job = {"code": code, "outputs": outputs, "workspace": str(work),
+    job = {"code": code, "outputs": outputs, "workspace": str(work), "name": ctx.block_id,
            "params": _portable(ctx.params, Table, SecretStr),
            "inputs": {k: _portable(v, Table, SecretStr) for k, v in inputs.items()}}
     proc = subprocess.Popen([str(python), "-I", str(helper), str(result_file)], cwd=os.getcwd(),

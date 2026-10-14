@@ -73,6 +73,12 @@ taskloom editor examples/daily-sales-report.yaml
   status live, the **Log** shows the selected block's messages, **Data preview** shows
   everything the selected block produced (tables as a grid, other values as text), and
   **Run history** reopens any past run. **Stop** cancels.
+- **After a run, hover** over any input, output or connection line to see the value that
+  went through it. Every run's values are kept in **Run history** (double-click a run, then
+  hover) for `history_days` (365 by default).
+- **When a block fails**, the Log says which block, what came into each input (from which
+  block and with what value) and, for Python Code, the code around the failing line and
+  the values of your variables.
 - To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
   the data on and shows it in the Log and Data preview. Its **message** is written like a
   Python f-string, e.g. `Healthy: {value['healthy']}`. Example:
@@ -168,6 +174,12 @@ File locations on a server are written `connection:path`, e.g. `appserver:~/app/
 An app watchdog is a flow: Health Check (URL and/or PID file) → `unhealthy` →
 Start Remote Process → Health Check, scheduled every few minutes.
 
+**Start Remote Process** runs your command as you would type it (`cd app && ./run.sh >>
+app.log 2>&1` is fine; no need for `nohup` or a final `&`), keeps track of it, and checks
+it is still running a few seconds later. For a command that does its job and finishes
+(e.g. a script that starts a service), untick `must_keep_running`. **Stop Remote Process**
+stops the app and everything it started, forcing whatever has not stopped after `grace`.
+
 On a server without root or crontab, run `taskloom scheduler --headless` there and
 list the server in the `keeper` setting (Tools → Settings) on your PC: your
 scheduler checks it every 5 minutes and starts it again after a server reboot.
@@ -179,7 +191,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | File | Purpose |
 |---|---|
 | `connections.yaml` | Database connections, e.g. a JDBC driver, URL, jar and properties |
-| `settings.yaml` | `calendar`, `keep_runs`, `java_home`, `max_concurrent_runs`, `keeper` |
+| `settings.yaml` | `calendar`, `keep_runs`, `history_days`, `java_home`, `max_concurrent_runs`, `keeper`, notifications |
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |

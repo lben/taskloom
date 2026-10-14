@@ -449,3 +449,34 @@ def test_connecting_done_to_run_after_by_dragging(win):
 
     assert tab.doc.edges() == [(a, "done", b, "after")]
     tab.doc.dirty = False
+
+
+def test_hovering_shows_values_of_the_run_on_screen_and_of_older_runs(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "values.yaml", """
+        params:
+          n: {type: int, value: 1}
+        blocks:
+          make:
+            type: logic.python
+            config: {inputs: [], code: "output = {'run': params['n']}"}
+          use:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "pass"}
+        edges:
+          - make.output -> use.input
+    """)
+    tab = win.open_flow(flow)
+    for n in (1, 2):
+        win.start_run(tab, {"n": n})
+        qtbot.waitUntil(lambda: not tab.running and tab.last is not None and len(tab.runs) == n, timeout=60_000)
+
+    out_tip = tab.scene.nodes["make"].ports[("output", True)].toolTip()
+    in_tip = tab.scene.nodes["use"].ports[("input", False)].toolTip()
+    assert '"run": 2' in out_tip and "from <b>make.output</b>" in in_tip and '"run": 2' in in_tip
+    assert '"run": 2' in tab.scene.edge_items[0].toolTip()
+
+    history = History(win.home.history_db)
+    first = history.runs(str(flow))[-1]["id"]
+    history.close()
+    win.show_history_run(first)  # an older run: its values
+    assert '"run": 1' in tab.scene.nodes["make"].ports[("output", True)].toolTip()

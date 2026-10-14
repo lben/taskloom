@@ -91,18 +91,39 @@ def remote_path(path: str) -> str:
     return shlex.quote(path)
 
 
+def exit_file(pid_file: str) -> str:
+    return f"{pid_file}.exit"
+
+
 def start_detached(command: str, workdir: str, log_file: str, pid_file: str) -> str:
     """Shell script that starts `command` in the background so it outlives the SSH session.
 
-    Uses setsid when available (Linux) so the process leaves the session; writes its PID.
+    The command runs as written (chains with && or ;, its own >> redirections) inside a small
+    shell whose PID goes to `pid_file`; with setsid (Linux) that shell leads its own process
+    group, so stopping it stops everything the command started. When the command ends, its exit
+    code goes to `<pid_file>.exit`.
     """
-    inner = f"cd {remote_path(workdir)} && exec {command}"
+    # In a subshell, so an `exit` in the command does not skip recording its exit code.
+    inner = f"cd {remote_path(workdir)} || exit 1\n(\n{command}\n)\necho $? > {remote_path(exit_file(pid_file))}"
     launch = f"nohup sh -c {shlex.quote(inner)} >> {remote_path(log_file)} 2>&1 < /dev/null &"
     return (
         f"mkdir -p \"$(dirname {remote_path(log_file)})\" \"$(dirname {remote_path(pid_file)})\" && "
+        f"rm -f {remote_path(exit_file(pid_file))} && "
         f"if command -v setsid >/dev/null 2>&1; then setsid {launch} else {launch} fi; "
         f"echo $! > {remote_path(pid_file)}; echo $!"
     )
+
+
+def processes(pid: str) -> str:
+    """Shell that prints every process belonging to what start_detached started: the shell, its
+    process group (with setsid) and all its descendants."""
+    return (f"_tl_tree() {{ echo \"$1\"; for c in $(pgrep -P \"$1\"); do _tl_tree \"$c\"; done; }}; "
+            f"{{ _tl_tree {pid}; pgrep -g {pid}; }} 2>/dev/null | sort -u")
+
+
+def alive(pids: list[str]) -> str:
+    """Shell that prints which of these processes are still running."""
+    return f"for p in {' '.join(pids)}; do kill -0 \"$p\" 2>/dev/null && echo \"$p\"; done; true"
 
 
 def sftp_path(sftp: paramiko.SFTPClient, path: str) -> str:

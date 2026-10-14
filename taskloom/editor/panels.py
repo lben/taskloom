@@ -820,7 +820,8 @@ class LogPanel(QWidget):
         level = e.get("level", "INFO")
         color = LEVEL_COLORS.get(level)
         block = f"[{html.escape(e['block'])}] " if e.get("block") else ""
-        message = html.escape(e.get("message", "")).replace("\n", "<br>")
+        # Keep spaces as they are: reports such as Python tracebacks are laid out in columns.
+        message = html.escape(e.get("message", "")).replace(" ", "&nbsp;").replace("\n", "<br>")
         level_html = f"<span style='color:{color}'>{level}</span>" if color else level
         return f"<span style='color:gray'>{e.get('ts', '')[11:19]}</span> {block}{level_html} {message}"
 

@@ -16,6 +16,7 @@ import yaml
 SETTINGS_DEFAULTS = {
     "calendar": None, "keep_runs": 20, "java_home": None, "max_concurrent_runs": None, "keeper": [],
     "notify_email": None, "notify_on": ["failure"], "smtp_connection": None, "python": None,
+    "history_days": 365,  # runs, their logs and their values are kept this long
 }
 SECRET_PREFIX = "secret:"
 # Every secret value this process has seen; run output is scrubbed of them (see engine.redact).

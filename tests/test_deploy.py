@@ -3,7 +3,6 @@
 import io
 import json
 import os
-import signal
 import sys
 import tarfile
 
@@ -70,7 +69,5 @@ def test_deploy_installs_then_asks_before_replacing(env, server):
         with pytest.raises(ProcessLookupError):
             os.kill(int(first_pid), 0)  # the old scheduler was stopped
     finally:
-        try:
-            os.kill(int(pid_file.read_text()), signal.SIGKILL)
-        except (OSError, ValueError):
-            pass
+        from test_servers import _kill_from_pid_file
+        _kill_from_pid_file(pid_file)

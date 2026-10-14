@@ -524,6 +524,12 @@ class MainWindow(QMainWindow):
         status = info.get("status")
         tab.block_info[block] = {"status": status, "tables": info.get("tables") or {},
                                  "previews": info.get("previews") or {}, "error": info.get("error")}
+        values = dict(info.get("previews") or {})
+        if status == "success":
+            values["done"] = "finished successfully"
+        elif status == "failed" and info.get("error"):
+            values["error"] = info["error"]
+        tab.scene.set_values(block, values)
         attempts = info.get("attempts") or 0
         if status == "success":
             text = "✓ " + _short(info.get("summary") or "done", 48) + (f" · retried {attempts - 1}×" if attempts > 1 else "")
