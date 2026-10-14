@@ -75,7 +75,12 @@ taskloom editor examples/daily-sales-report.yaml
   **Run history** reopens any past run. **Stop** cancels.
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it. Every run's values are kept in **Run history** (double-click a run, then
-  hover) for `history_days` (365 by default).
+  hover) for `history_days` (365 by default). The canvas always shows the newest run of
+  the flow, including scheduled ones, unless you opened an older run from Run history.
+- **Retry one block after a fix:** right-click it → **Run this block again with the same
+  inputs**. Only that block runs, with what reached it in the run on the canvas; the other
+  blocks keep their results. (`taskloom run FLOW --only BLOCK --inputs-from RUN`.) Inputs
+  that held a password are never saved, so such a block needs a full run.
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
   the values of your variables.
@@ -89,9 +94,12 @@ taskloom editor examples/daily-sales-report.yaml
 - **Python packages:** Tools → Python environment creates your own Python environment and
   installs packages with pip. Tick **Run in my Python environment** on a Python Code
   block to use them (`taskloom env create`, `taskloom env pip install NAME` from a terminal).
+  The screen shows the environment in use; **Use an existing environment…** picks one you
+  already have (the `python_env` setting).
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
   the flows you had open come back with them after a crash or a restart. If the editor
-  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder.
+  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. The
+  list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
   secure store, never in a file) and click **Save and test connection**.
@@ -155,12 +163,16 @@ triggers:
 overlap: skip        # if the previous run is still going: skip | queue | allow
 ```
 
-Turn on "Run on schedule" in the editor's Flow tab (or list the flow in
-`scheduled.yaml`), then start the scheduler with the **Scheduler** button at the top
+Add a **Schedule** block to the flow and save it: saved flows with a Schedule block are
+listed in `scheduled.yaml` (removing the block takes the flow off). Then start the scheduler with the **Scheduler** button at the top
 right of the editor (it also shows whether it is on), or `taskloom scheduler`. It shows
 a tray icon and notifies you about failed or skipped runs. On Windows, **Tools →
 Settings → Start the scheduler when I log in** (or `taskloom scheduler --at-login on`)
 adds it to your Startup folder; no admin needed.
+
+One scheduler runs every scheduled flow. It rereads changed flow files every 15 seconds,
+so a new cron line applies shortly after you save, without restarting it; a changed
+schedule counts from that moment (nothing before it counts as missed).
 
 Runs missed while the computer was off follow `misfire`: `skip`, `run_once` (the
 latest missed one) or `catch_up` (each of them), with parameters computed for the
@@ -195,10 +207,10 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
-| `editor.ini` | Editor preferences, e.g. remembered choices for overlapping runs |
+| `editor.ini` | Editor preferences and the flows you had open |
 | `scheduled.yaml` | Flows the scheduler runs |
 | `known_hosts` | SSH server keys trusted on first connection |
-| `python-env/` | Your Python environment for Python Code blocks |
+| `python-env/` | Your Python environment for Python Code blocks (unless `python_env` points elsewhere) |
 | `recovery/` | Autosaved copies of unsaved flows |
 | `crash.log` | What happened if the editor ever stopped unexpectedly |
 

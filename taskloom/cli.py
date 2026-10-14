@@ -111,8 +111,19 @@ def cmd_run(args, home: Home) -> int:
         signal.signal(signal.SIGTERM, on_signal)
     answers = StdinControl(cancel) if args.interactive else None
     as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
-    result = run_flow(flow, registry, home, _parse_overrides(args.param), sinks=sinks, cancel=cancel,
-                      answers=answers, as_of=as_of, trigger=args.trigger)
+    overrides = _parse_overrides(args.param)
+    if args.only and args.inputs_from and not overrides:  # re-running a block: same parameters as that run
+        from .history import History
+
+        history = History(home.history_db)
+        try:
+            overrides = {k: v for k, v in json.loads(history.run(args.inputs_from)["params"]).items() if k in flow.params}
+        except TypeError:
+            raise ValueError(f"there is no run #{args.inputs_from}") from None
+        finally:
+            history.close()
+    result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
+                      answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from)
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
@@ -214,6 +225,8 @@ def main(argv=None) -> int:
     p.add_argument("--param", action="append", metavar="NAME=VALUE", help="override a parameter (repeatable)")
     p.add_argument("--json-events", action="store_true", help="print events as JSON lines on stdout")
     p.add_argument("--as-of", metavar="DATETIME", help="compute parameters as if it were this local time (YYYY-MM-DD HH:MM)")
+    p.add_argument("--only", metavar="BLOCK", help="run just this block, with the inputs it got in --inputs-from")
+    p.add_argument("--inputs-from", metavar="RUN", type=int, help="the run whose inputs --only uses")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")

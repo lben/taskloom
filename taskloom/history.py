@@ -103,9 +103,9 @@ class History:
         rows = self._exec(sql + " ORDER BY id DESC LIMIT ?", args + [limit])
         return [dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), r)) for r in rows]
 
-    def run(self, run_id: int) -> dict:
+    def run(self, run_id: int) -> dict | None:
         row = self._exec("SELECT id, flow, flow_path, params, status, started, finished FROM runs WHERE id=?", (run_id,)).fetchone()
-        return dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), row))
+        return dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), row)) if row else None
 
     def blocks(self, run_id: int) -> dict:
         rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews FROM blocks WHERE run_id=?",

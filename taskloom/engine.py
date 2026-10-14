@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import pickle
 import shutil
 import threading
 import time
@@ -174,14 +176,18 @@ def _summary(produced: dict) -> str:
 
 
 def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
-             answers=None, as_of: dt.datetime | None = None, trigger: str | None = None) -> RunResult:
+             answers=None, as_of: dt.datetime | None = None, trigger: str | None = None,
+             only: str | None = None, inputs_from: int | None = None) -> RunResult:
     """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions.
 
     `trigger` is the Schedule block that started a scheduled run; None means a manual run.
+    `only` runs just that block, with the inputs it got in run `inputs_from`.
     """
     errors, warnings = validate(flow, registry, home)
     if errors:
         raise FlowError(errors)
+    if only is not None:
+        _kept_inputs(flow, registry, home, only, inputs_from)  # refuse before a run is recorded
     _, funcs = run_clock(flow, home, as_of)
     values = P.resolve(flow.params, overrides or {}, funcs)
     cancel = cancel or threading.Event()
@@ -202,6 +208,15 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         runner = _Runner(flow, registry, home, values, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
         runner.fired = _fired_triggers(flow, registry, trigger)
         try:
+            if only is not None:
+                emit({"event": "log", "block": only, "level": "INFO",
+                      "message": f"running only {only}, with the inputs it got in run #{inputs_from}"})
+                # This run holds everything the run it starts from held (so retrying another block from
+                # it works, and its tables survive that run being cleaned up), then takes its inputs
+                # from that.
+                _carry_over(home.runs_dir / str(inputs_from), runner.workspace)
+                runner.only = only
+                runner.outputs = _kept_inputs(flow, registry, home, only, run_id)
             status = runner.run()
         except BaseException:
             # Never leave the run recorded as "running" (e.g. a forced second Ctrl+C).
@@ -222,9 +237,11 @@ class _Runner:
         self.outputs: dict = {}
         self.blocked: set[str] = set()  # failed, or skipped because something before them failed
 
+    only: str | None = None
+
     def run(self) -> str:
         unhandled_failure = False
-        for block_id in order(self.flow):
+        for block_id in [self.only] if self.only else order(self.flow):
             cls = self.registry.get(self.flow.blocks[block_id].type)
             if cls is not None and cls.is_trigger and block_id not in self.fired:
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
@@ -260,6 +277,7 @@ class _Runner:
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
+            self._keep_outputs(block_id, produced)
             if status == "failed":
                 self.blocked.add(block_id)
             for port, value in produced.items():
@@ -270,6 +288,29 @@ class _Runner:
         if self.cancel.is_set():
             return "cancelled"
         return "failed" if unhandled_failure else "success"
+
+    def _keep_outputs(self, block_id: str, produced: dict):
+        """Save what the block produced, so it can later feed a re-run of a single block.
+        Values holding a password are never written to disk."""
+        kept, withheld = {}, []
+        for port, value in produced.items():
+            if isinstance(value, Table):
+                kept[port] = {"__table__": str(value.path)}
+                continue
+            try:
+                data = pickle.dumps(value)
+            except Exception:
+                withheld.append(port)  # not something that can be saved (e.g. an open connection)
+                continue
+            # A password, or text built from one (e.g. "user:" + password), stays off the disk.
+            if _holds_secret(value) or any(len(s) >= 4 and s.encode() in data for s in REVEALED):
+                withheld.append(port)
+            else:
+                kept[port] = value
+        kept[WITHHELD] = withheld
+        folder = self.workspace / block_id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / KEPT_OUTPUTS).write_bytes(pickle.dumps(kept))
 
     def _input_ports(self, spec) -> dict:
         cls = self.registry.get(spec.type)
@@ -397,6 +438,87 @@ class _Runner:
                 raise TypeError(f"output '{port}' must be a table, got {type(value).__name__}")
             produced[port] = value
         return produced
+
+
+KEPT_OUTPUTS = "outputs.pickle"
+WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
+
+
+def _holds_secret(value) -> bool:
+    if isinstance(value, SecretStr):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_secret(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_secret(v) for v in value)
+    return False
+
+
+def _kept_inputs(flow: Flow, registry, home, only: str, run_id: int | None) -> dict:
+    """The values that reached `only` in an earlier run, for re-running just that block."""
+    if only not in flow.blocks:
+        raise ValueError(f"there is no block named '{only}'")
+    if run_id is None:
+        raise ValueError("say which run's inputs to use")
+    spec = flow.blocks[only]
+    cls = registry.get(spec.type)
+    in_ports = all_ports(cls, block_config(cls, spec))[0] if cls else {}
+    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs): run the whole flow instead"
+    if not (home.runs_dir / str(run_id)).is_dir():
+        raise ValueError(cleaned)
+    if not (home.runs_dir / str(run_id) / only / KEPT_OUTPUTS).exists():
+        # Every block that runs (even one that fails) saves its outputs; this one was skipped.
+        raise ValueError(f"{only} did not run in run #{run_id} (nothing reached it, or something before it "
+                         "failed): run the whole flow instead")
+    values, reached = {}, {}
+    for edge in (e for e in flow.edges if e.dst == only):
+        reached.setdefault(edge.dst_port, False)
+        path = home.runs_dir / str(run_id) / edge.src / KEPT_OUTPUTS
+        kept = pickle.loads(path.read_bytes()) if path.exists() else {}
+        if edge.src_port in kept.get(WITHHELD, []):
+            raise ValueError(f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
+                             "so it was not kept: run the whole flow instead")
+        if edge.src_port not in kept:
+            # Nothing arriving is normal here: an error output that did not fire, a path not taken
+            # into an input that takes any of its edges, or a block that did not finish before it.
+            if edge.src_port in (ERROR_PORT, DONE) or getattr(in_ports.get(edge.dst_port), "any_of", False):
+                continue
+            raise ValueError(f"nothing reached {only}.{edge.dst_port} from {edge.src}.{edge.src_port} in run "
+                             f"#{run_id}: run the whole flow instead")
+        value = kept[edge.src_port]
+        if isinstance(value, dict) and set(value) == {"__table__"}:
+            if not Path(value["__table__"]).exists():
+                raise ValueError(cleaned)
+            value = Table(Path(value["__table__"]))
+        values[(edge.src, edge.src_port)] = value
+        reached[edge.dst_port] = True
+    nothing = [port for port, got in reached.items() if not got]
+    if nothing:  # it would not have run with these inputs: say so instead of skipping it quietly
+        raise ValueError(f"nothing reached {only}.{nothing[0]} in run #{run_id} (it did not run then): "
+                         "run the whole flow instead")
+    return values
+
+
+def _carry_over(old: Path, new: Path):
+    """Copy the saved outputs of every block of an earlier run into a new run's folder.
+    Table files are hard-linked (no extra space; they outlive the old run's folder), or copied."""
+    for kept_file in sorted(old.glob(f"*/{KEPT_OUTPUTS}")):
+        block = kept_file.parent.name
+        kept = pickle.loads(kept_file.read_bytes())
+        for port, value in list(kept.items()):
+            if isinstance(value, dict) and set(value) == {"__table__"}:
+                source = Path(value["__table__"])
+                if not source.exists():
+                    continue  # already cleaned up: using it is refused with a clear message
+                target = new / block / "kept" / f"{port}.parquet"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.link(source, target)
+                except OSError:
+                    shutil.copy2(source, target)
+                kept[port] = {"__table__": str(target)}
+        (new / block).mkdir(parents=True, exist_ok=True)
+        (new / block / KEPT_OUTPUTS).write_bytes(pickle.dumps(kept))
 
 
 def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:

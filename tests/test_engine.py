@@ -547,3 +547,224 @@ def test_old_runs_are_forgotten_after_history_days(env):
     assert [r for (r,) in env.query("SELECT id FROM runs")] == [old_id + 1]
     assert env.query("SELECT count(*) FROM blocks WHERE run_id=?", old_id) == [(0,)]
     assert env.query("SELECT count(*) FROM logs WHERE run_id=?", old_id) == [(0,)]
+
+
+def test_rerun_one_block_with_the_inputs_of_an_earlier_run(env):
+    flow = env.write("flow.yaml", """
+        params:
+          region: {type: text, value: EU}
+        blocks:
+          load:
+            type: data.duckdb_sql
+            config: {inputs: [], sql: "select :region as region, 5 as n"}
+          settings:
+            type: logic.python
+            config: {inputs: [], code: "open('loads.txt', 'a').write('x'); output = {'factor': 2}"}
+          compute:
+            type: logic.python
+            config:
+              inputs: [table, settings]
+              outputs: []
+              code: |
+                import os
+                if not os.path.exists('fixed.txt'):
+                    raise RuntimeError('bug')
+                n = table.scan().collect()['n'][0]
+                open('result.txt', 'w').write(f"{params['region']} {n * settings['factor']}")
+        edges:
+          - load.result -> compute.table
+          - settings.output -> compute.settings
+    """)
+    assert env.taskloom("run", flow, "--param", "region=US").returncode == 1
+    failed_run, _ = env.last_run()
+
+    (env.root / "fixed.txt").write_text("the fix")
+    result = env.taskloom("run", flow, "--only", "compute", "--inputs-from", failed_run)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "result.txt").read_text() == "US 10"  # same inputs and parameters as that run
+    assert (env.root / "loads.txt").read_text() == "x"  # the other blocks did not run again
+    run_id, status = env.last_run()
+    assert status == "success" and env.block_status(run_id) == {"compute": "success"}
+
+    # Retrying again, from that retry (what the editor does: it shows the latest run).
+    (env.root / "result.txt").unlink()
+    again = env.taskloom("run", flow, "--only", "compute", "--inputs-from", run_id)
+    assert again.returncode == 0, again.stderr
+    assert (env.root / "result.txt").read_text() == "US 10" and (env.root / "loads.txt").read_text() == "x"
+
+
+def test_rerun_accepts_inputs_that_had_nothing_in_that_run(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          check:
+            type: logic.if
+            config: {condition: "True"}
+          boom:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('down')"}
+          fine:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          handler:
+            type: logic.python
+            config:
+              inputs: [value, errors]
+              outputs: []
+              code: "open('handled.txt', 'w').write(f'{value} {[e[\\"block\\"] for e in errors]}')"
+        edges:
+          - check.true -> handler.value
+          - check.false -> handler.value
+          - boom.error -> handler.errors
+          - fine.error -> handler.errors
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    run_id, _ = env.last_run()
+    assert (env.root / "handled.txt").read_text() == "[None] ['boom']"
+    (env.root / "handled.txt").unlink()
+
+    result = env.taskloom("run", flow, "--only", "handler", "--inputs-from", run_id)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "handled.txt").read_text() == "[None] ['boom']"
+
+
+def test_rerun_refuses_inputs_that_held_a_password(env):
+    env.write("home/secrets.yaml", "pw: hunter2SECRET\n").chmod(0o600)
+    flow = env.write("flow.yaml", """
+        blocks:
+          ask:
+            type: logic.ask_user
+            config: {prompt: "Password?", kind: password, secret: pw}
+          use:
+            type: logic.python
+            config: {inputs: [pw], outputs: [], code: "pass"}
+        edges:
+          - ask.answer -> use.pw
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "use", "--inputs-from", run_id)
+
+    assert result.returncode == 2 and "held a password" in result.stderr
+    for path in (env.home / "runs").rglob("*"):
+        if path.is_file():
+            assert b"hunter2SECRET" not in path.read_bytes(), path
+
+
+def test_retries_of_different_blocks_chain_and_survive_cleanup(env):
+    env.write("home/settings.yaml", "keep_runs: 2\n")
+    flow = env.write("flow.yaml", """
+        blocks:
+          load:
+            type: data.duckdb_sql
+            config: {inputs: [], sql: "select 5 as n"}
+          a:
+            type: logic.python
+            config:
+              inputs: [table]
+              outputs: []
+              code: |
+                import os
+                assert os.path.exists('fix_a.txt'), 'a is broken'
+                open('a.txt', 'w').write(str(table.scan().collect()['n'][0]))
+          other:
+            type: logic.python
+            config: {inputs: [], code: "output = 'x'"}
+          b:
+            type: logic.python
+            config:
+              inputs: [value]
+              outputs: []
+              code: |
+                import os
+                assert os.path.exists('fix_b.txt'), 'b is broken'
+                open('b.txt', 'w').write(value)
+        edges:
+          - load.result -> a.table
+          - other.output -> b.value
+    """)
+    assert env.taskloom("run", flow).returncode == 1
+    run_id, _ = env.last_run()
+
+    (env.root / "fix_a.txt").write_text("")
+    assert env.taskloom("run", flow, "--only", "a", "--inputs-from", run_id).returncode == 0
+    run_id, _ = env.last_run()
+    (env.root / "fix_b.txt").write_text("")
+    result = env.taskloom("run", flow, "--only", "b", "--inputs-from", run_id)  # from the retry of a
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "b.txt").read_text() == "x"
+    for _ in range(3):  # more retries than keep_runs: older run folders get deleted meanwhile
+        run_id, _ = env.last_run()
+        result = env.taskloom("run", flow, "--only", "a", "--inputs-from", run_id)
+        assert result.returncode == 0, result.stderr
+    assert (env.root / "a.txt").read_text() == "5"
+
+
+def test_retrying_a_block_that_got_nothing_is_refused(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          check:
+            type: logic.if
+            config: {condition: "False"}
+          only_if_true:
+            type: logic.python
+            config: {inputs: [value], outputs: [], code: "pass"}
+        edges:
+          - check.true -> only_if_true.value
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "only_if_true", "--inputs-from", run_id)
+
+    assert result.returncode == 2 and "only_if_true did not run in run #" in result.stderr
+
+
+def test_retrying_a_block_skipped_after_a_failure_is_refused(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          fine:
+            type: logic.python
+            config: {code: "pass"}
+          boom:
+            type: logic.python
+            config: {code: "raise ValueError('boom')"}
+          later:
+            type: logic.python
+            config: {code: "open('later.txt', 'w').close()"}
+          handler:
+            type: logic.python
+            config: {inputs: [e], code: "pass"}
+        edges:
+          - fine.done -> later.after
+          - boom.done -> later.after
+          - boom.error -> handler.e
+    """)
+    env.taskloom("run", flow)
+    run_id, _ = env.last_run()
+    assert env.block_status(run_id)["later"] == "skipped"
+
+    result = env.taskloom("run", flow, "--only", "later", "--inputs-from", run_id)
+
+    assert result.returncode == 2 and "later did not run in run #" in result.stderr
+    assert not (env.root / "later.txt").exists()
+
+
+def test_retrying_the_only_block_of_a_flow(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          only1:
+            type: logic.python
+            config: {code: "open('ran.txt', 'a').write('x')"}
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "only1", "--inputs-from", run_id)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "ran.txt").read_text() == "xx"
+    assert env.query("SELECT count(*) FROM runs WHERE status = 'running'") == [(0,)]

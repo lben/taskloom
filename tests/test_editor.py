@@ -480,3 +480,76 @@ def test_hovering_shows_values_of_the_run_on_screen_and_of_older_runs(win, qtbot
     history.close()
     win.show_history_run(first)  # an older run: its values
     assert '"run": 1' in tab.scene.nodes["make"].ports[("output", True)].toolTip()
+
+
+def test_rerun_a_fixed_block_from_the_canvas(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "fix.yaml", """
+        blocks:
+          load:
+            type: logic.python
+            config: {inputs: [], code: "open('loads.txt', 'a').write('x'); output = 21"}
+          compute:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "raise ValueError('typo')"}
+        edges:
+          - load.output -> compute.input
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    assert tab.scene.nodes["compute"].status == "failed"
+    first_run = tab.shown_run_id
+
+    tab.doc.set_block_value("compute", "code", "open('result.txt', 'w').write(str(input * 2))")  # the fix
+    win.rerun_block(tab, "compute")
+    qtbot.waitUntil(lambda: len(tab.runs) == 2 and not tab.running and tab.runs[1].status is not None, timeout=60_000)
+
+    assert (tmp_path / "result.txt").read_text() == "42" and (tmp_path / "loads.txt").read_text() == "x"
+    assert tab.scene.nodes["compute"].status == "success"
+    assert tab.scene.nodes["load"].status == "success"  # still showing the earlier run's result
+    assert tab.shown_run_id != first_run and not tab.doc.dirty  # the fix was saved before running
+
+
+def test_the_canvas_shows_runs_started_elsewhere(win, qtbot, tmp_path):
+    import subprocess
+
+    flow = write_flow(tmp_path / "elsewhere.yaml", """
+        params:
+          n: {type: int, value: 1}
+        blocks:
+          make:
+            type: logic.python
+            config: {inputs: [], code: "output = params['n']"}
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+    subprocess.run([sys.executable, "-m", "taskloom.cli", "run", str(flow), "--param", "n=7"], env=env, check=True,
+                   capture_output=True)  # e.g. the scheduler
+
+    win._refresh_statuses()
+
+    assert "7" in tab.scene.nodes["make"].ports[("output", True)].toolTip()
+
+
+def test_python_environment_screen_shows_an_existing_environment(win, tmp_path, monkeypatch, qtbot):
+    import subprocess
+
+    from taskloom.editor.dialogs import PythonEnvDialog
+
+    existing = tmp_path / "my-venv"
+    subprocess.run([sys.executable, "-m", "venv", str(existing)], check=True)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(existing)))
+    dialog = PythonEnvDialog(win.home, win)
+    assert "Not created yet" in dialog.status.text()
+
+    dialog.existing_button.click()
+    qtbot.waitUntil(lambda: dialog.proc is None, timeout=120_000)
+
+    assert str(existing) in dialog.status.text() and "Python 3" in dialog.status.text()
+    assert win.home.settings()["python_env"] == str(existing)
+    assert "pip" in dialog.output.toPlainText()  # its packages are listed
+    reopened = PythonEnvDialog(win.home, win)
+    qtbot.waitUntil(lambda: reopened.proc is None, timeout=120_000)
+    assert str(existing) in reopened.status.text() and "pip" in reopened.output.toPlainText()

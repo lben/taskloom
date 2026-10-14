@@ -23,9 +23,10 @@ class RunProcess(QObject):
     output = Signal(str)  # text the runner printed outside of events (errors)
     finished = Signal(str)  # final status: success | failed | cancelled
 
-    def __init__(self, flow_path: str, overrides: dict, home: Home, parent=None):
+    def __init__(self, flow_path: str, overrides: dict, home: Home, parent=None, extra_args=()):
         super().__init__(parent)
         self.flow_path, self.overrides, self.home = flow_path, overrides, home
+        self.extra_args = list(extra_args)
         self.run_id: int | None = None
         self.status: str | None = None
         self._buffer = b""
@@ -43,7 +44,7 @@ class RunProcess(QObject):
         args += ["run", self.flow_path, "--json-events", "--interactive"]
         for name, value in self.overrides.items():
             args += ["--param", f"{name}={value}"]
-        self.proc.start(program, args)
+        self.proc.start(program, args + self.extra_args)
 
     @property
     def running(self) -> bool:

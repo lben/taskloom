@@ -79,11 +79,17 @@ with open(result_file, "wb") as f:
 
 
 def env_dir(home) -> Path:
-    return home.root / "python-env"
+    """The python_env setting (an environment you already had), else <Taskloom folder>/python-env."""
+    configured = home.settings().get("python_env")
+    return Path(configured).expanduser() if configured else home.root / "python-env"
+
+
+def python_in(folder: Path) -> Path:
+    return folder / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
 
 def env_python(home) -> Path:
-    return env_dir(home) / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    return python_in(env_dir(home))
 
 
 def base_python(home) -> list[str]:

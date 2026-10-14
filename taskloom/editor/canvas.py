@@ -214,6 +214,7 @@ class EdgeItem(QGraphicsPathItem):
 
 class FlowScene(QGraphicsScene):
     block_selected = Signal(object)  # block id or None
+    block_menu = Signal(str, object)  # block id, screen position (right-click on a block)
 
     def __init__(self, doc: FlowDocument, registry):
         super().__init__()
@@ -407,6 +408,15 @@ class FlowScene(QGraphicsScene):
                 moved[block_id] = (node.pos().x(), node.pos().y())
         if moved:
             self.doc.move_blocks(moved)
+
+    def contextMenuEvent(self, event):
+        for item in self.items(event.scenePos()):
+            node = item if isinstance(item, NodeItem) else item.parentItem()
+            if isinstance(node, NodeItem):
+                self.block_menu.emit(node.block_id, event.screenPos())
+                event.accept()
+                return
+        super().contextMenuEvent(event)
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
         pal = QApplication.palette()

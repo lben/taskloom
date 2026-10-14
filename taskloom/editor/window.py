@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QSplitter,
+from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox, QSizePolicy, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from .. import params as P
@@ -58,6 +58,8 @@ class FlowTab(QWidget):
         self.entries: list[dict] = []  # log of the run shown on the canvas
         self.block_info: dict[str, dict] = {}  # block -> status, tables, … of the run shown
         self.shown_run: RunProcess | None = None
+        self.shown_run_id: int | None = None  # the run whose results are on the canvas
+        self.following_latest = True  # show each new run (incl. scheduled ones) unless an older one was opened
         self.last: dict | None = None  # last finished run of this flow, from the history
         self.scheduled = False  # listed for the scheduler
         self.next_run: dt.datetime | None = None  # when the scheduler runs it next
@@ -214,6 +216,7 @@ class MainWindow(QMainWindow):
     def add_tab(self, doc: FlowDocument) -> FlowTab:
         tab = FlowTab(doc, self.registry)
         tab.scene.block_selected.connect(lambda block_id, t=tab: self._on_block_selected(t, block_id))
+        tab.scene.block_menu.connect(lambda block_id, pos, t=tab: self._block_menu(t, block_id, pos))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
         doc.changed.connect(tab.autosave.start)
         tab.autosave.timeout.connect(lambda t=tab: self._autosave(t))
@@ -459,16 +462,30 @@ class MainWindow(QMainWindow):
                 return
         self.start_run(tab, overrides)
 
-    def start_run(self, tab: FlowTab, overrides: dict) -> RunProcess:
-        run = RunProcess(str(tab.doc.path), overrides, self.home, self)
+    def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), only: str | None = None) -> RunProcess:
+        run = RunProcess(str(tab.doc.path), overrides, self.home, self, extra_args)
         run.event.connect(lambda e, t=tab, r=run: self._on_event(t, r, e))
         run.output.connect(lambda line, t=tab, r=run: self._on_output(t, r, line))
         run.finished.connect(lambda status, t=tab, r=run: self._on_finished(t, r, status))
         tab.runs.append(run)
-        self._show_run(tab, run)
+        if only is None:
+            self._show_run(tab, run)
+        else:  # re-running one block: the rest of the canvas keeps the run it showed
+            tab.shown_run = run
+            tab.block_info.pop(only, None)
+            tab.scene.set_status(only, None)
+            tab.scene.set_values(only, {})
         run.start()
         self.flows_panel.update_tab(tab)
         return run
+
+    def _block_menu(self, tab: FlowTab, block_id: str, pos):
+        menu = QMenu(self)
+        rerun = menu.addAction(f"Run this block again with the same inputs (run #{tab.shown_run_id})"
+                               if tab.shown_run_id else "Run this block again with the same inputs")
+        rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
+        rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
+        menu.exec(pos)
 
     def _show_run(self, tab: FlowTab, run: RunProcess | None):
         tab.shown_run = run
@@ -477,6 +494,18 @@ class MainWindow(QMainWindow):
         if tab is self.current:
             self.log.set_entries([])
             self.bottom_tabs.setCurrentWidget(self.log)
+
+    def rerun_block(self, tab: FlowTab, block_id: str):
+        """Run one block again, with the inputs it got in the run on the canvas (e.g. after fixing it)."""
+        if tab.shown_run_id is None:
+            QMessageBox.information(self, "Run the flow first", "There is no run on the canvas to take the inputs from.")
+            return
+        if tab.running:
+            QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
+            return
+        if self._ready_to_run(tab) is None:  # saves your fix and checks the flow
+            return
+        self.start_run(tab, {}, ["--only", block_id, "--inputs-from", str(tab.shown_run_id)], only=block_id)
 
     def stop(self, tab: FlowTab | None):
         if tab is None:
@@ -505,6 +534,7 @@ class MainWindow(QMainWindow):
             return
         block = e.get("block")
         if kind == "run_started":
+            tab.shown_run_id, tab.following_latest = e["run_id"], True
             params = " ".join(f"{k}={v}" for k, v in e.get("params", {}).items())
             self._log(tab, {"ts": e["ts"], "level": "INFO", "message": f"run #{e['run_id']} started {params}"})
         elif kind == "block_started":
@@ -573,6 +603,9 @@ class MainWindow(QMainWindow):
         history.close()
         tab.last = runs[0] if runs else None
         self.flows_panel.update_tab(tab)
+        newest = tab.last["id"] if tab.last else None
+        if newest and tab.following_latest and not tab.running and newest > (tab.shown_run_id or 0):
+            self.show_history_run(newest, tab)  # e.g. a run the scheduler started
 
     def _refresh_statuses(self):
         for tab in self.tabs_list():
@@ -666,19 +699,22 @@ class MainWindow(QMainWindow):
         if tab.last:
             self.show_history_run(tab.last["id"])
 
-    def show_history_run(self, run_id: int):
-        tab = self.current
+    def show_history_run(self, run_id: int, tab: FlowTab | None = None):
+        tab = tab or self.current
         if tab is None:
             return
         history = self._history()
         blocks, logs = history.blocks(run_id), history.logs(run_id)
         history.close()
         self._show_run(tab, None)
+        tab.shown_run_id = run_id
+        tab.following_latest = tab.last is None or run_id >= tab.last["id"]
         for block, info in blocks.items():
             self._apply_block_result(tab, block, info)
         tab.entries = logs
-        self.log.set_entries(list(logs))
-        self.statusBar().showMessage(f"Showing run #{run_id}", 5000)
+        if tab is self.current:
+            self.log.set_entries(list(logs))
+            self.statusBar().showMessage(f"Showing run #{run_id}", 5000)
 
     def closeEvent(self, event):
         running = [r for t in self.tabs_list() for r in t.runs if r.running]
