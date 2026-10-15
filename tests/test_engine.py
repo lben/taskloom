@@ -720,7 +720,7 @@ def test_retrying_a_block_that_got_nothing_is_refused(env):
 
     result = env.taskloom("run", flow, "--only", "only_if_true", "--inputs-from", run_id)
 
-    assert result.returncode == 2 and "only_if_true did not run in run #" in result.stderr
+    assert result.returncode == 2 and "nothing reached only_if_true.value" in result.stderr
 
 
 def test_retrying_a_block_skipped_after_a_failure_is_refused(env):
@@ -749,7 +749,7 @@ def test_retrying_a_block_skipped_after_a_failure_is_refused(env):
 
     result = env.taskloom("run", flow, "--only", "later", "--inputs-from", run_id)
 
-    assert result.returncode == 2 and "later did not run in run #" in result.stderr
+    assert result.returncode == 2 and "boom, before it, failed" in result.stderr
     assert not (env.root / "later.txt").exists()
 
 
@@ -1004,3 +1004,196 @@ def test_a_table_file_you_give_is_copied_into_the_run(env):
 
     assert result.returncode == 0, result.stderr
     assert (env.root / "got.txt").read_text() == "2 2 "
+
+
+def test_after_fixing_a_failed_block_the_blocks_after_it_can_be_retried(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 'x'"}
+          b:
+            type: logic.python
+            config: {inputs: [input], code: "import os; assert os.path.exists('fix.txt'), 'not fixed'; output = input + '!'"}
+          c:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('got.txt', 'w').write(input)"}
+        edges:
+          - a.output -> b.input
+          - b.output -> c.input
+    """)
+    env.taskloom("run", flow)
+    failed, _ = env.last_run()
+    assert env.block_status(failed)["c"] == "skipped"
+    result = env.taskloom("run", flow, "--only", "c", "--inputs-from", failed)
+    assert result.returncode == 2 and "b, before it, failed" in result.stderr
+
+    (env.root / "fix.txt").write_text("")
+    assert env.taskloom("run", flow, "--only", "b", "--inputs-from", failed).returncode == 0
+    fixed, _ = env.last_run()
+    result = env.taskloom("run", flow, "--only", "c", "--inputs-from", fixed)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "got.txt").read_text() == "x!"
+
+
+def test_a_block_whose_input_comes_through_an_out_of_date_block_is_refused(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 'x'"}
+          b:
+            type: logic.python
+            config: {inputs: [input], code: "output = input + open('ver.txt').read()"}
+          d:
+            type: logic.python
+            config: {inputs: [input], code: "output = input"}
+          c:
+            type: logic.python
+            config: {inputs: [p, q], outputs: [], code: "open('got.txt', 'w').write(p + '|' + q)"}
+        edges:
+          - a.output -> b.input
+          - b.output -> d.input
+          - b.output -> c.p
+          - d.output -> c.q
+    """)
+    env.taskloom("run", flow)  # b fails: there is no ver.txt yet
+    (env.root / "ver.txt").write_text("1")
+    for block in ("b", "d"):
+        run_id, _ = env.last_run()
+        assert env.taskloom("run", flow, "--only", block, "--inputs-from", run_id).returncode == 0
+    (env.root / "ver.txt").write_text("2")  # change b again: d now holds what it made from b's old output
+    run_id, _ = env.last_run()
+    assert env.taskloom("run", flow, "--only", "b", "--inputs-from", run_id).returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "c", "--inputs-from", run_id)
+    assert result.returncode == 2 and "retry d first" in result.stderr
+
+    assert env.taskloom("run", flow, "--only", "d", "--inputs-from", run_id).returncode == 0
+    run_id, _ = env.last_run()
+    assert env.taskloom("run", flow, "--only", "c", "--inputs-from", run_id).returncode == 0
+    assert (env.root / "got.txt").read_text() == "x2|x2"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sends SIGINT")
+def test_a_block_cancelled_while_running_keeps_the_inputs_it_got(env):
+    from taskloom.config import Home
+    from taskloom.engine import block_inputs
+    from taskloom.flow import load_flow
+    from taskloom.registry import discover
+
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 'upstream'"}
+          w:
+            type: logic.wait
+            config: {seconds: 60}
+        edges:
+          - a.output -> w.value
+    """)
+    proc = env.popen("run", flow, "--json-events", "--only", "w", "--input", "value='chosen'")
+    for line in proc.stdout:
+        if '"block_started"' in line:
+            break
+    proc.send_signal(signal.SIGINT)
+    assert proc.wait(timeout=15) == 130
+    cancelled, status = env.last_run()
+    assert status == "cancelled"
+
+    home = Home(env.home)
+    values, _, typed = block_inputs(load_flow(flow), discover(home.blocks_dir), home, "w", cancelled)
+
+    assert values == {"value": "chosen"} and typed == {"value": "'chosen'"}
+
+
+def test_a_block_is_not_retried_with_part_of_its_inputs_after_one_source_fails(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          b:
+            type: logic.python
+            config: {inputs: [], code: "import os; assert not os.path.exists('broken.txt'); output = 'B'"}
+          x:
+            type: logic.python
+            config: {inputs: [], code: "output = 'X'"}
+          c:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('got.txt', 'w').write(str(input))"}
+        edges:
+          - b.output -> c.input
+          - x.output -> c.input
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    (env.root / "broken.txt").write_text("")
+    run_id, _ = env.last_run()
+    env.taskloom("run", flow, "--only", "b", "--inputs-from", run_id)  # b fails now
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "c", "--inputs-from", run_id)
+
+    assert result.returncode == 2 and "b, before it, failed" in result.stderr
+    assert (env.root / "got.txt").read_text() == "['B', 'X']"
+
+
+def test_after_an_if_takes_the_other_path_the_block_where_paths_meet_can_be_retried(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          p:
+            type: logic.python
+            config: {inputs: [], code: "import os; output = os.path.exists('flip.txt')"}
+          check:
+            type: logic.if
+            config: {condition: "value"}
+          x:
+            type: logic.python
+            config: {inputs: [input], code: "output = 'X'"}
+          y:
+            type: logic.python
+            config: {inputs: [input], code: "output = 'Y'"}
+          c:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('got.txt', 'w').write(str(input))"}
+        edges:
+          - p.output -> check.value
+          - check.false -> x.input
+          - check.true -> y.input
+          - x.output -> c.input
+          - y.output -> c.input
+    """)
+    assert env.taskloom("run", flow).returncode == 0
+    assert (env.root / "got.txt").read_text() == "['X']"
+    (env.root / "flip.txt").write_text("")
+    for block in ("p", "check", "y", "c"):  # x is not retried: a full run would now skip it
+        run_id, _ = env.last_run()
+        result = env.taskloom("run", flow, "--only", block, "--inputs-from", run_id)
+        assert result.returncode == 0, result.stderr
+
+    assert (env.root / "got.txt").read_text() == "['Y']"
+
+
+def test_a_block_that_was_never_attempted_is_not_taken_as_skipped(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 'A'"}
+          b:
+            type: logic.python
+            config: {inputs: [], code: "output = 'B'"}
+          c:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('got.txt', 'w').write(str(input))"}
+        edges:
+          - a.output -> c.input
+          - b.output -> c.input
+    """)
+    assert env.taskloom("run", flow, "--only", "b").returncode == 0  # a run with nothing from a
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--only", "c", "--inputs-from", run_id)
+
+    assert result.returncode == 2 and "a did not run in run #" in result.stderr
+    assert not (env.root / "got.txt").exists()

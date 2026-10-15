@@ -494,8 +494,7 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         rerun = menu.addAction(f"Run this block again with the same inputs (run #{tab.shown_run_id})"
                                if tab.shown_run_id else "Run this block again with the same inputs")
-        ran = tab.block_info.get(block_id, {}).get("status") in ("success", "failed")
-        rerun.setEnabled(tab.shown_run_id is not None and ran and not tab.running)
+        rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
         rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
         choose = menu.addAction("Run this block with inputs I choose…")
         choose.setEnabled(not tab.running)
@@ -532,13 +531,13 @@ class MainWindow(QMainWindow):
         if flow is None:
             return
         names = [name for name in input_ports(flow, self.registry, block_id) if name != AFTER]
-        run_id, values, missing = tab.shown_run_id, {}, {}
+        run_id, values, missing, typed = tab.shown_run_id, {}, {}, {}
         if run_id is not None:
             try:
-                values, missing = block_inputs(flow, self.registry, self.home, block_id, run_id)
+                values, missing, typed = block_inputs(flow, self.registry, self.home, block_id, run_id)
             except Exception:  # e.g. that run's files were cleaned up: start from nothing
                 run_id = None
-        dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing, run_id, self)
+        dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing, run_id, self, typed)
         if not dialog.exec():
             return
         args = ["--only", block_id]

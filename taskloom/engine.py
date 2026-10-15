@@ -192,9 +192,10 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         raise FlowError(errors)
     _, funcs = run_clock(flow, home, as_of)
     values = P.resolve(flow.params, overrides or {}, funcs)
+    texts = dict(given or {})  # as you typed them: shown again next time, and read again then
     if only is not None:  # refuse before a run is recorded
-        given = _evaluate_inputs(given or {}, values)
-        _only_inputs(flow, registry, home, only, inputs_from, given)
+        given = _evaluate_inputs(texts, values)
+        _only_inputs(flow, registry, home, only, inputs_from, given, texts)
     cancel = cancel or threading.Event()
 
     history = History(home.history_db)
@@ -225,8 +226,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                 given = {k: Table.from_frame(v, runner.workspace / only / "inputs" / f"{k}.parquet")
                          if Table.is_frame(v) else v for k, v in given.items()}
                 runner.only = only
-                runner.only_inputs = _only_inputs(flow, registry, home, only,
-                                                  run_id if inputs_from is not None else None, given)
+                runner.only_inputs, runner.only_typed = _only_inputs(
+                    flow, registry, home, only, run_id if inputs_from is not None else None, given, texts)
             status = runner.run()
         except BaseException:
             # Never leave the run recorded as "running" (e.g. a forced second Ctrl+C).
@@ -249,12 +250,14 @@ class _Runner:
 
     only: str | None = None  # run just this block, with only_inputs
     only_inputs: dict = {}
+    only_typed: dict = {}  # the ones you typed, as you typed them
 
     def run(self) -> str:
         unhandled_failure = False
         for block_id in [self.only] if self.only else order(self.flow):
             cls = self.registry.get(self.flow.blocks[block_id].type)
             if cls is not None and cls.is_trigger and block_id not in self.fired:
+                self._keep_outputs(block_id, {}, status=SKIPPED)
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
             if self.cancel.is_set():
@@ -264,9 +267,9 @@ class _Runner:
             if inputs is None:
                 continue
             if block_id == self.only:  # what it gets (maybe values you chose), saved before it can change them
-                self._keep_outputs(block_id, inputs, KEPT_INPUTS)
+                self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed)
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
-            self._keep_outputs(block_id, produced)
+            self._keep_outputs(block_id, produced, status=status)
             if status == "failed":
                 self.blocked.add(block_id)
             for port, value in produced.items():
@@ -285,6 +288,7 @@ class _Runner:
         # a block skipped because of a failure) stops this block. Error outputs are the way out.
         if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
             self.blocked.add(block_id)
+            self._keep_outputs(block_id, {}, status=BLOCKED)
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
             return None
         in_ports = self._input_ports(self.flow.blocks[block_id])
@@ -305,13 +309,16 @@ class _Runner:
         if not ready:
             if after_failure:  # it did not get its input because something before it failed
                 self.blocked.add(block_id)
+            self._keep_outputs(block_id, {}, status=BLOCKED if after_failure else SKIPPED)
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
             return None
         return inputs
 
-    def _keep_outputs(self, block_id: str, produced: dict, file: str | None = None):
-        """Save what the block produced (or, with KEPT_INPUTS, got), so it can later feed a re-run of a
-        single block. Values holding a password are never written to disk."""
+    def _keep_outputs(self, block_id: str, produced: dict, file: str | None = None, status: str | None = None,
+                      typed: dict | None = None):
+        """Save what the block produced and how it ended (or, with KEPT_INPUTS, what it got and which of
+        those you typed), so it can later feed a re-run of a single block. Values holding a password
+        are never written to disk."""
         kept, withheld = {}, []
         for port, value in produced.items():
             value = _tables_to_marks(value)
@@ -326,6 +333,10 @@ class _Runner:
             else:
                 kept[port] = value
         kept[WITHHELD] = withheld
+        if status is not None:
+            kept[STATUS] = status
+        if typed:
+            kept[TYPED] = typed
         folder = self.workspace / block_id
         folder.mkdir(parents=True, exist_ok=True)
         (folder / (file or KEPT_OUTPUTS)).write_bytes(pickle.dumps(kept))
@@ -460,6 +471,11 @@ class _Runner:
 
 KEPT_OUTPUTS = "outputs.pickle"
 KEPT_INPUTS = "inputs.pickle"  # what a block run on its own got: its inputs then, not what came before it
+STATUS = "__status__"  # how the block ended: success | failed | BLOCKED
+BLOCKED = "blocked"  # skipped because something before it failed
+SKIPPED = "skipped"  # skipped for another reason (a path not taken, a start block that did not fire)
+TYPED = "__typed__"  # inputs you typed, as you typed them
+STALE = "__stale__"  # made from older data: a block before it ran again on its own since
 WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
 
 
@@ -484,10 +500,17 @@ def input_ports(flow: Flow, registry, only: str) -> dict:
     return all_ports(cls, block_config(cls, spec))[0] if cls else {}
 
 
-def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[dict, dict]:
-    """What reached each input of `only` in run `run_id`: ({input: value}, {input: why it got none}).
+def _saved(run_dir: Path, block: str) -> dict:
+    path = run_dir / block / KEPT_OUTPUTS
+    return pickle.loads(path.read_bytes()) if path.exists() else {}
+
+
+def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[dict, dict, dict]:
+    """What `only` gets when run on its own from run `run_id`: ({input: value}, {input: why it gets none},
+    {input: the text you typed for it}). If it ran on its own then: exactly what it got. Otherwise what
+    a full run would give it now, from what the blocks before it hold (e.g. after fixing one of them).
     Raises ValueError when that run's files are gone."""
-    in_ports = input_ports(flow, registry, only)
+    input_ports(flow, registry, only)  # a block that exists
     cleaned = f"the files of run #{run_id} were cleaned up (keep_runs)"
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
@@ -499,51 +522,113 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
             raise ValueError(cleaned)
         return Table(path)
 
-    if not (run_dir / only / KEPT_OUTPUTS).exists():
-        # Every block that runs (even one that fails) saves its outputs; this one was skipped.
-        why = f"{only} did not run in run #{run_id} (nothing reached it, or something before it failed)"
-        return {}, {port: why for port in connected}
-    if (run_dir / only / KEPT_INPUTS).exists():  # it ran on its own in that run (maybe with values you chose)
+    ran = _saved(run_dir, only).get(STATUS) in ("success", "failed", "cancelled")  # it got its inputs
+    if ran and (run_dir / only / KEPT_INPUTS).exists():
         kept = pickle.loads((run_dir / only / KEPT_INPUTS).read_bytes())
         missing = {port: f"{only}.{port} held a password (or something that cannot be saved), so it was not kept"
                    for port in kept.pop(WITHHELD, [])}
-        return {port: _map_marks(value, table) for port, value in kept.items()}, missing
+        typed = kept.pop(TYPED, {})
+        return {port: _map_marks(value, table) for port, value in kept.items()}, missing, typed
+    verdict, ports = _Now(flow, registry, run_dir, run_id).inputs(only)
+    if verdict in ("blocked", "unknown"):
+        return {}, {port: ports for port in connected}, {}
     values, missing = {}, {}
-    for port in connected:
-        edges = [e for e in flow.edges if e.dst == only and e.dst_port == port]
+    for port, got in ports.items():
+        if isinstance(got, str):
+            missing[port] = got
+            continue
         delivered = []
-        for edge in edges:
-            path = run_dir / edge.src / KEPT_OUTPUTS
-            kept = pickle.loads(path.read_bytes()) if path.exists() else {}
-            if edge.src_port in kept.get(WITHHELD, []):
+        for edge, saved in got:
+            if edge.src_port in saved.get(WITHHELD, []):
                 missing[port] = (f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
                                  "so it was not kept")
                 break
-            if edge.src_port not in kept:
-                # Nothing arriving is normal here: an error output that did not fire, a path not taken
-                # into an input that takes any of its edges, or a block that did not finish before it.
-                if edge.src_port in (ERROR_PORT, DONE) or getattr(in_ports.get(port), "any_of", False):
-                    continue
-                missing[port] = f"nothing reached {only}.{port} from {edge.src}.{edge.src_port} in run #{run_id}"
-                break
-            delivered.append(_map_marks(kept[edge.src_port], table))
-        else:
-            if not delivered:
-                missing[port] = f"nothing reached {only}.{port} in run #{run_id} (it did not run then)"
-            else:  # as the runner hands them over: a list from several edges, else the value
-                many = getattr(in_ports.get(port), "many", False)
-                values[port] = delivered if many or len(edges) > 1 else delivered[0]
-    return values, missing
+            delivered.append(_map_marks(saved[edge.src_port], table))
+        else:  # as the runner hands them over: a list from several edges, else the value
+            many = getattr(input_ports(flow, registry, only).get(port), "many", False)
+            values[port] = delivered if many or _edges_into(flow, only, port) > 1 else delivered[0]
+    return values, missing, {}
 
 
-def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict) -> dict:
-    """The inputs for running just `only`: the ones you give, the rest as they reached it in run `run_id`."""
+def _edges_into(flow: Flow, block: str, port: str) -> int:
+    return sum(1 for e in flow.edges if e.dst == block and e.dst_port == port)
+
+
+class _Now:
+    """What a full run would do now, by its rules, from what each block holds in a run's folder.
+
+    A block holds its saved outputs, unless a block before it ran again on its own since (it is
+    stale): then a full run would run it again, so what it gives is not known, unless a full run
+    would skip it now (e.g. an If before it took the other path).
+    """
+
+    def __init__(self, flow, registry, run_dir, run_id):
+        self.flow, self.registry, self.run_dir, self.run_id = flow, registry, run_dir, run_id
+        self.memo: dict = {}
+
+    def state(self, block: str) -> tuple[str, dict, str]:
+        """(ran | failed | blocked | skipped | unknown, saved outputs, why)."""
+        if block not in self.memo:
+            saved = _saved(self.run_dir, block)
+            if not saved.get(STALE):
+                status = saved.get(STATUS)
+                kind = {"success": "ran", "failed": "failed", BLOCKED: "blocked", SKIPPED: "skipped"}.get(status, "unknown")
+                why = (f"{block} did not run in run #{self.run_id} (it was not reached, e.g. the run was cancelled "
+                       "or ran another block on its own): run the whole flow instead" if status is None
+                       else f"{block} was {status} in run #{self.run_id}: retry {block} first")
+            else:
+                verdict, why = self.inputs(block)
+                kind = {"ready": "unknown", "blocked": "blocked", "skipped": "skipped", "unknown": "unknown"}[verdict]
+                if verdict == "ready":  # a full run would run it again
+                    why = f"{block} still holds what it made from older data: retry {block} first"
+            self.memo[block] = (kind, saved, why if isinstance(why, str) else "")
+        return self.memo[block]
+
+    def inputs(self, block: str) -> tuple[str, object]:
+        """(ready | skipped, {input: [(edge, saved outputs of its source)] or why it gets nothing}), or
+        (blocked | unknown, why): the runner's rules for whether a block runs."""
+        incoming = [e for e in self.flow.edges if e.dst == block]
+        for edge in incoming:  # nothing downstream of a failure runs; error outputs are the way out
+            kind = self.state(edge.src)[0]
+            if kind in ("failed", BLOCKED) and edge.src_port != ERROR_PORT:
+                return "blocked", (f"{block} would not run: "
+                                   + (f"{edge.src}, before it, failed" if kind == "failed" else "something before it failed"))
+        for edge in incoming:
+            kind, _, why = self.state(edge.src)
+            if kind == "unknown":
+                return "unknown", why
+        in_ports = input_ports(self.flow, self.registry, block)
+        ports, ready, after_failure = {}, True, False
+        for port in dict.fromkeys(e.dst_port for e in incoming):
+            delivered, missing = [], []
+            for edge in (e for e in incoming if e.dst_port == port):
+                kind, saved, _ = self.state(edge.src)
+                if kind in ("ran", "failed") and (edge.src_port in saved or edge.src_port in saved.get(WITHHELD, [])):
+                    delivered.append((edge, saved))
+                else:
+                    missing.append(edge)
+            if not delivered or (missing and not getattr(in_ports.get(port), "any_of", False)):
+                ready = False
+                after_failure |= any(self.state(e.src)[0] in ("failed", BLOCKED) for e in missing)
+                ports[port] = f"nothing reached {block}.{port} in run #{self.run_id}"
+            else:
+                ports[port] = delivered
+        if after_failure:
+            return "blocked", f"{block} would not run: something before it failed"
+        return ("ready" if ready else "skipped"), ports
+
+
+def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict,
+                 texts: dict) -> tuple[dict, dict]:
+    """The inputs for running just `only`: the ones you give, the rest as they reached it in run `run_id`;
+    and the ones you typed (now, or for the inputs it keeps from that run), as you typed them."""
     in_ports = input_ports(flow, registry, only)
     unknown = sorted(set(given) - set(in_ports))
     if unknown:
         raise ValueError(f"{only} has no input named '{unknown[0]}'")
     try:
-        values, missing = block_inputs(flow, registry, home, only, run_id) if run_id is not None else ({}, {})
+        values, missing, typed = (block_inputs(flow, registry, home, only, run_id) if run_id is not None
+                                  else ({}, {}, {}))
     except ValueError as e:
         raise ValueError(f"{e}: run the whole flow instead, or choose its inputs") from None
     if run_id is None and not given and any(e.dst == only and e.dst_port != AFTER for e in flow.edges):
@@ -557,7 +642,8 @@ def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, give
     needed = [name for name, port in in_ports.items() if port.required and name not in values]
     if needed:
         raise ValueError(f"{only}.{needed[0]} needs a value")
-    return values
+    typed = {k: t for k, t in typed.items() if k not in given} | {k: texts[k] for k in given if texts[k].strip()}
+    return values, typed
 
 
 def _table_file(path) -> "pl.DataFrame | pl.LazyFrame":
@@ -641,6 +727,8 @@ def _carry_over(old: Path, new: Path, after_only: set[str]):
             return {"__table__": str(target)}
 
         kept = _map_marks(pickle.loads(kept_file.read_bytes()), relink)
+        if block in after_only and kept_file.name == KEPT_OUTPUTS:
+            kept[STALE] = True  # it made these from what the block that runs now made before
         (new / block).mkdir(parents=True, exist_ok=True)
         (new / block / kept_file.name).write_bytes(pickle.dumps(kept))
 

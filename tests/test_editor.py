@@ -567,6 +567,39 @@ def test_run_a_block_with_inputs_you_choose_from_the_canvas(win, qtbot, tmp_path
     assert tab.scene.nodes["ran"].status == "success"
 
 
+def test_a_table_file_you_typed_is_read_again_when_you_test_again(win, qtbot, tmp_path, monkeypatch):
+    from taskloom.editor import dialogs
+
+    (tmp_path / "d.csv").write_text("a\n1\n2\n")
+    flow = write_flow(tmp_path / "typed.yaml", """
+        blocks:
+          use:
+            type: logic.python
+            config: {inputs: [t], outputs: [], code: "open('got.txt', 'a').write(f'{len(t)} ')"}
+    """)
+    tab = win.open_flow(flow)
+    shown = {}
+
+    def answer(values):
+        def exec_(dialog):
+            shown.update({name: field.text() for name, field in dialog.fields.items()})
+            for name, text in values.items():
+                dialog.fields[name].setText(text)
+            return True
+        return exec_
+
+    monkeypatch.setattr(dialogs.ChooseInputsDialog, "exec", answer({"t": "table('d.csv')"}))
+    win.run_block_with_inputs(tab, "use")
+    qtbot.waitUntil(lambda: len(tab.runs) == 1 and not tab.running and tab.runs[0].status is not None, timeout=60_000)
+    (tmp_path / "d.csv").write_text("a\n1\n2\n3\n")  # you edit the data
+
+    monkeypatch.setattr(dialogs.ChooseInputsDialog, "exec", answer({}))  # and just press Run again
+    win.run_block_with_inputs(tab, "use")
+    qtbot.waitUntil(lambda: len(tab.runs) == 2 and not tab.running and tab.runs[1].status is not None, timeout=60_000)
+
+    assert shown["t"] == "table('d.csv')" and (tmp_path / "got.txt").read_text() == "2 3 "
+
+
 def test_the_canvas_shows_runs_started_elsewhere(win, qtbot, tmp_path):
     import subprocess
 

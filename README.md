@@ -81,13 +81,16 @@ taskloom editor examples/daily-sales-report.yaml
 - **Retry one block after a fix:** right-click it → **Run this block again with the same
   inputs**. Only that block runs, with what reached it in the run on the canvas; the other
   blocks keep their results. (`taskloom run FLOW --only BLOCK --inputs-from RUN`.) Inputs
-  that held a password are never saved, so such a block needs a full run.
+  that held a password are never saved, so such a block needs a full run. After fixing a
+  block and retrying it, retry the blocks after it the same way: they get its new output,
+  by the same rules as a full run (Taskloom says which block to retry first if needed).
 - **Test a block with values you choose:** right-click it → **Run this block with inputs I
   choose…**. Each input is filled in with what reached it in the run on the canvas (empty if
   it did not run); change any of them and press Run. Write values as Python: `42`, `'text'`,
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
-  `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. (`--input NAME=VALUE` with
-  `--only` from a terminal.)
+  `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
+  what you typed and works it out again, so after editing `data.csv` just press Run.
+  (`--input NAME=VALUE` with `--only` from a terminal.)
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
   the values of your variables.

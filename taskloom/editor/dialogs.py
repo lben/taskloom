@@ -551,23 +551,28 @@ def input_text(value) -> str | None:
 class ChooseInputsDialog(QDialog):
     """Values for a block's inputs, to run just that block with them (e.g. to test it)."""
 
-    def __init__(self, block_id: str, names: list[str], values: dict, missing: dict, run_id, parent=None):
+    def __init__(self, block_id: str, names: list[str], values: dict, missing: dict, run_id, parent=None,
+                 typed: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"Run {block_id} with inputs you choose")
         self.resize(560, 0)
-        self.values = values
+        self.values, self.typed = values, typed or {}
         layout = QVBoxLayout(self)
         intro = QLabel("Write each value as Python: <code>42</code>, <code>'text'</code>, <code>[1, 2]</code>, "
                        "<code>{'a': 1}</code>, <code>None</code>; a table: <code>table('data.csv')</code> or "
                        "<code>pl.DataFrame({'a': [1, 2]})</code>. Leave a field empty for no value."
-                       + (f" Filled in: what reached the block in run #{run_id}." if values else ""))
+                       + (f" Filled in: what reached the block in run #{run_id}." if values else "")
+                       + (" What you typed last time is shown as you typed it and worked out again when you "
+                          "press Run (so <code>table('data.csv')</code> reads the file again)." if self.typed else ""))
         intro.setWordWrap(True)
         layout.addWidget(intro)
         form = QFormLayout()
         self.fields: dict[str, QLineEdit] = {}
         for name in names:
             field = QLineEdit()
-            if name in values:
+            if name in self.typed:
+                field.setText(self.typed[name])
+            elif name in values:
                 text = input_text(values[name])
                 if text is None:
                     field.setPlaceholderText(f"empty: the {type(values[name]).__name__} it got in run #{run_id}")
@@ -588,11 +593,12 @@ class ChooseInputsDialog(QDialog):
         layout.addWidget(buttons)
 
     def given(self) -> dict:
-        """{input: Python text} for each input you set; unchanged ones keep what they got in that run."""
+        """{input: Python text} for each input you set, or typed last time (worked out again); the other
+        unchanged ones keep what they got in that run."""
         given = {}
         for name, field in self.fields.items():
             text = field.text()
-            if name not in self.values:
+            if name not in self.values or name in self.typed:
                 given[name] = text  # empty: no value
             elif (shown := input_text(self.values[name])) is None:
                 if text.strip():
