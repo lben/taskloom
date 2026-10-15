@@ -6,8 +6,8 @@ import html
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen
-from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsScene,
-                               QGraphicsView)
+from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem, QGraphicsScene,
+                               QGraphicsTextItem, QGraphicsView, QStyle)
 
 from ..block import AFTER, DONE, all_ports
 from ..flow import ERROR_PORT, BlockSpec, block_config
@@ -106,6 +106,10 @@ class NodeItem(QGraphicsItem):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
         for i, name in enumerate(self.outputs):
             self.ports[(name, True)] = PortItem(self, name, True, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
+        # Over the message at the bottom: hovering it shows all of the message (it is cut to fit).
+        self.footer = QGraphicsRectItem(0, self.height - FOOTER_H, NODE_W, FOOTER_H, self)
+        self.footer.setPen(Qt.NoPen)
+        self.footer.setAcceptedMouseButtons(Qt.NoButton)
         ui = spec.get("ui") or {}
         self.setPos(ui.get("x", 0), ui.get("y", 0))
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
@@ -114,8 +118,10 @@ class NodeItem(QGraphicsItem):
     def boundingRect(self):
         return QRectF(-4, -4, NODE_W + 8, self.height + 8)
 
-    def set_status(self, status: str | None, text: str = ""):
+    def set_status(self, status: str | None, text: str = "", full: str = ""):
         self.status, self.status_text = status, text
+        full = full if len(full) <= 4000 else full[:4000] + "…"
+        self.footer.setToolTip(f"<p style='white-space:pre-wrap'>{html.escape(full)}</p>" if status and full else "")
         self.update()
 
     def paint(self, painter: QPainter, option, widget=None):
@@ -212,14 +218,53 @@ class EdgeItem(QGraphicsPathItem):
         painter.drawPath(self.path())
 
 
+NOTE_STYLES = {"title": 22, "heading": 16, "normal": 11, "small": 9}  # point sizes
+
+
+def note_font(note: dict) -> QFont:
+    """The font of a text on the canvas: its font (any installed one; else the usual), style and emphasis."""
+    font = QFont(note["font"]) if note.get("font") else QFont(QApplication.font())
+    font.setPointSize(NOTE_STYLES.get(note.get("style") or "normal", NOTE_STYLES["normal"]))
+    font.setBold(bool(note.get("bold")) or note.get("style") == "title")
+    font.setItalic(bool(note.get("italic")))
+    font.setUnderline(bool(note.get("underline")))
+    return font
+
+
+class NoteItem(QGraphicsTextItem):
+    """Text on the canvas (a title, a remark): select it to edit it in Properties, drag it to move it."""
+
+    def __init__(self, note_id: str, note: dict):
+        super().__init__(str(note.get("text", "")))
+        self.note_id = note_id
+        self.setFont(note_font(note))
+        self.setDefaultTextColor(QApplication.palette().text().color())
+        self.setPos(note.get("x", 0), note.get("y", 0))
+        self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable)
+        self.setZValue(0)
+        self.setToolTip("Text: select it to change it in Properties; drag it to move it.")
+
+    def paint(self, painter: QPainter, option, widget=None):
+        selected = self.isSelected()
+        option.state &= ~QStyle.State_Selected  # its own outline, below
+        super().paint(painter, option, widget)
+        if selected:
+            painter.setPen(QPen(QApplication.palette().highlight().color(), 1.5, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(self.boundingRect().adjusted(1, 1, -1, -1))
+
+
 class FlowScene(QGraphicsScene):
     block_selected = Signal(object)  # block id or None
+    note_selected = Signal(str)  # a text on the canvas, when it alone is selected
     block_menu = Signal(str, object)  # block id, screen position (right-click on a block)
+    canvas_menu = Signal(object, object)  # scene position, screen position (right-click on empty canvas)
 
     def __init__(self, doc: FlowDocument, registry):
         super().__init__()
         self.doc, self.registry = doc, registry
         self.nodes: dict[str, NodeItem] = {}
+        self.note_items: dict[str, NoteItem] = {}
         self.edge_items: list[EdgeItem] = []
         self.statuses: dict[str, tuple[str, str]] = {}
         self.values: dict[str, dict[str, str]] = {}  # block -> port -> text, from the run on screen
@@ -244,9 +289,15 @@ class FlowScene(QGraphicsScene):
                 QTimer.singleShot(0, self, self._deferred_rebuild)
             return
         selected = set(self.selected_block_ids())
+        selected_notes = set(self.selected_note_ids())
         self._rebuilding = True
         self.clear()
-        self.nodes, self.edge_items = {}, []
+        self.nodes, self.edge_items, self.note_items = {}, [], {}
+        for note_id, note in self.doc.notes.items():
+            item = NoteItem(note_id, note)
+            self.addItem(item)
+            self.note_items[note_id] = item
+            item.setSelected(note_id in selected_notes)
         for block_id, spec in self.doc.blocks.items():
             node = NodeItem(block_id, spec, self.registry)
             self.addItem(node)
@@ -314,13 +365,14 @@ class FlowScene(QGraphicsScene):
             if block_id in (edge.src_port.node.block_id, edge.dst_port.node.block_id):
                 edge.update_path()
 
-    def set_status(self, block_id: str, status: str | None, text: str = ""):
+    def set_status(self, block_id: str, status: str | None, text: str = "", full: str = ""):
+        """A block's result on the canvas: `text` under it (short), `full` when hovering that."""
         if status is None:
             self.statuses.pop(block_id, None)
         else:
-            self.statuses[block_id] = (status, text)
+            self.statuses[block_id] = (status, text, full or text)
         if block_id in self.nodes:
-            self.nodes[block_id].set_status(status, text)
+            self.nodes[block_id].set_status(status, text, full or text)
 
     def clear_statuses(self):
         for block_id in list(self.statuses):
@@ -332,17 +384,22 @@ class FlowScene(QGraphicsScene):
     def selected_block_ids(self) -> list[str]:
         return [i.block_id for i in self.selectedItems() if isinstance(i, NodeItem)]
 
+    def selected_note_ids(self) -> list[str]:
+        return [i.note_id for i in self.selectedItems() if isinstance(i, NoteItem)]
+
     def _on_selection(self):
         if self._rebuilding:
             return
-        ids = self.selected_block_ids()
+        ids, notes = self.selected_block_ids(), self.selected_note_ids()
         self.block_selected.emit(ids[0] if len(ids) == 1 else None)
+        if not ids and len(notes) == 1:
+            self.note_selected.emit(notes[0])
 
     def delete_selected(self):
-        blocks = self.selected_block_ids()
+        blocks, notes = self.selected_block_ids(), self.selected_note_ids()
         edges = [i.text for i in self.selectedItems() if isinstance(i, EdgeItem)]
-        if blocks or edges:
-            self.doc.remove(blocks, edges)
+        if blocks or edges or notes:
+            self.doc.remove(blocks, edges, notes)
 
     # --- connecting ports and moving nodes ---------------------------------------
 
@@ -408,6 +465,13 @@ class FlowScene(QGraphicsScene):
                 moved[block_id] = (node.pos().x(), node.pos().y())
         if moved:
             self.doc.move_blocks(moved)
+        moved_notes = {}
+        for note_id, item in self.note_items.items():
+            note = self.doc.notes.get(note_id, {})
+            if (round(item.pos().x()), round(item.pos().y())) != (note.get("x", 0), note.get("y", 0)):
+                moved_notes[note_id] = (item.pos().x(), item.pos().y())
+        if moved_notes:
+            self.doc.move_notes(moved_notes)
 
     def contextMenuEvent(self, event):
         for item in self.items(event.scenePos()):
@@ -416,6 +480,10 @@ class FlowScene(QGraphicsScene):
                 self.block_menu.emit(node.block_id, event.screenPos())
                 event.accept()
                 return
+        if not self.items(event.scenePos()):
+            self.canvas_menu.emit(event.scenePos(), event.screenPos())
+            event.accept()
+            return
         super().contextMenuEvent(event)
 
     def drawBackground(self, painter: QPainter, rect: QRectF):

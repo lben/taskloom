@@ -164,6 +164,32 @@ def cmd_validate(args, home: Home) -> int:
     return EXIT_OK
 
 
+def cmd_check(args, home: Home) -> int:
+    """What this version can fix in flows (fixed with --fix, after a backup) and what needs you."""
+    from . import upgrade
+
+    registry = discover(home.blocks_dir)
+    paths = [Path(p) for p in args.flows] or home.scheduled_flows()
+    if not paths:
+        print("no flows to check: name them, e.g. taskloom check my-flow.yaml (without names: the scheduled flows)")
+        return EXIT_OK
+    left = False
+    for path in paths:
+        report = upgrade.check(path, registry, home)
+        if report.ok:
+            print(f"{path}: OK")
+            continue
+        print(f"{path}:")
+        for text in report.fixes:
+            print(f"  can fix: {text}")
+        for text in report.problems:
+            print(f"  needs you: {text}")
+        if report.fixes and args.fix:
+            print(f"  fixed (backup: {upgrade.fix(report, home)})")
+        left |= bool(report.problems) or (bool(report.fixes) and not args.fix)
+    return EXIT_INVALID if left else EXIT_OK
+
+
 def cmd_secret_set(args, home: Home) -> int:
     value = getpass.getpass(f"Value for secret '{args.name}': ")
     where = home.set_secret(args.name, value)
@@ -244,6 +270,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
     p.set_defaults(func=cmd_validate)
+    p = sub.add_parser("check", help="find what this version can fix in flows (and fix it with --fix) and what needs you")
+    p.add_argument("flows", nargs="*", help="flow files (default: the scheduled flows)")
+    p.add_argument("--fix", action="store_true", help="fix what can be fixed, after a backup into <Taskloom folder>/backups")
+    p.set_defaults(func=cmd_check)
     p = sub.add_parser("scheduler", help="run scheduled flows (keeps running)")
     p.add_argument("--headless", action="store_true", help="no tray icon; for servers")
     p.add_argument("--at-login", choices=["on", "off"], help="start the scheduler when you log in (Windows)")

@@ -216,7 +216,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         try:
             if only is not None:
                 chosen = f"; inputs you chose: {', '.join(given)}" if given else ""
-                earlier = f", with the inputs it got in run #{inputs_from}" if inputs_from is not None else ""
+                earlier = f", with the inputs it got in {history.label(inputs_from)}" if inputs_from is not None else ""
                 emit({"event": "log", "block": only, "level": "INFO", "message": f"running only {only}{earlier}{chosen}"})
                 if inputs_from is not None:
                     # This run holds everything the run it starts from held (so retrying another block

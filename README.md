@@ -75,9 +75,14 @@ taskloom editor examples/daily-sales-report.yaml
   **Run history** reopens any past run. **Stop** cancels.
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it. Every run's values are kept in **Run history** (double-click a run, then
-  hover) for `history_days` (365 by default). The canvas always shows the newest run of
-  the flow, including scheduled ones, unless you opened an older run from Run history. The
-  Log keeps the messages of the earlier runs above it, each run starting with a bold line.
+  hover) for `history_days` (365 by default). Hover over the message under a block to read
+  all of it. The canvas shows each new run of the flow, including scheduled ones, unless you
+  opened an older run from Run history; a flow you open starts clean, unless it ran since
+  you last saw it (e.g. on schedule). The Log keeps the messages of the earlier runs above
+  it, each run starting with a bold line with its number, date and time.
+- **Text on the canvas:** right-click an empty spot → **Add text here** (or Edit → Add
+  text) for titles and remarks. Select it to write it in Properties, with a style (title,
+  heading, normal, small), bold, italic, underline and any font installed on your computer.
 - **Retry one block after a fix:** right-click it → **Run this block again with the same
   inputs**. Only that block runs, with what reached it in the run on the canvas; the other
   blocks keep their results. (`taskloom run FLOW --only BLOCK --inputs-from RUN`.) Inputs
@@ -208,6 +213,17 @@ On a server without root or crontab, run `taskloom scheduler --headless` there a
 list the server in the `keeper` setting (Tools → Settings) on your PC: your
 scheduler checks it every 5 minutes and starts it again after a server reboot.
 
+## Checking flows after an update
+
+Each version can check your flows for what it can fix and what needs you: **Tools → Check
+flows…** (the open and scheduled flows; it also runs by itself the first time a new
+version starts), or `taskloom check [FLOW…]`. It fixes an older flow format, a block's
+settings saved by an older version of that block, settings a block no longer has,
+connections to blocks, inputs or outputs that no longer exist (e.g. after renaming an
+output) and connections listed twice. **Back up and fix** (or `--fix`) first copies each
+flow into `backups/` in your Taskloom folder. Anything else it finds is listed for you to
+fix.
+
 ## Your files
 
 Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
@@ -224,6 +240,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | `known_hosts` | SSH server keys trusted on first connection |
 | `python-env/` | Your Python environment for Python Code blocks (unless `python_env` points elsewhere) |
 | `recovery/` | Autosaved copies of unsaved flows |
+| `backups/` | Flows as they were before Check flows fixed them |
 | `crash.log` | What happened if the editor ever stopped unexpectedly |
 
 ```yaml

@@ -645,10 +645,10 @@ def test_the_log_keeps_earlier_runs_including_scheduled_ones(win, qtbot, tmp_pat
     win._refresh_statuses()
 
     text = win.log.text.toPlainText()
-    assert text.index("got 1") < text.index("run #2 started") < text.index("got 7") < text.index("got 8")
+    assert text.index("got 1") < text.index("run #2 · ") < text.index("got 7") < text.index("got 8")
     win.log.set_filter("make")  # one block's messages, still split by run
     text = win.log.text.toPlainText()
-    assert "run #3 started" in text and "got 8" in text
+    assert "run #3 · " in text and "got 8" in text
 
 
 def test_python_environment_screen_shows_an_existing_environment(win, tmp_path, monkeypatch, qtbot):
@@ -755,3 +755,134 @@ def test_code_typed_in_one_flow_stays_in_that_flow(win, qtbot):
     assert "code" not in second.doc.blocks["python"].get("config", {})
     for tab in (first, second):
         tab.doc.dirty = False
+
+
+def test_runs_are_named_with_their_date_and_time(win, qtbot, tmp_path):
+    import re
+
+    flow = write_flow(tmp_path / "when.yaml", """
+        blocks:
+          python:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    when = r"run #\d+ · \d{4}-\d\d-\d\d \d\d:\d\d:\d\d"
+
+    assert re.search(when + " started", win.log.text.toPlainText())
+    menu = win._block_menu_for(tab, "python")
+    assert any(re.search(when, a.text()) for a in menu.actions())
+
+
+def test_hovering_a_blocks_message_shows_all_of_it(win, qtbot, tmp_path):
+    long = "this message is much longer than the space under the block " * 3
+    flow = write_flow(tmp_path / "long.yaml", f"""
+        blocks:
+          python:
+            type: logic.python
+            config: {{inputs: [], code: "raise ValueError('{long}')"}}
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    node = tab.scene.nodes["python"]
+
+    assert long.strip() in " ".join(node.footer.toolTip().split())
+    assert node.footer.acceptedMouseButtons() == Qt.NoButton  # clicks still select and move the block
+
+
+def test_opening_a_flow_shows_only_runs_you_have_not_seen(win, tmp_path):
+    import subprocess
+
+    flow = write_flow(tmp_path / "seen.yaml", """
+        blocks:
+          python:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+
+    def run_elsewhere():  # e.g. the scheduler
+        subprocess.run([sys.executable, "-m", "taskloom.cli", "run", str(flow)], env=env, check=True, capture_output=True)
+
+    run_elsewhere()  # before you ever opened it here
+    tab = win.open_flow(flow)
+    assert tab.scene.nodes["python"].status is None  # starts clean
+    win.close_tab(tab)
+
+    run_elsewhere()  # while it was closed
+    tab = win.open_flow(flow)
+    assert tab.scene.nodes["python"].status == "success"
+    win.close_tab(tab)
+
+    tab = win.open_flow(flow)  # nothing new since you saw it
+    assert tab.scene.nodes["python"].status is None
+
+
+def test_text_on_the_canvas(win, tmp_path):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtWidgets import QCheckBox
+
+    from taskloom.flow import load_flow
+
+    flow = write_flow(tmp_path / "noted.yaml", """
+        blocks:
+          python:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    tab = win.open_flow(flow)
+    menu = win._canvas_menu_for(tab, QPointF(40, -80))
+    next(a for a in menu.actions() if a.text() == "Add text here").trigger()
+
+    (note_id,) = tab.doc.notes
+    assert tab.scene.note_items[note_id].isSelected()  # ready to write in Properties
+    editor = win.properties.findChild(CodeEdit)
+    editor.setPlainText("Daily load\nruns at 7:00")
+    editor.editing_finished.emit()
+    next(b for b in win.properties.findChildren(QCheckBox) if b.text() == "Italic").setChecked(True)
+    style = next(c for c in win.properties.findChildren(QComboBox) if c.findData("title") >= 0)
+    style.setCurrentIndex(style.findData("title"))
+    style.activated.emit(style.currentIndex())
+
+    item = tab.scene.note_items[note_id]
+    assert item.toPlainText() == "Daily load\nruns at 7:00" and item.font().italic() and item.font().bold()
+    assert win.save(tab)
+    assert load_flow(flow).blocks  # the flow still loads (and runs): text is only for the editor
+    tab.scene.note_items[note_id].setSelected(True)
+    tab.scene.delete_selected()
+    assert tab.doc.notes == {}
+    tab.doc.undo()
+    assert tab.doc.notes[note_id]["style"] == "title"
+    tab.doc.dirty = False
+
+
+def test_check_flows_backs_up_and_fixes_open_flows(win, tmp_path, monkeypatch):
+    from taskloom.editor import dialogs
+
+    leftover = """
+        blocks:
+          python:
+            type: logic.python
+            config: {inputs: [], outputs: [result], code: "result = 1"}
+          after:
+            type: logic.python
+            config: {code: "pass"}
+        edges:
+          - python.output -> after.after
+    """
+    clean_tab = win.open_flow(write_flow(tmp_path / "saved.yaml", leftover))
+    busy_tab = win.open_flow(write_flow(tmp_path / "busy.yaml", leftover))
+    busy_tab.doc.move_blocks({"python": (10, 10)})  # unsaved changes
+    monkeypatch.setattr(dialogs.CheckFlowsDialog, "exec", lambda self: True)  # Back up and fix
+
+    win.check_flows()
+
+    assert clean_tab.doc.edges() == [] and not clean_tab.doc.dirty
+    assert len(list((win.home.root / "backups").iterdir())) == 1
+    assert "python.output -> after.after" in (tmp_path / "busy.yaml").read_text()  # left for you to save first
+    assert win.message_boxes and "busy.yaml" in win.message_boxes[0][1][1]
+    win.message_boxes.clear()
+    busy_tab.doc.dirty = False

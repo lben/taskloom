@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import signal
 import subprocess
@@ -16,12 +17,13 @@ from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox, QSizePolicy, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 
+from .. import __version__, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..config import Home
 from ..engine import block_inputs, input_ports
 from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
-from ..history import History
+from ..history import History, run_label
 from ..launch import runner_command
 from ..scheduler import acquire_lock
 from ..registry import discover
@@ -51,6 +53,16 @@ def _finished_line(run_id: int, status: str, ts: str) -> dict:
             "header": True}
 
 
+def _seen_key(path) -> str:
+    """Where editor.ini remembers the newest run of a flow you have seen."""
+    return "seen/" + hashlib.sha1(str(path).encode()).hexdigest()[:16]
+
+
+def _started_line(run_id: int, ts: str, params: str = "") -> dict:
+    return {"ts": ts, "level": "INFO", "message": f"{run_label(run_id, ts)} started" + (f" {params}" if params else ""),
+            "header": True}
+
+
 class FlowTab(QWidget):
     """One open flow: its document, canvas, runs and what they reported."""
 
@@ -71,6 +83,7 @@ class FlowTab(QWidget):
         self.shown_run: RunProcess | None = None
         self.shown_run_id: int | None = None  # the run whose results are on the canvas
         self.following_latest = True  # show each new run (incl. scheduled ones) unless an older one was opened
+        self.seen_up_to: int | None = None  # the newest run of this flow you have seen (or skipped) here
         self.last: dict | None = None  # last finished run of this flow, from the history
         self.scheduled = False  # listed for the scheduler
         self.next_run: dt.datetime | None = None  # when the scheduler runs it next
@@ -154,6 +167,44 @@ class MainWindow(QMainWindow):
             self.resizeDocks([self.output], [220], Qt.Vertical)
             self.resizeDocks([self.inspector], [470], Qt.Horizontal)
             QTimer.singleShot(0, self, lambda: self.current and self.current.view.center_on_flow())
+            QTimer.singleShot(0, self, self._check_after_update)
+
+    def _check_after_update(self):
+        """The first time a version starts: check your flows, and offer to fix what it can."""
+        if self.settings.value("checked_version") == __version__:
+            return
+        self.settings.setValue("checked_version", __version__)
+        self.check_flows(intro=f"Taskloom {__version__} checked your open and scheduled flows.", quiet=True)
+
+    def check_flows(self, intro: str = "", quiet: bool = False):
+        """Check the open and scheduled flows; offer to fix (after a backup) what this version can fix."""
+        paths = [t.doc.path for t in self.tabs_list() if t.doc.path is not None]
+        try:
+            paths += self.home.scheduled_flows()
+        except ValueError:
+            pass
+        paths = [p for p in dict.fromkeys(Path(p).resolve() for p in paths) if p.exists()]
+        reports = [upgrade.check(p, self.registry, self.home) for p in paths]
+        if quiet and not any(r.fixes for r in reports):
+            return
+        if not dialogs.CheckFlowsDialog(reports, self, intro).exec():
+            return
+        done, skipped = [], []
+        for report in (r for r in reports if r.fixes):
+            tab = next((t for t in self.tabs_list() if t.doc.path == report.path), None)
+            if tab is not None and tab.doc.dirty:
+                skipped.append(report.path.name)  # it checked the file, not your unsaved changes
+                continue
+            backup = upgrade.fix(report, self.home)
+            done.append(f"{report.path.name} (backup: {backup})")
+            if tab is not None:
+                tab.doc.restore(report.fixed)
+                tab.doc.dirty = False
+                self._on_doc_changed(tab)
+        QMessageBox.information(self, "Check flows",
+                                ("Fixed:\n" + "\n".join(done) if done else "Nothing was fixed.")
+                                + ("\n\nNot fixed, because they have unsaved changes (save them and check again): "
+                                   + ", ".join(skipped) if skipped else ""))
 
     def _dock(self, title, widget, area) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -191,6 +242,7 @@ class MainWindow(QMainWindow):
                        act(m, "Paste", self.paste_blocks, QKeySequence.Paste)):
             action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
             self.tabs.addAction(action)
+        act(m, "Add text", lambda: self.add_text(self.current))
         delete = act(m, "Delete", lambda: self.current and self.current.scene.delete_selected())
         delete.setShortcuts([QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)])
         delete.setShortcutContext(Qt.WidgetWithChildrenShortcut)
@@ -203,6 +255,7 @@ class MainWindow(QMainWindow):
         act(m, "Connections…", self.edit_connections)
         act(m, "Settings…", lambda: SettingsDialog(self.home, self).exec())
         act(m, "Python environment…", lambda: PythonEnvDialog(self.home, self).exec())
+        act(m, "Check flows…", lambda: self.check_flows())
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
@@ -231,6 +284,8 @@ class MainWindow(QMainWindow):
         tab = FlowTab(doc, self.registry)
         tab.scene.block_selected.connect(lambda block_id, t=tab: self._on_block_selected(t, block_id))
         tab.scene.block_menu.connect(lambda block_id, pos, t=tab: self._block_menu(t, block_id, pos))
+        tab.scene.note_selected.connect(lambda note_id, t=tab: self._on_note_selected(t, note_id))
+        tab.scene.canvas_menu.connect(lambda at, pos, t=tab: self._canvas_menu_for(t, at).exec(pos))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
         doc.changed.connect(tab.autosave.start)
         tab.autosave.timeout.connect(lambda t=tab: self._autosave(t))
@@ -358,6 +413,9 @@ class MainWindow(QMainWindow):
         self.parameters.show_doc(tab.doc)
         self.flow_settings.show_doc(tab.doc)
         self._on_block_selected(tab, (tab.scene.selected_block_ids() or [None])[0])
+        notes = tab.scene.selected_note_ids()
+        if not tab.scene.selected_block_ids() and len(notes) == 1:
+            self._on_note_selected(tab, notes[0])
         self.log.set_entries(list(tab.entries))
         self._refresh_history(tab)
         self._update_title()
@@ -493,16 +551,47 @@ class MainWindow(QMainWindow):
         self.flows_panel.update_tab(tab)
         return run
 
-    def _block_menu(self, tab: FlowTab, block_id: str, pos):
+    def _run_label(self, run_id: int) -> str:
+        history = self._history()
+        try:
+            return history.label(run_id)
+        finally:
+            history.close()
+
+    def _canvas_menu_for(self, tab: FlowTab, at) -> QMenu:
         menu = QMenu(self)
-        rerun = menu.addAction(f"Run this block again with the same inputs (run #{tab.shown_run_id})"
+        menu.addAction("Add text here", lambda: self.add_text(tab, at))
+        return menu
+
+    def add_text(self, tab: FlowTab | None, at=None):
+        """Put a text (a title, a remark) on the canvas and select it, to write it in Properties."""
+        if tab is None:
+            return
+        if at is None:
+            at = tab.view.mapToScene(tab.view.viewport().rect().center())
+        note_id = tab.doc.add_note(at.x(), at.y())
+        tab.scene.clearSelection()
+        if note_id in tab.scene.note_items:
+            tab.scene.note_items[note_id].setSelected(True)
+
+    def _on_note_selected(self, tab: FlowTab, note_id: str):
+        if tab is self.current:
+            self.properties.show_note(tab.doc, note_id)
+            self.right_tabs.setCurrentWidget(self.properties)
+
+    def _block_menu(self, tab: FlowTab, block_id: str, pos):
+        self._block_menu_for(tab, block_id).exec(pos)
+
+    def _block_menu_for(self, tab: FlowTab, block_id: str) -> QMenu:
+        menu = QMenu(self)
+        rerun = menu.addAction(f"Run this block again with the same inputs ({self._run_label(tab.shown_run_id)})"
                                if tab.shown_run_id else "Run this block again with the same inputs")
         rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
         rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
         choose = menu.addAction("Run this block with inputs I choose…")
         choose.setEnabled(not tab.running)
         choose.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id))
-        menu.exec(pos)
+        return menu
 
     def _show_run(self, tab: FlowTab, run: RunProcess | None, keep_log=False):
         """Put a run on the canvas. Its Log follows the earlier runs' messages (keep_log), or replaces them."""
@@ -540,7 +629,8 @@ class MainWindow(QMainWindow):
                 values, missing, typed = block_inputs(flow, self.registry, self.home, block_id, run_id)
             except Exception:  # e.g. that run's files were cleaned up: start from nothing
                 run_id = None
-        dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing, run_id, self, typed)
+        dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing,
+                                            self._run_label(run_id) if run_id is not None else None, self, typed)
         if not dialog.exec():
             return
         args = ["--only", block_id]
@@ -580,9 +670,9 @@ class MainWindow(QMainWindow):
         block = e.get("block")
         if kind == "run_started":
             tab.shown_run_id, tab.following_latest = e["run_id"], True
+            self._mark_seen(tab, e["run_id"])
             params = " ".join(f"{k}={v}" for k, v in e.get("params", {}).items())
-            self._log(tab, {"ts": e["ts"], "level": "INFO", "message": f"run #{e['run_id']} started {params}",
-                            "header": True})
+            self._log(tab, _started_line(e["run_id"], e["ts"], params))
         elif kind == "block_started":
             tab.block_info[block] = {"status": "running"}
             text = "running" if e["attempt"] == 1 else f"running · attempt {e['attempt']}"
@@ -606,13 +696,14 @@ class MainWindow(QMainWindow):
             values["error"] = info["error"]
         tab.scene.set_values(block, values)
         attempts = info.get("attempts") or 0
+        retried = f" · retried {attempts - 1}×" if attempts > 1 else ""
         if status == "success":
-            text = "✓ " + _short(info.get("summary") or "done", 48) + (f" · retried {attempts - 1}×" if attempts > 1 else "")
+            text, full = "✓ " + _short(info.get("summary") or "done", 48) + retried, (info.get("summary") or "done") + retried
         elif status == "failed":
-            text = "✕ " + _short(info.get("error") or "failed", 48)
+            text, full = "✕ " + _short(info.get("error") or "failed", 48), info.get("error") or "failed"
         else:
-            text = status
-        tab.scene.set_status(block, status, text)
+            text = full = status
+        tab.scene.set_status(block, status, text, full)
         if tab is self.current and block in tab.scene.selected_block_ids():
             self.preview.show_outputs(block, tab.block_info[block])
 
@@ -649,11 +740,21 @@ class MainWindow(QMainWindow):
         tab.last = runs[0] if runs else None
         self.flows_panel.update_tab(tab)
         if tab.following_latest and not tab.running and runs:
-            # Just opened: the newest run. Afterwards: each new one (e.g. started by the scheduler), oldest
-            # first, its messages after the ones already shown.
-            new = runs[:1] if tab.shown_run_id is None else [r for r in runs if r["id"] > tab.shown_run_id]
-            for r in reversed(new):
+            # Each run you have not seen yet (e.g. started by the scheduler, also while this flow was closed),
+            # oldest first, its messages after the ones already shown. Runs you saw before start nothing:
+            # a flow opens clean.
+            if tab.seen_up_to is None:
+                stored = self.settings.value(_seen_key(tab.doc.path))
+                tab.seen_up_to = int(stored) if stored is not None else runs[0]["id"]
+                self._mark_seen(tab, tab.seen_up_to)
+            for r in reversed([r for r in runs if r["id"] > tab.seen_up_to]):
                 self.show_history_run(r["id"], tab, keep_log=True)
+
+    def _mark_seen(self, tab: FlowTab, run_id: int):
+        tab.seen_up_to = max(tab.seen_up_to or 0, run_id)
+        if tab.doc.path is not None:
+            key = _seen_key(tab.doc.path)
+            self.settings.setValue(key, max(int(self.settings.value(key) or 0), run_id))
 
     def _refresh_statuses(self):
         for tab in self.tabs_list():
@@ -758,16 +859,17 @@ class MainWindow(QMainWindow):
         history.close()
         self._show_run(tab, None, keep_log)
         tab.shown_run_id = run_id
+        self._mark_seen(tab, run_id)
         tab.following_latest = tab.last is None or run_id >= tab.last["id"]
         for block, info in blocks.items():
             self._apply_block_result(tab, block, info)
         if run:
-            logs = [{"ts": run["started"], "level": "INFO", "message": f"run #{run_id} started", "header": True},
+            logs = [_started_line(run_id, run["started"]),
                     *logs, _finished_line(run_id, run["status"], run["finished"] or run["started"])]
         tab.entries += logs
         if tab is self.current:
             self.log.set_entries(list(tab.entries))
-            self.statusBar().showMessage(f"Showing run #{run_id}", 5000)
+            self.statusBar().showMessage(f"Showing {run_label(run_id, run['started'] if run else None)}", 5000)
 
     def closeEvent(self, event):
         running = [r for t in self.tabs_list() for r in t.runs if r.running]

@@ -297,23 +297,34 @@ class PropertiesPanel(QScrollArea):
         super().__init__()
         self.home = home
         self.setWidgetResizable(True)
-        self.doc = self.registry = self.block_id = None
+        self.doc = self.registry = self.block_id = self.note_id = None
         self._committing = False
         self.refresh()
 
-    def show_block(self, doc, registry, block_id):
-        # A field being edited saves when it loses focus: let it, while this still shows its block
-        # (the next flow can have a block with the same name).
+    def _finish_editing(self):
+        # A field being edited saves when it loses focus: let it, while this still shows what it belongs
+        # to (the next flow can have a block with the same name).
         focused = QApplication.focusWidget()
         if focused is not None and self.isAncestorOf(focused):
             focused.clearFocus()
-        self.doc, self.registry, self.block_id = doc, registry, block_id
+
+    def show_block(self, doc, registry, block_id):
+        self._finish_editing()
+        self.doc, self.registry, self.block_id, self.note_id = doc, registry, block_id, None
+        self.refresh()
+
+    def show_note(self, doc, note_id):
+        """A text on the canvas: its text, style, emphasis and font."""
+        self._finish_editing()
+        self.doc, self.block_id, self.note_id = doc, None, note_id
         self.refresh()
 
     def on_doc_changed(self):
         if not self._committing:
             if self.doc is not None and self.block_id not in self.doc.blocks:
                 self.block_id = None
+            if self.doc is not None and self.note_id not in self.doc.notes:
+                self.note_id = None
             self.refresh()
 
     def _commit(self, fn):
@@ -341,6 +352,9 @@ class PropertiesPanel(QScrollArea):
             self.takeWidget()
             old.deleteLater()  # not now: refresh may run inside a click on one of its buttons
         self.setWidget(body)
+        if self.doc is not None and self.note_id is not None:
+            self._note_form(layout)
+            return
         if self.doc is None or self.block_id is None:
             hint = QLabel("Select a block to see its properties.\n\nDrag blocks from the tree on the left, "
                           "or double-click them. Connect an output (right side) to an input (left side) by dragging.")
@@ -555,6 +569,44 @@ class PropertiesPanel(QScrollArea):
             edit.editingFinished.connect(lambda: self._commit(commit_retry))
         timeout.editingFinished.connect(lambda: self._commit(commit_timeout))
         return box
+
+    def _note_form(self, layout):
+        note = self.doc.notes[self.note_id]
+        layout.addWidget(QLabel("<b>Text</b><br><span style='color: gray'>on the canvas, for titles and remarks; "
+                                "it does not run</span>"))
+        self.error = QLabel()
+        self.error.hide()
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        text = CodeEdit(str(note.get("text", "")))
+        text.setFont(QApplication.font())
+        text.editing_finished.connect(lambda: text.toPlainText().strip() and self._set_note("text", text.toPlainText()))
+        form.addRow("Text", text)
+        style = QComboBox()
+        for name in ("title", "heading", "normal", "small"):
+            style.addItem(name.capitalize(), name)
+        style.setCurrentIndex(style.findData(note.get("style") or "normal"))
+        style.activated.connect(lambda _: self._set_note("style", None if style.currentData() == "normal"
+                                                          else style.currentData()))
+        form.addRow("Style", style)
+        for key in ("bold", "italic", "underline"):
+            box = QCheckBox(key.capitalize())
+            box.setChecked(bool(note.get(key)))
+            box.toggled.connect(lambda checked, k=key: self._set_note(k, checked))
+            form.addRow("", box)
+        font = QComboBox()
+        font.addItem("(the usual font)", "")
+        for family in QFontDatabase.families():  # the fonts installed on this computer
+            font.addItem(family, family)
+        font.setCurrentIndex(max(font.findData(note.get("font") or ""), 0))
+        font.activated.connect(lambda _: self._set_note("font", font.currentData() or None))
+        form.addRow("Font", font)
+        layout.addLayout(form)
+
+    def _set_note(self, key, value):
+        if self.doc is None or self.note_id not in self.doc.notes:
+            return
+        self._commit(lambda: self.doc.set_note_value(self.note_id, key, value))
 
     def _show_problems(self):
         spec = self.doc.blocks.get(self.block_id)

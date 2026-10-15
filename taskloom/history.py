@@ -27,6 +27,11 @@ CREATE INDEX IF NOT EXISTS logs_run ON logs (run_id, block);
 """
 
 
+def run_label(run_id: int, started: str | None) -> str:
+    """'run #12 · 2026-10-15 14:03:22': a run's number and when it started."""
+    return f"run #{run_id}" + (f" · {started.replace('T', ' ')[:19]}" if started else "")
+
+
 def connect(path: Path) -> sqlite3.Connection:
     """Several runs, the scheduler and the editor share one history file: wait for your turn
     (up to 30 s) instead of failing with "database is locked"."""
@@ -102,6 +107,11 @@ class History:
             sql, args = sql + " WHERE flow_path=?", [flow_path]
         rows = self._exec(sql + " ORDER BY id DESC LIMIT ?", args + [limit])
         return [dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), r)) for r in rows]
+
+    def label(self, run_id: int) -> str:
+        """'run #12 · 2026-10-15 14:03:22' (when it started), or 'run #12' if it is not known."""
+        run = self.run(run_id)
+        return run_label(run_id, run["started"] if run else None)
 
     def run(self, run_id: int) -> dict | None:
         row = self._exec("SELECT id, flow, flow_path, params, status, started, finished FROM runs WHERE id=?", (run_id,)).fetchone()

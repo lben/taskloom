@@ -19,7 +19,7 @@ from .schedule import Trigger
 
 FORMAT_VERSION = 1
 FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone", "triggers", "overlap", "notify",
-             "blocks", "edges"}
+             "blocks", "edges", "notes"}  # notes: text on the canvas; only the editor uses them
 OVERLAP_POLICIES = ("skip", "queue", "allow")
 BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui"}
 ERROR_PORT = "error"
@@ -126,6 +126,11 @@ def load_flow(path) -> Flow:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as e:
         raise FlowError([f"cannot read {path}: {e}"]) from None
+    return flow_from_data(data, path)
+
+
+def flow_from_data(data, path: Path) -> Flow:
+    """A flow from what its file holds (`path`: where it is, for its default name)."""
     if not isinstance(data, dict):
         raise FlowError([f"{path}: expected a mapping at the top level"])
     errors = []

@@ -540,6 +540,35 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
+class CheckFlowsDialog(QDialog):
+    """What this version can fix in your flows, and what needs you; Back up and fix does the first."""
+
+    def __init__(self, reports: list, parent=None, intro: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Check flows")
+        self.resize(760, 480)
+        layout = QVBoxLayout(self)
+        fixable = [r for r in reports if r.fixes]
+        text = QLabel((intro + " " if intro else "")
+                      + (f"{len(fixable)} flow(s) can be fixed. <b>Back up and fix</b> copies each into the "
+                         "backups folder of your Taskloom folder first." if fixable else "Nothing to fix."))
+        text.setWordWrap(True)
+        layout.addWidget(text)
+        self.details = QPlainTextEdit(readOnly=True)
+        lines = []
+        for r in reports:
+            lines.append(f"{r.path}: " + ("OK" if r.ok else ""))
+            lines += [f"    can fix: {t}" for t in r.fixes] + [f"    needs you: {t}" for t in r.problems]
+        self.details.setPlainText("\n".join(lines) or "No flows to check: open some, or schedule them.")
+        layout.addWidget(self.details, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        if fixable:
+            buttons.addButton("Back up and fix", QDialogButtonBox.AcceptRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 def input_text(value) -> str | None:
     """A value as Python you can edit, or None when it is too big or cannot be written that way."""
     if isinstance(value, Table):
@@ -551,7 +580,7 @@ def input_text(value) -> str | None:
 class ChooseInputsDialog(QDialog):
     """Values for a block's inputs, to run just that block with them (e.g. to test it)."""
 
-    def __init__(self, block_id: str, names: list[str], values: dict, missing: dict, run_id, parent=None,
+    def __init__(self, block_id: str, names: list[str], values: dict, missing: dict, run, parent=None,
                  typed: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"Run {block_id} with inputs you choose")
@@ -561,7 +590,7 @@ class ChooseInputsDialog(QDialog):
         intro = QLabel("Write each value as Python: <code>42</code>, <code>'text'</code>, <code>[1, 2]</code>, "
                        "<code>{'a': 1}</code>, <code>None</code>; a table: <code>table('data.csv')</code> or "
                        "<code>pl.DataFrame({'a': [1, 2]})</code>. Leave a field empty for no value."
-                       + (f" Filled in: what reached the block in run #{run_id}." if values else "")
+                       + (f" Filled in: what reached the block in {run}." if values else "")
                        + (" What you typed last time is shown as you typed it and worked out again when you "
                           "press Run (so <code>table('data.csv')</code> reads the file again)." if self.typed else ""))
         intro.setWordWrap(True)
@@ -575,7 +604,7 @@ class ChooseInputsDialog(QDialog):
             elif name in values:
                 text = input_text(values[name])
                 if text is None:
-                    field.setPlaceholderText(f"empty: the {type(values[name]).__name__} it got in run #{run_id}")
+                    field.setPlaceholderText(f"empty: the {type(values[name]).__name__} it got in {run}")
                 else:
                     field.setText(text)
             elif name in missing:

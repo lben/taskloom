@@ -113,6 +113,41 @@ class FlowDocument(QObject):
 
     # --- editing -----------------------------------------------------------------
 
+    # --- text on the canvas ---------------------------------------------------------------
+
+    @property
+    def notes(self) -> dict:
+        """Text on the canvas: note id -> {text, x, y, and optionally style, bold, italic, underline, font}."""
+        return self.data.get("notes") or {}
+
+    def add_note(self, x: float, y: float, text: str = "Text") -> str:
+        self._change()
+        notes = self.data.setdefault("notes", {})
+        n = 1
+        while f"note_{n}" in notes:
+            n += 1
+        notes[f"note_{n}"] = {"text": text, "x": round(x), "y": round(y)}
+        self._done()
+        return f"note_{n}"
+
+    def set_note_value(self, note_id: str, key: str, value):
+        """None, "" or False removes the key (its default applies: normal style, the usual font)."""
+        note = self.notes[note_id]
+        if note.get(key) == value or (value in (None, "", False) and key not in note):
+            return
+        self._change()
+        if value in (None, "", False):
+            note.pop(key, None)
+        else:
+            note[key] = value
+        self._done()
+
+    def move_notes(self, positions: dict):
+        self._change()
+        for note_id, (x, y) in positions.items():
+            self.notes[note_id].update(x=round(x), y=round(y))
+        self._done()
+
     def new_block_id(self, type_id: str) -> str:
         base = re.sub(r"\W", "_", type_id.split(".")[-1]) or "block"
         if not IDENTIFIER.match(base):
@@ -147,10 +182,14 @@ class FlowDocument(QObject):
         self._done()
         return list(renamed.values())
 
-    def remove(self, block_ids=(), edges=()):
+    def remove(self, block_ids=(), edges=(), notes=()):
         self._change()
         for block_id in block_ids:
             self.blocks.pop(block_id, None)
+        for note_id in notes:
+            self.notes.pop(note_id, None)
+        if "notes" in self.data and not self.data["notes"]:
+            del self.data["notes"]
         gone = set(block_ids)
         drop = {parse_edge(t) for t in edges}  # compare parsed, so spacing in the file doesn't matter
         self.data["edges"] = [t for t in self.data["edges"]
