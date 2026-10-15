@@ -186,8 +186,11 @@ class MainWindow(QMainWindow):
         act(m, "Undo", lambda: self.current and self.current.doc.undo(), QKeySequence.Undo)
         act(m, "Redo", lambda: self.current and self.current.doc.redo(), QKeySequence.Redo)
         m.addSeparator()
-        act(m, "Copy", self.copy_blocks, QKeySequence.Copy)
-        act(m, "Paste", self.paste_blocks, QKeySequence.Paste)
+        # Only on the canvas: elsewhere (the Log, text fields) Ctrl+C and Ctrl+V copy and paste text.
+        for action in (act(m, "Copy", self.copy_blocks, QKeySequence.Copy),
+                       act(m, "Paste", self.paste_blocks, QKeySequence.Paste)):
+            action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            self.tabs.addAction(action)
         delete = act(m, "Delete", lambda: self.current and self.current.scene.delete_selected())
         delete.setShortcuts([QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)])
         delete.setShortcutContext(Qt.WidgetWithChildrenShortcut)

@@ -210,6 +210,34 @@ class FlowDocument(QObject):
             target[key] = value
         self._done()
 
+    def set_port_names(self, block_id: str, key: str, value, old: list, new: list, outputs: bool):
+        """Set a list of a block's input or output names (e.g. a Python Code block's outputs) and
+        update their connections: a renamed one (another name in the same place) keeps them, a
+        removed one loses them. `old` and `new` are the names in effect before and after."""
+        renamed = ({o: n for o, n in zip(old, new) if o != n and o not in new and n not in old}
+                   if len(old) == len(new) else {})
+        removed = set(old) - set(new) - set(renamed)
+        self._change()
+        spec = self.blocks[block_id].setdefault("config", {})
+        if value in (None, ""):
+            spec.pop(key, None)
+        else:
+            spec[key] = value
+        edges = []
+        for text in self.data["edges"]:
+            e = parse_edge(text)
+            if e:
+                src, sp, dst, dp = e
+                block, port = (src, sp) if outputs else (dst, dp)
+                if block == block_id and port in removed:
+                    continue
+                if block == block_id and port in renamed:
+                    sp, dp = (renamed[sp], dp) if outputs else (sp, renamed[dp])
+                    text = edge_text(src, sp, dst, dp)
+            edges.append(text)
+        self.data["edges"] = edges
+        self._done()
+
     def set_flow_value(self, key: str, value):
         if self.data.get(key) == value or (value in (None, "") and key not in self.data):
             return

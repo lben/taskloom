@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QVBoxLayout, QWidget)
 
 from .. import params as P
-from ..block import IDENTIFIER, fields
+from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields
 from ..calendars import load_calendar
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
@@ -302,6 +302,11 @@ class PropertiesPanel(QScrollArea):
         self.refresh()
 
     def show_block(self, doc, registry, block_id):
+        # A field being edited saves when it loses focus: let it, while this still shows its block
+        # (the next flow can have a block with the same name).
+        focused = QApplication.focusWidget()
+        if focused is not None and self.isAncestorOf(focused):
+            focused.clearFocus()
         self.doc, self.registry, self.block_id = doc, registry, block_id
         self.refresh()
 
@@ -327,11 +332,13 @@ class PropertiesPanel(QScrollArea):
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setAlignment(Qt.AlignTop)
-        old = self.takeWidget()
+        old = self.widget()
         if old is not None:
-            # Its fields may still report an edit (e.g. losing focus): it no longer belongs to any block.
+            # Its fields may still report an edit (e.g. losing focus, which taking it out causes): it no
+            # longer belongs to any block, and self.doc may already be another flow's.
             for child in old.findChildren(QWidget):
                 child.blockSignals(True)
+            self.takeWidget()
             old.deleteLater()  # not now: refresh may run inside a click on one of its buttons
         self.setWidget(body)
         if self.doc is None or self.block_id is None:
@@ -389,6 +396,18 @@ class PropertiesPanel(QScrollArea):
             self.block_id = old
             raise
 
+    def _set_names(self, key, f, value):
+        """A list of input or output names: renaming or removing one updates its connections too."""
+        if self.doc is None or self.block_id not in self.doc.blocks:
+            return
+        old = self.doc.blocks[self.block_id].get("config", {}).get(key)
+        old, new = (old if old is not None else f.default or []), (value if value is not None else f.default or [])
+        if old == new:
+            return self._set(key, value)
+        f.coerce(new)  # a bad name is reported before anything changes
+        outputs = f.reserved == RESERVED_OUTPUTS
+        self._commit(lambda: self.doc.set_port_names(self.block_id, key, value, list(old), list(new), outputs))
+
     def _set(self, key, value, section="config"):
         if self.doc is None or self.block_id not in self.doc.blocks:
             return  # the block was deleted while its field was being edited
@@ -431,7 +450,10 @@ class PropertiesPanel(QScrollArea):
 
         def commit():
             try:
-                self._set(key, convert(w.text()))
+                if isinstance(f, fields.Names):
+                    self._set_names(key, f, convert(w.text()))
+                else:
+                    self._set(key, convert(w.text()))
             except ValueError as e:
                 self.error.setText(f"{key}: {e}")
                 self.error.show()

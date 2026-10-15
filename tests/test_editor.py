@@ -671,3 +671,87 @@ def test_python_environment_screen_shows_an_existing_environment(win, tmp_path, 
     reopened = PythonEnvDialog(win.home, win)
     qtbot.waitUntil(lambda: reopened.proc is None, timeout=120_000)
     assert str(existing) in reopened.status.text() and "pip" in reopened.output.toPlainText()
+
+
+def test_text_in_the_log_can_be_copied(win, qtbot):
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    win.bottom_tabs.setCurrentWidget(win.log)
+    win.log.set_entries([{"ts": "2026-10-15T09:00:00", "level": "INFO", "message": "copy me"}])
+    QApplication.clipboard().setText("")
+    win.log.text.setFocus()
+    win.log.text.selectAll()
+
+    QTest.keyClick(win.log.text, Qt.Key_C, Qt.ControlModifier)
+
+    assert "copy me" in QApplication.clipboard().text()
+
+
+def test_ctrl_c_and_ctrl_v_on_the_canvas_copy_and_paste_blocks(win, qtbot):
+    from PySide6.QtTest import QTest
+
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    tab = win.new_flow()
+    block = tab.doc.add_block("logic.python", 0, 0)
+    tab.scene.nodes[block].setSelected(True)
+    tab.view.setFocus()
+
+    QTest.keyClick(tab.view, Qt.Key_C, Qt.ControlModifier)
+    QTest.keyClick(tab.view, Qt.Key_V, Qt.ControlModifier)
+
+    assert len(tab.doc.blocks) == 2
+    tab.doc.dirty = False
+
+
+def test_renaming_an_input_or_output_keeps_its_connections(win):
+    from PySide6.QtWidgets import QLineEdit
+
+    tab = win.new_flow()
+    p = tab.doc.add_block("logic.python", 0, 0)
+    q = tab.doc.add_block("logic.python", 300, 0)
+    tab.doc.connect(p, "output", q, "input")
+    tab.doc.connect(p, "output", q, "after", many=True)
+
+    def set_names(block, current, text):
+        tab.scene.clearSelection()
+        tab.scene.nodes[block].setSelected(True)
+        field = next(e for e in win.properties.findChildren(QLineEdit) if current in (e.text(), e.placeholderText()))
+        field.setText(text)
+        field.editingFinished.emit()
+
+    set_names(p, "output", "result")
+    set_names(q, "input", "data")
+    assert sorted(tab.doc.edges()) == [(p, "result", q, "after"), (p, "result", q, "data")]
+
+    set_names(p, "result", "other, more")  # result is gone: so are its connections
+    assert tab.doc.edges() == []
+    tab.doc.dirty = False
+
+
+def test_code_typed_in_one_flow_stays_in_that_flow(win, qtbot):
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    first, second = win.new_flow(), win.new_flow()
+    for tab in (first, second):
+        assert tab.doc.add_block("logic.python", 0, 0) == "python"  # the same name in both flows
+    win.tabs.setCurrentWidget(first)
+    first.scene.nodes["python"].setSelected(True)
+    editor = win.properties.findChild(CodeEdit)
+    editor.setFocus()
+    qtbot.waitUntil(editor.hasFocus)  # as when you are typing in it
+    editor.setPlainText("output = 'first'")
+
+    win.tabs.setCurrentWidget(second)  # without leaving the code box first
+    second.scene.nodes["python"].setSelected(True)
+
+    assert first.doc.blocks["python"]["config"].get("code") == "output = 'first'"
+    assert "code" not in second.doc.blocks["python"].get("config", {})
+    for tab in (first, second):
+        tab.doc.dirty = False
