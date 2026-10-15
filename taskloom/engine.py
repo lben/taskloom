@@ -213,6 +213,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
             emit({"event": "log", "level": "WARNING", "message": message})
         runner = _Runner(flow, registry, home, values, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
         runner.fired = _fired_triggers(flow, registry, trigger)
+        runner.taking_part = _taking_part(flow, registry, runner.fired)
         try:
             if only is not None:
                 chosen = f"; inputs you chose: {', '.join(given)}" if given else ""
@@ -251,6 +252,7 @@ class _Runner:
     only: str | None = None  # run just this block, with only_inputs
     only_inputs: dict = {}
     only_typed: dict = {}  # the ones you typed, as you typed them
+    taking_part: set | None = None  # the blocks this run takes part in (None: all of them)
 
     def run(self) -> str:
         unhandled_failure = False
@@ -259,6 +261,11 @@ class _Runner:
             if cls is not None and cls.is_trigger and block_id not in self.fired:
                 self._keep_outputs(block_id, {}, status=SKIPPED)
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
+                continue
+            if self.only is None and self.taking_part is not None and block_id not in self.taking_part:
+                self._keep_outputs(block_id, {}, status=SKIPPED)
+                self.emit({"event": "block_finished", "block": block_id, "status": "skipped",
+                           "summary": "not connected to the start of this run"})
                 continue
             if self.cancel.is_set():
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
@@ -274,7 +281,10 @@ class _Runner:
                 self.blocked.add(block_id)
             for port, value in produced.items():
                 self.outputs[(block_id, port)] = value
-            handled = any(e.src == block_id and e.src_port == ERROR_PORT for e in self.flow.edges)
+            # Handled: an error handler of it runs next (not in a run of just this block).
+            handled = self.only is None and any(
+                e.src == block_id and e.src_port == ERROR_PORT
+                and (self.taking_part is None or e.dst in self.taking_part) for e in self.flow.edges)
             if status == "failed" and not handled:
                 unhandled_failure = True
         if self.cancel.is_set():
@@ -289,10 +299,11 @@ class _Runner:
         if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
             self.blocked.add(block_id)
             self._keep_outputs(block_id, {}, status=BLOCKED)
-            self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
+            self.emit({"event": "block_finished", "block": block_id, "status": "skipped",
+                       "summary": "something before it failed"})
             return None
         in_ports = self._input_ports(self.flow.blocks[block_id])
-        inputs, ready, after_failure = {}, True, False
+        inputs, ready, after_failure, empty = {}, True, False, []
         for name in dict.fromkeys(e.dst_port for e in incoming):
             port = in_ports.get(name)
             edges = [e for e in incoming if e.dst_port == name]
@@ -303,6 +314,7 @@ class _Runner:
             if not delivered or (missing and not getattr(port, "any_of", False)):
                 ready = False
                 after_failure |= any(e.src in self.blocked for e in missing)
+                empty.append(name)
                 continue
             # Several edges into one input give a list (in edge order), one edge gives the value.
             inputs[name] = delivered if getattr(port, "many", False) or len(edges) > 1 else delivered[0]
@@ -310,7 +322,9 @@ class _Runner:
             if after_failure:  # it did not get its input because something before it failed
                 self.blocked.add(block_id)
             self._keep_outputs(block_id, {}, status=BLOCKED if after_failure else SKIPPED)
-            self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
+            why = "something before it failed" if after_failure else (
+                "nothing reached its run-after" if empty[0] == AFTER else f"nothing reached its '{empty[0]}' input")
+            self.emit({"event": "block_finished", "block": block_id, "status": "skipped", "summary": why})
             return None
         return inputs
 
@@ -731,6 +745,41 @@ def _carry_over(old: Path, new: Path, after_only: set[str]):
             kept[STALE] = True  # it made these from what the block that runs now made before
         (new / block).mkdir(parents=True, exist_ok=True)
         (new / block / kept_file.name).write_bytes(pickle.dumps(kept))
+
+
+def _taking_part(flow: Flow, registry, fired: set[str]) -> set[str] | None:
+    """The blocks a run takes part in. In a flow with start blocks: the blocks after the ones that started
+    it; the blocks whose data those need (e.g. a query feeding one of them; not through an error or a
+    run-after connection); and the error handlers of all of these, with what comes after them. A block
+    connected to no start block takes no part: that is how to switch it off.
+    None: a flow without start blocks runs all its blocks."""
+    if not any((cls := registry.get(spec.type)) is not None and cls.is_trigger for spec in flow.blocks.values()):
+        return None
+    part: set[str] = set()
+
+    def with_what_follows(blocks):
+        todo = [b for b in blocks if b not in part]
+        part.update(todo)
+        while todo:
+            block = todo.pop()
+            for edge in flow.edges:
+                if edge.src == block and edge.dst not in part:
+                    part.add(edge.dst)
+                    todo.append(edge.dst)
+
+    with_what_follows(fired)
+    grown = True
+    while grown:
+        grown = False
+        for edge in flow.edges:
+            data = edge.src_port not in (ERROR_PORT, DONE) and edge.dst_port != AFTER
+            if data and edge.dst in part and edge.src not in part:  # its data is needed
+                part.add(edge.src)
+                grown = True
+            elif edge.src_port == ERROR_PORT and edge.src in part and edge.dst not in part:  # its error handler
+                with_what_follows([edge.dst])
+                grown = True
+    return part
 
 
 def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:

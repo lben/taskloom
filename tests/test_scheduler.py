@@ -151,3 +151,29 @@ def test_cli_as_of_computes_parameters_for_that_time(env):
     assert result.returncode == 0, result.stderr
     assert env.query("SELECT params FROM runs") == [('{"day": "2026-01-02"}',)]
 
+
+
+@pytest.mark.parametrize("plan,cron,words", [
+    ({"kind": "minutes", "every": 5}, "*/5 * * * *", "Every 5 minutes"),
+    ({"kind": "minutes", "every": 1}, "* * * * *", "Every minute"),
+    ({"kind": "hourly", "minute": 15}, "15 * * * *", "Every hour at :15"),
+    ({"kind": "daily", "hour": 7, "minute": 0}, "0 7 * * *", "Every day at 07:00"),
+    ({"kind": "weekdays", "hour": 7, "minute": 30}, "30 7 * * MON-FRI", "Monday to Friday at 07:30"),
+    ({"kind": "weekly", "days": [1, 3, 5], "hour": 18, "minute": 5}, "5 18 * * MON,WED,FRI", "Mon, Wed, Fri at 18:05"),
+    ({"kind": "weekly", "days": [0], "hour": 9, "minute": 0}, "0 9 * * SUN", "Sun at 09:00"),
+    ({"kind": "monthly", "day": 1, "hour": 6, "minute": 0}, "0 6 1 * *", "Day 1 of every month at 06:00"),
+])
+def test_schedule_plans_turn_into_cron_and_back(plan, cron, words):
+    from taskloom.schedule import cron_plan, describe_cron, plan_cron
+
+    assert plan_cron(plan) == cron
+    assert cron_plan(cron) == plan
+    assert describe_cron(cron) == words
+
+
+def test_a_cron_line_no_plan_covers_is_custom():
+    from taskloom.schedule import cron_plan, describe_cron
+
+    assert cron_plan("0 7-17/2 * * MON-FRI") is None
+    assert describe_cron("0 7-17/2 * * MON-FRI") == "Custom: 0 7-17/2 * * MON-FRI"
+    assert cron_plan("0 7 * * 1-5") == {"kind": "weekdays", "hour": 7, "minute": 0}  # numbers read too

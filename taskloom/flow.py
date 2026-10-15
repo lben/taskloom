@@ -328,12 +328,21 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
         for name, port in inputs.items():
             if port.required and (block_id, name) not in connected:
                 errors.append(f"blocks.{block_id}: required input '{name}' is not connected")
+    warnings += unconnected_starts(flow, registry)
     if not errors:
         try:
             order(flow)
         except FlowError as e:
             errors += e.errors
     return errors, warnings
+
+
+def unconnected_starts(flow: Flow, registry) -> list[str]:
+    """Start blocks connected to nothing: when one starts the flow, nothing runs."""
+    return [f"{block_id} is not connected to anything: nothing runs when it starts the flow (connect its "
+            "start to the first block)" for block_id, spec in flow.blocks.items()
+            if (cls := registry.get(spec.type)) is not None and cls.is_trigger
+            and not any(e.src == block_id for e in flow.edges)]
 
 
 def order(flow: Flow) -> list[str]:

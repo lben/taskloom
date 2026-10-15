@@ -886,3 +886,222 @@ def test_check_flows_backs_up_and_fixes_open_flows(win, tmp_path, monkeypatch):
     assert win.message_boxes and "busy.yaml" in win.message_boxes[0][1][1]
     win.message_boxes.clear()
     busy_tab.doc.dirty = False
+
+
+def test_hovering_a_blocks_result_shows_its_outputs_laid_out(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "laid.yaml", """
+        blocks:
+          check:
+            type: logic.python
+            config: {inputs: [], code: "output = {'healthy': True, 'checks': [1, 2]}"}
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+
+    tip = tab.scene.nodes["check"].footer.toolTip()
+    assert "<b>output</b><pre>" in tip and '\n  "healthy": true,\n' in tip  # as on the connections
+
+
+def test_schedule_countdown():
+    import datetime as dt
+
+    from taskloom.editor.window import schedule_countdown
+
+    now = dt.datetime(2026, 10, 15, 4, 46, 55)  # a Thursday
+    daily = {"cron": "0 7 * * *"}
+    assert schedule_countdown(daily, now, True, True, False)[0] == "next run in 02:13:05"
+    assert schedule_countdown({"cron": "0 7 * * MON"}, now, True, True, False)[0] == "next run in 4d 02:13:05"
+    assert schedule_countdown(daily, now, True, False, False)[0] == "next Thu 07:00 · scheduler off"
+    assert schedule_countdown(daily, now, True, True, True)[0] == "next Thu 07:00 · save to schedule"
+    assert schedule_countdown({**daily, "active": False}, now, True, True, False)[0] == "paused"
+    assert schedule_countdown({}, now, True, True, False)[0] == "needs a time"
+    assert schedule_countdown({"at": "2026-10-01 10:00"}, now, True, True, False)[0] == "no more runs"
+    assert "Fri 16 Oct 2026 07:00" in schedule_countdown(daily, now, True, True, False)[1]
+
+
+def test_a_schedule_block_is_not_shown_skipped_when_you_run_the_flow(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "both.yaml", """
+        blocks:
+          manual:
+            type: trigger.manual
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - manual.start -> work.after
+          - nightly.start -> work.after
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    win._show_countdowns()
+
+    node = tab.scene.nodes["nightly"]
+    assert node.status is None and node.countdown.startswith("next ")  # its countdown, not "skipped"
+    assert tab.scene.nodes["work"].status == "success"
+
+
+def test_text_from_the_blocks_tree_written_and_resized_on_the_canvas(win, qtbot):
+    from PySide6.QtCore import QPointF
+
+    from taskloom.editor.canvas import TEXT_ITEM
+
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    tab = win.new_flow()
+    tree = win.palette_panel.tree
+    notes = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount()) if tree.topLevelItem(i).text(0).startswith("Notes"))
+    assert notes.child(0).text(0) == "Text" and notes.child(0).data(0, Qt.UserRole) == TEXT_ITEM
+    tab.view.add_item(TEXT_ITEM, QPointF(0, 0))  # as when dropping it on the canvas
+    (note_id,) = tab.doc.notes
+    item = tab.scene.note_items[note_id]
+    qtbot.waitUntil(item.isSelected)
+
+    view = tab.view.viewport()
+    center = tab.view.mapFromScene(item.mapToScene(item.boundingRect().center()))
+    QTest.mouseDClick(view, Qt.LeftButton, Qt.NoModifier, center)
+    assert item.editing
+    QTest.keyClick(tab.view, Qt.Key_A, Qt.ControlModifier)
+    QTest.keyClicks(tab.view, "Hello world")
+    QTest.keyClick(tab.view, Qt.Key_Backspace)
+    QTest.keyClick(tab.view, Qt.Key_Delete)  # keys go to the text, not to deleting it
+    QTest.keyClick(tab.view, Qt.Key_Escape)  # done writing
+    qtbot.waitUntil(lambda: tab.doc.notes.get(note_id, {}).get("text") == "Hello worl")
+
+    item = tab.scene.note_items[note_id]
+    item.setSelected(True)
+    width = item.boundingRect().width()
+    corner = tab.view.mapFromScene(item.mapToScene(item._handle().center()))
+    QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, corner)
+    QTest.mouseMove(view, corner + QPointF(60, 0).toPoint())
+    QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, corner + QPointF(120, 0).toPoint())
+    qtbot.waitUntil(lambda: tab.doc.notes[note_id].get("width", 0) > width + 60)
+    tab.doc.dirty = False
+
+
+def test_choosing_when_a_schedule_runs(win):
+    from PySide6.QtCore import QTime
+    from PySide6.QtWidgets import QCheckBox, QLabel, QTimeEdit
+
+    tab = win.new_flow()
+    block = tab.doc.add_block("trigger.schedule", 0, 0)
+    tab.scene.nodes[block].setSelected(True)
+    props = win.properties
+
+    def combo(item):
+        return next(c for c in props.findChildren(QComboBox) if c.findText(item) >= 0)
+
+    def choose(item):
+        box = combo(item)
+        box.setCurrentIndex(box.findText(item))
+        box.activated.emit(box.currentIndex())
+
+    def config():
+        return tab.doc.blocks[block].get("config", {})
+
+    def preview():
+        return " ".join(label.text() for label in props.findChildren(QLabel))
+
+    assert "Not set yet" in preview()
+    choose("Every weekday (Mon–Fri)")
+    assert config()["cron"] == "0 7 * * MON-FRI"
+    edit = props.findChild(QTimeEdit)
+    edit.setTime(QTime(7, 30))
+    edit.editingFinished.emit()
+    assert config()["cron"] == "30 7 * * MON-FRI" and "Monday to Friday at 07:30" in preview() and "Next:" in preview()
+
+    choose("Some days of the week")
+    for day in ("Wed", "Fri"):
+        next(b for b in props.findChildren(QCheckBox) if b.text() == day).setChecked(True)
+    assert config()["cron"] == "0 7 * * MON,WED,FRI"
+
+    choose("One time")
+    assert "cron" not in config() and config()["at"]
+    assert "Once, on" in preview()
+    tab.doc.dirty = False
+
+
+def test_a_custom_cron_line_can_be_chosen_and_written(win):
+    from PySide6.QtWidgets import QLabel, QLineEdit
+
+    tab = win.new_flow()
+    block = tab.doc.add_block("trigger.schedule", 0, 0)
+    tab.scene.nodes[block].setSelected(True)
+    props = win.properties
+
+    def choose(item):
+        box = next(c for c in props.findChildren(QComboBox) if c.findText(item) >= 0)
+        box.setCurrentIndex(box.findText(item))
+        box.activated.emit(box.currentIndex())
+
+    def cron_line():
+        return next((e for e in props.findChildren(QLineEdit) if e.toolTip().startswith("minute hour")), None)
+
+    for start in (None, "Every day"):  # from a new block, and from a plan
+        if start:
+            choose(start)
+        choose("Custom (a cron line)")
+        line = cron_line()
+        assert line is not None
+        line.setText("0 7,13 * * *")
+        line.editingFinished.emit()
+        assert tab.doc.blocks[block]["config"]["cron"] == "0 7,13 * * *"
+        assert "Custom: 0 7,13 * * *" in " ".join(label.text() for label in props.findChildren(QLabel))
+    tab.doc.dirty = False
+
+
+def test_text_being_written_on_the_canvas_is_kept_when_saving_or_closing(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "titled.yaml", """
+        notes:
+          note_1: {text: Text, x: 0, y: 0}
+    """)
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    tab = win.open_flow(flow)
+
+    def write(text):
+        item = tab.scene.note_items["note_1"]
+        QTest.mouseDClick(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                          tab.view.mapFromScene(item.mapToScene(item.boundingRect().center())))
+        assert item.editing
+        QTest.keyClick(tab.view, Qt.Key_A, Qt.ControlModifier)
+        QTest.keyClicks(tab.view, text)
+
+    write("My title")
+    QTest.keyClick(tab.view, Qt.Key_S, Qt.ControlModifier)  # save while still writing
+    assert "My title" in flow.read_text() and not tab.doc.dirty
+
+    write("Changed")
+    win.close_tab(tab)  # asks: the text is an unsaved change
+    assert win.message_boxes and win.message_boxes[0][1][0] == "Unsaved changes"
+    win.message_boxes.clear()
+
+
+def test_saving_while_typing_in_properties_keeps_what_you_typed(win, qtbot, tmp_path):
+    from PySide6.QtWidgets import QLineEdit
+
+    flow = write_flow(tmp_path / "named.yaml", """
+        blocks:
+          python:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    tab = win.open_flow(flow)
+    tab.scene.nodes["python"].setSelected(True)
+    name = next(e for e in win.properties.findChildren(QLineEdit) if e.text() == "python")
+    name.setFocus()
+    qtbot.waitUntil(name.hasFocus)
+    name.setText("load_sales")
+
+    QTest.keyClick(name, Qt.Key_S, Qt.ControlModifier)  # save before leaving the field
+
+    assert "load_sales:" in flow.read_text() and not tab.doc.dirty

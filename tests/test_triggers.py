@@ -166,3 +166,142 @@ def test_done_and_after_are_reserved_names(env):
     """)
     result = env.taskloom("validate", flow)
     assert result.returncode == 2 and "every block already has these" in result.stderr
+
+
+def test_a_block_connected_to_no_start_block_does_not_run(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          manual:
+            type: trigger.manual
+          load:
+            type: logic.python
+            config: {inputs: [], code: "output = 'data'"}
+          work:
+            type: logic.python
+            config: {inputs: [data], outputs: [], code: "open('work.txt', 'w').write(data)"}
+          health:
+            type: logic.python
+            config: {inputs: [], code: "open('health.txt', 'w').write('x'); output = 1"}
+          restart:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('restart.txt', 'w').write('x')"}
+        edges:
+          - manual.start -> work.after
+          - load.output -> work.data
+          - health.output -> restart.input
+    """)
+
+    assert env.taskloom("run", flow).returncode == 0
+
+    assert (env.root / "work.txt").read_text() == "data"  # load runs: work needs it
+    assert not (env.root / "health.txt").exists() and not (env.root / "restart.txt").exists()
+    run_id, _ = env.last_run()
+    history = History(env.home / "history.db")
+    blocks = history.blocks(run_id)
+    history.close()
+    assert blocks["health"]["status"] == "skipped"
+    assert blocks["health"]["summary"] == "not connected to the start of this run"
+
+
+def test_a_start_block_connected_to_nothing_is_reported(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+    """)
+
+    result = env.taskloom("validate", flow)
+
+    assert "nightly is not connected to anything: nothing runs when it starts the flow" in result.stderr
+
+
+def test_the_error_handler_of_a_block_the_run_needs_takes_part(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          manual:
+            type: trigger.manual
+          load:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('database is down')"}
+          work:
+            type: logic.python
+            config: {inputs: [data], outputs: [], code: "pass"}
+          notify:
+            type: logic.python
+            config: {inputs: [problem], outputs: [], code: "open('notified.txt', 'w').write(problem['error'])"}
+        edges:
+          - manual.start -> work.after
+          - load.output -> work.data
+          - load.error -> notify.problem
+    """)
+
+    env.taskloom("run", flow)
+
+    assert "database is down" in (env.root / "notified.txt").read_text()
+
+
+def test_a_switched_off_block_does_not_run_through_its_error_or_done_connections(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          manual:
+            type: trigger.manual
+          extract:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+          restart:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('restart.txt', 'w').write('x')"}
+          failing:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('failing.txt', 'w').write('x'); raise RuntimeError('no')"}
+          report:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('report.txt', 'w').write('x')"}
+          handler:
+            type: logic.python
+            config: {inputs: [errors], outputs: [], code: "pass"}
+        edges:
+          - manual.start -> extract.after
+          - extract.done -> report.after
+          - restart.done -> report.after
+          - manual.start -> handler.after
+          - failing.error -> handler.errors
+    """)
+
+    assert env.taskloom("run", flow).returncode == 0
+
+    assert (env.root / "report.txt").exists()  # it runs: extract, before it, did
+    assert not (env.root / "restart.txt").exists() and not (env.root / "failing.txt").exists()
+
+
+def test_a_skipped_block_says_why(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          check:
+            type: logic.if
+            config: {condition: "False"}
+          on_yes:
+            type: logic.python
+            config: {inputs: [value], outputs: [], code: "pass"}
+          boom:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('no')"}
+          after_boom:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "pass"}
+        edges:
+          - check.true -> on_yes.value
+          - boom.output -> after_boom.input
+    """)
+    env.taskloom("run", flow)
+    run_id, _ = env.last_run()
+    history = History(env.home / "history.db")
+    blocks = history.blocks(run_id)
+    history.close()
+
+    assert blocks["on_yes"]["summary"] == "nothing reached its 'value' input"
+    assert blocks["after_boom"]["summary"] == "something before it failed"

@@ -551,7 +551,9 @@ class CheckFlowsDialog(QDialog):
         fixable = [r for r in reports if r.fixes]
         text = QLabel((intro + " " if intro else "")
                       + (f"{len(fixable)} flow(s) can be fixed. <b>Back up and fix</b> copies each into the "
-                         "backups folder of your Taskloom folder first." if fixable else "Nothing to fix."))
+                         "backups folder of your Taskloom folder first." if fixable
+                         else "Nothing it can fix by itself: the lines marked 'needs you' are for you to change."
+                         if any(r.problems for r in reports) else "Nothing to fix."))
         text.setWordWrap(True)
         layout.addWidget(text)
         self.details = QPlainTextEdit(readOnly=True)

@@ -21,7 +21,8 @@ from pathlib import Path
 import yaml
 
 from .block import all_ports
-from .flow import _EDGE, ERROR_PORT, FORMAT_VERSION, BlockSpec, FlowError, block_config, flow_from_data, validate
+from .flow import (_EDGE, ERROR_PORT, FORMAT_VERSION, BlockSpec, FlowError, block_config, flow_from_data,
+                   unconnected_starts, validate)
 
 # Format version N -> a function that turns a flow of version N into one of version N + 1.
 MIGRATIONS: dict = {}
@@ -132,7 +133,9 @@ def _check(path: Path, registry, home) -> Report:
         new["edges"] = edges
 
     try:
-        errors, _ = validate(flow_from_data(new, path), registry, home)
+        flow = flow_from_data(new, path)
+        errors, _ = validate(flow, registry, home)
+        errors += unconnected_starts(flow, registry)  # it runs, but does nothing: you meant something else
     except FlowError as e:
         errors = e.errors
     report.problems += errors

@@ -14,6 +14,8 @@ from ..flow import ERROR_PORT, BlockSpec, block_config
 from .document import FlowDocument, edge_text
 
 BLOCK_MIME = "application/x-taskloom-block"
+TEXT_ITEM = "canvas.text"  # the Text item of the blocks tree: text on the canvas, not a block that runs
+HANDLE = 10  # the corner you drag to resize a text
 NODE_W, HEADER_H, ROW_H, FOOTER_H, PORT_R = 184, 28, 22, 22, 5
 CATEGORY_COLORS = {
     "Start": "#1f8a4c", "Database": "#2c5d8f", "Data": "#2f7f7a", "Reports": "#9a6a1f",
@@ -101,6 +103,7 @@ class NodeItem(QGraphicsItem):
         rows = max(len(self.inputs), len(self.outputs), 1)
         self.height = HEADER_H + 6 + rows * ROW_H + FOOTER_H
         self.status, self.status_text = None, ""
+        self.countdown = ""  # a Schedule block: when it starts the flow next (shown instead of the type)
         self.ports: dict[tuple[str, bool], PortItem] = {}
         for i, name in enumerate(self.inputs):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
@@ -118,10 +121,16 @@ class NodeItem(QGraphicsItem):
     def boundingRect(self):
         return QRectF(-4, -4, NODE_W + 8, self.height + 8)
 
-    def set_status(self, status: str | None, text: str = "", full: str = ""):
+    def set_status(self, status: str | None, text: str = "", tip: str = ""):
+        """The run's result under the block: `text` (short), and `tip` (HTML) when hovering it."""
         self.status, self.status_text = status, text
-        full = full if len(full) <= 4000 else full[:4000] + "…"
-        self.footer.setToolTip(f"<p style='white-space:pre-wrap'>{html.escape(full)}</p>" if status and full else "")
+        self._footer_tip = tip if status else ""
+        self.footer.setToolTip(self._footer_tip or getattr(self, "_countdown_tip", ""))
+        self.update()
+
+    def set_countdown(self, text: str, tip: str = ""):
+        self.countdown, self._countdown_tip = text, tip
+        self.footer.setToolTip(getattr(self, "_footer_tip", "") or tip)
         self.update()
 
     def paint(self, painter: QPainter, option, widget=None):
@@ -170,9 +179,10 @@ class NodeItem(QGraphicsItem):
             if font.italic():
                 font.setItalic(False)
                 painter.setFont(font)
-        # footer: type, or the run status
-        text = self.status_text if self.status else self.type_title
-        painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS and self.status != "skipped" else muted)
+        # footer: the run status, else (a Schedule block) its countdown, else the type
+        text = self.status_text if self.status else self.countdown or self.type_title
+        painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS and self.status != "skipped"
+                       else pal.text().color() if self.countdown and not self.status else muted)
         footer = QRectF(10, self.height - FOOTER_H, NODE_W - 20, FOOTER_H - 4)
         painter.drawText(footer, Qt.AlignVCenter, painter.fontMetrics().elidedText(text, Qt.ElideRight, int(footer.width())))
         painter.setOpacity(1.0)
@@ -218,6 +228,11 @@ class EdgeItem(QGraphicsPathItem):
         painter.drawPath(self.path())
 
 
+def value_html(text: str) -> str:
+    """A value as shown when hovering (cut when long): escaped, to go inside <pre>."""
+    return html.escape(text if len(text) <= 1500 else text[:1500] + "…", quote=False)
+
+
 NOTE_STYLES = {"title": 22, "heading": 16, "normal": 11, "small": 9}  # point sizes
 
 
@@ -232,26 +247,112 @@ def note_font(note: dict) -> QFont:
 
 
 class NoteItem(QGraphicsTextItem):
-    """Text on the canvas (a title, a remark): select it to edit it in Properties, drag it to move it."""
+    """Text on the canvas (a title, a remark). Double-click to write in it, drag to move it, drag its
+    corner (when selected) to make it wider or narrower; Properties has its style and font."""
 
     def __init__(self, note_id: str, note: dict):
         super().__init__(str(note.get("text", "")))
         self.note_id = note_id
         self.setFont(note_font(note))
         self.setDefaultTextColor(QApplication.palette().text().color())
+        if note.get("width"):
+            self.setTextWidth(float(note["width"]))  # its lines wrap at this width
         self.setPos(note.get("x", 0), note.get("y", 0))
         self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable)
+        self.setAcceptHoverEvents(True)
         self.setZValue(0)
-        self.setToolTip("Text: select it to change it in Properties; drag it to move it.")
+        self.setToolTip("Text: double-click to write in it; drag its corner to resize it.")
+        self._resizing = False
+
+    @property
+    def editing(self) -> bool:
+        return bool(self.textInteractionFlags() & Qt.TextEditable)
+
+    def _handle(self) -> QRectF:
+        r = self.boundingRect()
+        return QRectF(r.right() - HANDLE, r.bottom() - HANDLE, HANDLE, HANDLE)
 
     def paint(self, painter: QPainter, option, widget=None):
         selected = self.isSelected()
         option.state &= ~QStyle.State_Selected  # its own outline, below
+        option.state &= ~QStyle.State_HasFocus
         super().paint(painter, option, widget)
-        if selected:
-            painter.setPen(QPen(QApplication.palette().highlight().color(), 1.5, Qt.DashLine))
+        if selected or self.editing:
+            color = QApplication.palette().highlight().color()
+            painter.setPen(QPen(color, 1.5, Qt.SolidLine if self.editing else Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(self.boundingRect().adjusted(1, 1, -1, -1))
+            if not self.editing:
+                painter.setBrush(color)
+                painter.drawRect(self._handle())
+
+    # --- writing in it on the canvas ---------------------------------------------------
+
+    def mouseDoubleClickEvent(self, event):
+        if not self.editing:
+            self.start_editing()
+        super().mouseDoubleClickEvent(event)
+
+    def start_editing(self):
+        self.setTextInteractionFlags(Qt.TextEditorInteraction)
+        self.setFocus(Qt.MouseFocusReason)
+        self.update()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.clearFocus()  # done writing
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if self.editing:
+            # Later: saving rebuilds the canvas, which must not delete this item while Qt is still using it.
+            self.stop_editing(now=False)
+
+    def stop_editing(self, now: bool):
+        """Done writing: what you wrote goes into the flow (now, or just after the event being handled)."""
+        if not self.editing:
+            return
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        cursor = self.textCursor()
+        cursor.clearSelection()
+        self.setTextCursor(cursor)
+        self.update()
+        scene = self.scene()
+        if scene is not None:
+            scene.write_note_text(self.note_id, self.toPlainText(), now)
+
+    # --- resizing ------------------------------------------------------------------------
+
+    def hoverMoveEvent(self, event):
+        on_handle = self.isSelected() and not self.editing and self._handle().contains(event.pos())
+        self.setCursor(Qt.SizeFDiagCursor if on_handle else Qt.ArrowCursor)
+        super().hoverMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.LeftButton and self.isSelected() and not self.editing
+                and self._handle().contains(event.pos())):
+            self._resizing = True
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._resizing:
+            self.setTextWidth(max(40.0, event.pos().x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._resizing:
+            self._resizing = False
+            event.accept()
+            self.setTextWidth(max(40.0, event.pos().x()))
+            self.scene().doc.set_note_value(self.note_id, "width", round(self.textWidth()))
+            return
+        super().mouseReleaseEvent(event)
 
 
 class FlowScene(QGraphicsScene):
@@ -265,8 +366,9 @@ class FlowScene(QGraphicsScene):
         self.doc, self.registry = doc, registry
         self.nodes: dict[str, NodeItem] = {}
         self.note_items: dict[str, NoteItem] = {}
+        self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule block -> (text, tip)
         self.edge_items: list[EdgeItem] = []
-        self.statuses: dict[str, tuple[str, str]] = {}
+        self.statuses: dict[str, tuple[str, str, str]] = {}  # block -> (status, text, tip)
         self.values: dict[str, dict[str, str]] = {}  # block -> port -> text, from the run on screen
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsPathItem | None = None
@@ -290,6 +392,12 @@ class FlowScene(QGraphicsScene):
             return
         selected = set(self.selected_block_ids())
         selected_notes = set(self.selected_note_ids())
+        # Text being written on the canvas when something else changes the flow: kept, written just after.
+        writing = [(i.note_id, i.toPlainText()) for i in self.note_items.values() if i.editing]
+        for item in self.note_items.values():
+            item.setTextInteractionFlags(Qt.NoTextInteraction)  # (no writing on its way out)
+        for note_id, text in writing:
+            self.write_note_text(note_id, text, now=False)
         self._rebuilding = True
         self.clear()
         self.nodes, self.edge_items, self.note_items = {}, [], {}
@@ -304,6 +412,8 @@ class FlowScene(QGraphicsScene):
             self.nodes[block_id] = node
             if block_id in self.statuses:
                 node.set_status(*self.statuses[block_id])
+            if block_id in self.countdowns:
+                node.set_countdown(*self.countdowns[block_id])
             node.setSelected(block_id in selected)
         for src, sp, dst, dp in self.doc.edges():
             a = self.nodes.get(src) and self.nodes[src].ports.get((sp, True))
@@ -329,7 +439,7 @@ class FlowScene(QGraphicsScene):
 
     def _value(self, block_id, port):
         text = self.values.get(block_id, {}).get(port)
-        return None if text is None else html.escape(text if len(text) <= 1500 else text[:1500] + "…", quote=False)
+        return None if text is None else value_html(text)
 
     def refresh_tooltips(self):
         for node in self.nodes.values():
@@ -365,14 +475,20 @@ class FlowScene(QGraphicsScene):
             if block_id in (edge.src_port.node.block_id, edge.dst_port.node.block_id):
                 edge.update_path()
 
-    def set_status(self, block_id: str, status: str | None, text: str = "", full: str = ""):
-        """A block's result on the canvas: `text` under it (short), `full` when hovering that."""
+    def set_status(self, block_id: str, status: str | None, text: str = "", tip: str = ""):
+        """A block's result on the canvas: `text` under it (short), `tip` (HTML) when hovering that."""
         if status is None:
             self.statuses.pop(block_id, None)
         else:
-            self.statuses[block_id] = (status, text, full or text)
+            self.statuses[block_id] = (status, text, tip or html.escape(text))
         if block_id in self.nodes:
-            self.nodes[block_id].set_status(status, text, full or text)
+            self.nodes[block_id].set_status(status, text, tip or html.escape(text))
+
+    def set_countdown(self, block_id: str, text: str, tip: str = ""):
+        """Under a Schedule block: when it starts the flow next."""
+        self.countdowns[block_id] = (text, tip)
+        if block_id in self.nodes and (self.nodes[block_id].countdown, getattr(self.nodes[block_id], "_countdown_tip", "")) != (text, tip):
+            self.nodes[block_id].set_countdown(text, tip)
 
     def clear_statuses(self):
         for block_id in list(self.statuses):
@@ -383,6 +499,34 @@ class FlowScene(QGraphicsScene):
 
     def selected_block_ids(self) -> list[str]:
         return [i.block_id for i in self.selectedItems() if isinstance(i, NodeItem)]
+
+    def write_note_text(self, note_id: str, text: str, now: bool):
+        """Put text written on the canvas into the flow (nothing if it is empty or unchanged)."""
+        def write():
+            if note_id in self.doc.notes and text.strip() and text != self.doc.notes[note_id].get("text"):
+                self.doc.set_note_value(note_id, "text", text)
+        if now:
+            write()
+        else:
+            QTimer.singleShot(0, self, write)
+
+    def commit_editing(self):
+        """Before saving, running or closing: what is being written on the canvas goes into the flow."""
+        for item in list(self.note_items.values()):
+            if item.editing:
+                item.stop_editing(now=True)
+                return  # (writing it rebuilt the canvas)
+
+    def add_note_at(self, at: QPointF) -> str:
+        """Put a text on the canvas and select it (to write it in Properties, or double-click it)."""
+        note_id = self.doc.add_note(at.x(), at.y())
+        if note_id in self.note_items:  # (a rebuild during a mouse event happens just after)
+            self.clearSelection()
+            self.note_items[note_id].setSelected(True)
+        else:
+            QTimer.singleShot(0, self, lambda: note_id in self.note_items and (
+                self.clearSelection(), self.note_items[note_id].setSelected(True)))
+        return note_id
 
     def selected_note_ids(self) -> list[str]:
         return [i.note_id for i in self.selectedItems() if isinstance(i, NoteItem)]
@@ -563,11 +707,17 @@ class FlowView(QGraphicsView):
 
     def dropEvent(self, event):
         type_id = bytes(event.mimeData().data(BLOCK_MIME)).decode()
-        pos = self.mapToScene(event.position().toPoint())
-        self.scene().doc.add_block(type_id, pos.x() - NODE_W / 2, pos.y() - HEADER_H / 2)
+        self.add_item(type_id, self.mapToScene(event.position().toPoint()))
         event.acceptProposedAction()
+
+    def add_item(self, type_id: str, at: QPointF):
+        """What was dropped from the blocks tree: a block, or (the Text item) text on the canvas."""
+        if type_id == TEXT_ITEM:
+            self.scene().add_note_at(at)
+        else:
+            self.scene().doc.add_block(type_id, at.x() - NODE_W / 2, at.y() - HEADER_H / 2)
 
     def add_at_center(self, type_id: str):
         center = self.mapToScene(self.viewport().rect().center())
-        n = len(self.scene().doc.blocks)
-        self.scene().doc.add_block(type_id, center.x() - NODE_W / 2 + (n % 5) * 24, center.y() - 40 + (n % 5) * 24)
+        n = len(self.scene().doc.blocks) + len(self.scene().doc.notes)
+        self.add_item(type_id, QPointF(center.x() + (n % 5) * 24, center.y() - 40 + HEADER_H / 2 + (n % 5) * 24))

@@ -277,6 +277,19 @@ class FlowDocument(QObject):
         self.data["edges"] = edges
         self._done()
 
+    def set_block_values(self, block_id: str, values: dict):
+        """Set several config values of a block in one step (None or "" removes one)."""
+        config = self.blocks[block_id].setdefault("config", {})
+        if all(config.get(k) == v or (v in (None, "") and k not in config) for k, v in values.items()):
+            return
+        self._change()
+        for key, value in values.items():
+            if value in (None, ""):
+                config.pop(key, None)
+            else:
+                config[key] = value
+        self._done()
+
     def set_flow_value(self, key: str, value):
         if self.data.get(key) == value or (value in (None, "") and key not in self.data):
             return

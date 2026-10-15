@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
                                QMessageBox, QToolButton)
 
 from taskloom.config import Home  # noqa: E402
+from taskloom.editor.canvas import TEXT_ITEM  # noqa: E402
 from taskloom.editor.dialogs import ConnectionsDialog  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
 from taskloom.editor.document import FlowDocument  # noqa: E402
@@ -48,7 +49,7 @@ def at(item, local):
 for step in range(steps):
     nodes = list(tab.scene.nodes.values())
     action = rnd.choice(["add", "add", "move", "connect", "connect", "select", "edit", "toggle", "choice",
-                         "connection", "delete", "undo", "redo", "copy", "save", "zoom"])
+                         "connection", "delete", "undo", "redo", "copy", "save", "zoom", "note", "note"])
     if action == "add" or not nodes:
         window.palette_panel.add_requested.emit(rnd.choice(types))
     elif action == "move":
@@ -107,6 +108,37 @@ for step in range(steps):
         window.save(tab)
     elif action == "zoom":
         view.center_on_flow()
+    elif action == "note":
+        notes = list(tab.scene.note_items.values())
+        if not notes:
+            window.palette_panel.add_requested.emit(TEXT_ITEM)
+        else:
+            n = rnd.choice(notes)
+            what = rnd.choice(["write", "resize", "move", "delete"])
+            center = at(n, n.boundingRect().center().toPoint())
+            if what == "write":
+                QTest.mouseDClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, center)
+                QTest.keyClicks(view, rnd.choice(["hi", "", "Title"]))
+                QTest.keyClick(view, rnd.choice([Qt.Key_Escape, Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Return]))
+                if rnd.random() < 0.5:  # or click elsewhere to finish
+                    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(5, 5))
+            elif what == "resize":
+                tab.scene.clearSelection()
+                n.setSelected(True)
+                a = at(n, n._handle().center().toPoint())
+                b = a + QPoint(rnd.randint(-80, 120), 0)
+                QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, a)
+                QTest.mouseMove(view.viewport(), b)
+                QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, b)
+            elif what == "move":
+                b = center + QPoint(rnd.randint(-80, 80), rnd.randint(-60, 60))
+                QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, center)
+                QTest.mouseMove(view.viewport(), b)
+                QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, b)
+            else:
+                tab.scene.clearSelection()
+                n.setSelected(True)
+                window.current.scene.delete_selected()
     app.processEvents()
 
 # The document is consistent, and what it saves reopens exactly as it was.
@@ -115,6 +147,7 @@ for src, sp, dst, dp in tab.doc.edges():
     assert src in blocks and dst in blocks, (src, dst)
 app.processEvents()
 assert set(tab.scene.nodes) == set(blocks)
+assert set(tab.scene.note_items) == set(tab.doc.notes)
 window.save(tab)
 assert FlowDocument.load(folder / "fuzz.yaml").data == tab.doc.data
 try:

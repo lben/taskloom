@@ -67,6 +67,82 @@ class Cron:
         return None
 
 
+# --- plans: the common schedules, as the editor builds them, and their cron lines --------------------
+
+DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]  # cron's weekdays: 0 (or 7) is Sunday
+DAY_WORDS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+MINUTE_STEPS = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)  # they divide an hour, so the gaps stay equal
+
+
+def _monday_first(days) -> list[int]:
+    return sorted(days, key=lambda d: (d - 1) % 7)
+
+
+def plan_cron(plan: dict) -> str:
+    """The cron line of a plan, e.g. {"kind": "weekdays", "hour": 7, "minute": 0} -> "0 7 * * MON-FRI"."""
+    kind = plan["kind"]
+    if kind == "minutes":
+        return "* * * * *" if plan["every"] == 1 else f"*/{plan['every']} * * * *"
+    if kind == "hourly":
+        return f"{plan['minute']} * * * *"
+    at = f"{plan['minute']} {plan['hour']}"
+    if kind == "daily":
+        return f"{at} * * *"
+    if kind == "weekdays":
+        return f"{at} * * MON-FRI"
+    if kind == "weekly":
+        return f"{at} * * " + ",".join(DAY_NAMES[d] for d in _monday_first(plan["days"]))
+    if kind == "monthly":
+        return f"{at} {plan['day']} * *"
+    raise ValueError(f"unknown kind of schedule: {kind}")
+
+
+def cron_plan(text: str) -> dict | None:
+    """The plan a cron line is, or None when it is something else (then it stays as you wrote it)."""
+    parts = str(text).split()
+    try:
+        cron = Cron(str(text))
+    except ValueError:
+        return None
+    minute, hour, day, month, dow = parts
+    if month != "*":
+        return None
+    if hour == "*" and day == "*" and dow == "*":
+        if minute == "*":
+            return {"kind": "minutes", "every": 1}
+        if minute.startswith("*/") and minute[2:].isdigit() and int(minute[2:]) in MINUTE_STEPS:
+            return {"kind": "minutes", "every": int(minute[2:])}
+        return {"kind": "hourly", "minute": int(minute)} if minute.isdigit() else None
+    if not (minute.isdigit() and hour.isdigit()):
+        return None
+    at = {"hour": int(hour), "minute": int(minute)}
+    if day == "*" and dow == "*":
+        return {"kind": "daily", **at}
+    if day == "*":
+        if cron.dow == {1, 2, 3, 4, 5}:
+            return {"kind": "weekdays", **at}
+        return {"kind": "weekly", "days": _monday_first(cron.dow), **at}
+    if dow == "*" and day.isdigit():
+        return {"kind": "monthly", "day": int(day), **at}
+    return None
+
+
+def describe_cron(text: str) -> str:
+    """A cron line in words, e.g. "Monday to Friday at 07:00"."""
+    plan = cron_plan(text)
+    if plan is None:
+        return f"Custom: {text}"
+    kind = plan["kind"]
+    if kind == "minutes":
+        return "Every minute" if plan["every"] == 1 else f"Every {plan['every']} minutes"
+    if kind == "hourly":
+        return f"Every hour at :{plan['minute']:02d}"
+    at = f"at {plan['hour']:02d}:{plan['minute']:02d}"
+    return {"daily": f"Every day {at}", "weekdays": f"Monday to Friday {at}",
+            "weekly": ", ".join(DAY_WORDS[d] for d in plan.get("days", [])) + f" {at}",
+            "monthly": f"Day {plan.get('day')} of every month {at}"}[kind]
+
+
 class At:
     """A single run at a given time, e.g. "2026-10-08 15:30"."""
 

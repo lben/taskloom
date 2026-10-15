@@ -64,9 +64,15 @@ taskloom editor examples/daily-sales-report.yaml
 - **Start blocks** say how a flow starts. Connect their `start` output to the **run
   after** diamond of the first block:
   - **Manual Start**: the flow runs when you press **Run now** (F5).
-  - **Schedule**: the flow runs by itself at the times you set (e.g. `0 7 * * MON-FRI`)
-    while the scheduler is on. Saving a flow with a Schedule block schedules it.
-  A flow can have both. Without start blocks, Run now runs every block.
+  - **Schedule**: the flow runs by itself at the times you set while the scheduler is
+    on; under the block, a countdown to its next run. Set the times in Properties →
+    **When**: repeating (every few minutes, hour, day, weekday, chosen days, month, or a
+    cron line) or one time (a date and time), with the next runs shown. Saving a flow
+    with a Schedule block schedules it.
+  A flow can have both. A run includes the blocks after the start block that started it,
+  the blocks whose data those need, and the error handlers of all of them; **a block
+  connected to no start block does not run**, which is how to switch one off. Without
+  start blocks, Run now runs every block. A skipped block says why under it.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name and calendar.
 - **Run now** saves, checks and runs the flow in a separate process: blocks show their
@@ -80,9 +86,11 @@ taskloom editor examples/daily-sales-report.yaml
   opened an older run from Run history; a flow you open starts clean, unless it ran since
   you last saw it (e.g. on schedule). The Log keeps the messages of the earlier runs above
   it, each run starting with a bold line with its number, date and time.
-- **Text on the canvas:** right-click an empty spot → **Add text here** (or Edit → Add
-  text) for titles and remarks. Select it to write it in Properties, with a style (title,
-  heading, normal, small), bold, italic, underline and any font installed on your computer.
+- **Text on the canvas:** drag **Text** (under **Notes** in the blocks tree) onto the
+  canvas, or right-click an empty spot → **Add text here**, for titles and remarks.
+  Double-click it to write in it; drag its corner (when selected) to resize it.
+  Properties has its style (title, heading, normal, small), bold, italic, underline and
+  any font installed on your computer. Text does not run.
 - **Retry one block after a fix:** right-click it → **Run this block again with the same
   inputs**. Only that block runs, with what reached it in the run on the canvas; the other
   blocks keep their results. (`taskloom run FLOW --only BLOCK --inputs-from RUN`.) Inputs
@@ -180,9 +188,10 @@ triggers:
 overlap: skip        # if the previous run is still going: skip | queue | allow
 ```
 
-Add a **Schedule** block to the flow and save it: saved flows with a Schedule block are
-listed in `scheduled.yaml` (removing the block takes the flow off). Then start the scheduler with the **Scheduler** button at the top
-right of the editor (it also shows whether it is on), or `taskloom scheduler`. It shows
+Add a **Schedule** block to the flow, connect it to the first block, set **When** in
+Properties and save: saved flows with a Schedule block are listed in `scheduled.yaml`
+(removing the block takes the flow off). Then start the scheduler with the **Scheduler**
+button at the top right of the editor (it also shows whether it is on), or `taskloom scheduler`. It shows
 a tray icon and notifies you about failed or skipped runs. On Windows, **Tools →
 Settings → Start the scheduler when I log in** (or `taskloom scheduler --at-login on`)
 adds it to your Startup folder; no admin needed.

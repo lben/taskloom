@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import html
 import os
 import signal
 import subprocess
@@ -23,11 +24,12 @@ from ..block import AFTER
 from ..config import Home
 from ..engine import block_inputs, input_ports
 from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
+from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import runner_command
 from ..scheduler import acquire_lock
 from ..registry import discover
-from .canvas import FlowScene, FlowView
+from .canvas import FlowScene, FlowView, value_html
 from . import dialogs
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
@@ -51,6 +53,32 @@ MAX_LOG_ENTRIES = 20000  # the Log keeps earlier runs' messages, up to this many
 def _finished_line(run_id: int, status: str, ts: str) -> dict:
     return {"ts": ts, "level": "DONE" if status == "success" else "ERROR", "message": f"run #{run_id} {status}",
             "header": True}
+
+
+def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, scheduler_on: bool,
+                       unsaved: bool) -> tuple[str, str]:
+    """(Text under a Schedule block, its tooltip): when it starts the flow next."""
+    if config.get("active", True) is False:
+        return "paused", "This schedule is paused: tick Active to use it."
+    timing = {k: config[k] for k in ("cron", "at") if config.get(k) not in (None, "")}
+    try:
+        trigger = Trigger({"schedule": timing})
+    except ValueError:
+        return "needs a time", "Set its cron (repeating times) or at (one time)."
+    upcoming, t = [], now
+    while len(upcoming) < 5 and (t := trigger.next_after(t)) is not None:
+        upcoming.append(t)
+    if not upcoming:
+        return "no more runs", "Its time has passed."
+    tip = "Next runs:<br>" + "<br>".join(f"{t:%a %d %b %Y %H:%M}" for t in upcoming)
+    if unsaved or not scheduled:
+        return f"next {upcoming[0]:%a %H:%M} · save to schedule", tip + "<br><br>Save the flow to schedule this."
+    if not scheduler_on:
+        return f"next {upcoming[0]:%a %H:%M} · scheduler off", tip + "<br><br>Turn the scheduler on (top right)."
+    left = int((upcoming[0] - now).total_seconds())
+    days, rest = divmod(left, 86400)
+    clock = f"{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
+    return f"next run in {f'{days}d ' if days else ''}{clock}", tip
 
 
 def _seen_key(path) -> str:
@@ -153,6 +181,10 @@ class MainWindow(QMainWindow):
         self.flows_panel.last_run_requested.connect(self._open_last_run)
         self.history_panel.open_run.connect(self.show_history_run)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
+        self._countdown = QTimer(self, interval=1000)
+        self._countdown.timeout.connect(self._show_countdowns)
+        self._countdown.start()
+        self._scheduler_on = False
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
         self._poll.start()
@@ -185,7 +217,7 @@ class MainWindow(QMainWindow):
             pass
         paths = [p for p in dict.fromkeys(Path(p).resolve() for p in paths) if p.exists()]
         reports = [upgrade.check(p, self.registry, self.home) for p in paths]
-        if quiet and not any(r.fixes for r in reports):
+        if quiet and all(r.ok for r in reports):
             return
         if not dialogs.CheckFlowsDialog(reports, self, intro).exec():
             return
@@ -371,6 +403,7 @@ class MainWindow(QMainWindow):
     def save(self, tab: FlowTab | None, ask: bool = False) -> bool:
         if tab is None:
             return False
+        self._finish_editing(tab)
         path = tab.doc.path
         if ask or path is None:
             suggested = str(path or Path.cwd() / f"{tab.doc.data.get('name') or 'flow'}.yaml")
@@ -392,6 +425,7 @@ class MainWindow(QMainWindow):
     def close_tab(self, tab: FlowTab | None) -> bool:
         if tab is None:
             return False
+        self._finish_editing(tab)  # what is being typed is an unsaved change too
         if tab.doc.dirty:
             answer = QMessageBox.question(self, "Unsaved changes", f"Save changes to {tab.doc.title}?",
                                           QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
@@ -471,8 +505,16 @@ class MainWindow(QMainWindow):
 
     # --- running --------------------------------------------------------------------
 
+    def _finish_editing(self, tab: FlowTab):
+        """Before saving, running or closing a flow: what you are typing (a field in Properties, a text on
+        the canvas) goes into it first."""
+        if self.properties.doc is tab.doc:
+            self.properties._finish_editing()
+        tab.scene.commit_editing()
+
     def _ready_to_run(self, tab: FlowTab):
         """Save and validate; returns the loaded flow or None."""
+        self._finish_editing(tab)
         if tab.doc.dirty or tab.doc.path is None:
             if not self.save(tab):
                 return None
@@ -569,10 +611,7 @@ class MainWindow(QMainWindow):
             return
         if at is None:
             at = tab.view.mapToScene(tab.view.viewport().rect().center())
-        note_id = tab.doc.add_note(at.x(), at.y())
-        tab.scene.clearSelection()
-        if note_id in tab.scene.note_items:
-            tab.scene.note_items[note_id].setSelected(True)
+        tab.scene.add_note_at(at)
 
     def _on_note_selected(self, tab: FlowTab, note_id: str):
         if tab is self.current:
@@ -687,6 +726,14 @@ class MainWindow(QMainWindow):
 
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
         status = info.get("status")
+        cls = self.registry.get((tab.doc.blocks.get(block) or {}).get("type"))
+        if status == "skipped" and cls is not None and cls.is_trigger:
+            # A start block that did not start this run (e.g. a Schedule block when you press Run): it
+            # skipped nothing, so it looks as usual (a Schedule block shows when it starts the flow next).
+            tab.block_info.pop(block, None)
+            tab.scene.set_status(block, None)
+            tab.scene.set_values(block, {})
+            return
         tab.block_info[block] = {"status": status, "tables": info.get("tables") or {},
                                  "previews": info.get("previews") or {}, "error": info.get("error")}
         values = dict(info.get("previews") or {})
@@ -698,12 +745,19 @@ class MainWindow(QMainWindow):
         attempts = info.get("attempts") or 0
         retried = f" · retried {attempts - 1}×" if attempts > 1 else ""
         if status == "success":
-            text, full = "✓ " + _short(info.get("summary") or "done", 48) + retried, (info.get("summary") or "done") + retried
+            text = "✓ " + _short(info.get("summary") or "done", 48) + retried
+            # Hovering it shows each output as the connections do (e.g. JSON laid out).
+            tip = "".join(f"<b>{html.escape(port)}</b><pre>{value_html(value)}</pre>"
+                          for port, value in (info.get("previews") or {}).items())
+            tip = (tip or html.escape(info.get("summary") or "done")) + html.escape(retried)
         elif status == "failed":
-            text, full = "✕ " + _short(info.get("error") or "failed", 48), info.get("error") or "failed"
+            text = "✕ " + _short(info.get("error") or "failed", 48)
+            tip = f"<pre>{value_html(info.get('error') or 'failed')}</pre>"
+        elif status == "skipped" and info.get("summary"):
+            text, tip = f"skipped · {info['summary']}", html.escape(f"skipped: {info['summary']}")
         else:
-            text = full = status
-        tab.scene.set_status(block, status, text, full)
+            text = tip = status
+        tab.scene.set_status(block, status, text, tip)
         if tab is self.current and block in tab.scene.selected_block_ids():
             self.preview.show_outputs(block, tab.block_info[block])
 
@@ -796,7 +850,19 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             return True
 
+    def _show_countdowns(self):
+        """Under each Schedule block of the flow on screen: when it starts the flow next."""
+        tab = self.current
+        if tab is None:
+            return
+        now = dt.datetime.now().replace(microsecond=0)
+        for block_id, spec in tab.doc.blocks.items():
+            if spec.get("type") == "trigger.schedule":
+                tab.scene.set_countdown(block_id, *schedule_countdown(spec.get("config") or {}, now, tab.scheduled,
+                                                                      self._scheduler_on, tab.doc.dirty))
+
     def _show_scheduler_state(self, running: bool):
+        self._scheduler_on = running
         self.scheduler_action.setIcon(scheduler_icon(running))
         self.scheduler_action.setText("Scheduler on" if running else "Scheduler off")
         self.scheduler_action.setToolTip(

@@ -164,3 +164,20 @@ def test_a_repeated_run_after_connection_is_left_alone(env):
     assert env.taskloom("validate", flow).returncode == 0
 
     assert env.taskloom("check", flow).returncode == 0  # valid, so nothing to fix
+
+
+def test_a_start_block_connected_to_nothing_needs_you(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+    """)
+
+    result = env.taskloom("check", flow)
+
+    assert result.returncode == 2
+    assert "needs you: nightly is not connected to anything: nothing runs when it starts the flow" in result.stdout

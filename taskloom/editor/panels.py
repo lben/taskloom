@@ -8,12 +8,14 @@ import math
 
 import polars as pl
 import yaml
-from PySide6.QtCore import QAbstractTableModel, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (QAbstractTableModel, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTime,
+                            QTimer, Signal)
 from PySide6.QtGui import QColor, QDrag, QFontDatabase, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
+                               QFileDialog, QFormLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QTableView,
-                               QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem,
+                               QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
+                               QTableWidget, QTableWidgetItem, QTimeEdit, QToolButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from .. import params as P
@@ -21,7 +23,7 @@ from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields
 from ..calendars import load_calendar
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
-from .canvas import BLOCK_MIME, CATEGORY_COLORS, STATUS_COLORS, USER_COLOR
+from .canvas import BLOCK_MIME, CATEGORY_COLORS, STATUS_COLORS, TEXT_ITEM, USER_COLOR
 
 MONO = QFontDatabase.systemFont(QFontDatabase.FixedFont)
 
@@ -117,6 +119,9 @@ class _BlockTree(QTreeWidget):
         drag.exec(Qt.CopyAction)
 
 
+NOTES_COLOR = "#9aa5b1"
+
+
 class Palette(QWidget):
     """Blocks as a tree of categories, like Godot's node list. Drag onto the canvas or double-click."""
 
@@ -166,6 +171,22 @@ class Palette(QWidget):
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
                 folder.addChild(item)
             folder.setExpanded(True)
+        # Not blocks: things you put on the canvas to explain the flow. They do not run.
+        folder = QTreeWidgetItem(["Notes  (1)"])
+        folder.setIcon(0, _square_icon(NOTES_COLOR, 12))
+        folder.setFlags(Qt.ItemIsEnabled)
+        font = folder.font(0)
+        font.setBold(True)
+        folder.setFont(0, font)
+        self.tree.addTopLevelItem(folder)
+        item = QTreeWidgetItem(["Text"])
+        item.setIcon(0, _square_icon(NOTES_COLOR))
+        item.setData(0, Qt.UserRole, TEXT_ITEM)
+        item.setToolTip(0, "<b>Text</b><br>A title or remark on the canvas, to explain the flow. It does not run."
+                           "<br>Double-click it on the canvas to write in it; Properties has its style and font.")
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
+        folder.addChild(item)
+        folder.setExpanded(True)
 
     def _filter(self, text: str):
         text = text.strip().lower()
@@ -299,6 +320,7 @@ class PropertiesPanel(QScrollArea):
         self.setWidgetResizable(True)
         self.doc = self.registry = self.block_id = self.note_id = None
         self._committing = False
+        self._custom_when = None  # (flow, block) whose schedule you chose to write as a cron line
         self.refresh()
 
     def _finish_editing(self):
@@ -383,7 +405,12 @@ class PropertiesPanel(QScrollArea):
             layout.addWidget(QLabel("This block type is not installed."))
             return
         config = spec.get("config") or {}
+        when = cls.type_id == "trigger.schedule"
+        if when:
+            layout.addWidget(self._when_box(config))
         for key, f in cls.config.items():
+            if when and key in ("cron", "at"):
+                continue  # in the When box
             widget = self._field_widget(key, f, config.get(key))
             words = key.replace("_", " ").capitalize().split(" ")
             label = QLabel(" ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words))
@@ -400,6 +427,176 @@ class PropertiesPanel(QScrollArea):
                 layout.addLayout(row)
         layout.addWidget(self._retry_box(spec))
         self._show_problems()
+
+    # --- when a Schedule block runs ----------------------------------------------------------
+
+    WHEN_KINDS = [("Every few minutes", "minutes"), ("Every hour", "hourly"), ("Every day", "daily"),
+                  ("Every weekday (Mon–Fri)", "weekdays"), ("Some days of the week", "weekly"),
+                  ("Every month", "monthly"), ("Custom (a cron line)", "custom")]
+    DEFAULT_PLANS = {"minutes": {"kind": "minutes", "every": 15}, "hourly": {"kind": "hourly", "minute": 0},
+                     "daily": {"kind": "daily", "hour": 7, "minute": 0},
+                     "weekdays": {"kind": "weekdays", "hour": 7, "minute": 0},
+                     "weekly": {"kind": "weekly", "days": [1], "hour": 7, "minute": 0},
+                     "monthly": {"kind": "monthly", "day": 1, "hour": 7, "minute": 0}}
+
+    def _set_when(self, cron=None, at=None):
+        """Repeating (cron) or one time (at): setting one clears the other, in one step."""
+        if self.doc is None or self.block_id not in self.doc.blocks:
+            return
+        self._commit(lambda: self.doc.set_block_values(self.block_id, {"cron": cron, "at": at}))
+
+    def _when_box(self, config: dict) -> QGroupBox:
+        """Repeating or one time; for repeating, how often (or a cron line); and the next runs."""
+        box = QGroupBox("When")
+        form = QFormLayout(box)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        cron, at = config.get("cron") or "", config.get("at") or ""
+        mode = QComboBox()
+        mode.addItem("Repeating", "cron")
+        mode.addItem("One time", "at")
+        mode.setCurrentIndex(1 if at and not cron else 0)
+        form.addRow("Runs", mode)
+        preview = QLabel()
+        preview.setWordWrap(True)
+        preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        def show_preview(cron_text, at_text):
+            from ..schedule import Trigger, describe_cron
+            timing = {"cron": cron_text} if cron_text else {"at": at_text} if at_text else {}
+            try:
+                trigger = Trigger({"schedule": timing})
+            except ValueError as e:
+                preview.setText("<span style='color: gray'>Not set yet: choose when it runs.</span>" if not timing
+                                else f"<span style='color: {STATUS_COLORS['failed']}'>{html.escape(str(e))}</span>")
+                return
+            upcoming, t = [], dt.datetime.now()
+            while len(upcoming) < 3 and (t := trigger.next_after(t)) is not None:
+                upcoming.append(t)
+            words = describe_cron(cron_text) if cron_text else f"Once, on {trigger.timing.when:%A %d %B %Y at %H:%M}"
+            preview.setText(f"<b>{html.escape(words)}</b><br>" + ("Next: " + ", ".join(
+                f"{t:%a %d %b %H:%M}" for t in upcoming) if upcoming else "This time has passed."))
+
+        def switch(_):
+            if mode.currentData() == "at" and not at:
+                soon = (dt.datetime.now() + dt.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+                self._set_when(at=f"{soon:%Y-%m-%d %H:%M}")
+            elif mode.currentData() == "cron" and not cron:
+                self._set_when(cron=None)  # repeating, not chosen yet
+            self.refresh()
+
+        mode.activated.connect(switch)
+        if mode.currentData() == "at":
+            self._at_rows(form, at, show_preview)
+        else:
+            self._cron_rows(form, cron, show_preview)
+        form.addRow(preview)
+        show_preview(cron if mode.currentData() == "cron" else "", at if mode.currentData() == "at" else "")
+        return box
+
+    def _at_rows(self, form, at: str, show_preview):
+        edit = QDateTimeEdit(calendarPopup=True)
+        edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        try:
+            when = dt.datetime.fromisoformat(str(at))
+        except ValueError:
+            when = dt.datetime.now().replace(second=0, microsecond=0)
+        edit.setDateTime(when)
+
+        def commit():
+            text = edit.dateTime().toPython().strftime("%Y-%m-%d %H:%M")
+            self._set_when(at=text)
+            show_preview("", text)
+
+        edit.editingFinished.connect(commit)
+        edit.calendarWidget().clicked.connect(lambda _: commit())
+        form.addRow("On", edit)
+
+    def _cron_rows(self, form, cron: str, show_preview):
+        from ..schedule import DAY_WORDS, MINUTE_STEPS, cron_plan, plan_cron
+
+        plan = cron_plan(cron) if cron else None
+        kind_box = QComboBox()
+        if not cron:
+            kind_box.addItem("Choose…", "")
+        for label, kind in self.WHEN_KINDS:
+            kind_box.addItem(label, kind)
+        custom = self._custom_when == (id(self.doc), self.block_id)
+        current = "" if not cron else "custom" if custom or not plan else plan["kind"]
+        kind_box.setCurrentIndex(kind_box.findData(current))
+        form.addRow("How often", kind_box)
+
+        def choose(_):
+            kind = kind_box.currentData()
+            self._custom_when = (id(self.doc), self.block_id) if kind == "custom" else None
+            if kind == "custom":
+                self._set_when(cron=cron or "0 7 * * MON-FRI")  # the line so far, to change as you like
+            elif kind:
+                self._set_when(cron=plan_cron(self.DEFAULT_PLANS[kind]))
+            self.refresh()
+
+        kind_box.activated.connect(choose)
+        if not current:
+            return
+        if current == "custom":
+            line = QLineEdit(cron)
+            line.setToolTip("minute hour day month weekday, e.g. 0 7-17/2 * * MON-FRI = every two hours from 7:00 "
+                            "to 17:00 on weekdays; * means every, */N every N, a-b a range, a,b a list")
+            line.editingFinished.connect(lambda: (self._set_when(cron=line.text().strip() or None),
+                                                  show_preview(line.text().strip(), "")))
+            form.addRow("Cron line", line)
+            hint = QLabel("minute · hour · day · month · weekday")
+            hint.setStyleSheet("color: gray;")
+            form.addRow("", hint)
+            return
+        plan = dict(plan)
+
+        def commit():
+            text = plan_cron(plan)
+            self._set_when(cron=text)
+            show_preview(text, "")
+
+        if current == "minutes":
+            every = QComboBox()
+            for n in MINUTE_STEPS:
+                every.addItem("minute" if n == 1 else f"{n} minutes", n)
+            every.setCurrentIndex(max(every.findData(plan["every"]), 0))
+            every.activated.connect(lambda _: (plan.update(every=every.currentData()), commit()))
+            form.addRow("Every", every)
+            return
+        if current == "hourly":
+            minute = QSpinBox(minimum=0, maximum=59, value=plan["minute"])
+            minute.editingFinished.connect(lambda: (plan.update(minute=minute.value()), commit()))
+            form.addRow("At minute", minute)
+            return
+        if current == "weekly":
+            days = QWidget()
+            row = QHBoxLayout(days)
+            row.setContentsMargins(0, 0, 0, 0)
+            for d in (1, 2, 3, 4, 5, 6, 0):
+                box = QCheckBox(DAY_WORDS[d])
+                box.setChecked(d in plan["days"])
+
+                def toggled(checked, d=d, box=box):
+                    chosen = (set(plan["days"]) | {d}) if checked else (set(plan["days"]) - {d})
+                    if not chosen:  # at least one day
+                        box.setChecked(True)
+                        return
+                    plan.update(days=sorted(chosen))
+                    commit()
+
+                box.toggled.connect(toggled)
+                row.addWidget(box)
+            form.addRow("On", days)
+        if current == "monthly":
+            day = QSpinBox(minimum=1, maximum=31, value=plan["day"])
+            day.setToolTip("Days 29 to 31 are skipped in months that do not have them")
+            day.editingFinished.connect(lambda: (plan.update(day=day.value()), commit()))
+            form.addRow("On day", day)
+        time_edit = QTimeEdit(QTime(plan["hour"], plan["minute"]))
+        time_edit.setDisplayFormat("HH:mm")
+        time_edit.editingFinished.connect(lambda: (plan.update(hour=time_edit.time().hour(),
+                                                               minute=time_edit.time().minute()), commit()))
+        form.addRow("At", time_edit)
 
     def _rename(self, new):
         old = self.block_id
