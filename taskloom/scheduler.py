@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import mail, ssh
+from . import __version__, mail, ssh
 from .config import Home
 from .flow import FlowError, load_flow
 from .history import History
@@ -82,7 +82,11 @@ class Scheduler:
             flow = load_flow(path)
         except FlowError as e:
             flow = None
-            self.notify("Scheduled flow cannot be read", f"{path.name}: {e.errors[0]}")
+            newer = any(m.startswith(("unknown top-level key", "unsupported flow format")) or ": unknown key" in m
+                        for m in e.errors)
+            hint = (f" (this scheduler is Taskloom {__version__}: if a newer Taskloom saved the flow, restart the "
+                    "scheduler from it)") if newer else ""
+            self.notify("Scheduled flow cannot be read", f"{path.name}: {e.errors[0]}{hint}")
         self._flows[str(path)] = (mtime, flow)
         return flow
 
@@ -262,6 +266,25 @@ def _keeper_loop(scheduler: Scheduler, stop: threading.Event):
         stop.wait(KEEPER_INTERVAL_SECONDS)
 
 
+def running_scheduler_version(home: Home) -> str | None:
+    """The version of the Taskloom whose scheduler wrote scheduler.pid last; None if it is older than the
+    first version that says (or none ever ran)."""
+    try:
+        pid = (home.root / "scheduler.pid").read_text().strip()
+        version, _, version_pid = (home.root / "scheduler.version").read_text().strip().partition(" ")
+    except OSError:
+        return None
+    return version if version_pid == pid else None
+
+
+def version_tuple(version: str | None) -> tuple:
+    """'0.14.1' -> (0, 14, 1), to compare versions; () when unknown (older than any)."""
+    try:
+        return tuple(int(part) for part in str(version).split(".")[:3])
+    except ValueError:
+        return ()
+
+
 def acquire_lock(home: Home):
     """Hold an exclusive lock for the life of this process, so only one scheduler runs per home."""
     home.root.mkdir(parents=True, exist_ok=True)
@@ -284,6 +307,8 @@ def serve(home: Home, headless: bool) -> int:
     with acquire_lock(home):  # held until the scheduler stops
         # The keeper checks this PID, however the scheduler was started.
         (home.root / "scheduler.pid").write_text(str(os.getpid()))
+        # The editor checks which Taskloom this is (with the PID: an older scheduler writes no version).
+        (home.root / "scheduler.version").write_text(f"{__version__} {os.getpid()}")
         stop = threading.Event()
         if not headless and _tray_available():
             return _serve_tray(home, stop)
@@ -362,7 +387,17 @@ def startup_file() -> Path:
 def startup_script(home: Home) -> str:
     """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
     command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler"])
-    return f'@echo off\nset "TASKLOOM_HOME={home.root}"\nstart "" {command}\n'
+    return f'@echo off\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={home.root}"\nstart "" {command}\n'
+
+
+def startup_script_outdated(text: str, home: Home) -> bool:
+    """A start-at-login script for this Taskloom folder that starts an older Taskloom than this one."""
+    if f'TASKLOOM_HOME={home.root}"' not in text:
+        return False  # another Taskloom folder's: not ours to change
+    import re
+
+    found = re.search(r"^rem Taskloom (\S+)", text, re.MULTILINE)
+    return version_tuple(found.group(1) if found else None) < version_tuple(__version__)
 
 
 def set_start_at_login(home: Home, enabled: bool) -> Path:

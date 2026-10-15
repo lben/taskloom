@@ -120,6 +120,9 @@ def test_only_one_scheduler_runs_per_home(env):
 
         assert second.returncode == 1
         assert "already running" in second.stderr
+        from taskloom import __version__
+        from taskloom.scheduler import running_scheduler_version
+        assert running_scheduler_version(Home(env.home)) == __version__  # the editor can tell its version
     finally:
         first.terminate()
         assert first.wait(timeout=30) == 0
@@ -177,3 +180,40 @@ def test_a_cron_line_no_plan_covers_is_custom():
     assert cron_plan("0 7-17/2 * * MON-FRI") is None
     assert describe_cron("0 7-17/2 * * MON-FRI") == "Custom: 0 7-17/2 * * MON-FRI"
     assert cron_plan("0 7 * * 1-5") == {"kind": "weekdays", "hour": 7, "minute": 0}  # numbers read too
+
+
+def test_a_start_at_login_script_says_which_version_starts(env, monkeypatch):
+    from taskloom import __version__
+    from taskloom.scheduler import startup_script_outdated
+
+    home = Home(env.home)
+    script = startup_script(home)
+
+    assert f"rem Taskloom {__version__}" in script and not startup_script_outdated(script, home)
+    older = script.replace(f"rem Taskloom {__version__}", "rem Taskloom 0.1.0")
+    assert startup_script_outdated(older, home)
+    assert startup_script_outdated(script.replace(f"rem Taskloom {__version__}\r\n", "").replace(
+        f"rem Taskloom {__version__}\n", ""), home)  # from before versions were written in it
+    newer = script.replace(f"rem Taskloom {__version__}", "rem Taskloom 999.0.0")
+    assert not startup_script_outdated(newer, home)  # a newer Taskloom set it: leave it
+    assert not startup_script_outdated(older.replace(str(env.home), "C:\\elsewhere"), home)  # another folder's
+
+
+def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
+    from taskloom import __version__
+
+    flow = env.write("flow.yaml", """
+        some_future_setting: 1
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "* * * * *"}
+    """)
+    home = Home(env.home)
+    home.set_scheduled(flow, True)
+    told = []
+    Scheduler(home, lambda title, message: told.append((title, message))).tick(T0)
+
+    (title, message), = told
+    assert title == "Scheduled flow cannot be read"
+    assert f"this scheduler is Taskloom {__version__}" in message and "restart the scheduler from it" in message

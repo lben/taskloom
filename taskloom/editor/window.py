@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -26,8 +27,9 @@ from ..engine import block_inputs, input_ports
 from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
-from ..launch import runner_command
-from ..scheduler import acquire_lock
+from ..launch import frozen, runner_command
+from ..scheduler import (acquire_lock, running_scheduler_version, set_start_at_login, startup_file,
+                         startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView, value_html
 from . import dialogs
@@ -185,6 +187,9 @@ class MainWindow(QMainWindow):
         self._countdown.timeout.connect(self._show_countdowns)
         self._countdown.start()
         self._scheduler_on = False
+        self._offered_restart = False  # asked once per session to restart an older scheduler
+        if frozen() and sys.platform == "win32":
+            self._update_start_at_login()
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
         self._poll.start()
@@ -865,9 +870,53 @@ class MainWindow(QMainWindow):
         self._scheduler_on = running
         self.scheduler_action.setIcon(scheduler_icon(running))
         self.scheduler_action.setText("Scheduler on" if running else "Scheduler off")
+        version = running_scheduler_version(self.home) if running else None
+        older = running and version_tuple(version) < version_tuple(__version__)
         self.scheduler_action.setToolTip(
-            "The scheduler is running scheduled flows. Click to stop it." if running else
+            (f"The scheduler is from an older Taskloom ({version or 'before 0.14.1'}); this is {__version__}. "
+             "Stop it and start it again here to run this version." if older else
+             "The scheduler is running scheduled flows. Click to stop it.") if running else
             "Scheduled flows only run while the scheduler is on. Click to start it.")
+        if older and not self._offered_restart:
+            self._offered_restart = True
+            answer = QMessageBox.question(
+                self, "Restart the scheduler?",
+                f"The scheduler that is running is from an older Taskloom ({version or 'before 0.14.1'}); this is "
+                f"Taskloom {__version__}. It may not read flows saved by this version (it says they cannot be "
+                "read). Restart it with this version?")
+            if answer == QMessageBox.Yes:
+                self.restart_scheduler()
+
+    def restart_scheduler(self):
+        """Stop the running scheduler, then start this version's once it has stopped."""
+        try:
+            os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Cannot stop the scheduler", f"{e}\n\nStop it from its tray icon, then start "
+                                                                  "it here with the Scheduler button.")
+            return
+        deadline = time.monotonic() + 15
+
+        def when_stopped():
+            if not self.scheduler_running():
+                self.start_scheduler()
+            elif time.monotonic() < deadline:
+                QTimer.singleShot(300, self, when_stopped)
+            else:
+                QMessageBox.warning(self, "Cannot restart the scheduler", "It did not stop. Stop it from its tray "
+                                    "icon, then start it here with the Scheduler button.")
+
+        QTimer.singleShot(300, self, when_stopped)
+
+    def _update_start_at_login(self):
+        """If you start the scheduler at login, it starts this version from now on (not an older one)."""
+        try:
+            path = startup_file()
+            if path.exists() and startup_script_outdated(path.read_text(encoding="utf-8"), self.home):
+                set_start_at_login(self.home, True)
+                self.statusBar().showMessage(f"The scheduler now starts at login with Taskloom {__version__}", 10000)
+        except (OSError, RuntimeError) as e:
+            self.statusBar().showMessage(f"Could not update starting the scheduler at login: {e}", 10000)
 
     def toggle_scheduler(self):
         if not self.scheduler_running():
@@ -892,6 +941,7 @@ class MainWindow(QMainWindow):
         if self.scheduler_running():
             self.statusBar().showMessage("The scheduler is already running", 5000)
             return
+        self._offered_restart = True  # this version's: nothing to offer
         subprocess.Popen(
             runner_command() + ["scheduler"], env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

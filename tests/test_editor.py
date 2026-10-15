@@ -1105,3 +1105,46 @@ def test_saving_while_typing_in_properties_keeps_what_you_typed(win, qtbot, tmp_
     QTest.keyClick(name, Qt.Key_S, Qt.ControlModifier)  # save before leaving the field
 
     assert "load_sales:" in flow.read_text() and not tab.doc.dirty
+
+
+def test_an_older_scheduler_running_is_offered_a_restart(win, monkeypatch):
+    import os
+
+    from taskloom.scheduler import acquire_lock
+
+    lock = acquire_lock(win.home)  # a scheduler from an older Taskloom: it writes no version
+    try:
+        (win.home.root / "scheduler.pid").write_text(str(os.getpid()))
+        win._show_scheduler_state(True)
+        win._show_scheduler_state(True)  # once per session, not every few seconds
+    finally:
+        lock.close()
+
+    assert [box[1][0] for box in win.message_boxes] == ["Restart the scheduler?"]
+    assert "older Taskloom" in win.scheduler_action.toolTip()
+    win.message_boxes.clear()
+
+
+def test_restarting_the_scheduler_stops_the_old_one_first(win, qtbot, monkeypatch):
+    import subprocess
+    import time
+
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+    old = subprocess.Popen([sys.executable, "-m", "taskloom.cli", "scheduler", "--headless"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 30
+        while not win.scheduler_running() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert win.scheduler_running()
+        started = []
+        monkeypatch.setattr(win, "start_scheduler", lambda: started.append(win.scheduler_running()))
+
+        win.restart_scheduler()
+
+        qtbot.waitUntil(lambda: bool(started), timeout=20_000)
+        assert started == [False]  # this version's starts only once the old one has stopped
+        assert old.wait(timeout=10) is not None
+    finally:
+        if old.poll() is None:
+            old.kill()

@@ -196,6 +196,10 @@ a tray icon and notifies you about failed or skipped runs. On Windows, **Tools â
 Settings â†’ Start the scheduler when I log in** (or `taskloom scheduler --at-login on`)
 adds it to your Startup folder; no admin needed.
 
+The scheduler keeps running when you open a newer Taskloom: the editor then offers to
+restart it with the newer version (a scheduler from an older version may not read flows
+the newer one saved), and starting at login switches to the newest version you opened.
+
 One scheduler runs every scheduled flow. It rereads changed flow files every 15 seconds,
 so a new cron line applies shortly after you save, without restarting it; a changed
 schedule counts from that moment (nothing before it counts as missed).
