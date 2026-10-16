@@ -540,6 +540,17 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
+def confirm_run_now(parent, flow_name: str, what: str) -> tuple[bool, bool]:
+    """Ask before Run now: (run it, and do not ask again)."""
+    box = QMessageBox(QMessageBox.Question, "Run now?", f"<b>Run {html.escape(flow_name)} now?</b><br><br>"
+                      f"{html.escape(what)}", QMessageBox.Yes | QMessageBox.Cancel, parent)
+    box.button(QMessageBox.Yes).setText("Run")
+    never = QCheckBox("Don't ask me again")
+    box.setCheckBox(never)
+    go = box.exec() == QMessageBox.Yes
+    return go, go and never.isChecked()
+
+
 class CheckFlowsDialog(QDialog):
     """What this version can fix in your flows, and what needs you; Back up and fix does the first."""
 

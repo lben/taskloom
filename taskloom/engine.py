@@ -180,12 +180,15 @@ def _summary(produced: dict) -> str:
 
 def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
              answers=None, as_of: dt.datetime | None = None, trigger: str | None = None,
-             only: str | None = None, inputs_from: int | None = None, given: dict | None = None) -> RunResult:
+             only: str | None = None, inputs_from: int | None = None, given: dict | None = None,
+             run_from: str | None = None) -> RunResult:
     """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions.
 
     `trigger` is the Schedule block that started a scheduled run; None means a manual run.
     `only` runs just that block: with the inputs it got in run `inputs_from`, and the ones in
     `given` ({input: Python expression}; empty means no value) instead.
+    `run_from` runs that block (with the inputs it got in run `inputs_from`) and every block after it;
+    the blocks before them are not run again: what they held in run `inputs_from` is used.
     """
     errors, warnings = validate(flow, registry, home)
     if errors:
@@ -193,9 +196,13 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     _, funcs = run_clock(flow, home, as_of)
     values = P.resolve(flow.params, overrides or {}, funcs)
     texts = dict(given or {})  # as you typed them: shown again next time, and read again then
-    if only is not None:  # refuse before a run is recorded
+    start = only or run_from
+    part = blocks_from(flow, registry, run_from) if run_from else None
+    if start is not None:  # refuse before a run is recorded
         given = _evaluate_inputs(texts, values)
-        _only_inputs(flow, registry, home, only, inputs_from, given, texts)
+        _only_inputs(flow, registry, home, start, inputs_from, given, texts)
+        if part is not None:
+            _from_before(flow, registry, home, part, inputs_from, run_from)
     cancel = cancel or threading.Event()
 
     history = History(home.history_db)
@@ -215,20 +222,24 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         runner.fired = _fired_triggers(flow, registry, trigger)
         runner.taking_part = _taking_part(flow, registry, runner.fired)
         try:
-            if only is not None:
+            if start is not None:
                 chosen = f"; inputs you chose: {', '.join(given)}" if given else ""
                 earlier = f", with the inputs it got in {history.label(inputs_from)}" if inputs_from is not None else ""
-                emit({"event": "log", "block": only, "level": "INFO", "message": f"running only {only}{earlier}{chosen}"})
+                what = f"running only {start}" if only else f"running from {start} on (it and the blocks after it)"
+                emit({"event": "log", "block": start, "level": "INFO", "message": f"{what}{earlier}{chosen}"})
                 if inputs_from is not None:
                     # This run holds everything the run it starts from held (so retrying another block
                     # from it works, and its tables survive that run being cleaned up), then takes its
                     # inputs from that.
-                    _carry_over(home.runs_dir / str(inputs_from), runner.workspace, _after(flow, only))
-                given = {k: Table.from_frame(v, runner.workspace / only / "inputs" / f"{k}.parquet")
+                    _carry_over(home.runs_dir / str(inputs_from), runner.workspace, _after(flow, start))
+                given = {k: Table.from_frame(v, runner.workspace / start / "inputs" / f"{k}.parquet")
                          if Table.is_frame(v) else v for k, v in given.items()}
-                runner.only = only
-                runner.only_inputs, runner.only_typed = _only_inputs(
-                    flow, registry, home, only, run_id if inputs_from is not None else None, given, texts)
+                runner.only, runner.run_from, runner.from_blocks = only, run_from, part
+                source = run_id if inputs_from is not None else None
+                runner.only_inputs, runner.only_typed = _only_inputs(flow, registry, home, start, source, given, texts)
+                if part is not None:
+                    runner.outputs, runner.blocked, runner.before_unhandled = _from_before(
+                        flow, registry, home, part, source, run_from)
             status = runner.run()
         except BaseException:
             # Never leave the run recorded as "running" (e.g. a forced second Ctrl+C).
@@ -253,16 +264,22 @@ class _Runner:
     only_inputs: dict = {}
     only_typed: dict = {}  # the ones you typed, as you typed them
     taking_part: set | None = None  # the blocks this run takes part in (None: all of them)
+    run_from: str | None = None  # run from this block on (with only_inputs) ...
+    from_blocks: set | None = None  # ... that is, these blocks: it and the blocks after it
+    before_unhandled: set = set()  # blocks before them whose failure nothing handles
+    _stopped_by_before = False  # one of those stopped a block of this run: the run has failed
 
     def run(self) -> str:
         unhandled_failure = False
-        for block_id in [self.only] if self.only else order(self.flow):
+        blocks = [self.only] if self.only else order(self.flow)
+        for block_id in [b for b in blocks if self.from_blocks is None or b in self.from_blocks]:
             cls = self.registry.get(self.flow.blocks[block_id].type)
             if cls is not None and cls.is_trigger and block_id not in self.fired:
                 self._keep_outputs(block_id, {}, status=SKIPPED)
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped"})
                 continue
-            if self.only is None and self.taking_part is not None and block_id not in self.taking_part:
+            if (self.only is None and self.from_blocks is None and self.taking_part is not None
+                    and block_id not in self.taking_part):
                 self._keep_outputs(block_id, {}, status=SKIPPED)
                 started = ", ".join(sorted(self.fired))
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped",
@@ -272,10 +289,11 @@ class _Runner:
             if self.cancel.is_set():
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
-            inputs = self.only_inputs if block_id == self.only else self._gather(block_id)
+            alone = block_id in (self.only, self.run_from)  # its inputs were worked out for this run
+            inputs = self.only_inputs if alone else self._gather(block_id)
             if inputs is None:
                 continue
-            if block_id == self.only:  # what it gets (maybe values you chose), saved before it can change them
+            if alone:  # what it gets (maybe values you chose), saved before it can change them
                 self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed)
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
             self._keep_outputs(block_id, produced, status=status)
@@ -286,12 +304,13 @@ class _Runner:
             # Handled: an error handler of it runs next (not in a run of just this block).
             handled = self.only is None and any(
                 e.src == block_id and e.src_port == ERROR_PORT
-                and (self.taking_part is None or e.dst in self.taking_part) for e in self.flow.edges)
+                and (self.taking_part is None or self.from_blocks is not None or e.dst in self.taking_part)
+                and (self.from_blocks is None or e.dst in self.from_blocks) for e in self.flow.edges)
             if status == "failed" and not handled:
                 unhandled_failure = True
         if self.cancel.is_set():
             return "cancelled"
-        return "failed" if unhandled_failure else "success"
+        return "failed" if unhandled_failure or self._stopped_by_before else "success"
 
     def _gather(self, block_id: str) -> dict | None:
         """The block's inputs from the blocks before it; None (and it is skipped) when it cannot run."""
@@ -299,6 +318,8 @@ class _Runner:
         # Nothing downstream of a failure runs: an edge from a normal output of a failed block (or of
         # a block skipped because of a failure) stops this block. Error outputs are the way out.
         if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
+            self._stopped_by_before |= any(e.src in self.before_unhandled and e.src_port != ERROR_PORT
+                                           for e in incoming)
             self.blocked.add(block_id)
             self._keep_outputs(block_id, {}, status=BLOCKED)
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped",
@@ -316,6 +337,7 @@ class _Runner:
             if not delivered or (missing and not getattr(port, "any_of", False)):
                 ready = False
                 after_failure |= any(e.src in self.blocked for e in missing)
+                self._stopped_by_before |= any(e.src in self.before_unhandled for e in missing)
                 empty.append(name)
                 continue
             # Several edges into one input give a list (in edge order), one edge gives the value.
@@ -581,9 +603,14 @@ class _Now:
     def __init__(self, flow, registry, run_dir, run_id):
         self.flow, self.registry, self.run_dir, self.run_id = flow, registry, run_dir, run_id
         self.memo: dict = {}
+        # A full run of a flow with start blocks never runs a block connected to none of them (it is off).
+        self.on = _taking_part(flow, registry, {b for b, s in flow.blocks.items()
+                                                if (c := registry.get(s.type)) is not None and c.is_trigger})
 
     def state(self, block: str) -> tuple[str, dict, str]:
         """(ran | failed | blocked | skipped | unknown, saved outputs, why)."""
+        if block not in self.memo and self.on is not None and block not in self.on:
+            self.memo[block] = ("skipped", {}, f"{block} is connected to no start block (it is off)")
         if block not in self.memo:
             saved = _saved(self.run_dir, block)
             if not saved.get(STALE):
@@ -632,6 +659,76 @@ class _Now:
         if after_failure:
             return "blocked", f"{block} would not run: something before it failed"
         return ("ready" if ready else "skipped"), ports
+
+
+def blocks_from(flow: Flow, registry, block: str) -> set[str]:
+    """What running from `block` on runs: it, and the blocks after it that are on (a block connected to no
+    start block is off)."""
+    on = _taking_part(flow, registry, {b for b, s in flow.blocks.items()
+                                       if (c := registry.get(s.type)) is not None and c.is_trigger})
+    return {block} | {b for b in _after(flow, block) if on is None or b in on}
+
+
+def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, start: str) -> tuple[dict, set, set]:
+    """For running the blocks in `part` (block `start` and the blocks after it): what the blocks before
+    them, which do not run, hold in run `run_id` ({(block, output): value}); which of them failed (or did
+    not run because something before them failed); and of those, the ones whose failure nothing handles.
+    Refuses (ValueError) when what one holds is not current. (`start` has its inputs worked out already.)"""
+    before = [e for e in flow.edges if e.dst in part and e.src not in part and e.dst != start]
+    if run_id is None:
+        if before:
+            raise ValueError(f"{before[0].dst} needs what {before[0].src} holds: say which run's to use (--inputs-from)")
+        return {}, set(), set()
+    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs)"
+    run_dir = home.runs_dir / str(run_id)
+    if not run_dir.is_dir():
+        raise ValueError(f"{cleaned}: run the whole flow instead")
+
+    def table(path: Path) -> Table:
+        if not path.exists():
+            raise ValueError(f"{cleaned}: run the whole flow instead")
+        return Table(path)
+
+    now, outputs, blocked, unhandled = _Now(flow, registry, run_dir, run_id), {}, set(), set()
+    for edge in before:
+        kind, saved, why = now.state(edge.src)
+        if kind == "unknown":
+            raise ValueError(f"{why}, or run from it")
+        if kind in ("failed", BLOCKED):
+            blocked.add(edge.src)  # as in a full run: nothing after it runs (but its error handlers)
+            if _unhandled_failure(flow, now, edge.src):
+                unhandled.add(edge.src)  # a failure nothing handles: a run it stops has failed
+        if kind in ("ran", "failed"):
+            if edge.src_port in saved.get(WITHHELD, []):
+                raise ValueError(f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
+                                 "so it was not kept: run the whole flow instead")
+            if edge.src_port in saved:
+                outputs[(edge.src, edge.src_port)] = _map_marks(saved[edge.src_port], table)
+    return outputs, blocked, unhandled
+
+
+def _unhandled_failure(flow: Flow, now: "_Now", block: str) -> bool:
+    """`block` failed, or did not run because a block before it failed: and nothing handles that failure
+    (none of the failed blocks behind it has an error handler that is on)."""
+    def handled(failed: str) -> bool:
+        return any(e.src == failed and e.src_port == ERROR_PORT and (now.on is None or e.dst in now.on)
+                   for e in flow.edges)
+
+    if now.state(block)[0] == "failed":
+        return not handled(block)
+    seen, todo = {block}, [block]
+    while todo:  # back through what stopped it: the error output of a failed block is the way out, but
+        current = todo.pop()  # a block that did not run gave no error either (as in the runner's rules)
+        for edge in flow.edges:
+            if (edge.dst == current and edge.src not in seen
+                    and (edge.src_port != ERROR_PORT or now.state(edge.src)[0] == BLOCKED)):
+                seen.add(edge.src)
+                kind = now.state(edge.src)[0]
+                if kind == "failed" and not handled(edge.src):
+                    return True
+                if kind == BLOCKED:
+                    todo.append(edge.src)
+    return False
 
 
 def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict,

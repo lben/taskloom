@@ -29,6 +29,8 @@ def win(qtbot, tmp_path, monkeypatch):
     shown = []
     for name in ("information", "warning", "question"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, _n=name, **k: shown.append((_n, a[1:3])) or QMessageBox.No))
+    from taskloom.editor import dialogs
+    monkeypatch.setattr(dialogs, "confirm_run_now", lambda *a, **k: (True, False))  # Run now: yes, run it
     w = MainWindow(Home(tmp_path / "home"))
     w.message_boxes = shown
     qtbot.addWidget(w)
@@ -1402,5 +1404,106 @@ def test_each_flows_tab_shows_its_last_result_and_next_run(win, qtbot, tmp_path)
 
     index = win.tabs.indexOf(tab)
     assert not win.tabs.tabIcon(index).isNull()
-    assert "ok " in win.tabs.tabToolTip(index) and "next" in win.tabs.tabToolTip(index)
+    import re
+    tip = win.tabs.tabToolTip(index)  # e.g. ok 2026-10-16 13:15:42 · next 2026-10-17 02:00:00
+    assert re.search(r"ok \d{4}-\d\d-\d\d \d\d:\d\d:\d\d · next \d{4}-\d\d-\d\d 02:00:00", tip), tip
     assert not hasattr(win, "flows_panel")  # the tabs say it: no separate list of flows
+
+
+def test_run_from_a_block_on_from_the_canvas(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "from.yaml", """
+        blocks:
+          load:
+            type: logic.python
+            config: {inputs: [], code: "open('loads.txt', 'a').write('x'); output = 20"}
+          compute:
+            type: logic.python
+            config: {inputs: [input], code: "import os; assert os.path.exists('fix.txt'), 'not fixed'; output = input + 1"}
+          report:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('report.txt', 'w').write(str(input))"}
+        edges:
+          - load.output -> compute.input
+          - compute.output -> report.input
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    assert tab.scene.nodes["report"].status == "skipped"
+    (tmp_path / "fix.txt").write_text("")
+
+    actions = [a.text() for a in win._block_menu_for(tab, "compute").actions()]
+    assert [t.split(" (")[0] for t in actions] == ["Run only this block, with the same inputs",
+                                                   "Run only this block, with inputs I choose…",
+                                                   "Run from this block on, with the same inputs"]
+    next(a for a in win._block_menu_for(tab, "compute").actions() if a.text().startswith("Run from")).trigger()
+    qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
+
+    assert tab.scene.nodes["compute"].status == "success" and tab.scene.nodes["report"].status == "success"
+    assert tab.scene.nodes["load"].status == "success"  # not run again: it keeps its result from before
+    assert (tmp_path / "report.txt").read_text() == "21" and (tmp_path / "loads.txt").read_text() == "x"
+
+
+def test_run_now_says_what_it_will_run_first(win, qtbot, tmp_path, monkeypatch):
+    from taskloom.editor import dialogs
+
+    asked = []
+    monkeypatch.setattr(dialogs, "confirm_run_now", lambda parent, name, what: asked.append(what) or (False, False))
+    flows = {
+        "none.yaml": ("blocks:\n  a:\n    type: logic.python\n    config: {inputs: [], code: 'pass'}\n",
+                      "no start blocks: every block in it runs"),
+        "manual.yaml": ("blocks:\n  manual:\n    type: trigger.manual\n  a:\n    type: logic.python\n"
+                        "    config: {inputs: [], code: 'pass'}\nedges: ['manual.start -> a.after']\n",
+                        "runs from its Manual Start block manual"),
+        "nightly.yaml": ("blocks:\n  nightly:\n    type: trigger.schedule\n    config: {cron: '0 2 * * *'}\n"
+                         "  a:\n    type: logic.python\n    config: {inputs: [], code: 'pass'}\n"
+                         "edges: ['nightly.start -> a.after']\n",
+                         "no Manual Start block, so it runs from all its start blocks (nightly)"),
+    }
+    for name, (text, expected) in flows.items():
+        tab = win.open_flow(write_flow(tmp_path / name, text))
+        win.run_flow(tab)
+        assert expected in asked[-1] and not tab.runs  # you said no: nothing ran
+
+    monkeypatch.setattr(dialogs, "confirm_run_now", lambda *a: asked.append("again") or (True, True))  # yes, never ask
+    win.run_flow(tab)
+    wait_done(qtbot, tab)
+    win.run_flow(tab)  # not asked again
+    wait_done(qtbot, tab)
+    assert asked.count("again") == 1 and len(tab.runs) == 2
+    win.run_flow(tab, start="nightly")  # from a start block's menu: you chose what runs, no question
+    qtbot.waitUntil(lambda: len(tab.runs) == 3 and not tab.running, timeout=60_000)
+    assert asked.count("again") == 1
+
+
+def test_flows_running_anywhere_are_listed_and_open_from_there(win, qtbot, tmp_path):
+    import subprocess
+
+    flow = write_flow(tmp_path / "slow.yaml", """
+        blocks:
+          wait:
+            type: logic.wait
+            config: {seconds: 60}
+    """)
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+    elsewhere = subprocess.Popen([sys.executable, "-m", "taskloom.cli", "run", str(flow)], env=env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # e.g. the scheduler's
+    try:
+        def shown():
+            win._refresh_statuses()
+            return win.running_flows.text() == "1 flow running"
+        qtbot.waitUntil(shown, timeout=30_000)
+
+        (item,) = win.running_flows.menu().actions()
+        assert item.text().startswith("slow")
+        item.trigger()  # opens it
+        assert win.current is not None and win.current.doc.path == flow.resolve()
+    finally:
+        elsewhere.kill()
+        elsewhere.wait()
+
+    win._refresh_statuses()  # its process is gone: not running any more (and recorded as failed)
+    assert win.running_flows.text() == "No flows running"
+    history = win._history()
+    assert history.runs(str(flow.resolve()))[0]["status"] == "failed"
+    history.close()

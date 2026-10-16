@@ -116,7 +116,12 @@ def cmd_run(args, home: Home) -> int:
         raise ValueError("--input gives a value to an input of the block that --only runs")
     if any("=" not in i for i in args.input):
         raise ValueError("write --input as NAME=VALUE, e.g. --input x=42")
-    if args.only and args.inputs_from and not overrides:  # re-running a block: same parameters as that run
+    if args.only and args.run_from:
+        raise ValueError("--only runs one block, --from a block and the blocks after it: use one of them")
+    if args.run_from and args.run_from in flow.blocks and getattr(
+            registry.get(flow.blocks[args.run_from].type), "is_trigger", False):
+        args.trigger, args.run_from = args.run_from, None  # from a start block: the flow, started by it
+    if (args.only or args.run_from) and args.inputs_from and not overrides:  # same parameters as that run
         from .history import History
 
         history = History(home.history_db)
@@ -128,7 +133,7 @@ def cmd_run(args, home: Home) -> int:
             history.close()
     result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
                       answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
-                      given=dict(i.split("=", 1) for i in args.input) if args.only else None)
+                      given=dict(i.split("=", 1) for i in args.input) if args.only else None, run_from=args.run_from)
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
@@ -257,7 +262,10 @@ def main(argv=None) -> int:
     p.add_argument("--json-events", action="store_true", help="print events as JSON lines on stdout")
     p.add_argument("--as-of", metavar="DATETIME", help="compute parameters as if it were this local time (YYYY-MM-DD HH:MM)")
     p.add_argument("--only", metavar="BLOCK", help="run just this block, with the inputs it got in --inputs-from")
-    p.add_argument("--inputs-from", metavar="RUN", type=int, help="the run whose inputs --only uses")
+    p.add_argument("--from", dest="run_from", metavar="BLOCK",
+                   help="run this block and every block after it; the blocks before them are not run again: "
+                        "what they held in --inputs-from is used")
+    p.add_argument("--inputs-from", metavar="RUN", type=int, help="the run whose inputs --only (or --from) uses")
     p.add_argument("--input", metavar="NAME=VALUE", action="append", default=[],
                    help="with --only: give this input a value (a Python expression, e.g. 42, 'text', [1, 2], "
                         "table('data.csv'); empty for no value) instead of the one it got in --inputs-from")

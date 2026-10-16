@@ -78,8 +78,10 @@ taskloom editor examples/daily-sales-report.yaml
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name and calendar.
 - Each open flow's tab shows its last result (a coloured dot) and, when it is scheduled, a
-  clock; hover the tab for when it last ran and runs next.
-- **Run now** saves, checks and runs the flow in a separate process: blocks show their
+  clock; hover the tab for when it last ran and runs next. Bottom left, **N flows running**
+  lists the flows running now (also on schedule or from a terminal): choose one to open it.
+- **Run now** (it first says what it will run; you can turn that off) saves, checks and
+  runs the flow in a separate process: blocks show their
   status live, the **Log** shows the selected block's messages, **Data preview** shows
   everything the selected block produced (tables as a grid, other values as text), and
   **Run history** reopens any past run. **Stop** cancels.
@@ -96,14 +98,17 @@ taskloom editor examples/daily-sales-report.yaml
   make the text bigger or smaller, and the square on its right to change where it wraps.
   Properties has its style (title, heading, normal, small), bold, italic, underline and
   any font installed on your computer. Text does not run.
-- **Retry one block after a fix:** right-click it → **Run this block again with the same
-  inputs**. Only that block runs, with what reached it in the run on the canvas; the other
-  blocks keep their results. (`taskloom run FLOW --only BLOCK --inputs-from RUN`.) Inputs
-  that held a password are never saved, so such a block needs a full run. After fixing a
-  block and retrying it, retry the blocks after it the same way: they get its new output,
-  by the same rules as a full run (Taskloom says which block to retry first if needed).
-- **Test a block with values you choose:** right-click it → **Run this block with inputs I
-  choose…**. Each input is filled in with what reached it in the run on the canvas (empty if
+- **Retry after a fix:** right-click the block →
+  - **Run only this block, with the same inputs**: only that block runs, with what reached
+    it in the run on the canvas; the other blocks keep their results
+    (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
+  - **Run from this block on, with the same inputs**: that block and every block after it
+    (error handlers too) run; the blocks before it are not run again, what they held in
+    the run on the canvas is used (`--from BLOCK --inputs-from RUN`).
+  Inputs that held a password are never saved, so such a block needs a full run. Blocks get
+  what a full run would give them now (Taskloom says which block to retry first if needed).
+- **Test a block with values you choose:** right-click it → **Run only this block, with
+  inputs I choose…**. Each input is filled in with what reached it in the run on the canvas (empty if
   it did not run); change any of them and press Run. Write values as Python: `42`, `'text'`,
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows

@@ -17,13 +17,13 @@ import yaml
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox, QSizePolicy,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import __version__, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..config import Home
-from ..engine import block_inputs, input_ports
+from ..engine import block_inputs, blocks_from, input_ports
 from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
@@ -38,7 +38,7 @@ from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
                      PreviewPanel, PropertiesPanel, scheduler_icon)
 from .runs import RunProcess
-from .safety import CRASH_LOG, Safety
+from .safety import CRASH_LOG, Safety, pid_alive
 
 CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
@@ -93,6 +93,26 @@ def _started_line(run_id: int, ts: str, params: str = "") -> dict:
             "header": True}
 
 
+class HoverMenuButton(QToolButton):
+    """A button whose menu opens when you hover it (or click it)."""
+
+    def __init__(self, text: str):
+        super().__init__(text=text)
+        self.setPopupMode(QToolButton.InstantPopup)
+        self.setAutoRaise(True)
+        self._hover = QTimer(self, singleShot=True, interval=300)
+        self._hover.timeout.connect(lambda: self.underMouse() and self.menu() and not self.menu().isEmpty()
+                                    and self.showMenu())
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._hover.start()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self._hover.stop()
+
+
 class FlowTab(QWidget):
     """One open flow: its document, canvas, runs and what they reported."""
 
@@ -127,7 +147,7 @@ class FlowTab(QWidget):
             done = sum(1 for i in self.block_info.values() if i.get("status") not in (None, "running"))
             return "running", f"running · {done} of {len(self.doc.blocks)} blocks done"
         if self.last:
-            when = (self.last.get("finished") or self.last["started"] or "")[11:16]
+            when = (self.last.get("finished") or self.last["started"] or "").replace("T", " ")[:19]  # date and seconds
             if self.last["status"] == "failed":
                 return "failed", f"failed {when}"
             return self.last["status"], f"{'ok' if self.last['status'] == 'success' else self.last['status']} {when}"
@@ -180,6 +200,12 @@ class MainWindow(QMainWindow):
         self._countdown.timeout.connect(self._show_countdowns)
         self._countdown.start()
         self._scheduler_on = False
+        # Bottom left: the flows running now (from here, on schedule or from a terminal); open one from it.
+        self.running_flows = HoverMenuButton("No flows running")
+        self.running_flows.setMenu(QMenu(self.running_flows))
+        self.running_flows.setToolTip("The flows running now, also on schedule or from a terminal: choose one to "
+                                      "open it")
+        self.statusBar().addWidget(self.running_flows)
         self._offered_restart = False  # asked once per session to restart an older scheduler
         if frozen() and sys.platform == "win32":
             self._update_start_at_login()
@@ -545,6 +571,12 @@ class MainWindow(QMainWindow):
         flow = self._ready_to_run(tab)
         if flow is None:
             return
+        if start is None and self.settings.value("ask_before_run_now", "yes") != "no":
+            go, never = dialogs.confirm_run_now(self, flow.name, self._run_now_says(flow))
+            if never:
+                self.settings.setValue("ask_before_run_now", "no")
+            if not go:
+                return
         overrides = {}
         if flow.params:
             _, funcs = run_clock(flow, self.home)
@@ -577,19 +609,37 @@ class MainWindow(QMainWindow):
                 return
         self.start_run(tab, overrides, extra)
 
-    def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), only: str | None = None) -> RunProcess:
+    def _run_now_says(self, flow) -> str:
+        """What Run now runs in this flow."""
+        starts = [b for b, spec in flow.blocks.items()
+                  if (cls := self.registry.get(spec.type)) is not None and cls.is_trigger]
+        manual = [b for b in starts if flow.blocks[b].type == "trigger.manual"]
+        if not starts:
+            return "This flow has no start blocks: every block in it runs."
+        if manual:
+            which = f"its Manual Start block {manual[0]}" if len(manual) == 1 else \
+                f"its Manual Start blocks ({', '.join(manual)})"
+            return (f"It runs from {which}: the blocks connected after it run; blocks connected to no start "
+                    "block do not. To run from one start block only, right-click it.")
+        return (f"It has no Manual Start block, so it runs from all its start blocks ({', '.join(starts)}), as "
+                "if each one's time had come. To run from one of them only, right-click it.")
+
+    def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), refresh: set | None = None) -> RunProcess:
+        """Start a run of the flow. `refresh`: the blocks it runs, when it does not run them all (one block,
+        or a block and what follows it): the rest of the canvas keeps the run it showed."""
         run = RunProcess(str(tab.doc.path), overrides, self.home, self, extra_args)
         run.event.connect(lambda e, t=tab, r=run: self._on_event(t, r, e))
         run.output.connect(lambda line, t=tab, r=run: self._on_output(t, r, line))
         run.finished.connect(lambda status, t=tab, r=run: self._on_finished(t, r, status))
         tab.runs.append(run)
-        if only is None:
+        if refresh is None:
             self._show_run(tab, run, keep_log=True)
-        else:  # re-running one block: the rest of the canvas keeps the run it showed
+        else:
             tab.shown_run = run
-            tab.block_info.pop(only, None)
-            tab.scene.set_status(only, None)
-            tab.scene.set_values(only, {})
+            for block in refresh:
+                tab.block_info.pop(block, None)
+                tab.scene.set_status(block, None)
+                tab.scene.set_values(block, {})
         run.start()
         self.flow_status.update_tab(tab)
         return run
@@ -630,13 +680,17 @@ class MainWindow(QMainWindow):
                      else "Run the flow from here")
             menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
             return menu
-        rerun = menu.addAction(f"Run this block again with the same inputs ({self._run_label(tab.shown_run_id)})"
-                               if tab.shown_run_id else "Run this block again with the same inputs")
+        shown = f" ({self._run_label(tab.shown_run_id)})" if tab.shown_run_id else ""
+        rerun = menu.addAction(f"Run only this block, with the same inputs{shown}")
         rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
         rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
-        choose = menu.addAction("Run this block with inputs I choose…")
+        choose = menu.addAction("Run only this block, with inputs I choose…")
         choose.setEnabled(not tab.running)
         choose.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id))
+        onwards = menu.addAction(f"Run from this block on, with the same inputs{shown}")
+        onwards.setToolTip("This block and every block after it; the blocks before it are not run again")
+        onwards.setEnabled(tab.shown_run_id is not None and not tab.running)
+        onwards.triggered.connect(lambda: self.rerun_block(tab, block_id, on=True))
         return menu
 
     def _show_run(self, tab: FlowTab, run: RunProcess | None, keep_log=False):
@@ -648,17 +702,21 @@ class MainWindow(QMainWindow):
             self.log.set_entries(list(tab.entries))
             self.bottom_tabs.setCurrentWidget(self.log)
 
-    def rerun_block(self, tab: FlowTab, block_id: str):
-        """Run one block again, with the inputs it got in the run on the canvas (e.g. after fixing it)."""
+    def rerun_block(self, tab: FlowTab, block_id: str, on: bool = False):
+        """Run one block again (`on`: and every block after it), with the inputs it got in the run on the
+        canvas (e.g. after fixing it); the blocks before it are not run again."""
         if tab.shown_run_id is None:
             QMessageBox.information(self, "Run the flow first", "There is no run on the canvas to take the inputs from.")
             return
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
-        if self._ready_to_run(tab) is None:  # saves your fix and checks the flow
+        flow = self._ready_to_run(tab)  # saves your fix and checks the flow
+        if flow is None:
             return
-        self.start_run(tab, {}, ["--only", block_id, "--inputs-from", str(tab.shown_run_id)], only=block_id)
+        blocks = blocks_from(flow, self.registry, block_id) if on else {block_id}
+        self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(tab.shown_run_id)],
+                       refresh=blocks)
 
     def run_block_with_inputs(self, tab: FlowTab, block_id: str):
         """Run one block with input values you type (filled in with what reached it in the run on the canvas)."""
@@ -686,7 +744,7 @@ class MainWindow(QMainWindow):
             args += ["--inputs-from", str(run_id)]
         for name, text in dialog.given().items():
             args += ["--input", f"{name}={text}"]
-        self.start_run(tab, {}, args, only=block_id)
+        self.start_run(tab, {}, args, refresh={block_id})
 
     def stop(self, tab: FlowTab | None):
         if tab is None:
@@ -826,6 +884,35 @@ class MainWindow(QMainWindow):
             if not tab.running:
                 self._load_last_run(tab)
         self._show_scheduler_state(self.scheduler_running())
+        self._show_running_flows()
+
+    def _show_running_flows(self):
+        """The flows running now, wherever they were started; a run whose process is gone is recorded as failed."""
+        if not self.home.history_db.exists():
+            return
+        history = self._history()
+        try:
+            running = []
+            for run in history.running():
+                if run["pid"] is None:
+                    continue  # from before runs recorded their process: cannot tell
+                if pid_alive(run["pid"]):
+                    running.append(run)
+                else:
+                    history.mark_crashed(run["id"], dt.datetime.now().isoformat(timespec="milliseconds"))
+        finally:
+            history.close()
+        count = len(running)
+        self.running_flows.setText("No flows running" if not count else
+                                   f"{count} flow{'s' if count > 1 else ''} running")
+        menu = self.running_flows.menu()
+        menu.clear()
+        today = dt.date.today().isoformat()
+        for run in running:
+            started = run["started"].replace("T", " ")[:19]
+            since = started[11:] if started.startswith(today) else started
+            menu.addAction(f"{run['flow']}  ·  running since {since} ({run_label(run['id'], None)})",
+                           lambda path=run["flow_path"]: self.open_flow(Path(path)))
 
     # --- scheduling -----------------------------------------------------------------
 

@@ -226,8 +226,7 @@ class FlowTabsStatus(QObject):
             return
         status, subtitle = tab.list_status()
         if tab.next_run:
-            when = tab.next_run.strftime("%H:%M" if tab.next_run.date() == dt.date.today() else "%a %d %b %H:%M")
-            subtitle += f" · next {when}"
+            subtitle += f" · next {tab.next_run:%Y-%m-%d %H:%M:%S}"
         self.tabs.setTabToolTip(index, f"{tab.doc.path or 'not saved yet'}\n{subtitle}")
         self.tabs.setTabIcon(index, status_icon(status, self._frame, clock=tab.next_run is not None))
         self.tabs.tabBar().setTabTextColor(index, QColor(STATUS_COLORS["failed"]) if status == "failed"

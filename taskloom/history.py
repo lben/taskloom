@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -48,6 +49,11 @@ class History:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = connect(path)
         self._db.executescript(SCHEMA)
+        if "pid" not in {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}:
+            try:  # a history file from before runs recorded their process: it gets the column
+                self._db.execute("ALTER TABLE runs ADD COLUMN pid INTEGER")
+            except sqlite3.OperationalError:
+                pass  # another process added it just now
         self._lock = threading.Lock()
 
     def _exec(self, sql, args=()):
@@ -56,8 +62,8 @@ class History:
 
     def start_run(self, flow: str, flow_path: str, params: dict, ts: str) -> int:
         cur = self._exec(
-            "INSERT INTO runs (flow, flow_path, params, status, started) VALUES (?, ?, ?, 'running', ?)",
-            (flow, flow_path, json.dumps(params, default=str), ts),
+            "INSERT INTO runs (flow, flow_path, params, status, started, pid) VALUES (?, ?, ?, 'running', ?, ?)",
+            (flow, flow_path, json.dumps(params, default=str), ts, os.getpid()),
         )
         return cur.lastrowid
 
@@ -126,6 +132,11 @@ class History:
     def logs(self, run_id: int) -> list[dict]:
         rows = self._exec("SELECT block, ts, level, message FROM logs WHERE run_id=? ORDER BY rowid", (run_id,))
         return [dict(zip(("block", "ts", "level", "message"), r)) for r in rows]
+
+    def running(self) -> list[dict]:
+        """Runs in progress, of any flow, with the process running each (None: from before runs said)."""
+        rows = self._exec("SELECT id, flow, flow_path, started, pid FROM runs WHERE status='running' ORDER BY id")
+        return [dict(zip(("id", "flow", "flow_path", "started", "pid"), r)) for r in rows]
 
     def mark_crashed(self, run_id: int, ts: str):
         """Record a run whose process died without finishing (e.g. it was killed)."""

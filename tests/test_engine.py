@@ -1222,3 +1222,277 @@ def test_an_error_handler_can_be_tried_on_the_latest_error_of_a_retried_block(en
 
     assert result.returncode == 0, result.stderr
     assert "second" in (env.root / "handled.txt").read_text()  # the error it got this time
+
+
+FROM_FLOW = """
+    blocks:
+      load:
+        type: logic.python
+        config: {inputs: [], code: "open('loads.txt', 'a').write('x'); output = 20"}
+      compute:
+        type: logic.python
+        config: {inputs: [input], code: "import os; assert os.path.exists('fix.txt'), 'not fixed'; output = input + 1"}
+      report:
+        type: logic.python
+        config: {inputs: [input], outputs: [], code: "open('report.txt', 'w').write(str(input))"}
+      handler:
+        type: logic.python
+        config: {inputs: [problem], outputs: [], code: "open('handled.txt', 'w').write(problem['error'])"}
+    edges:
+      - load.output -> compute.input
+      - compute.output -> report.input
+      - compute.error -> handler.problem
+"""
+
+
+def test_run_from_a_fixed_block_runs_it_and_what_follows_with_what_came_before(env):
+    flow = env.write("flow.yaml", FROM_FLOW)
+    env.taskloom("run", flow)  # compute fails, report is skipped
+    failed, _ = env.last_run()
+    assert "not fixed" in (env.root / "handled.txt").read_text()
+    (env.root / "fix.txt").write_text("")
+
+    result = env.taskloom("run", flow, "--from", "compute", "--inputs-from", failed)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "report.txt").read_text() == "21"  # compute and report ran
+    assert (env.root / "loads.txt").read_text() == "x"  # load did not: its saved output was used
+    run_id, _ = env.last_run()
+    assert set(env.block_status(run_id)) == {"compute", "report", "handler"}
+
+
+def test_run_from_a_block_runs_its_error_handler_when_it_fails(env):
+    flow = env.write("flow.yaml", FROM_FLOW)
+    env.taskloom("run", flow)
+    first, _ = env.last_run()
+    (env.root / "handled.txt").unlink()
+
+    result = env.taskloom("run", flow, "--from", "compute", "--inputs-from", first)
+
+    assert result.returncode == 0, result.stderr  # failed, but its handler ran: handled
+    assert "not fixed" in (env.root / "handled.txt").read_text()
+
+
+def test_run_from_refuses_out_of_date_blocks_before_it(env):
+    flow = env.write("flow.yaml", FROM_FLOW.replace("output = 20", "output = int(open('n.txt').read())"))
+    env.write("n.txt", "1")
+    (env.root / "fix.txt").write_text("")
+    env.taskloom("run", flow)
+    first, _ = env.last_run()
+    # load ran again on its own: compute (after it) now holds what it made from load's old output
+    env.write("n.txt", "5")
+    assert env.taskloom("run", flow, "--only", "load", "--inputs-from", first).returncode == 0
+    only_load, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "report", "--inputs-from", only_load)
+    assert result.returncode == 2 and "retry compute first" in result.stderr
+
+    result = env.taskloom("run", flow, "--from", "compute", "--inputs-from", only_load)
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "report.txt").read_text() == "6"
+
+
+def test_run_from_fails_when_an_earlier_unhandled_failure_stops_a_block(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('a is broken')"}
+          b:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          c:
+            type: logic.python
+            config: {inputs: [x, y], outputs: [], code: "pass"}
+        edges:
+          - a.output -> c.x
+          - b.output -> c.y
+    """)
+    assert env.taskloom("run", flow).returncode == 1
+    first, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "b", "--inputs-from", first)
+
+    assert result.returncode == 1  # as a full run: a's failure stops c, and nothing handles it
+    _, status = env.last_run()
+    assert status == "failed"
+
+
+def test_run_from_keeps_switched_off_blocks_off(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          start:
+            type: trigger.manual
+          query:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          report:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('report.txt', 'w').write('x')"}
+          mailer:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('mailer.txt', 'w').write('x')"}
+        edges:
+          - start.start -> report.after
+          - query.output -> report.input
+          - query.output -> mailer.input
+    """)
+    env.taskloom("run", flow)
+    first, _ = env.last_run()
+    (env.root / "report.txt").unlink()
+
+    assert env.taskloom("run", flow, "--from", "query", "--inputs-from", first).returncode == 0
+
+    assert (env.root / "report.txt").exists() and not (env.root / "mailer.txt").exists()
+
+
+def test_run_from_starts_with_the_inputs_run_only_would_use(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          q:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          s:
+            type: logic.python
+            config: {inputs: [input], code: "output = input"}
+          x:
+            type: logic.python
+            config: {inputs: [input], code: "output = input * 10"}
+          y:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('y.txt', 'w').write(str(input))"}
+        edges:
+          - q.output -> s.input
+          - s.output -> x.input
+          - x.output -> y.input
+    """)
+    env.taskloom("run", flow)
+    run_id, _ = env.last_run()
+    assert env.taskloom("run", flow, "--only", "q", "--inputs-from", run_id).returncode == 0  # s is out of date now
+    run_id, _ = env.last_run()
+    assert env.taskloom("run", flow, "--only", "x", "--inputs-from", run_id, "--input", "input=5").returncode == 0
+    run_id, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "x", "--inputs-from", run_id)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "y.txt").read_text() == "50"
+
+
+def test_run_from_needs_a_run_when_blocks_after_it_need_data_from_before(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          a:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          b:
+            type: logic.python
+            config: {inputs: [], code: "output = 2"}
+          c:
+            type: logic.python
+            config: {inputs: [x, y], outputs: [], code: "pass"}
+        edges:
+          - a.output -> c.x
+          - b.output -> c.y
+    """)
+
+    result = env.taskloom("run", flow, "--from", "b")
+
+    assert result.returncode == 2 and "--inputs-from" in result.stderr
+
+
+def test_run_from_is_not_stopped_by_a_switched_off_block_after_it(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          start:
+            type: trigger.manual
+          q:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          r:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('r.txt', 'w').write('x')"}
+          m:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('m.txt', 'w').write('x')"}
+          h:
+            type: logic.python
+            config: {inputs: [problem], outputs: [], code: "pass"}
+        edges:
+          - start.start -> r.after
+          - q.output -> r.input
+          - q.output -> m.input
+          - r.error -> h.problem
+          - m.error -> h.problem
+    """)
+    env.taskloom("run", flow)
+    first, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "q", "--inputs-from", first)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "r.txt").exists() and not (env.root / "m.txt").exists()
+
+
+def test_run_from_is_not_failed_by_a_failure_that_was_handled(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          x:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('x is broken')"}
+          h:
+            type: logic.python
+            config: {inputs: [problem], outputs: [], code: "pass"}
+          b:
+            type: logic.python
+            config: {inputs: [input], code: "output = input"}
+          y:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          d:
+            type: logic.python
+            config: {inputs: [p, q], outputs: [], code: "pass"}
+        edges:
+          - x.error -> h.problem
+          - x.output -> b.input
+          - b.output -> d.p
+          - y.output -> d.q
+    """)
+    assert env.taskloom("run", flow).returncode == 0  # x failed, but its handler ran: handled
+    first, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "y", "--inputs-from", first)
+
+    assert result.returncode == 0, result.stderr  # d is stopped by that handled failure, as in a full run
+
+
+def test_run_from_fails_when_an_unhandled_failure_reaches_it_through_a_handler_that_never_ran(env):
+    flow = env.write("flow.yaml", """
+        blocks:
+          f:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError('f is broken')"}
+          a:
+            type: logic.python
+            config: {inputs: [input], code: "output = input"}
+          h:
+            type: logic.python
+            config: {inputs: [problem], code: "output = 'fallback'"}
+          x:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+          d:
+            type: logic.python
+            config: {inputs: [p, q], outputs: [], code: "pass"}
+        edges:
+          - f.output -> a.input
+          - a.error -> h.problem
+          - h.output -> d.p
+          - x.output -> d.q
+    """)
+    assert env.taskloom("run", flow).returncode == 1
+    first, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "x", "--inputs-from", first)
+
+    assert result.returncode == 1  # f's failure stops d (through a, and h that never ran): as a full run
