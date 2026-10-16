@@ -1197,3 +1197,28 @@ def test_a_block_that_was_never_attempted_is_not_taken_as_skipped(env):
 
     assert result.returncode == 2 and "a did not run in run #" in result.stderr
     assert not (env.root / "got.txt").exists()
+
+
+def test_an_error_handler_can_be_tried_on_the_latest_error_of_a_retried_block(env):
+    env.write("why.txt", "first")
+    flow = env.write("flow.yaml", """
+        blocks:
+          load:
+            type: logic.python
+            config: {inputs: [], code: "raise RuntimeError(open('why.txt').read())"}
+          handler:
+            type: logic.python
+            config: {inputs: [problem], outputs: [], code: "open('handled.txt', 'w').write(problem['error'])"}
+        edges:
+          - load.error -> handler.problem
+    """)
+    env.taskloom("run", flow)
+    first, _ = env.last_run()
+    env.write("why.txt", "second")
+
+    assert env.taskloom("run", flow, "--only", "load", "--inputs-from", first).returncode == 1  # it fails again
+    retried, _ = env.last_run()
+    result = env.taskloom("run", flow, "--only", "handler", "--inputs-from", retried)
+
+    assert result.returncode == 0, result.stderr
+    assert "second" in (env.root / "handled.txt").read_text()  # the error it got this time
