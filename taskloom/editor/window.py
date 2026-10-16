@@ -416,6 +416,8 @@ class MainWindow(QMainWindow):
             if not chosen:
                 return False
             path = Path(chosen)
+        if path.resolve() != tab.doc.path:
+            tab.seen_up_to = None  # another file: which of its runs you saw is read again
         tab.doc.save(path.resolve())
         self.safety.drop_copy(tab.tab_id)
         self._load_last_run(tab)
@@ -791,21 +793,24 @@ class MainWindow(QMainWindow):
         return History(self.home.history_db)
 
     def _load_last_run(self, tab: FlowTab):
-        if tab.doc.path is None or not self.home.history_db.exists():
+        if tab.doc.path is None:
             return
-        history = self._history()
-        runs = [r for r in history.runs(str(tab.doc.path), limit=20) if r["status"] != "running"]
-        history.close()
+        runs = []
+        if self.home.history_db.exists():
+            history = self._history()
+            runs = [r for r in history.runs(str(tab.doc.path), limit=20) if r["status"] != "running"]
+            history.close()
         tab.last = runs[0] if runs else None
         self.flows_panel.update_tab(tab)
+        if tab.seen_up_to is None:
+            # Just opened: runs you saw before start nothing (a flow opens clean); none yet: every run to
+            # come is new.
+            stored = self.settings.value(_seen_key(tab.doc.path))
+            tab.seen_up_to = int(stored) if stored is not None else runs[0]["id"] if runs else 0
+            self._mark_seen(tab, tab.seen_up_to)
         if tab.following_latest and not tab.running and runs:
             # Each run you have not seen yet (e.g. started by the scheduler, also while this flow was closed),
-            # oldest first, its messages after the ones already shown. Runs you saw before start nothing:
-            # a flow opens clean.
-            if tab.seen_up_to is None:
-                stored = self.settings.value(_seen_key(tab.doc.path))
-                tab.seen_up_to = int(stored) if stored is not None else runs[0]["id"]
-                self._mark_seen(tab, tab.seen_up_to)
+            # oldest first, its messages after the ones already shown.
             for r in reversed([r for r in runs if r["id"] > tab.seen_up_to]):
                 self.show_history_run(r["id"], tab, keep_log=True)
 

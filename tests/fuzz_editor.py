@@ -125,8 +125,8 @@ for step in range(steps):
             elif what == "resize":
                 tab.scene.clearSelection()
                 n.setSelected(True)
-                a = at(n, n._handle().center().toPoint())
-                b = a + QPoint(rnd.randint(-80, 120), 0)
+                a = at(n, rnd.choice([n._handle, n._edge])().center().toPoint())
+                b = a + QPoint(rnd.randint(-80, 120), rnd.randint(-60, 60))
                 QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, a)
                 QTest.mouseMove(view.viewport(), b)
                 QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, b)

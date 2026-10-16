@@ -200,7 +200,7 @@ def test_a_block_connected_to_no_start_block_does_not_run(env):
     blocks = history.blocks(run_id)
     history.close()
     assert blocks["health"]["status"] == "skipped"
-    assert blocks["health"]["summary"] == "not connected to the start of this run"
+    assert blocks["health"]["summary"] == "not connected to manual, which started this run"
 
 
 def test_a_start_block_connected_to_nothing_is_reported(env):
@@ -305,3 +305,15 @@ def test_a_skipped_block_says_why(env):
 
     assert blocks["on_yes"]["summary"] == "nothing reached its 'value' input"
     assert blocks["after_boom"]["summary"] == "something before it failed"
+
+
+def test_in_a_scheduled_run_a_block_after_manual_start_says_what_started_the_run(env):
+    flow = env.write("flow.yaml", TWO_STARTS)
+
+    env.taskloom("run", flow, "--trigger", "nightly")
+
+    run_id, _ = env.last_run()
+    history = History(env.home / "history.db")
+    blocks = history.blocks(run_id)
+    history.close()
+    assert blocks["by_hand"]["summary"] == "not connected to nightly, which started this run"

@@ -41,6 +41,7 @@ class FlowDocument(QObject):
         self.data.setdefault("edges", [])
         self.path = path
         self.dirty = False
+        self.renamed: dict[str, str] = {}  # old block name -> new, until the canvas has followed it
         self._place_unpositioned()
         self._undo: list[dict] = []
         self._redo: list[dict] = []
@@ -142,6 +143,19 @@ class FlowDocument(QObject):
             note[key] = value
         self._done()
 
+    def set_note_values(self, note_id: str, values: dict):
+        """Set several values of a text in one step (None, "" or False removes one)."""
+        note = self.notes[note_id]
+        if all(note.get(k) == v or (v in (None, "", False) and k not in note) for k, v in values.items()):
+            return
+        self._change()
+        for key, value in values.items():
+            if value in (None, "", False):
+                note.pop(key, None)
+            else:
+                note[key] = value
+        self._done()
+
     def move_notes(self, positions: dict):
         self._change()
         for note_id, (x, y) in positions.items():
@@ -222,6 +236,7 @@ class FlowDocument(QObject):
         if new in self.blocks:
             raise ValueError(f"a block named '{new}' already exists")
         self._change()
+        self.renamed[old] = new  # (the canvas keeps it selected under its new name)
         self.data["blocks"] = {(new if k == old else k): v for k, v in self.blocks.items()}
         edges = []
         for text in self.data["edges"]:

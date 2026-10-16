@@ -973,14 +973,24 @@ def test_text_from_the_blocks_tree_written_and_resized_on_the_canvas(win, qtbot)
     QTest.keyClick(tab.view, Qt.Key_Escape)  # done writing
     qtbot.waitUntil(lambda: tab.doc.notes.get(note_id, {}).get("text") == "Hello worl")
 
-    item = tab.scene.note_items[note_id]
-    item.setSelected(True)
-    width = item.boundingRect().width()
-    corner = tab.view.mapFromScene(item.mapToScene(item._handle().center()))
-    QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, corner)
-    QTest.mouseMove(view, corner + QPointF(60, 0).toPoint())
-    QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, corner + QPointF(120, 0).toPoint())
-    qtbot.waitUntil(lambda: tab.doc.notes[note_id].get("width", 0) > width + 60)
+    def drag(grip, by):
+        item = tab.scene.note_items[note_id]
+        item.setSelected(True)
+        a = tab.view.mapFromScene(item.mapToScene(grip(item).center()))
+        QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, a)
+        QTest.mouseMove(view, a + by / 2)
+        QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, a + by)
+
+    drag(lambda i: i._handle(), QPointF(0, 40).toPoint())  # the corner, straight down: bigger text
+    qtbot.waitUntil(lambda: tab.doc.notes[note_id].get("size", 0) > 15)
+    assert tab.scene.note_items[note_id].font().pointSizeF() == tab.doc.notes[note_id]["size"]
+    size = tab.doc.notes[note_id]["size"]
+    width = tab.scene.note_items[note_id].boundingRect().width()
+    drag(lambda i: i._edge(), QPointF(100, 0).toPoint())  # the right edge: where its lines wrap
+    qtbot.waitUntil(lambda: tab.doc.notes[note_id].get("width", 0) > width + 50)
+    assert tab.doc.notes[note_id]["size"] == size  # the text kept its size
+    tab.doc.undo()
+    assert "width" not in tab.doc.notes[note_id]
     tab.doc.dirty = False
 
 
@@ -1148,3 +1158,194 @@ def test_restarting_the_scheduler_stops_the_old_one_first(win, qtbot, monkeypatc
     finally:
         if old.poll() is None:
             old.kill()
+
+
+def test_a_scheduled_run_shows_its_result_and_the_countdown(win, tmp_path):
+    import subprocess
+
+    flow = write_flow(tmp_path / "nightly.yaml", """
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - nightly.start -> work.after
+    """)
+    tab = win.open_flow(flow)  # a flow that never ran: its first run, on schedule, is new to you
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+    subprocess.run([sys.executable, "-m", "taskloom.cli", "run", str(flow), "--trigger", "nightly"], env=env,
+                   check=True, capture_output=True)  # as the scheduler does
+
+    win._refresh_statuses()
+    win._show_countdowns()
+
+    node = tab.scene.nodes["nightly"]
+    assert node.status == "success" and node.countdown.startswith("next ")  # both: result and countdown
+    assert node.countdown_area.isVisible() and "Next runs" in node.countdown_area.toolTip()
+    assert tab.scene.nodes["work"].status == "success"
+
+
+def test_clicking_a_texts_grips_without_dragging_changes_nothing(win, qtbot):
+    from PySide6.QtCore import QPointF
+
+    win.show()
+    qtbot.waitExposed(win)
+    tab = win.new_flow()
+    tab.view.add_item("canvas.text", QPointF(0, 0))
+    (note_id,) = tab.doc.notes
+    before = dict(tab.doc.notes[note_id])
+    for grip in ("_handle", "_edge"):
+        item = tab.scene.note_items[note_id]
+        item.setSelected(True)
+        at = tab.view.mapFromScene(item.mapToScene(getattr(item, grip)().center()))
+        QTest.mouseClick(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, at)
+        qtbot.wait(50)
+
+    assert {k: v for k, v in tab.doc.notes[note_id].items() if k not in ("x", "y")} == \
+           {k: v for k, v in before.items() if k not in ("x", "y")}
+    tab.doc.dirty = False
+
+
+def test_save_as_over_a_flow_you_saw_does_not_replay_its_runs(win, tmp_path, monkeypatch):
+    import subprocess
+
+    seen = write_flow(tmp_path / "seen.yaml", """
+        blocks:
+          python:
+            type: logic.python
+            config: {inputs: [], code: "output = 1"}
+    """)
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
+    subprocess.run([sys.executable, "-m", "taskloom.cli", "run", str(seen)], env=env, check=True, capture_output=True)
+    win.close_tab(win.open_flow(seen))  # you saw its runs
+    fresh = win.open_flow(write_flow(tmp_path / "fresh.yaml", seen.read_text()))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(seen), "")))
+
+    win.save(fresh, ask=True)
+
+    assert fresh.scene.nodes["python"].status is None and not fresh.entries
+
+
+def test_a_size_field_left_unchanged_keeps_a_dragged_size(win):
+    from PySide6.QtWidgets import QAbstractSpinBox
+
+    tab = win.new_flow()
+    note_id = tab.doc.add_note(0, 0)
+    tab.doc.set_note_value(note_id, "size", 10.7)
+    tab.scene.note_items[note_id].setSelected(True)
+    size = next(s for s in win.properties.findChildren(QAbstractSpinBox) if s.suffix() == " pt")
+
+    size.editingFinished.emit()
+    assert tab.doc.notes[note_id]["size"] == 10.7  # left unchanged: kept
+
+    size.setValue(11)  # the style's own size: no size of its own
+    size.editingFinished.emit()
+    assert "size" not in tab.doc.notes[note_id]
+    tab.doc.dirty = False
+
+
+def test_renaming_a_block_then_changing_the_selection(win, qtbot):
+    from PySide6.QtWidgets import QLineEdit
+
+    win.show()
+    qtbot.waitExposed(win)
+    win.activateWindow()
+    tab = win.new_flow()
+    tab.doc.add_block("logic.python", 0, 0)
+    tab.scene.nodes["python"].setSelected(True)
+    name = next(e for e in win.properties.findChildren(QLineEdit) if e.text() == "python")
+    name.setFocus()
+    qtbot.waitUntil(name.hasFocus)
+    name.setText("load")
+
+    win.copy_blocks()
+    win.paste_blocks()  # the selection changes (to the copy) while the name is being typed
+    qtbot.wait(50)
+
+    assert "load" in tab.doc.blocks and "python" not in tab.doc.blocks
+    tab.doc.dirty = False
+
+
+def test_the_right_edge_grip_of_a_one_line_text_only_changes_where_it_wraps(win, qtbot):
+    from PySide6.QtCore import QPointF
+
+    win.show()
+    qtbot.waitExposed(win)
+    tab = win.new_flow()
+    note_id = tab.doc.add_note(0, 0)
+    tab.doc.set_note_value(note_id, "style", "small")  # one short line
+    item = tab.scene.note_items[note_id]
+    item.setSelected(True)
+    assert not item._edge().intersects(item._handle())
+    edge = item._edge()
+    for y in (edge.top() + 1, edge.center().y(), edge.bottom() - 1):  # anywhere in the drawn square
+        item = tab.scene.note_items[note_id]
+        item.setSelected(True)
+        a = tab.view.mapFromScene(item.mapToScene(QPointF(edge.center().x(), y)))
+        QTest.mousePress(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, a)
+        QTest.mouseMove(tab.view.viewport(), a + QPointF(20, 0).toPoint())
+        QTest.mouseRelease(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, a + QPointF(40, 0).toPoint())
+        qtbot.wait(50)
+
+    assert "size" not in tab.doc.notes[note_id] and tab.doc.notes[note_id]["width"] > 0
+    tab.doc.dirty = False
+
+
+def test_a_renamed_block_stays_selected(win):
+    from PySide6.QtWidgets import QLineEdit
+
+    tab = win.new_flow()
+    tab.doc.add_block("logic.python", 0, 0)
+    tab.scene.nodes["python"].setSelected(True)
+    name = next(e for e in win.properties.findChildren(QLineEdit) if e.text() == "python")
+    name.setText("load")
+    name.editingFinished.emit()  # Enter
+
+    assert tab.scene.selected_block_ids() == ["load"]
+    assert any(e.text() == "load" for e in win.properties.findChildren(QLineEdit))
+    tab.doc.dirty = False
+
+
+def test_the_space_next_to_an_unselected_text_is_empty_canvas(win, qtbot):
+    from PySide6.QtCore import QPointF
+
+    win.show()
+    qtbot.waitExposed(win)
+    tab = win.new_flow()
+    note_id = tab.doc.add_note(0, 0, "Body remark line one")
+    tab.scene.clearSelection()
+    item = tab.scene.note_items[note_id]
+    beside = item.mapToScene(QPointF(item._text_rect().right() + 6, item._text_rect().center().y()))
+    a = tab.view.mapFromScene(beside)
+    steps = len(tab.doc._undo)
+
+    QTest.mousePress(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, a)
+    QTest.mouseMove(tab.view.viewport(), a + QPointF(30, 20).toPoint())
+    QTest.mouseRelease(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, a + QPointF(60, 40).toPoint())
+    qtbot.wait(50)
+
+    assert (tab.doc.notes[note_id]["x"], tab.doc.notes[note_id]["y"]) == (0, 0) and len(tab.doc._undo) == steps
+    tab.doc.dirty = False
+
+
+def test_dragging_a_texts_corner_straight_left_makes_it_smaller(win, qtbot):
+    from PySide6.QtCore import QPointF
+
+    win.show()
+    qtbot.waitExposed(win)
+    tab = win.new_flow()
+    note_id = tab.doc.add_note(0, 0, "A remark to shrink")
+    item = tab.scene.note_items[note_id]
+    item.setSelected(True)
+    a = tab.view.mapFromScene(item.mapToScene(item._handle().center()))
+
+    QTest.mousePress(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, a)
+    QTest.mouseMove(tab.view.viewport(), a - QPointF(20, 0).toPoint())
+    QTest.mouseRelease(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, a - QPointF(40, 0).toPoint())
+    qtbot.wait(50)
+
+    assert 0 < tab.doc.notes[note_id].get("size", 99) < 11
+    tab.doc.dirty = False

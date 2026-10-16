@@ -1,6 +1,6 @@
 """Taskloom: build automations from connected blocks."""
 
-__version__ = "0.14.1"
+__version__ = "0.14.2"
 
 from .block import Block, fields, ports
 from .table import Table

@@ -12,6 +12,7 @@ from PySide6.QtCore import (QAbstractTableModel, QDate, QMimeData, QModelIndex, 
                             QTimer, Signal)
 from PySide6.QtGui import QColor, QDrag, QFontDatabase, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
+                               QDoubleSpinBox,
                                QFileDialog, QFormLayout,
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
@@ -23,7 +24,7 @@ from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields
 from ..calendars import load_calendar
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
-from .canvas import BLOCK_MIME, CATEGORY_COLORS, STATUS_COLORS, TEXT_ITEM, USER_COLOR
+from .canvas import BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR
 
 MONO = QFontDatabase.systemFont(QFontDatabase.FixedFont)
 
@@ -331,7 +332,10 @@ class PropertiesPanel(QScrollArea):
             focused.clearFocus()
 
     def show_block(self, doc, registry, block_id):
+        shown = (self.doc, self.block_id)
         self._finish_editing()
+        if (doc, block_id) == shown and self.block_id != block_id:
+            block_id = self.block_id  # finishing renamed it: show it under its new name
         self.doc, self.registry, self.block_id, self.note_id = doc, registry, block_id, None
         self.refresh()
 
@@ -377,7 +381,7 @@ class PropertiesPanel(QScrollArea):
         if self.doc is not None and self.note_id is not None:
             self._note_form(layout)
             return
-        if self.doc is None or self.block_id is None:
+        if self.doc is None or self.block_id not in self.doc.blocks:  # (a name it no longer has: none)
             hint = QLabel("Select a block to see its properties.\n\nDrag blocks from the tree on the left, "
                           "or double-click them. Connect an output (right side) to an input (left side) by dragging.")
             hint.setWordWrap(True)
@@ -783,9 +787,20 @@ class PropertiesPanel(QScrollArea):
         for name in ("title", "heading", "normal", "small"):
             style.addItem(name.capitalize(), name)
         style.setCurrentIndex(style.findData(note.get("style") or "normal"))
-        style.activated.connect(lambda _: self._set_note("style", None if style.currentData() == "normal"
-                                                          else style.currentData()))
+        # A style sets its size: a size you chose (or dragged) gives way to it.
+        style.activated.connect(lambda _: (self._set_note_values(
+            {"style": None if style.currentData() == "normal" else style.currentData(), "size": None}),
+            self.refresh()))
         form.addRow("Style", style)
+        style_size = float(NOTE_STYLES.get(note.get("style") or "normal", 11))
+        current = float(note.get("size") or style_size)
+        size = QDoubleSpinBox(minimum=NOTE_SIZES[0], maximum=NOTE_SIZES[1], decimals=1, suffix=" pt")
+        size.setValue(current)
+        size.setToolTip("Or drag the corner of the selected text on the canvas")
+        # A change only (leaving the field is not one); the style's own size means no size of its own.
+        size.editingFinished.connect(lambda: size.value() != current and self._set_note(
+            "size", None if size.value() == style_size else size.value()))
+        form.addRow("Size", size)
         for key in ("bold", "italic", "underline"):
             box = QCheckBox(key.capitalize())
             box.setChecked(bool(note.get(key)))
@@ -801,9 +816,12 @@ class PropertiesPanel(QScrollArea):
         layout.addLayout(form)
 
     def _set_note(self, key, value):
+        self._set_note_values({key: value})
+
+    def _set_note_values(self, values: dict):
         if self.doc is None or self.note_id not in self.doc.notes:
             return
-        self._commit(lambda: self.doc.set_note_value(self.note_id, key, value))
+        self._commit(lambda: self.doc.set_note_values(self.note_id, values))
 
     def _show_problems(self):
         spec = self.doc.blocks.get(self.block_id)

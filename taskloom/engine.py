@@ -264,8 +264,10 @@ class _Runner:
                 continue
             if self.only is None and self.taking_part is not None and block_id not in self.taking_part:
                 self._keep_outputs(block_id, {}, status=SKIPPED)
+                started = ", ".join(sorted(self.fired))
                 self.emit({"event": "block_finished", "block": block_id, "status": "skipped",
-                           "summary": "not connected to the start of this run"})
+                           "summary": f"not connected to {started}, which started this run" if started
+                           else "no start block started this run"})
                 continue
             if self.cancel.is_set():
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})

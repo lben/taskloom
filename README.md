@@ -88,7 +88,8 @@ taskloom editor examples/daily-sales-report.yaml
   it, each run starting with a bold line with its number, date and time.
 - **Text on the canvas:** drag **Text** (under **Notes** in the blocks tree) onto the
   canvas, or right-click an empty spot → **Add text here**, for titles and remarks.
-  Double-click it to write in it; drag its corner (when selected) to resize it.
+  Double-click it to write in it. When it is selected, drag the square past its corner to
+  make the text bigger or smaller, and the square on its right to change where it wraps.
   Properties has its style (title, heading, normal, small), bold, italic, underline and
   any font installed on your computer. Text does not run.
 - **Retry one block after a fix:** right-click it → **Run this block again with the same
