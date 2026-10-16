@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox, QSizePolicy, QSplitter,
+from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox, QSizePolicy,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from .. import __version__, upgrade
@@ -35,7 +35,7 @@ from .canvas import FlowScene, FlowView, value_html
 from . import dialogs
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
-from .panels import (FlowSettingsPanel, FlowsPanel, HistoryPanel, LogPanel, Palette, ParametersPanel,
+from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
                      PreviewPanel, PropertiesPanel, scheduler_icon)
 from .runs import RunProcess
 from .safety import CRASH_LOG, Safety
@@ -149,12 +149,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self.palette_panel = Palette(self.registry)
-        self.flows_panel = FlowsPanel()
-        left = QSplitter(Qt.Vertical)
-        left.addWidget(self.palette_panel)
-        left.addWidget(self.flows_panel)
-        left.setSizes([520, 300])
-        self._dock("Blocks and flows", left, Qt.LeftDockWidgetArea)
+        self._dock("Blocks", self.palette_panel, Qt.LeftDockWidgetArea)
+        self.flow_status = FlowTabsStatus(self.tabs)  # each flow's last result and next run, on its tab
 
         self.properties = PropertiesPanel(self.home)
         self.parameters = ParametersPanel(self.home)
@@ -178,9 +174,6 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tabs.tabCloseRequested.connect(lambda i: self.close_tab(self.tabs.widget(i)))
         self.palette_panel.add_requested.connect(lambda t: self.current and self.current.view.add_at_center(t))
-        self.flows_panel.activated.connect(lambda tab: self.tabs.setCurrentWidget(tab))
-        self.flows_panel.run_requested.connect(self.run_flow)
-        self.flows_panel.last_run_requested.connect(self._open_last_run)
         self.history_panel.open_run.connect(self.show_history_run)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
         self._countdown = QTimer(self, interval=1000)
@@ -328,8 +321,8 @@ class MainWindow(QMainWindow):
         tab.autosave.timeout.connect(lambda t=tab: self._autosave(t))
         self.tabs.addTab(tab, doc.title)
         self._refresh_schedule(tab)
-        self.flows_panel.add(tab)
         self._load_last_run(tab)
+        self.flow_status.update_tab(tab)
         self.tabs.setCurrentWidget(tab)
         QTimer.singleShot(0, tab.view.center_on_flow)
         self._save_session()
@@ -440,7 +433,6 @@ class MainWindow(QMainWindow):
                 return False
         tab.autosave.stop()
         self.safety.drop_copy(tab.tab_id)
-        self.flows_panel.remove(tab)
         self.tabs.removeTab(self.tabs.indexOf(tab))
         self._save_session()
         return True
@@ -450,7 +442,6 @@ class MainWindow(QMainWindow):
         if tab is None:
             self.properties.show_block(None, self.registry, None)
             return
-        self.flows_panel.select(tab)
         self.parameters.show_doc(tab.doc)
         self.flow_settings.show_doc(tab.doc)
         self._on_block_selected(tab, (tab.scene.selected_block_ids() or [None])[0])
@@ -464,7 +455,7 @@ class MainWindow(QMainWindow):
     def _on_doc_changed(self, tab: FlowTab):
         self.tabs.setTabText(self.tabs.indexOf(tab), tab.doc.title + (" *" if tab.doc.dirty else ""))
         self._refresh_schedule(tab)
-        self.flows_panel.update_tab(tab)
+        self.flow_status.update_tab(tab)
         if tab is self.current:
             self.properties.on_doc_changed()
             self.parameters.on_doc_changed()
@@ -545,9 +536,12 @@ class MainWindow(QMainWindow):
         if tab is not None and self._ready_to_run(tab):
             self.statusBar().showMessage(f"{tab.doc.title}: no problems found", 5000)
 
-    def run_flow(self, tab: FlowTab | None):
+    def run_flow(self, tab: FlowTab | None, start: str | None = None):
+        """Run the flow: from its Manual Start blocks (all of its start blocks if it has none), or from the
+        start block `start` (e.g. right-click a Schedule block: as if its time had come)."""
         if tab is None:
             return
+        extra = ["--trigger", start] if start else []
         flow = self._ready_to_run(tab)
         if flow is None:
             return
@@ -578,10 +572,10 @@ class MainWindow(QMainWindow):
             if choice == OverlapDialog.SKIP:
                 return
             if choice == OverlapDialog.QUEUE:
-                tab.queued.append(overrides)
+                tab.queued.append((overrides, extra))
                 self.statusBar().showMessage("Queued: it starts when the current run finishes", 5000)
                 return
-        self.start_run(tab, overrides)
+        self.start_run(tab, overrides, extra)
 
     def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), only: str | None = None) -> RunProcess:
         run = RunProcess(str(tab.doc.path), overrides, self.home, self, extra_args)
@@ -597,7 +591,7 @@ class MainWindow(QMainWindow):
             tab.scene.set_status(only, None)
             tab.scene.set_values(only, {})
         run.start()
-        self.flows_panel.update_tab(tab)
+        self.flow_status.update_tab(tab)
         return run
 
     def _run_label(self, run_id: int) -> str:
@@ -630,6 +624,12 @@ class MainWindow(QMainWindow):
 
     def _block_menu_for(self, tab: FlowTab, block_id: str) -> QMenu:
         menu = QMenu(self)
+        cls = self.registry.get((tab.doc.blocks.get(block_id) or {}).get("type"))
+        if cls is not None and cls.is_trigger:  # a start block: the flow starts from it (nothing to retry in it)
+            label = ("Run the flow now, as if its time had come" if cls.type_id == "trigger.schedule"
+                     else "Run the flow from here")
+            menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
+            return menu
         rerun = menu.addAction(f"Run this block again with the same inputs ({self._run_label(tab.shown_run_id)})"
                                if tab.shown_run_id else "Run this block again with the same inputs")
         rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
@@ -729,7 +729,7 @@ class MainWindow(QMainWindow):
             self._apply_block_result(tab, block, e)
         elif kind == "run_finished":
             self._log(tab, _finished_line(e["run_id"], e["status"], e["ts"]))
-        self.flows_panel.update_tab(tab)
+        self.flow_status.update_tab(tab)
 
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
         status = info.get("status")
@@ -784,8 +784,8 @@ class MainWindow(QMainWindow):
         if tab is self.current:
             self._refresh_history(tab)
         if tab.queued and not tab.running:
-            self.start_run(tab, tab.queued.pop(0))
-        self.flows_panel.update_tab(tab)
+            self.start_run(tab, *tab.queued.pop(0))
+        self.flow_status.update_tab(tab)
 
     # --- history --------------------------------------------------------------------
 
@@ -801,7 +801,7 @@ class MainWindow(QMainWindow):
             runs = [r for r in history.runs(str(tab.doc.path), limit=20) if r["status"] != "running"]
             history.close()
         tab.last = runs[0] if runs else None
-        self.flows_panel.update_tab(tab)
+        self.flow_status.update_tab(tab)
         if tab.seen_up_to is None:
             # Just opened: runs you saw before start nothing (a flow opens clean); none yet: every run to
             # come is new.
@@ -837,7 +837,7 @@ class MainWindow(QMainWindow):
         now = dt.datetime.now()
         times = [t.next_after(now) for t in schedules_of(tab.doc.data)[0]] if tab.scheduled else []
         tab.next_run = min((t for t in times if t), default=None)
-        self.flows_panel.update_tab(tab)
+        self.flow_status.update_tab(tab)
 
     def _sync_schedule(self, tab: FlowTab):
         """A saved flow with a Schedule block is run by the scheduler; without one it is not."""
@@ -963,11 +963,6 @@ class MainWindow(QMainWindow):
         history = self._history()
         self.history_panel.show_runs(history.runs(str(tab.doc.path)))
         history.close()
-
-    def _open_last_run(self, tab: FlowTab):
-        self.tabs.setCurrentWidget(tab)
-        if tab.last:
-            self.show_history_run(tab.last["id"])
 
     def show_history_run(self, run_id: int, tab: FlowTab | None = None, keep_log=False):
         """Show a past run: its results on the canvas, its messages in the Log (after the earlier

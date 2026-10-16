@@ -1349,3 +1349,58 @@ def test_dragging_a_texts_corner_straight_left_makes_it_smaller(win, qtbot):
 
     assert 0 < tab.doc.notes[note_id].get("size", 99) < 11
     tab.doc.dirty = False
+
+
+def test_a_start_blocks_menu_runs_the_flow_from_it(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "starts.yaml", """
+        blocks:
+          manual:
+            type: trigger.manual
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          health_check:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('checked.txt', 'w').write('x')"}
+          nightly_job:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "open('nightly.txt', 'w').write('x')"}
+        edges:
+          - manual.start -> health_check.after
+          - nightly.start -> nightly_job.after
+    """)
+    tab = win.open_flow(flow)
+
+    for start, ran, skipped in (("manual", "health_check", "nightly_job"), ("nightly", "nightly_job", "health_check")):
+        actions = {a.text(): a for a in win._block_menu_for(tab, start).actions()}
+        assert not any("same inputs" in t or "inputs I choose" in t for t in actions)  # nothing to retry in it
+        (run,) = actions.values()
+        run.trigger()
+        qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
+        assert tab.scene.nodes[ran].status == "success" and tab.scene.nodes[skipped].status == "skipped"
+        assert tab.scene.nodes[start].status == "success"
+    assert (tmp_path / "checked.txt").exists() and (tmp_path / "nightly.txt").exists()
+
+
+def test_each_flows_tab_shows_its_last_result_and_next_run(win, qtbot, tmp_path):
+    flow = write_flow(tmp_path / "shown.yaml", """
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - nightly.start -> work.after
+    """)
+    tab = win.open_flow(flow)
+    win.save(tab)  # saved with a Schedule block: scheduled
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+    win._refresh_statuses()
+
+    index = win.tabs.indexOf(tab)
+    assert not win.tabs.tabIcon(index).isNull()
+    assert "ok " in win.tabs.tabToolTip(index) and "next" in win.tabs.tabToolTip(index)
+    assert not hasattr(win, "flows_panel")  # the tabs say it: no separate list of flows

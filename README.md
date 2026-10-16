@@ -63,11 +63,13 @@ taskloom editor examples/daily-sales-report.yaml
   its data. You can use both lines between two blocks; each has its own purpose.
 - **Start blocks** say how a flow starts. Connect their `start` output to the **run
   after** diamond of the first block:
-  - **Manual Start**: the flow runs when you press **Run now** (F5).
+  - **Manual Start**: the flow runs when you press **Run now** (F5), or right-click the
+    block → **Run the flow from here** (with several, only what follows that one runs).
   - **Schedule**: the flow runs by itself at the times you set while the scheduler is
     on; under the block, a countdown to its next run. Set the times in Properties →
     **When**: repeating (every few minutes, hour, day, weekday, chosen days, month, or a
-    cron line) or one time (a date and time), with the next runs shown. Saving a flow
+    cron line) or one time (a date and time), with the next runs shown. Right-click it →
+    **Run the flow now, as if its time had come** to try it. Saving a flow
     with a Schedule block schedules it.
   A flow can have both. A run includes the blocks after the start block that started it,
   the blocks whose data those need, and the error handlers of all of them; **a block
@@ -75,6 +77,8 @@ taskloom editor examples/daily-sales-report.yaml
   start blocks, Run now runs every block. A skipped block says why under it.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name and calendar.
+- Each open flow's tab shows its last result (a coloured dot) and, when it is scheduled, a
+  clock; hover the tab for when it last ran and runs next.
 - **Run now** saves, checks and runs the flow in a separate process: blocks show their
   status live, the **Log** shows the selected block's messages, **Data preview** shows
   everything the selected block produced (tables as a grid, other values as text), and

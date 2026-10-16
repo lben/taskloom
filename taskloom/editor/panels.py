@@ -8,14 +8,12 @@ import math
 
 import polars as pl
 import yaml
-from PySide6.QtCore import (QAbstractTableModel, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTime,
+from PySide6.QtCore import (QAbstractTableModel, QObject, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTime,
                             QTimer, Signal)
 from PySide6.QtGui import QColor, QDrag, QFontDatabase, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
-                               QDoubleSpinBox,
-                               QFileDialog, QFormLayout,
-                               QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
+                               QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+                               QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
                                QTableWidget, QTableWidgetItem, QTimeEdit, QToolButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
@@ -210,82 +208,38 @@ class Palette(QWidget):
 
 # --- Flows list -------------------------------------------------------------------
 
-class FlowsPanel(QWidget):
-    """Every open flow with its run status."""
+class FlowTabsStatus(QObject):
+    """Each open flow's last result (and, when scheduled, its next run) on its tab: an icon and a tooltip."""
 
-    activated = Signal(object)  # the FlowTab
-    run_requested = Signal(object)
-    last_run_requested = Signal(object)
-
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        title = QLabel("FLOWS")
-        title.setStyleSheet("font-weight: 600; color: palette(placeholder-text); letter-spacing: 1px;")
-        self.list = QListWidget()
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.list.setIconSize(QSize(30, 14))
-        layout.addWidget(title)
-        layout.addWidget(self.list)
-        self.items: dict[int, QListWidgetItem] = {}
+    def __init__(self, tabs):
+        super().__init__(tabs)
+        self.tabs = tabs
+        tabs.setIconSize(QSize(30, 14))
         self._frame = 0
         self._timer = QTimer(self, interval=120)
         self._timer.timeout.connect(self._spin)
         self._timer.start()
-        self.list.itemClicked.connect(lambda item: self.activated.emit(item.data(Qt.UserRole)))
-        self.list.customContextMenuRequested.connect(self._menu)
-
-    def add(self, tab):
-        item = QListWidgetItem()
-        item.setData(Qt.UserRole, tab)
-        self.list.addItem(item)
-        self.items[id(tab)] = item
-        self.update_tab(tab)
-
-    def remove(self, tab):
-        item = self.items.pop(id(tab), None)
-        if item is not None:
-            self.list.takeItem(self.list.row(item))
-
-    def select(self, tab):
-        item = self.items.get(id(tab))
-        if item is not None:
-            self.list.setCurrentItem(item)
 
     def update_tab(self, tab):
-        item = self.items.get(id(tab))
-        if item is None:
+        index = self.tabs.indexOf(tab)
+        if index < 0:
             return
         status, subtitle = tab.list_status()
         if tab.next_run:
             when = tab.next_run.strftime("%H:%M" if tab.next_run.date() == dt.date.today() else "%a %d %b %H:%M")
             subtitle += f" · next {when}"
-            item.setToolTip(f"Scheduled; next run {tab.next_run:%Y-%m-%d %H:%M}")
-        else:
-            item.setToolTip("")
-        item.setText(f"{tab.doc.data.get('name') or tab.doc.title}\n{subtitle}")
-        item.setData(Qt.UserRole + 1, status)
-        item.setData(Qt.UserRole + 2, tab.next_run is not None)
-        item.setIcon(status_icon(status, self._frame, clock=tab.next_run is not None))
-        item.setForeground(QColor(STATUS_COLORS["failed"]) if status == "failed" else self.list.palette().text().color())
+        self.tabs.setTabToolTip(index, f"{tab.doc.path or 'not saved yet'}\n{subtitle}")
+        self.tabs.setTabIcon(index, status_icon(status, self._frame, clock=tab.next_run is not None))
+        self.tabs.tabBar().setTabTextColor(index, QColor(STATUS_COLORS["failed"]) if status == "failed"
+                                           else self.tabs.palette().text().color())
+        tab.shown_status = (status, tab.next_run is not None)
 
     def _spin(self):
         self._frame = (self._frame + 1) % 8
-        for item in self.items.values():
-            if item.data(Qt.UserRole + 1) == "running":
-                item.setIcon(status_icon("running", self._frame, clock=bool(item.data(Qt.UserRole + 2))))
-
-    def _menu(self, pos):
-        item = self.list.itemAt(pos)
-        if item is None:
-            return
-        tab = item.data(Qt.UserRole)
-        menu = QMenu(self)
-        menu.addAction("Run now", lambda: self.run_requested.emit(tab))
-        menu.addAction("Open", lambda: self.activated.emit(tab))
-        menu.addAction("Open last run", lambda: self.last_run_requested.emit(tab))
-        menu.exec(self.list.mapToGlobal(pos))
+        for index in range(self.tabs.count()):
+            status, clock = getattr(self.tabs.widget(index), "shown_status", (None, False))
+            if status == "running":
+                self.tabs.setTabIcon(index, status_icon("running", self._frame, clock=clock))
 
 
 # --- Properties -------------------------------------------------------------------
