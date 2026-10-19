@@ -266,6 +266,20 @@ def _keeper_loop(scheduler: Scheduler, stop: threading.Event):
         stop.wait(KEEPER_INTERVAL_SECONDS)
 
 
+def paused(home: Home) -> bool:
+    """You paused the scheduler service: it does not start by itself until you turn it on."""
+    return (home.root / "scheduler.paused").exists()
+
+
+def set_paused(home: Home, value: bool):
+    marker = home.root / "scheduler.paused"
+    if value:
+        home.root.mkdir(parents=True, exist_ok=True)
+        marker.write_text("paused by you\n")
+    else:
+        marker.unlink(missing_ok=True)
+
+
 def running_scheduler_version(home: Home) -> str | None:
     """The version of the Taskloom whose scheduler wrote scheduler.pid last; None if it is older than the
     first version that says (or none ever ran)."""
@@ -353,14 +367,14 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     painter.drawRoundedRect(3, 3, 26, 26, 7, 7)
     painter.end()
     tray = QSystemTrayIcon(QIcon(pix))
-    tray.setToolTip("Taskloom scheduler")
+    tray.setToolTip("Taskloom scheduler service: runs your scheduled flows at their times")
     scheduler = Scheduler(home, lambda title, message: tray.showMessage(title, message))
     menu = QMenu()
     open_editor = QAction("Open editor", menu)
     open_editor.triggered.connect(lambda: subprocess.Popen(windowed_command() + ["editor"],
                                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
-    quit_action = QAction("Stop scheduler", menu)
-    quit_action.triggered.connect(app.quit)
+    quit_action = QAction("Pause the scheduler service", menu)
+    quit_action.triggered.connect(lambda: (set_paused(home, True), app.quit()))  # you paused it: it stays off
     menu.addAction(open_editor)
     menu.addAction(quit_action)
     tray.setContextMenu(menu)
@@ -386,7 +400,8 @@ def startup_file() -> Path:
 
 def startup_script(home: Home) -> str:
     """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
-    command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler"])
+    # Unless you paused it: then it stays off until you turn it on.
+    command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler", "--unless-paused"])
     return f'@echo off\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={home.root}"\nstart "" {command}\n'
 
 

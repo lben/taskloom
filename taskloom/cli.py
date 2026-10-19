@@ -112,8 +112,8 @@ def cmd_run(args, home: Home) -> int:
     answers = StdinControl(cancel) if args.interactive else None
     as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
     overrides = _parse_overrides(args.param)
-    if args.input and not args.only:
-        raise ValueError("--input gives a value to an input of the block that --only runs")
+    if args.input and not (args.only or args.run_from):
+        raise ValueError("--input gives a value to an input of the block that --only (or --from) runs")
     if any("=" not in i for i in args.input):
         raise ValueError("write --input as NAME=VALUE, e.g. --input x=42")
     if args.only and args.run_from:
@@ -133,7 +133,8 @@ def cmd_run(args, home: Home) -> int:
             history.close()
     result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
                       answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
-                      given=dict(i.split("=", 1) for i in args.input) if args.only else None, run_from=args.run_from)
+                      given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
+                      run_from=args.run_from)
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
@@ -209,6 +210,9 @@ def cmd_scheduler(args, home: Home) -> int:
         path = scheduler.set_start_at_login(home, args.at_login == "on")
         print(f"start at login {'enabled' if args.at_login == 'on' else 'disabled'}: {path}")
         return EXIT_OK
+    if args.unless_paused and scheduler.paused(home):
+        print("the scheduler service is paused: not starting it (turn it on in the editor)")
+        return EXIT_OK
     try:
         return scheduler.serve(home, args.headless)
     except RuntimeError as e:
@@ -267,7 +271,7 @@ def main(argv=None) -> int:
                         "what they held in --inputs-from is used")
     p.add_argument("--inputs-from", metavar="RUN", type=int, help="the run whose inputs --only (or --from) uses")
     p.add_argument("--input", metavar="NAME=VALUE", action="append", default=[],
-                   help="with --only: give this input a value (a Python expression, e.g. 42, 'text', [1, 2], "
+                   help="with --only or --from: give this input a value (a Python expression, e.g. 42, 'text', [1, 2], "
                         "table('data.csv'); empty for no value) instead of the one it got in --inputs-from")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
@@ -285,6 +289,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("scheduler", help="run scheduled flows (keeps running)")
     p.add_argument("--headless", action="store_true", help="no tray icon; for servers")
     p.add_argument("--at-login", choices=["on", "off"], help="start the scheduler when you log in (Windows)")
+    p.add_argument("--unless-paused", action="store_true",
+                   help="do not start if you paused the scheduler service (how starting at login starts it)")
     p.set_defaults(func=cmd_scheduler)
     p = sub.add_parser("editor", help="open the visual editor")
     p.add_argument("flows", nargs="*", help="flow files to open")

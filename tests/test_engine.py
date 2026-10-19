@@ -24,7 +24,8 @@ def test_example_flow_runs_end_to_end(env):
     assert out.to_dicts() == [{"day_key": 20261002, "region": "EU", "stores": 3, "total": 753.73}]
     run_id, status = env.last_run()
     assert status == "success"
-    assert env.block_status(run_id) == {"sales": "success", "totals": "success", "save": "success", "no_data": "skipped"}
+    assert env.block_status(run_id) == {"manual": "success", "sales": "success", "totals": "success", "save": "success",
+                                        "no_data": "skipped"}
 
 
 FLAKY_BLOCK = """
@@ -1496,3 +1497,16 @@ def test_run_from_fails_when_an_unhandled_failure_reaches_it_through_a_handler_t
     result = env.taskloom("run", flow, "--from", "x", "--inputs-from", first)
 
     assert result.returncode == 1  # f's failure stops d (through a, and h that never ran): as a full run
+
+
+def test_run_from_a_block_on_with_inputs_you_choose(env):
+    flow = env.write("flow.yaml", FROM_FLOW)
+    (env.root / "fix.txt").write_text("")
+    env.taskloom("run", flow)
+    first, _ = env.last_run()
+
+    result = env.taskloom("run", flow, "--from", "compute", "--inputs-from", first, "--input", "input=100")
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "report.txt").read_text() == "101"  # compute got 100, report got what compute made
+    assert (env.root / "loads.txt").read_text() == "x"

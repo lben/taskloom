@@ -292,6 +292,15 @@ class FlowDocument(QObject):
         self.data["edges"] = edges
         self._done()
 
+    def add_manual_start(self, registry) -> str:
+        """Add a Manual Start, connected to the flow's first blocks (it then runs as before: every block)."""
+        from ..upgrade import add_manual_start
+
+        self._change()
+        name = add_manual_start(self.data, registry)
+        self._done()
+        return name
+
     def set_block_values(self, block_id: str, values: dict):
         """Set several config values of a block in one step (None or "" removes one)."""
         config = self.blocks[block_id].setdefault("config", {})

@@ -217,3 +217,16 @@ def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
     (title, message), = told
     assert title == "Scheduled flow cannot be read"
     assert f"this scheduler is Taskloom {__version__}" in message and "restart the scheduler from it" in message
+
+
+def test_starting_at_login_keeps_a_paused_scheduler_service_off(env):
+    from taskloom.scheduler import set_paused
+
+    home = Home(env.home)
+    assert "scheduler --unless-paused" in startup_script(home)
+    set_paused(home, True)
+
+    result = env.taskloom("scheduler", "--headless", "--unless-paused", timeout=30)
+
+    assert result.returncode == 0 and "paused" in result.stdout
+    assert not (env.home / "scheduler.heartbeat").exists()  # it did not start

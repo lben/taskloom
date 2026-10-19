@@ -4,7 +4,9 @@ Fixed automatically:
 - an older flow format: each change of the format comes with a step in MIGRATIONS that updates it;
 - connections to blocks, inputs or outputs that no longer exist (e.g. after renaming an output);
 - the same connection listed twice;
-- settings a block no longer has.
+- settings a block no longer has;
+- no start block: a flow starts from a Manual Start or a Schedule, so a Manual Start is added, connected to
+  its first blocks (it then runs as before: every block).
 
 Anything else the flow's checks find (e.g. a connection name missing from connections.yaml) needs you.
 """
@@ -131,6 +133,11 @@ def _check(path: Path, registry, home) -> Report:
         edges.append(text)
     if isinstance(new.get("edges"), list):  # anything else cannot be read: reported, left as it is
         new["edges"] = edges
+    if isinstance(new.get("blocks"), dict) and new["blocks"] and not start_blocks(new, registry):
+        firsts = first_blocks(new, registry)
+        add_manual_start(new, registry)
+        report.fixes.append("add a Manual Start connected to its first blocks"
+                            + (f" ({', '.join(firsts)})" if firsts else "") + ": a flow starts from a start block")
 
     try:
         flow = flow_from_data(new, path)
@@ -146,6 +153,34 @@ def _check(path: Path, registry, home) -> Report:
 
 def _takes_several(port) -> bool:
     return bool(getattr(port, "many", False) or getattr(port, "any_of", False))
+
+
+def start_blocks(data: dict, registry) -> list[str]:
+    """The flow's start blocks (Manual Start, Schedule)."""
+    return [b for b, spec in (data.get("blocks") or {}).items() if isinstance(spec, dict)
+            and (cls := registry.get(spec.get("type"))) is not None and cls.is_trigger]
+
+
+def first_blocks(data: dict, registry) -> list[str]:
+    """The blocks nothing is connected into (where a flow without start blocks begins)."""
+    into = {m.group(3) for text in data.get("edges") or [] if (m := _EDGE.match(str(text)))}
+    return [b for b in (data.get("blocks") or {}) if b not in into and b not in start_blocks(data, registry)]
+
+
+def add_manual_start(data: dict, registry) -> str:
+    """Add a Manual Start to a flow (left of its first blocks), connected to each of them. Returns its name."""
+    blocks, firsts = data.setdefault("blocks", {}), first_blocks(data, registry)
+    name, n = "start", 2
+    while name in blocks:
+        name, n = f"start_{n}", n + 1
+    placed = [spec.get("ui") or {} for spec in blocks.values() if isinstance(spec, dict)]
+    x = min((ui.get("x", 0) for ui in placed), default=0) - 260
+    ys = [(blocks[b].get("ui") or {}).get("y", 0) for b in firsts]
+    blocks[name] = {"type": "trigger.manual", "ui": {"x": x, "y": round(sum(ys) / len(ys)) if ys else 0}}
+    data.setdefault("edges", [])
+    if isinstance(data["edges"], list):
+        data["edges"] += [f"{name}.start -> {b}.after" for b in firsts]
+    return name
 
 
 def fix(report: Report, home) -> Path:

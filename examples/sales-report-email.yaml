@@ -7,6 +7,8 @@ params:
   day: {type: date, expr: "today() - bdays(1)"}
 
 blocks:
+  manual:
+    type: trigger.manual   # Run now starts here
   sales:
     type: data.read_file
     config: {path: data/sales.csv}
@@ -40,6 +42,7 @@ blocks:
       subject: "Daily sales {day:%Y-%m-%d}"
 
 edges:
+  - manual.start -> sales.after
   - sales.table -> totals.sales
   - totals.result -> chart.table
   - totals.result -> excel.totals

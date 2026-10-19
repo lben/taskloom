@@ -65,21 +65,23 @@ taskloom editor examples/daily-sales-report.yaml
   after** diamond of the first block:
   - **Manual Start**: the flow runs when you press **Run now** (F5), or right-click the
     block → **Run the flow from here** (with several, only what follows that one runs).
-  - **Schedule**: the flow runs by itself at the times you set while the scheduler is
-    on; under the block, a countdown to its next run. Set the times in Properties →
+  - **Schedule**: the flow runs by itself at the times you set (the scheduler service
+    runs it, see Schedules); under the block, a countdown to its next run. Set the times in Properties →
     **When**: repeating (every few minutes, hour, day, weekday, chosen days, month, or a
     cron line) or one time (a date and time), with the next runs shown. Right-click it →
     **Run the flow now, as if its time had come** to try it. Saving a flow
     with a Schedule block schedules it.
-  A flow can have both. A run includes the blocks after the start block that started it,
-  the blocks whose data those need, and the error handlers of all of them; **a block
-  connected to no start block does not run**, which is how to switch one off. Without
-  start blocks, Run now runs every block. A skipped block says why under it.
+  A flow starts from its start blocks: a new flow comes with a Manual Start, and Run now
+  offers to add one to a flow without (connected to its first blocks). A flow can have
+  both kinds. A run includes the blocks after the start block that started it, the blocks
+  whose data those need, and the error handlers of all of them; **a block connected to no
+  start block does not run**, which is how to switch one off. A skipped block says why.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name and calendar.
 - Each open flow's tab shows its last result (a coloured dot) and, when it is scheduled, a
   clock; hover the tab for when it last ran and runs next. Bottom left, **N flows running**
-  lists the flows running now (also on schedule or from a terminal): choose one to open it.
+  lists the flows running now (also on schedule or from a terminal), with when each one's
+  next scheduled run is: choose one to open it.
 - **Run now** (it first says what it will run; you can turn that off) saves, checks and
   runs the flow in a separate process: blocks show their
   status live, the **Log** shows the selected block's messages, **Data preview** shows
@@ -102,7 +104,8 @@ taskloom editor examples/daily-sales-report.yaml
   - **Run only this block, with the same inputs**: only that block runs, with what reached
     it in the run on the canvas; the other blocks keep their results
     (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
-  - **Run from this block on, with the same inputs**: that block and every block after it
+  - **Run from this block on, with the same inputs** (or **with inputs I choose…**): that
+    block and every block after it
     (error handlers too) run; the blocks before it are not run again, what they held in
     the run on the canvas is used (`--from BLOCK --inputs-from RUN`).
   Inputs that held a password are never saved, so such a block needs a full run. Blocks get
@@ -200,17 +203,23 @@ overlap: skip        # if the previous run is still going: skip | queue | allow
 
 Add a **Schedule** block to the flow, connect it to the first block, set **When** in
 Properties and save: saved flows with a Schedule block are listed in `scheduled.yaml`
-(removing the block takes the flow off). Then start the scheduler with the **Scheduler**
-button at the top right of the editor (it also shows whether it is on), or `taskloom scheduler`. It shows
-a tray icon and notifies you about failed or skipped runs. On Windows, **Tools →
-Settings → Start the scheduler when I log in** (or `taskloom scheduler --at-login on`)
-adds it to your Startup folder; no admin needed.
+(removing the block takes the flow off).
 
-The scheduler keeps running when you open a newer Taskloom: the editor then offers to
+The **scheduler service** runs scheduled flows at their times. It is a program of its own
+that keeps running in the background (its icon is in the tray), also while the editor is
+closed, and notifies you about failed or skipped runs. It starts by itself when you save a
+scheduled flow and when the editor opens with flows scheduled. The **Scheduler service**
+button at the top right shows whether it is on; click it to pause it (or **Pause the
+scheduler service** on its tray icon): then no scheduled flow runs, and it does not start
+by itself, until you turn it on again. On Windows, **Tools → Settings → Start the
+scheduler service when I log in** (or `taskloom scheduler --at-login on`) adds it to your
+Startup folder; no admin needed. From a terminal or on a server: `taskloom scheduler`.
+
+The scheduler service keeps running when you open a newer Taskloom: the editor then offers to
 restart it with the newer version (a scheduler from an older version may not read flows
 the newer one saved), and starting at login switches to the newest version you opened.
 
-One scheduler runs every scheduled flow. It rereads changed flow files every 15 seconds,
+One scheduler service runs every scheduled flow. It rereads changed flow files every 15 seconds,
 so a new cron line applies shortly after you save, without restarting it; a changed
 schedule counts from that moment (nothing before it counts as missed).
 
@@ -243,7 +252,8 @@ flows…** (the open and scheduled flows; it also runs by itself the first time 
 version starts), or `taskloom check [FLOW…]`. It fixes an older flow format, a block's
 settings saved by an older version of that block, settings a block no longer has,
 connections to blocks, inputs or outputs that no longer exist (e.g. after renaming an
-output) and connections listed twice. **Back up and fix** (or `--fix`) first copies each
+output) and connections listed twice, and adds a Manual Start (connected to its first
+blocks) to a flow without a start block. **Back up and fix** (or `--fix`) first copies each
 flow into `backups/` in your Taskloom folder. Anything else it finds is listed for you to
 fix.
 

@@ -8,6 +8,8 @@ params:
   archive: {type: text, value: taskloom-runner-linux-x86_64.tar.gz}
 
 blocks:
+  manual:
+    type: trigger.manual   # Run now starts here
   check:
     type: servers.ssh_command
     config: {connection: deploy_target, command: "cat ~/taskloom/VERSION 2>/dev/null || echo none", fail_on_error: false}
@@ -41,6 +43,7 @@ blocks:
     config: {connection: deploy_target, pid_file: "~/.taskloom/scheduler.pid"}
 
 edges:
+  - manual.start -> check.after
   - check.stdout -> installed.value
   - installed.true -> confirm.value
   - confirm.answer -> replace.value

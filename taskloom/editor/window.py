@@ -28,8 +28,8 @@ from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
-from ..scheduler import (acquire_lock, running_scheduler_version, set_start_at_login, startup_file,
-                         startup_script_outdated, version_tuple)
+from ..scheduler import (acquire_lock, paused, running_scheduler_version, set_paused, set_start_at_login,
+                         startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView, value_html
 from . import dialogs
@@ -76,7 +76,7 @@ def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, schedule
     if unsaved or not scheduled:
         return f"next {upcoming[0]:%a %H:%M} · save to schedule", tip + "<br><br>Save the flow to schedule this."
     if not scheduler_on:
-        return f"next {upcoming[0]:%a %H:%M} · scheduler off", tip + "<br><br>Turn the scheduler on (top right)."
+        return f"next {upcoming[0]:%a %H:%M} · service off", tip + "<br><br>Turn the scheduler service on (top right)."
     left = int((upcoming[0] - now).total_seconds())
     days, rest = divmod(left, 86400)
     clock = f"{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
@@ -201,6 +201,7 @@ class MainWindow(QMainWindow):
         self._countdown.start()
         self._scheduler_on = False
         # Bottom left: the flows running now (from here, on schedule or from a terminal); open one from it.
+        self._schedules_cache: dict = {}  # flow file -> (modified, its schedules)
         self.running_flows = HoverMenuButton("No flows running")
         self.running_flows.setMenu(QMenu(self.running_flows))
         self.running_flows.setToolTip("The flows running now, also on schedule or from a terminal: choose one to "
@@ -224,6 +225,7 @@ class MainWindow(QMainWindow):
             self.resizeDocks([self.inspector], [470], Qt.Horizontal)
             QTimer.singleShot(0, self, lambda: self.current and self.current.view.center_on_flow())
             QTimer.singleShot(0, self, self._check_after_update)
+            QTimer.singleShot(0, self, self._start_scheduler_if_needed)
 
     def _check_after_update(self):
         """The first time a version starts: check your flows, and offer to fix what it can."""
@@ -404,7 +406,11 @@ class MainWindow(QMainWindow):
                             f"{details[-1500:]}\n\nThe details are in {self.home.root / CRASH_LOG}.")
 
     def new_flow(self) -> FlowTab:
-        return self.add_tab(FlowDocument())
+        """A new flow, with a Manual Start: a flow starts from a start block (swap it for a Schedule to run
+        it at set times)."""
+        doc = FlowDocument()
+        doc.data["blocks"]["start"] = {"type": "trigger.manual", "ui": {"x": -280, "y": 0}}  # on the left
+        return self.add_tab(doc)
 
     def open_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open flow", str(Path.cwd()), FLOW_FILTER)
@@ -568,6 +574,11 @@ class MainWindow(QMainWindow):
         if tab is None:
             return
         extra = ["--trigger", start] if start else []
+        if start is None and not upgrade.start_blocks(tab.doc.data, self.registry):
+            # A flow starts from a start block: offer the one that runs it as before (every block).
+            if not dialogs.offer_manual_start(self, tab.doc.title):
+                return
+            tab.doc.add_manual_start(self.registry)
         flow = self._ready_to_run(tab)
         if flow is None:
             return
@@ -614,15 +625,17 @@ class MainWindow(QMainWindow):
         starts = [b for b, spec in flow.blocks.items()
                   if (cls := self.registry.get(spec.type)) is not None and cls.is_trigger]
         manual = [b for b in starts if flow.blocks[b].type == "trigger.manual"]
-        if not starts:
-            return "This flow has no start blocks: every block in it runs."
         if manual:
             which = f"its Manual Start block {manual[0]}" if len(manual) == 1 else \
                 f"its Manual Start blocks ({', '.join(manual)})"
             return (f"It runs from {which}: the blocks connected after it run; blocks connected to no start "
                     "block do not. To run from one start block only, right-click it.")
-        return (f"It has no Manual Start block, so it runs from all its start blocks ({', '.join(starts)}), as "
-                "if each one's time had come. To run from one of them only, right-click it.")
+        if len(starts) == 1:
+            return (f"It has no Manual Start block, so it starts from its Schedule block {starts[0]}, as if its "
+                    "time had come.")
+        return (f"It has no Manual Start block, so it starts from each of its Schedule blocks "
+                f"({', '.join(starts)}) at once, as if their times had come. To start from one of them only, "
+                "right-click it.")
 
     def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), refresh: set | None = None) -> RunProcess:
         """Start a run of the flow. `refresh`: the blocks it runs, when it does not run them all (one block,
@@ -691,6 +704,9 @@ class MainWindow(QMainWindow):
         onwards.setToolTip("This block and every block after it; the blocks before it are not run again")
         onwards.setEnabled(tab.shown_run_id is not None and not tab.running)
         onwards.triggered.connect(lambda: self.rerun_block(tab, block_id, on=True))
+        choose_on = menu.addAction("Run from this block on, with inputs I choose…")
+        choose_on.setEnabled(not tab.running)
+        choose_on.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id, on=True))
         return menu
 
     def _show_run(self, tab: FlowTab, run: RunProcess | None, keep_log=False):
@@ -718,8 +734,9 @@ class MainWindow(QMainWindow):
         self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(tab.shown_run_id)],
                        refresh=blocks)
 
-    def run_block_with_inputs(self, tab: FlowTab, block_id: str):
-        """Run one block with input values you type (filled in with what reached it in the run on the canvas)."""
+    def run_block_with_inputs(self, tab: FlowTab, block_id: str, on: bool = False):
+        """Run one block (`on`: and the blocks after it) with input values you type for it (filled in with
+        what reached it in the run on the canvas)."""
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
@@ -737,14 +754,14 @@ class MainWindow(QMainWindow):
                                             self._run_label(run_id) if run_id is not None else None, self, typed)
         if not dialog.exec():
             return
-        args = ["--only", block_id]
+        args = ["--from" if on else "--only", block_id]
         # Start from the run on the canvas (the rest of the flow's results carry over), unless that run has
         # nothing for a block without inputs: running it as it was then would be refused.
         if run_id is not None and (names or not missing):
             args += ["--inputs-from", str(run_id)]
         for name, text in dialog.given().items():
             args += ["--input", f"{name}={text}"]
-        self.start_run(tab, {}, args, refresh={block_id})
+        self.start_run(tab, {}, args, refresh=blocks_from(flow, self.registry, block_id) if on else {block_id})
 
     def stop(self, tab: FlowTab | None):
         if tab is None:
@@ -908,11 +925,32 @@ class MainWindow(QMainWindow):
         menu = self.running_flows.menu()
         menu.clear()
         today = dt.date.today().isoformat()
+        try:
+            scheduled = {Path(p).resolve() for p in self.home.scheduled_flows()}
+        except ValueError:
+            scheduled = set()
         for run in running:
             started = run["started"].replace("T", " ")[:19]
             since = started[11:] if started.startswith(today) else started
-            menu.addAction(f"{run['flow']}  ·  running since {since} ({run_label(run['id'], None)})",
-                           lambda path=run["flow_path"]: self.open_flow(Path(path)))
+            text = f"{run['flow']}  ·  running since {since} ({run_label(run['id'], None)})"
+            path = Path(run["flow_path"]).resolve()
+            upcoming = self._next_scheduled(path) if path in scheduled else None  # (the service runs only those)
+            if upcoming is not None:  # its soonest schedule
+                text += f"  ·  next run {upcoming:%Y-%m-%d %H:%M:%S}" + ("" if self._scheduler_on else " (service off)")
+            menu.addAction(text, lambda path=run["flow_path"]: self.open_flow(Path(path)))
+
+    def _next_scheduled(self, path: Path) -> dt.datetime | None:
+        """When the soonest of a flow's schedules comes next (from its saved file), or None."""
+        try:
+            mtime = path.stat().st_mtime
+            cached = self._schedules_cache.get(path)
+            if cached is None or cached[0] != mtime:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                cached = self._schedules_cache[path] = (mtime, schedules_of(data)[0] if isinstance(data, dict) else [])
+        except (OSError, yaml.YAMLError):
+            return None
+        now = dt.datetime.now()
+        return min((t for t in (trigger.next_after(now) for trigger in cached[1]) if t), default=None)
 
     # --- scheduling -----------------------------------------------------------------
 
@@ -937,7 +975,20 @@ class MainWindow(QMainWindow):
             self.home.set_scheduled(tab.doc.path, scheduled)
         self._refresh_schedule(tab)
         if scheduled and not self.scheduler_running():
-            self.statusBar().showMessage("This flow has a schedule. Turn the scheduler on (top right) so it runs.", 10000)
+            if paused(self.home):
+                self.statusBar().showMessage("This flow is scheduled, but the scheduler service is off (you paused "
+                                             "it): turn it on (top right) to run it.", 10000)
+            else:
+                self.start_scheduler()
+
+    def _start_scheduler_if_needed(self):
+        """Flows are scheduled: the scheduler service runs them (unless you paused it)."""
+        try:
+            scheduled = bool(self.home.scheduled_flows())
+        except ValueError:
+            scheduled = False
+        if scheduled and not paused(self.home) and not self.scheduler_running():
+            self.start_scheduler()
 
     def scheduler_running(self) -> bool:
         """The scheduler holds its lock file while it runs."""
@@ -961,19 +1012,21 @@ class MainWindow(QMainWindow):
     def _show_scheduler_state(self, running: bool):
         self._scheduler_on = running
         self.scheduler_action.setIcon(scheduler_icon(running))
-        self.scheduler_action.setText("Scheduler on" if running else "Scheduler off")
+        self.scheduler_action.setText("Scheduler service on" if running else "Scheduler service off")
         version = running_scheduler_version(self.home) if running else None
         older = running and version_tuple(version) < version_tuple(__version__)
         self.scheduler_action.setToolTip(
-            (f"The scheduler is from an older Taskloom ({version or 'before 0.14.1'}); this is {__version__}. "
-             "Stop it and start it again here to run this version." if older else
-             "The scheduler is running scheduled flows. Click to stop it.") if running else
-            "Scheduled flows only run while the scheduler is on. Click to start it.")
+            (f"The scheduler service is from an older Taskloom ({version or 'before 0.14.1'}); this is "
+             f"{__version__}. Turn it off and on again here to run this version." if older else
+             "The scheduler service runs in the background, also while the editor is closed (its icon is in the "
+             "tray), and starts your scheduled flows at their times. It starts by itself when a flow is "
+             "scheduled. Click to pause it: no scheduled flow runs until you turn it on again.") if running else
+            "The scheduler service is off: scheduled flows do not run. Click to turn it on.")
         if older and not self._offered_restart:
             self._offered_restart = True
             answer = QMessageBox.question(
-                self, "Restart the scheduler?",
-                f"The scheduler that is running is from an older Taskloom ({version or 'before 0.14.1'}); this is "
+                self, "Restart the scheduler service?",
+                f"The scheduler service running is from an older Taskloom ({version or 'before 0.14.1'}); this is "
                 f"Taskloom {__version__}. It may not read flows saved by this version (it says they cannot be "
                 "read). Restart it with this version?")
             if answer == QMessageBox.Yes:
@@ -984,8 +1037,8 @@ class MainWindow(QMainWindow):
         try:
             os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Cannot stop the scheduler", f"{e}\n\nStop it from its tray icon, then start "
-                                                                  "it here with the Scheduler button.")
+            QMessageBox.warning(self, "Cannot stop the scheduler service", f"{e}\n\nPause it from its tray icon, "
+                                "then turn it on here (top right).")
             return
         deadline = time.monotonic() + 15
 
@@ -995,8 +1048,8 @@ class MainWindow(QMainWindow):
             elif time.monotonic() < deadline:
                 QTimer.singleShot(300, self, when_stopped)
             else:
-                QMessageBox.warning(self, "Cannot restart the scheduler", "It did not stop. Stop it from its tray "
-                                    "icon, then start it here with the Scheduler button.")
+                QMessageBox.warning(self, "Cannot restart the scheduler service", "It did not stop. Pause it from "
+                                    "its tray icon, then turn it on here (top right).")
 
         QTimer.singleShot(300, self, when_stopped)
 
@@ -1006,32 +1059,40 @@ class MainWindow(QMainWindow):
             path = startup_file()
             if path.exists() and startup_script_outdated(path.read_text(encoding="utf-8"), self.home):
                 set_start_at_login(self.home, True)
-                self.statusBar().showMessage(f"The scheduler now starts at login with Taskloom {__version__}", 10000)
+                self.statusBar().showMessage(f"The scheduler service now starts at login with Taskloom {__version__}",
+                                             10000)
         except (OSError, RuntimeError) as e:
-            self.statusBar().showMessage(f"Could not update starting the scheduler at login: {e}", 10000)
+            self.statusBar().showMessage(f"Could not update starting the scheduler service at login: {e}", 10000)
 
     def toggle_scheduler(self):
         if not self.scheduler_running():
-            self.start_scheduler()
+            self.start_scheduler(by_you=True)
             return
-        answer = QMessageBox.question(self, "Stop the scheduler?",
-                                      "Scheduled flows will not run until the scheduler is started again. "
-                                      "Runs already going continue.")
+        answer = QMessageBox.question(self, "Pause the scheduler service?",
+                                      "No scheduled flow runs until you turn it on again (it does not start by "
+                                      "itself meanwhile). Runs already going continue.")
         if answer == QMessageBox.Yes:
-            self.stop_scheduler()
+            self.pause_scheduler()
+
+    def pause_scheduler(self):
+        """Turn the scheduler service off, and keep it off until you turn it on."""
+        set_paused(self.home, True)
+        self.stop_scheduler()
 
     def stop_scheduler(self):
         try:
             os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Cannot stop the scheduler", str(e))
+            QMessageBox.warning(self, "Cannot stop the scheduler service", str(e))
             return
         QTimer.singleShot(1500, self, lambda: self._show_scheduler_state(self.scheduler_running()))
-        self.statusBar().showMessage("Scheduler stopped", 5000)
+        self.statusBar().showMessage("Scheduler service off", 5000)
 
-    def start_scheduler(self):
+    def start_scheduler(self, by_you: bool = False):
+        if by_you:
+            set_paused(self.home, False)  # you turned it on: it starts by itself again when needed
         if self.scheduler_running():
-            self.statusBar().showMessage("The scheduler is already running", 5000)
+            self.statusBar().showMessage("The scheduler service is already on", 5000)
             return
         self._offered_restart = True  # this version's: nothing to offer
         subprocess.Popen(
@@ -1040,7 +1101,7 @@ class MainWindow(QMainWindow):
             start_new_session=sys.platform != "win32",
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        self.statusBar().showMessage("Scheduler started", 5000)
+        self.statusBar().showMessage("Scheduler service on: it runs your scheduled flows in the background", 8000)
         QTimer.singleShot(2000, self, lambda: self._show_scheduler_state(self.scheduler_running()))
 
     def _refresh_history(self, tab: FlowTab):

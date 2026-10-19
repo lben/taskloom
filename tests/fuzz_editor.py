@@ -34,6 +34,7 @@ QInputDialog.getText = staticmethod(lambda *a, **k: (f"conn{rnd.randint(0, 10 **
 QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (str(folder / "fuzz.yaml"), ""))
 ConnectionsDialog.exec = lambda self: (self._save(), 1)[1]
 
+MainWindow.start_scheduler = lambda self, by_you=False: None  # a real scheduler service would outlive this
 window = MainWindow(Home(folder / "home"))
 window.resize(1400, 900)
 window.show()

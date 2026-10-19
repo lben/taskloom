@@ -18,6 +18,7 @@ from taskloom.editor.dialogs import AskDialog, OverlapDialog, RunDialog, Setting
 from taskloom.editor.document import FlowDocument  # noqa: E402
 from taskloom.editor.panels import CodeEdit  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
+REAL_START_SCHEDULER = MainWindow.start_scheduler
 from taskloom.history import History  # noqa: E402
 
 
@@ -31,6 +32,9 @@ def win(qtbot, tmp_path, monkeypatch):
         monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, _n=name, **k: shown.append((_n, a[1:3])) or QMessageBox.No))
     from taskloom.editor import dialogs
     monkeypatch.setattr(dialogs, "confirm_run_now", lambda *a, **k: (True, False))  # Run now: yes, run it
+    monkeypatch.setattr(dialogs, "offer_manual_start", lambda *a, **k: True)  # no start block: add one
+    # A real scheduler service would outlive the test (and run its flows): the tests that need one say so.
+    monkeypatch.setattr(MainWindow, "start_scheduler", lambda self, by_you=False: None)
     w = MainWindow(Home(tmp_path / "home"))
     w.message_boxes = shown
     qtbot.addWidget(w)
@@ -81,16 +85,18 @@ def test_build_save_reopen_and_run_a_flow_from_the_ui(win, qtbot, tmp_path, monk
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(flow_path), ""))
     tab = win.new_flow()
 
+    assert [spec["type"] for spec in tab.doc.blocks.values()] == ["trigger.manual"]  # a new flow starts there
     add_from_palette(win, "Python Code")
     add_from_palette(win, "Python Code")
-    first, second = list(tab.doc.blocks)
+    first, second = [b for b in tab.doc.blocks if b != "start"]
     tab.scene.nodes[first].setSelected(True)
     set_code(win, "output = 21")
     tab.scene.clearSelection()
     tab.scene.nodes[second].setSelected(True)
     set_code(win, "open('result.txt', 'w').write(str(input * 2))")
     drag_port_to_port(tab, first, "output", second, "input")
-    assert tab.doc.edges() == [(first, "output", second, "input")]
+    drag_port_to_port(tab, "start", "start", first, "after")
+    assert tab.doc.edges() == [(first, "output", second, "input"), ("start", "start", first, "after")]
 
     assert win.save(tab)
     saved = tab.doc.data
@@ -102,7 +108,7 @@ def test_build_save_reopen_and_run_a_flow_from_the_ui(win, qtbot, tmp_path, monk
     wait_done(qtbot, tab)
 
     assert (tmp_path / "result.txt").read_text() == "42"
-    assert {b: n.status for b, n in tab.scene.nodes.items()} == {first: "success", second: "success"}
+    assert {b: n.status for b, n in tab.scene.nodes.items()} == {"start": "success", first: "success", second: "success"}
     assert tab.list_status()[0] == "success"
 
 
@@ -281,17 +287,24 @@ def test_settings_dialog_keeps_settings_it_does_not_show(win):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")
 def test_scheduler_button_starts_and_stops_the_scheduler(win, qtbot, monkeypatch):
-    assert win.scheduler_action.text() == "Scheduler off"
+    import types
+
+    from taskloom.scheduler import paused
+
+    monkeypatch.setattr(win, "start_scheduler", types.MethodType(REAL_START_SCHEDULER, win))  # the real one
+
+    assert win.scheduler_action.text() == "Scheduler service off"
     win.scheduler_action.trigger()
     try:
         qtbot.waitUntil(win.scheduler_running, timeout=30_000)
-        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler on", timeout=10_000)
+        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler service on", timeout=10_000)
 
         monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
         win.scheduler_action.trigger()
 
         qtbot.waitUntil(lambda: not win.scheduler_running(), timeout=15_000)
-        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler off", timeout=10_000)
+        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler service off", timeout=10_000)
+        assert paused(win.home)  # you paused it: it does not start by itself
     finally:
         if win.scheduler_running():
             os.kill(int((win.home.root / "scheduler.pid").read_text()), signal.SIGKILL)
@@ -378,6 +391,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from taskloom.config import Home
 from taskloom.editor.window import MainWindow
+MainWindow._check_after_update = lambda self: None  # (the check after an update would wait for a click)
 app = QApplication([])
 w = MainWindow(Home(Path(sys.argv[1])))
 w.show()
@@ -414,7 +428,7 @@ def test_unsaved_work_comes_back_after_the_editor_is_killed(win, tmp_path):
     work = restored["work.yaml"]
     assert work.doc.dirty and {s["type"] for s in work.doc.blocks.values()} == {"logic.python", "logic.wait"}
     untitled = next(t for t in win.tabs_list() if t.doc.path is None)
-    assert untitled.doc.dirty and [s["type"] for s in untitled.doc.blocks.values()] == ["logic.python"]
+    assert untitled.doc.dirty and [s["type"] for s in untitled.doc.blocks.values()] == ["trigger.manual", "logic.python"]
     assert win.message_boxes and win.message_boxes[0][1][0] == "Work recovered"
     win.message_boxes.clear()
     for tab in win.tabs_list():
@@ -707,7 +721,7 @@ def test_ctrl_c_and_ctrl_v_on_the_canvas_copy_and_paste_blocks(win, qtbot):
     QTest.keyClick(tab.view, Qt.Key_C, Qt.ControlModifier)
     QTest.keyClick(tab.view, Qt.Key_V, Qt.ControlModifier)
 
-    assert len(tab.doc.blocks) == 2
+    assert [spec["type"] for spec in tab.doc.blocks.values()].count("logic.python") == 2
     tab.doc.dirty = False
 
 
@@ -866,6 +880,8 @@ def test_check_flows_backs_up_and_fixes_open_flows(win, tmp_path, monkeypatch):
 
     leftover = """
         blocks:
+          start:
+            type: trigger.manual
           python:
             type: logic.python
             config: {inputs: [], outputs: [result], code: "result = 1"}
@@ -873,6 +889,7 @@ def test_check_flows_backs_up_and_fixes_open_flows(win, tmp_path, monkeypatch):
             type: logic.python
             config: {code: "pass"}
         edges:
+          - start.start -> python.after
           - python.output -> after.after
     """
     clean_tab = win.open_flow(write_flow(tmp_path / "saved.yaml", leftover))
@@ -882,7 +899,7 @@ def test_check_flows_backs_up_and_fixes_open_flows(win, tmp_path, monkeypatch):
 
     win.check_flows()
 
-    assert clean_tab.doc.edges() == [] and not clean_tab.doc.dirty
+    assert clean_tab.doc.edges() == [("start", "start", "python", "after")] and not clean_tab.doc.dirty
     assert len(list((win.home.root / "backups").iterdir())) == 1
     assert "python.output -> after.after" in (tmp_path / "busy.yaml").read_text()  # left for you to save first
     assert win.message_boxes and "busy.yaml" in win.message_boxes[0][1][1]
@@ -914,7 +931,7 @@ def test_schedule_countdown():
     daily = {"cron": "0 7 * * *"}
     assert schedule_countdown(daily, now, True, True, False)[0] == "next run in 02:13:05"
     assert schedule_countdown({"cron": "0 7 * * MON"}, now, True, True, False)[0] == "next run in 4d 02:13:05"
-    assert schedule_countdown(daily, now, True, False, False)[0] == "next Thu 07:00 · scheduler off"
+    assert schedule_countdown(daily, now, True, False, False)[0] == "next Thu 07:00 · service off"
     assert schedule_countdown(daily, now, True, True, True)[0] == "next Thu 07:00 · save to schedule"
     assert schedule_countdown({**daily, "active": False}, now, True, True, False)[0] == "paused"
     assert schedule_countdown({}, now, True, True, False)[0] == "needs a time"
@@ -1132,7 +1149,7 @@ def test_an_older_scheduler_running_is_offered_a_restart(win, monkeypatch):
     finally:
         lock.close()
 
-    assert [box[1][0] for box in win.message_boxes] == ["Restart the scheduler?"]
+    assert [box[1][0] for box in win.message_boxes] == ["Restart the scheduler service?"]
     assert "older Taskloom" in win.scheduler_action.toolTip()
     win.message_boxes.clear()
 
@@ -1435,7 +1452,8 @@ def test_run_from_a_block_on_from_the_canvas(win, qtbot, tmp_path):
     actions = [a.text() for a in win._block_menu_for(tab, "compute").actions()]
     assert [t.split(" (")[0] for t in actions] == ["Run only this block, with the same inputs",
                                                    "Run only this block, with inputs I choose…",
-                                                   "Run from this block on, with the same inputs"]
+                                                   "Run from this block on, with the same inputs",
+                                                   "Run from this block on, with inputs I choose…"]
     next(a for a in win._block_menu_for(tab, "compute").actions() if a.text().startswith("Run from")).trigger()
     qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
 
@@ -1447,18 +1465,21 @@ def test_run_from_a_block_on_from_the_canvas(win, qtbot, tmp_path):
 def test_run_now_says_what_it_will_run_first(win, qtbot, tmp_path, monkeypatch):
     from taskloom.editor import dialogs
 
-    asked = []
+    asked, offered = [], []
     monkeypatch.setattr(dialogs, "confirm_run_now", lambda parent, name, what: asked.append(what) or (False, False))
+    monkeypatch.setattr(dialogs, "offer_manual_start", lambda *a: offered.append(a) or False)
+    none = win.open_flow(write_flow(tmp_path / "none.yaml", "blocks:\n  a:\n    type: logic.python\n"
+                                                            "    config: {inputs: [], code: 'pass'}\n"))
+    win.run_flow(none)  # no start block: you are offered a Manual Start; no thanks: nothing runs
+    assert len(offered) == 1 and not asked and not none.runs
     flows = {
-        "none.yaml": ("blocks:\n  a:\n    type: logic.python\n    config: {inputs: [], code: 'pass'}\n",
-                      "no start blocks: every block in it runs"),
         "manual.yaml": ("blocks:\n  manual:\n    type: trigger.manual\n  a:\n    type: logic.python\n"
                         "    config: {inputs: [], code: 'pass'}\nedges: ['manual.start -> a.after']\n",
                         "runs from its Manual Start block manual"),
         "nightly.yaml": ("blocks:\n  nightly:\n    type: trigger.schedule\n    config: {cron: '0 2 * * *'}\n"
                          "  a:\n    type: logic.python\n    config: {inputs: [], code: 'pass'}\n"
                          "edges: ['nightly.start -> a.after']\n",
-                         "no Manual Start block, so it runs from all its start blocks (nightly)"),
+                         "no Manual Start block, so it starts from its Schedule block nightly, as if its time had come"),
     }
     for name, (text, expected) in flows.items():
         tab = win.open_flow(write_flow(tmp_path / name, text))
@@ -1481,10 +1502,16 @@ def test_flows_running_anywhere_are_listed_and_open_from_there(win, qtbot, tmp_p
 
     flow = write_flow(tmp_path / "slow.yaml", """
         blocks:
+          hourly:
+            type: trigger.schedule
+            config: {cron: "0 * * * *"}
           wait:
             type: logic.wait
             config: {seconds: 60}
+        edges:
+          - hourly.start -> wait.after
     """)
+    win.home.set_scheduled(flow.resolve(), True)  # (as saving it in the editor does)
     env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
     elsewhere = subprocess.Popen([sys.executable, "-m", "taskloom.cli", "run", str(flow)], env=env,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # e.g. the scheduler's
@@ -1496,6 +1523,8 @@ def test_flows_running_anywhere_are_listed_and_open_from_there(win, qtbot, tmp_p
 
         (item,) = win.running_flows.menu().actions()
         assert item.text().startswith("slow")
+        import re
+        assert re.search(r"next run \d{4}-\d\d-\d\d \d\d:00:00", item.text()), item.text()  # its soonest schedule
         item.trigger()  # opens it
         assert win.current is not None and win.current.doc.path == flow.resolve()
     finally:
@@ -1507,3 +1536,69 @@ def test_flows_running_anywhere_are_listed_and_open_from_there(win, qtbot, tmp_p
     history = win._history()
     assert history.runs(str(flow.resolve()))[0]["status"] == "failed"
     history.close()
+
+
+def test_run_from_a_block_on_with_inputs_you_choose_from_the_canvas(win, qtbot, tmp_path, monkeypatch):
+    from taskloom.editor import dialogs
+
+    flow = write_flow(tmp_path / "from_chosen.yaml", """
+        blocks:
+          load:
+            type: logic.python
+            config: {inputs: [], code: "output = 20"}
+          compute:
+            type: logic.python
+            config: {inputs: [input], code: "output = input + 1"}
+          report:
+            type: logic.python
+            config: {inputs: [input], outputs: [], code: "open('report.txt', 'w').write(str(input))"}
+        edges:
+          - load.output -> compute.input
+          - compute.output -> report.input
+    """)
+    tab = win.open_flow(flow)
+    win.start_run(tab, {})
+    wait_done(qtbot, tab)
+
+    def exec_(dialog):
+        dialog.fields["input"].setText("100")
+        return True
+    monkeypatch.setattr(dialogs.ChooseInputsDialog, "exec", exec_)
+    next(a for a in win._block_menu_for(tab, "compute").actions() if a.text().startswith("Run from this block on, with inputs")).trigger()
+    qtbot.waitUntil(lambda: len(tab.runs) == 2 and not tab.running and tab.runs[1].status is not None, timeout=60_000)
+
+    assert (tmp_path / "report.txt").read_text() == "101"
+    assert tab.scene.nodes["report"].status == "success"
+
+
+def test_the_scheduler_service_starts_by_itself_unless_you_paused_it(win, tmp_path, monkeypatch):
+    from taskloom.scheduler import paused
+
+    started = []
+    monkeypatch.setattr(win, "scheduler_running", lambda: False)
+    monkeypatch.setattr(win, "start_scheduler", lambda by_you=False: started.append(by_you))
+    tab = win.open_flow(write_flow(tmp_path / "nightly.yaml", """
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 * * *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - nightly.start -> work.after
+    """))
+
+    tab.doc.move_blocks({"work": (10, 10)})
+    win.save(tab)  # a scheduled flow saved: the service starts
+    assert started == [False]
+    win._start_scheduler_if_needed()  # (and when the editor opens with scheduled flows)
+    assert started == [False, False]
+
+    monkeypatch.setattr(win, "stop_scheduler", lambda: None)
+    win.pause_scheduler()  # you paused it: it stays off
+    assert paused(win.home)
+    tab.doc.move_blocks({"work": (20, 20)})
+    win.save(tab)
+    win._start_scheduler_if_needed()
+    assert started == [False, False]

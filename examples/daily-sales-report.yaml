@@ -8,6 +8,8 @@ params:
   region: {type: text, value: EU}
 
 blocks:
+  manual:
+    type: trigger.manual   # Run now starts here
   sales:
     type: data.read_file
     config: {path: data/sales.csv}
@@ -32,6 +34,7 @@ blocks:
         ctx.warn(f"could not build the report: {error['error']}")
 
 edges:
+  - manual.start -> sales.after
   - sales.table -> totals.sales
   - totals.result -> save.table
   - totals.error -> no_data.error

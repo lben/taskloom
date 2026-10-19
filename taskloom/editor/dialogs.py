@@ -458,7 +458,7 @@ class SettingsDialog(QDialog):
         form.addRow("Keep files of last runs", self.keep_runs)
         form.addRow("Scheduled runs at once", self.max_runs)
         form.addRow("Java folder", java_row)
-        self.at_login = QCheckBox("Start the scheduler when I log in")
+        self.at_login = QCheckBox("Start the scheduler service when I log in")
         if sys.platform == "win32":
             from ..scheduler import startup_file
             self.at_login.setChecked(startup_file().exists())
@@ -538,6 +538,15 @@ class SettingsDialog(QDialog):
             from ..scheduler import set_start_at_login
             set_start_at_login(self.home, self.at_login.isChecked())
         self.accept()
+
+
+def offer_manual_start(parent, flow_name: str) -> bool:
+    """A flow without a start block: add a Manual Start (connected to its first blocks) to run it?"""
+    return QMessageBox.question(
+        parent, "No start block",
+        f"{flow_name} has no start block. A flow starts from a Manual Start (when you run it) or a Schedule (at "
+        "the times you set).\n\nAdd a Manual Start connected to its first blocks, and run it?",
+        QMessageBox.Yes | QMessageBox.Cancel) == QMessageBox.Yes
 
 
 def confirm_run_now(parent, flow_name: str, what: str) -> tuple[bool, bool]:
