@@ -211,7 +211,7 @@ def cmd_scheduler(args, home: Home) -> int:
         print(f"start at login {'enabled' if args.at_login == 'on' else 'disabled'}: {path}")
         return EXIT_OK
     if args.unless_paused and scheduler.paused(home):
-        print("the scheduler service is paused: not starting it (turn it on in the editor)")
+        print("the scheduler service is off (you turned it off): not starting it (turn it on in the editor)")
         return EXIT_OK
     try:
         return scheduler.serve(home, args.headless)
@@ -290,7 +290,7 @@ def main(argv=None) -> int:
     p.add_argument("--headless", action="store_true", help="no tray icon; for servers")
     p.add_argument("--at-login", choices=["on", "off"], help="start the scheduler when you log in (Windows)")
     p.add_argument("--unless-paused", action="store_true",
-                   help="do not start if you paused the scheduler service (how starting at login starts it)")
+                   help="do not start if you turned the scheduler service off (how starting at login starts it)")
     p.set_defaults(func=cmd_scheduler)
     p = sub.add_parser("editor", help="open the visual editor")
     p.add_argument("flows", nargs="*", help="flow files to open")

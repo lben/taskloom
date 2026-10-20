@@ -10,10 +10,10 @@ from pathlib import Path
 import yaml
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-                               QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+                               QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
+                               QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTableWidget,
+                               QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from ..block import IDENTIFIER
 from ..config import SETTINGS_DEFAULTS
@@ -657,6 +657,60 @@ class ChooseInputsDialog(QDialog):
             elif text != shown:
                 given[name] = text
         return given
+
+
+class BlockResultsDialog(QDialog):
+    """A block's results in the runs it took part in, newest first: when each run started, what started it,
+    how the block ended; the selected run's values below. Show this run (or a double-click) chooses run_id."""
+
+    def __init__(self, block_id: str, results: list[dict], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Results of {block_id}")
+        self.resize(820, 560)
+        self.results, self.run_id = results, None
+        layout = QVBoxLayout(self)
+        intro = QLabel(f"{block_id} in each run it took part in, newest first. Select one to see its values; "
+                       "<b>Show this run</b> (or a double-click) puts that run on the canvas." if results
+                       else f"{block_id} has not taken part in a run of this flow yet.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.table = QTableWidget(len(results), 5)
+        self.table.setHorizontalHeaderLabels(["Run", "Started", "Started by", "Status", "Result"])
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.verticalHeader().hide()
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        for row, r in enumerate(results):
+            for col, text in enumerate([str(r["run_id"]), (r["started"] or "").replace("T", " ")[:19],
+                                        r["started_by"] or "", r["status"], r["error"] or r["summary"] or ""]):
+                self.table.setItem(row, col, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+        layout.addWidget(self.table, 2)
+        self.values = QPlainTextEdit(readOnly=True)  # what the selected run's outputs held
+        self.values.setLineWrapMode(QPlainTextEdit.NoWrap)
+        layout.addWidget(self.values, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        show = buttons.addButton("Show this run", QDialogButtonBox.AcceptRole)
+        show.setEnabled(bool(results))
+        buttons.accepted.connect(lambda: self._choose(self.table.currentRow()))
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.table.currentCellChanged.connect(lambda row, *_: self._show_values(row))
+        self.table.cellDoubleClicked.connect(lambda row, _: self._choose(row))
+        if results:
+            self.table.setCurrentCell(0, 0)
+
+    def _show_values(self, row: int):
+        if 0 <= row < len(self.results):
+            previews = self.results[row]["previews"]
+            self.values.setPlainText("\n\n".join(f"{port}:\n{text}" for port, text in previews.items())
+                                     or "No output values in this run.")
+
+    def _choose(self, row: int):
+        if 0 <= row < len(self.results):
+            self.run_id = self.results[row]["run_id"]
+            self.accept()
 
 
 class PythonEnvDialog(QDialog):

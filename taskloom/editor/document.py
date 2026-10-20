@@ -10,7 +10,8 @@ import yaml
 from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
-from ..flow import _EDGE
+from ..engine import lines as start_lines
+from ..flow import _EDGE, FlowError, flow_from_data
 
 UNDO_LIMIT = 200
 
@@ -111,6 +112,13 @@ class FlowDocument(QObject):
 
     def edges(self) -> list[tuple[str, str, str, str]]:
         return [e for e in (parse_edge(t) for t in self.data["edges"]) if e]
+
+    def lines(self, registry) -> dict[str, set[str]]:
+        """Each start block's line as the flow is now: the blocks its runs take part in ({} while it cannot be read)."""
+        try:
+            return start_lines(flow_from_data(self.data, self.path or Path("flow.yaml")), registry)
+        except FlowError:
+            return {}
 
     # --- editing -----------------------------------------------------------------
 

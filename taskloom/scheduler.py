@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import html
 import json
+import math
 import os
 import queue
 import signal
@@ -107,19 +108,20 @@ class Scheduler:
                 if last is None:  # a new schedule starts from now; nothing is "missed"
                     self._set_last(key, now)
                     continue
-                due = trigger.due(last, now, limit=CATCH_UP_LIMIT)
+                due = trigger.due(last, now)  # since the previous check
                 if not due:
                     continue
                 self._set_last(key, now)
-                missed = [t for t in due if now - t > ON_TIME_GRACE]
-                to_run = [t for t in due if now - t <= ON_TIME_GRACE]
-                if missed and trigger.misfire == "run_once":
-                    to_run.insert(0, missed[-1])
-                elif missed and trigger.misfire == "catch_up":
-                    to_run = missed + to_run
-                elif missed:
-                    self._tell(flow, "skipped", "Missed runs skipped",
-                               f"{flow.name}: {len(missed)} run(s) were due while the scheduler was off")
+                if trigger.misfire == "run_once":
+                    to_run = due[-1:]
+                elif trigger.misfire == "catch_up":
+                    to_run = due[:CATCH_UP_LIMIT]
+                else:  # skip: only the most recent time can be on time; the others were missed
+                    to_run = due[-1:] if now - due[-1] <= ON_TIME_GRACE else []
+                    missed = len(due) - len(to_run)
+                    if missed:
+                        self._tell(flow, "skipped", "Missed runs skipped",
+                                   f"{flow.name}: {missed} run(s) were due while the scheduler was off")
                 for n, as_of in enumerate(to_run):
                     self._request(str(path), flow, (as_of, trigger.block), force_queue=n > 0)
         self._write_heartbeat()
@@ -216,15 +218,13 @@ class Scheduler:
             time.sleep(0.2)
             self._poll()
 
-    def next_runs(self) -> dict[str, dt.datetime]:
-        """Next fire time per scheduled flow (for the editor)."""
-        now, result = dt.datetime.now(), {}
-        for path in self.home.scheduled_flows():
-            flow = self._load(path)
-            times = [t for t in (tr.next_after(now) for tr in (flow.triggers if flow else [])) if t]
-            if times:
-                result[str(path)] = min(times)
-        return result
+    def seconds_to_next_check(self, now: dt.datetime) -> float:
+        """How long the loop waits after its check at `now`: until the soonest due time, so that run starts
+        on time, and at most TICK_SECONDS (edited flows, finished and queued runs)."""
+        times = [t for path in self.home.scheduled_flows() if (flow := self._load(path))
+                 for t in (trigger.next_after(now) for trigger in flow.triggers) if t]
+        seconds = (min(times) - now).total_seconds() if times else TICK_SECONDS
+        return max(0.0, min(TICK_SECONDS, seconds))
 
     # --- keeping server schedulers alive ----------------------------------------------
 
@@ -267,7 +267,7 @@ def _keeper_loop(scheduler: Scheduler, stop: threading.Event):
 
 
 def paused(home: Home) -> bool:
-    """You paused the scheduler service: it does not start by itself until you turn it on."""
+    """You turned the scheduler service off: it does not start by itself until you turn it on."""
     return (home.root / "scheduler.paused").exists()
 
 
@@ -275,7 +275,7 @@ def set_paused(home: Home, value: bool):
     marker = home.root / "scheduler.paused"
     if value:
         home.root.mkdir(parents=True, exist_ok=True)
-        marker.write_text("paused by you\n")
+        marker.write_text("turned off by you\n")
     else:
         marker.unlink(missing_ok=True)
 
@@ -336,8 +336,9 @@ def serve(home: Home, headless: bool) -> int:
         threading.Thread(target=_keeper_loop, args=(scheduler, stop), daemon=True).start()
         notify("Scheduler started", str(home.root))
         while not stop.is_set():
-            scheduler.tick()
-            stop.wait(TICK_SECONDS - time.time() % TICK_SECONDS)
+            now = dt.datetime.now()
+            scheduler.tick(now)
+            stop.wait(scheduler.seconds_to_next_check(now))
         notify("Scheduler stopped", f"{len(scheduler.runs)} run(s) still going continue on their own")
         return 0
 
@@ -353,7 +354,7 @@ def _tray_available() -> bool:
 
 
 def _serve_tray(home: Home, stop: threading.Event) -> int:
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QTimer, Qt
     from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -373,18 +374,24 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     open_editor = QAction("Open editor", menu)
     open_editor.triggered.connect(lambda: subprocess.Popen(windowed_command() + ["editor"],
                                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
-    quit_action = QAction("Pause the scheduler service", menu)
-    quit_action.triggered.connect(lambda: (set_paused(home, True), app.quit()))  # you paused it: it stays off
+    quit_action = QAction("Turn off the scheduler service", menu)
+    quit_action.triggered.connect(lambda: (set_paused(home, True), app.quit()))  # you turned it off: it stays off
     menu.addAction(open_editor)
     menu.addAction(quit_action)
     tray.setContextMenu(menu)
     tray.messageClicked.connect(open_editor.trigger)
     tray.show()
     threading.Thread(target=_keeper_loop, args=(scheduler, stop), daemon=True).start()
-    timer = QTimer(interval=TICK_SECONDS * 1000)
-    timer.timeout.connect(scheduler.tick)
-    timer.start()
-    scheduler.tick()
+    timer = QTimer(singleShot=True, timerType=Qt.PreciseTimer)
+
+    def check():
+        now = dt.datetime.now()
+        timer.start(TICK_SECONDS * 1000)  # the next check, also if this one fails
+        scheduler.tick(now)
+        timer.start(math.ceil(scheduler.seconds_to_next_check(now) * 1000))
+
+    timer.timeout.connect(check)
+    check()
     try:
         return app.exec()
     finally:
@@ -400,7 +407,7 @@ def startup_file() -> Path:
 
 def startup_script(home: Home) -> str:
     """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
-    # Unless you paused it: then it stays off until you turn it on.
+    # Unless you turned it off: then it stays off until you turn it on.
     command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler", "--unless-paused"])
     return f'@echo off\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={home.root}"\nstart "" {command}\n'
 

@@ -56,6 +56,9 @@ taskloom editor examples/daily-sales-report.yaml
 - Drag blocks from the tree on the left onto the canvas (or double-click them); drag
   from an output port (right side of a block) to an input port (left side) to connect.
   Hover over a block to see what it does.
+- **Zoom** with the mouse wheel or the control at the top right of the canvas: it shows the
+  zoom, and **+** and **−** zoom in and out by the step between them (5% by default, change
+  it with its arrows), from 20% to 300%.
 - Two kinds of connectors: **circles carry data** (an output into an input), **diamonds set
   the order**. Every block has a **done** diamond output (it fires when the block succeeded)
   and a **run after** diamond input: connect `done` → `run after` to run blocks one after
@@ -75,25 +78,47 @@ taskloom editor examples/daily-sales-report.yaml
   offers to add one to a flow without (connected to its first blocks). A flow can have
   both kinds. A run includes the blocks after the start block that started it, the blocks
   whose data those need, and the error handlers of all of them; **a block connected to no
-  start block does not run**, which is how to switch one off. A skipped block says why.
+  start block does not run**, which is how to switch one off: it says **off · not connected
+  to a start block** under it. A skipped block says why.
+- **Lines:** the blocks a start block's runs take part in are its line. A flow can have
+  several lines, each from its own start block, and they run independently: a run of one
+  line reports only its own blocks, and never clears, overwrites, skips or stops another
+  line's blocks, whether it succeeds or fails. One start block can start several lines
+  (connected to several first blocks): one run runs them all, and a failure in one does not
+  stop the others. A block both lines connect into runs in either line's runs. On the
+  canvas each block shows its result from the latest run it took part in, so a block shared
+  by two lines shows the most recent one.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name and calendar.
-- Each open flow's tab shows its last result (a coloured dot) and, when it is scheduled, a
-  clock; hover the tab for when it last ran and runs next. Bottom left, **N flows running**
+- Each open flow's tab shows its last result (a coloured dot; a red ✕ while any line's last
+  run failed) and, when it is scheduled, a clock; hover the tab for how each start block's
+  line last ended (e.g. `manual: ok 2026-10-20 10:28:20`; re-running a block counts for the
+  lines it is in) and when it runs next. Bottom left, **N flows running**
   lists the flows running now (also on schedule or from a terminal), with when each one's
-  next scheduled run is: choose one to open it.
+  next scheduled run is: choose one to open it. While the scheduler service is off, the tabs
+  and this list say so instead of a next run.
 - **Run now** (it first says what it will run; you can turn that off) saves, checks and
   runs the flow in a separate process: blocks show their
   status live, the **Log** shows the selected block's messages, **Data preview** shows
   everything the selected block produced (tables as a grid, other values as text), and
-  **Run history** reopens any past run. **Stop** cancels.
+  **Run history** reopens any past run; its **Started by** column says what started each
+  run: its start blocks (e.g. `manual`, `nightly`), or `only BLOCK` / `from BLOCK` for a
+  re-run. **Stop** cancels.
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it. Every run's values are kept in **Run history** (double-click a run, then
   hover) for `history_days` (365 by default). Hover over the message under a block to read
-  all of it. The canvas shows each new run of the flow, including scheduled ones, unless you
-  opened an older run from Run history; a flow you open starts clean, unless it ran since
-  you last saw it (e.g. on schedule). The Log keeps the messages of the earlier runs above
-  it, each run starting with a bold line with its number, date and time.
+  all of it. The canvas follows the runs of the flow, including scheduled ones: each block
+  shows its result from the latest run it took part in, and a run that starts clears only
+  its own blocks. Opening an older run from Run history shows only that run (the blocks not
+  in it show nothing) until you start a run or open the newest one. A flow you open starts
+  clean, unless it ran since you last saw it (e.g. on schedule). The Log keeps the messages
+  of the earlier runs above it, each run starting with a bold line with its number, date
+  and time.
+- **A block's earlier results:** right-click it → **Results of this block…**: one row per
+  run it took part in, newest first, with the run, when it started, what started it, how
+  the block ended and its result or error. Select a row to see the values the block's
+  outputs held in that run; **Show this run** (or double-click the row) puts that run on the
+  canvas.
 - **Text on the canvas:** drag **Text** (under **Notes** in the blocks tree) onto the
   canvas, or right-click an empty spot → **Add text here**, for titles and remarks.
   Double-click it to write in it. When it is selected, drag the square past its corner to
@@ -102,17 +127,19 @@ taskloom editor examples/daily-sales-report.yaml
   any font installed on your computer. Text does not run.
 - **Retry after a fix:** right-click the block →
   - **Run only this block, with the same inputs**: only that block runs, with what reached
-    it in the run on the canvas; the other blocks keep their results
+    it in the run its result on the canvas comes from (the menu names that run); the other
+    blocks keep their results
     (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
   - **Run from this block on, with the same inputs** (or **with inputs I choose…**): that
     block and every block after it
     (error handlers too) run; the blocks before it are not run again, what they held in
-    the run on the canvas is used (`--from BLOCK --inputs-from RUN`).
+    that run is used (`--from BLOCK --inputs-from RUN`).
   Inputs that held a password are never saved, so such a block needs a full run. Blocks get
   what a full run would give them now (Taskloom says which block to retry first if needed).
 - **Test a block with values you choose:** right-click it → **Run only this block, with
-  inputs I choose…**. Each input is filled in with what reached it in the run on the canvas (empty if
-  it did not run); change any of them and press Run. Write values as Python: `42`, `'text'`,
+  inputs I choose…**. Each input is filled in with what reached it in the run its result comes
+  from (a block showing no result: the latest run among the results of the blocks connected
+  into it; empty if it did not run); change any of them and press Run. Write values as Python: `42`, `'text'`,
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
   what you typed and works it out again, so after editing `data.csv` just press Run.
@@ -209,23 +236,33 @@ The **scheduler service** runs scheduled flows at their times. It is a program o
 that keeps running in the background (its icon is in the tray), also while the editor is
 closed, and notifies you about failed or skipped runs. It starts by itself when you save a
 scheduled flow and when the editor opens with flows scheduled. The **Scheduler service**
-button at the top right shows whether it is on; click it to pause it (or **Pause the
-scheduler service** on its tray icon): then no scheduled flow runs, and it does not start
-by itself, until you turn it on again. On Windows, **Tools → Settings → Start the
-scheduler service when I log in** (or `taskloom scheduler --at-login on`) adds it to your
-Startup folder; no admin needed. From a terminal or on a server: `taskloom scheduler`.
+button at the top right shows whether it is on or off; click it to turn it off (or **Turn
+off the scheduler service** on its tray icon): then no scheduled flow runs, and it does not
+start by itself (also not at login), until you turn it on again. While it is off, a Schedule
+block says **scheduler service off** instead of its countdown. On Windows, **Tools →
+Settings → Start the scheduler service when I log in** (or
+`taskloom scheduler --at-login on`) adds it to your Startup folder; no admin needed. From
+a terminal or on a server: `taskloom scheduler`.
 
 The scheduler service keeps running when you open a newer Taskloom: the editor then offers to
 restart it with the newer version (a scheduler from an older version may not read flows
 the newer one saved), and starting at login switches to the newest version you opened.
 
-One scheduler service runs every scheduled flow. It rereads changed flow files every 15 seconds,
-so a new cron line applies shortly after you save, without restarting it; a changed
+One scheduler service runs every scheduled flow. Each run starts at its time (within a
+second). The service checks at least every 15 seconds and then rereads changed flow files,
+so a new cron line applies shortly after you save, without restarting it; a new or changed
 schedule counts from that moment (nothing before it counts as missed).
 
-Runs missed while the computer was off follow `misfire`: `skip`, `run_once` (the
-latest missed one) or `catch_up` (each of them), with parameters computed for the
-time each run was due.
+At each check, of the times that came since the previous check only the most recent can be
+on time, and only if it is at most 2 minutes old; the others were missed (the scheduler
+service was off, the computer asleep, ...). `misfire` says what runs:
+
+- `run_once` (the default): one run, for the most recent time, on time or missed;
+- `skip`: only the on-time run, if there is one; one **Missed runs skipped** notification
+  says how many were missed;
+- `catch_up`: one run for each time, oldest first, one after another (at most 100).
+
+A run's parameters are computed for the time it was due (that is what `now()` means).
 
 ## Servers
 

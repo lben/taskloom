@@ -215,6 +215,7 @@ class FlowTabsStatus(QObject):
         super().__init__(tabs)
         self.tabs = tabs
         tabs.setIconSize(QSize(30, 14))
+        self.scheduler_on = False  # the window says: scheduled flows run only while the scheduler service is on
         self._frame = 0
         self._timer = QTimer(self, interval=120)
         self._timer.timeout.connect(self._spin)
@@ -226,7 +227,8 @@ class FlowTabsStatus(QObject):
             return
         status, subtitle = tab.list_status()
         if tab.next_run:
-            subtitle += f" · next {tab.next_run:%Y-%m-%d %H:%M:%S}"
+            subtitle += (f" · next {tab.next_run:%Y-%m-%d %H:%M:%S}" if self.scheduler_on else
+                         " · scheduler service off")
         self.tabs.setTabToolTip(index, f"{tab.doc.path or 'not saved yet'}\n{subtitle}")
         self.tabs.setTabIcon(index, status_icon(status, self._frame, clock=tab.next_run is not None))
         self.tabs.tabBar().setTabTextColor(index, QColor(STATUS_COLORS["failed"]) if status == "failed"
@@ -1189,9 +1191,9 @@ class HistoryPanel(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Run", "Started", "Status", "Duration", "Parameters"])
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Run", "Started", "Started by", "Status", "Duration", "Parameters"])
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1212,9 +1214,10 @@ class HistoryPanel(QWidget):
                 seconds = (dt.datetime.fromisoformat(run["finished"]) - dt.datetime.fromisoformat(run["started"])).total_seconds()
                 duration = f"{seconds:.1f} s" if seconds < 120 else f"{math.floor(seconds / 60)} min {seconds % 60:.0f} s"
             params = " ".join(f"{k}={v}" for k, v in yaml.safe_load(run["params"] or "{}").items())
-            for col, text in enumerate([str(run["id"]), started.replace("T", " ")[:19], run["status"], duration, params]):
+            for col, text in enumerate([str(run["id"]), started.replace("T", " ")[:19], run["started_by"] or "",
+                                        run["status"], duration, params]):
                 item = QTableWidgetItem(text)
-                if col == 2:
+                if col == 3:
                     item.setIcon(status_icon(run["status"]))
                 self.table.setItem(row, col, item)
         self.table.resizeColumnsToContents()

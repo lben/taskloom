@@ -5,9 +5,10 @@ from __future__ import annotations
 import html
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen
-from PySide6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem, QGraphicsScene,
-                               QGraphicsTextItem, QGraphicsView, QStyle)
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QTransform
+from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem,
+                               QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QLabel, QSpinBox, QStyle,
+                               QToolButton)
 
 from ..block import AFTER, DONE, all_ports
 from ..flow import ERROR_PORT, BlockSpec, block_config
@@ -25,6 +26,9 @@ CATEGORY_COLORS = {
 USER_COLOR = "#b0563a"
 STATUS_COLORS = {"success": "#1f8a4c", "running": "#b7791f", "failed": "#c0392b",
                  "skipped": "#9aa6b2", "cancelled": "#9aa6b2", "retrying": "#b7791f"}
+OFF = ("off", "off · not connected to a start block",  # (status, text under the block, its tooltip)
+       "No start block leads to this block, so no run of the flow runs it. Connect it after a start block, or "
+       "after a block that comes after one, to switch it on.")
 
 
 def is_dark() -> bool:
@@ -450,6 +454,7 @@ class FlowScene(QGraphicsScene):
         self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule block -> (text, tip)
         self.edge_items: list[EdgeItem] = []
         self.statuses: dict[str, tuple[str, str, str]] = {}  # block -> (status, text, tip)
+        self.off: set[str] = set()  # blocks connected to no start block (in a flow with start blocks)
         self.values: dict[str, dict[str, str]] = {}  # block -> port -> text, from the run on screen
         self._drag_from: PortItem | None = None
         self._drag_line: QGraphicsPathItem | None = None
@@ -484,6 +489,8 @@ class FlowScene(QGraphicsScene):
         self._rebuilding = True
         self.clear()
         self.nodes, self.edge_items, self.note_items = {}, [], {}
+        lines = self.doc.lines(self.registry)
+        self.off = set(self.doc.blocks) - set().union(*lines.values()) if lines else set()
         for note_id, note in self.doc.notes.items():
             item = NoteItem(note_id, note)
             self.addItem(item)
@@ -493,8 +500,7 @@ class FlowScene(QGraphicsScene):
             node = NodeItem(block_id, spec, self.registry)
             self.addItem(node)
             self.nodes[block_id] = node
-            if block_id in self.statuses:
-                node.set_status(*self.statuses[block_id])
+            node.set_status(*self._shown_status(block_id))
             if block_id in self.countdowns:
                 node.set_countdown(*self.countdowns[block_id])
             node.setSelected(block_id in selected)
@@ -565,7 +571,12 @@ class FlowScene(QGraphicsScene):
         else:
             self.statuses[block_id] = (status, text, tip or html.escape(text))
         if block_id in self.nodes:
-            self.nodes[block_id].set_status(status, text, tip or html.escape(text))
+            self.nodes[block_id].set_status(*self._shown_status(block_id))
+
+    def _shown_status(self, block_id: str) -> tuple[str | None, str, str]:
+        """Under a block: its result on the canvas; without one, that it is off if no start block leads to it
+        (not a result: it goes away once the block is connected to a line)."""
+        return self.statuses.get(block_id) or (OFF if block_id in self.off else (None, "", ""))
 
     def set_countdown(self, block_id: str, text: str, tip: str = ""):
         """Under a Schedule block: when it starts the flow next."""
@@ -730,6 +741,36 @@ class FlowScene(QGraphicsScene):
             painter.drawPoints(points)
 
 
+class ZoomBar(QFrame):
+    """Floats over the top-right corner of a canvas: a magnifier, the zoom, + and − by the step between them."""
+
+    def __init__(self, view: "FlowView"):
+        super().__init__(view)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setAutoFillBackground(True)
+        magnifier = QPixmap(14, 14)
+        magnifier.fill(Qt.transparent)
+        p = QPainter(magnifier)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(self.palette().windowText().color(), 1.6))
+        p.drawEllipse(QRectF(1.5, 1.5, 8, 8))
+        p.drawLine(QPointF(8.5, 8.5), QPointF(12.5, 12.5))
+        p.end()
+        self.percent = QLabel(alignment=Qt.AlignCenter)
+        self.percent.setMinimumWidth(self.percent.fontMetrics().horizontalAdvance("300%") + 4)  # + and − stay put
+        self.plus = QToolButton(text="+", autoRaise=True)
+        self.minus = QToolButton(text="\N{MINUS SIGN}", autoRaise=True)
+        self.step = QSpinBox(minimum=1, maximum=100, value=5, suffix="%", toolTip="How much + and − zoom")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 2, 2)
+        layout.setSpacing(2)
+        for widget in (QLabel(pixmap=magnifier), self.percent, self.plus, self.step, self.minus):
+            layout.addWidget(widget)
+        self.plus.clicked.connect(lambda: view.zoom_to(view.zoom_percent() + self.step.value()))
+        self.minus.clicked.connect(lambda: view.zoom_to(view.zoom_percent() - self.step.value()))
+        self.adjustSize()
+
+
 class FlowView(QGraphicsView):
     def __init__(self, scene: FlowScene):
         super().__init__(scene)
@@ -739,7 +780,29 @@ class FlowView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.setAcceptDrops(True)
         self._pan_from = None
+        self.zoom_bar = ZoomBar(self)  # a child of the view, not the scene: not saved, not scrolled with the flow
+        self._show_zoom()
         self.center_on_flow()
+
+    def resizeEvent(self, event):  # also when only the visible canvas (the viewport) changes size
+        super().resizeEvent(event)
+        canvas = self.viewport().geometry()
+        self.zoom_bar.move(canvas.right() - 8 - self.zoom_bar.width(), canvas.top() + 8)
+
+    def zoom_percent(self) -> float:
+        return 100 * self.transform().m11()
+
+    def zoom_to(self, percent: float):
+        """Zoom to that percentage (kept to 20-300%, like the mouse wheel) around the middle of the visible canvas."""
+        zoom = min(max(percent, 20), 300) / 100
+        # Qt keeps the middle as an exact scene point, so clicks in a row do not drift by the whole-pixel scrolling.
+        self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
+        self.setTransform(QTransform.fromScale(zoom, zoom))
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)  # the mouse wheel zooms around the mouse
+        self._show_zoom()
+
+    def _show_zoom(self):
+        self.zoom_bar.percent.setText(f"{round(self.zoom_percent())}%")
 
     def center_on_flow(self):
         """Show the whole flow: centred, zoomed out (not below half size) if it does not fit."""
@@ -753,8 +816,7 @@ class FlowView(QGraphicsView):
         rect = rect.adjusted(-30, -30, 30, 30)
         view = self.viewport().rect()
         scale = min(1.0, view.width() / rect.width(), view.height() / rect.height())
-        self.resetTransform()
-        self.scale(max(scale, 0.5), max(scale, 0.5))
+        self.zoom_to(100 * max(scale, 0.5))
         self.centerOn(rect.center())
 
     def wheelEvent(self, event):
@@ -762,6 +824,7 @@ class FlowView(QGraphicsView):
         zoom = self.transform().m11() * factor
         if 0.2 <= zoom <= 3:
             self.scale(factor, factor)
+            self._show_zoom()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:

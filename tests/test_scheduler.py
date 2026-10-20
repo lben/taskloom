@@ -228,5 +228,5 @@ def test_starting_at_login_keeps_a_paused_scheduler_service_off(env):
 
     result = env.taskloom("scheduler", "--headless", "--unless-paused", timeout=30)
 
-    assert result.returncode == 0 and "paused" in result.stdout
+    assert result.returncode == 0 and "scheduler service is off" in result.stdout
     assert not (env.home / "scheduler.heartbeat").exists()  # it did not start

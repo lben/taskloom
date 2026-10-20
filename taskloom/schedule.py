@@ -171,9 +171,9 @@ class Trigger:
     def next_after(self, t: dt.datetime) -> dt.datetime | None:
         return self.timing.next_after(t)
 
-    def due(self, after: dt.datetime, until: dt.datetime, limit: int = 1000) -> list[dt.datetime]:
+    def due(self, after: dt.datetime, until: dt.datetime) -> list[dt.datetime]:
         """Fire times in (after, until], oldest first."""
         times, t = [], after
-        while len(times) < limit and (t := self.next_after(t)) is not None and t <= until:
+        while (t := self.next_after(t)) is not None and t <= until:
             times.append(t)
         return times

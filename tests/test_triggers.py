@@ -36,7 +36,7 @@ def test_run_starts_from_manual_start_and_the_scheduler_from_its_schedule_block(
     assert env.taskloom("run", flow, "--trigger", "nightly").returncode == 0
     assert (env.root / "by_schedule.txt").exists() and not (env.root / "by_hand.txt").exists()
     run_id, _ = env.last_run()
-    assert env.block_status(run_id)["manual"] == "skipped"
+    assert set(env.block_status(run_id)) == {"nightly", "by_schedule"}  # manual's line is not part of it
 
 
 def test_run_now_starts_a_flow_that_only_has_a_schedule(env):
@@ -199,8 +199,7 @@ def test_a_block_connected_to_no_start_block_does_not_run(env):
     history = History(env.home / "history.db")
     blocks = history.blocks(run_id)
     history.close()
-    assert blocks["health"]["status"] == "skipped"
-    assert blocks["health"]["summary"] == "not connected to manual, which started this run"
+    assert set(blocks) == {"manual", "load", "work"}  # health and restart are part of no run
 
 
 def test_a_start_block_connected_to_nothing_is_reported(env):
@@ -305,15 +304,3 @@ def test_a_skipped_block_says_why(env):
 
     assert blocks["on_yes"]["summary"] == "nothing reached its 'value' input"
     assert blocks["after_boom"]["summary"] == "something before it failed"
-
-
-def test_in_a_scheduled_run_a_block_after_manual_start_says_what_started_the_run(env):
-    flow = env.write("flow.yaml", TWO_STARTS)
-
-    env.taskloom("run", flow, "--trigger", "nightly")
-
-    run_id, _ = env.last_run()
-    history = History(env.home / "history.db")
-    blocks = history.blocks(run_id)
-    history.close()
-    assert blocks["by_hand"]["summary"] == "not connected to nightly, which started this run"

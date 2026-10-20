@@ -61,7 +61,7 @@ def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, schedule
                        unsaved: bool) -> tuple[str, str]:
     """(Text under a Schedule block, its tooltip): when it starts the flow next."""
     if config.get("active", True) is False:
-        return "paused", "This schedule is paused: tick Active to use it."
+        return "not active", "This schedule is not active: it does not start the flow. Tick Active to use it."
     timing = {k: config[k] for k in ("cron", "at") if config.get(k) not in (None, "")}
     try:
         trigger = Trigger({"schedule": timing})
@@ -75,8 +75,9 @@ def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, schedule
     tip = "Next runs:<br>" + "<br>".join(f"{t:%a %d %b %Y %H:%M}" for t in upcoming)
     if unsaved or not scheduled:
         return f"next {upcoming[0]:%a %H:%M} · save to schedule", tip + "<br><br>Save the flow to schedule this."
-    if not scheduler_on:
-        return f"next {upcoming[0]:%a %H:%M} · service off", tip + "<br><br>Turn the scheduler service on (top right)."
+    if not scheduler_on:  # no time: none comes while it is off
+        return "scheduler service off", ("The scheduler service is off, so this schedule does not start the flow. "
+                                         "The Scheduler service button (top right) turns it on.")
     left = int((upcoming[0] - now).total_seconds())
     days, rest = divmod(left, 86400)
     clock = f"{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
@@ -128,13 +129,18 @@ class FlowTab(QWidget):
         self.queued: list[dict] = []
         self.tab_id = uuid.uuid4().hex[:12]  # names this tab's autosaved copy
         self.autosave = QTimer(self, singleShot=True, interval=1500)
-        self.entries: list[dict] = []  # log of the run shown on the canvas
-        self.block_info: dict[str, dict] = {}  # block -> status, tables, … of the run shown
-        self.shown_run: RunProcess | None = None
-        self.shown_run_id: int | None = None  # the run whose results are on the canvas
-        self.following_latest = True  # show each new run (incl. scheduled ones) unless an older one was opened
+        self.entries: list[dict] = []  # log of the runs shown on the canvas
+        self.block_info: dict[str, dict] = {}  # block -> status, tables, …, run_id: the result it shows
+        self.shown_run: RunProcess | None = None  # the run going whose events the canvas shows
+        self.run_blocks: list[str] = []  # the blocks that run takes part in
+        # Show each block's latest result (incl. scheduled runs), unless an older run was opened: among the runs
+        # after since_run (the newest you had seen when the flow was opened).
+        self.following_latest = True
+        self.since_run = 0
         self.seen_up_to: int | None = None  # the newest run of this flow you have seen (or skipped) here
+        self.going: set[int] = set()  # its runs still going (in the history) when it last looked
         self.last: dict | None = None  # last finished run of this flow, from the history
+        self.line_results: list[tuple[str, dict | None]] = []  # each start block, its line's last finished run
         self.scheduled = False  # listed for the scheduler
         self.next_run: dt.datetime | None = None  # when the scheduler runs it next
 
@@ -142,16 +148,27 @@ class FlowTab(QWidget):
     def running(self) -> bool:
         return any(r.running for r in self.runs)
 
+    def result_run(self, block: str) -> int | None:
+        """The run the result a block shows comes from (None: it shows none)."""
+        return (self.block_info.get(block) or {}).get("run_id")
+
     def list_status(self) -> tuple[str | None, str]:
         if self.running:
-            done = sum(1 for i in self.block_info.values() if i.get("status") not in (None, "running"))
-            return "running", f"running · {done} of {len(self.doc.blocks)} blocks done"
+            done = sum(1 for b in self.run_blocks if (self.block_info.get(b) or {}).get("status") not in (None, "running"))
+            return "running", f"running · {done} of {len(self.run_blocks)} blocks done" if self.run_blocks else "running"
+        if self.line_results:  # one line per start block: how its line last ended
+            ended = [run["status"] for _, run in self.line_results if run]
+            return ("failed" if "failed" in ended else "success" if ended else None), "\n".join(
+                f"{start}: {_ended(run) if run else 'not run yet'}" for start, run in self.line_results)
         if self.last:
-            when = (self.last.get("finished") or self.last["started"] or "").replace("T", " ")[:19]  # date and seconds
-            if self.last["status"] == "failed":
-                return "failed", f"failed {when}"
-            return self.last["status"], f"{'ok' if self.last['status'] == 'success' else self.last['status']} {when}"
+            return self.last["status"], _ended(self.last)
         return None, "not run yet" if self.doc.path else "unsaved"
+
+
+def _ended(run: dict) -> str:
+    """'ok 2026-10-20 10:28:20' (when it finished), 'failed …'."""
+    when = (run.get("finished") or run["started"] or "").replace("T", " ")[:19]  # date and seconds
+    return f"{'ok' if run['status'] == 'success' else run['status']} {when}"
 
 
 class MainWindow(QMainWindow):
@@ -199,7 +216,6 @@ class MainWindow(QMainWindow):
         self._countdown = QTimer(self, interval=1000)
         self._countdown.timeout.connect(self._show_countdowns)
         self._countdown.start()
-        self._scheduler_on = False
         # Bottom left: the flows running now (from here, on schedule or from a terminal); open one from it.
         self._schedules_cache: dict = {}  # flow file -> (modified, its schedules)
         self.running_flows = HoverMenuButton("No flows running")
@@ -638,24 +654,33 @@ class MainWindow(QMainWindow):
                 "right-click it.")
 
     def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), refresh: set | None = None) -> RunProcess:
-        """Start a run of the flow. `refresh`: the blocks it runs, when it does not run them all (one block,
-        or a block and what follows it): the rest of the canvas keeps the run it showed."""
+        """Start a run of the flow. Only the blocks it takes part in are cleared (when it starts, it says
+        which); the others keep the results they show. `refresh`: the blocks a re-run of one block (or of a
+        block and what follows it) runs, cleared now."""
         run = RunProcess(str(tab.doc.path), overrides, self.home, self, extra_args)
         run.event.connect(lambda e, t=tab, r=run: self._on_event(t, r, e))
         run.output.connect(lambda line, t=tab, r=run: self._on_output(t, r, line))
         run.finished.connect(lambda status, t=tab, r=run: self._on_finished(t, r, status))
         tab.runs.append(run)
+        if not tab.following_latest:  # an older run was on the canvas: each block's latest result again
+            self._show_results(tab)
+        tab.shown_run, tab.run_blocks = run, []
         if refresh is None:
-            self._show_run(tab, run, keep_log=True)
+            tab.entries = tab.entries[-MAX_LOG_ENTRIES:]  # its messages follow the earlier runs'
+            if tab is self.current:
+                self.log.set_entries(list(tab.entries))
+                self.bottom_tabs.setCurrentWidget(self.log)
         else:
-            tab.shown_run = run
-            for block in refresh:
-                tab.block_info.pop(block, None)
-                tab.scene.set_status(block, None)
-                tab.scene.set_values(block, {})
+            self._clear_blocks(tab, refresh)
         run.start()
         self.flow_status.update_tab(tab)
         return run
+
+    def _clear_blocks(self, tab: FlowTab, blocks):
+        for block in blocks:
+            tab.block_info.pop(block, None)
+            tab.scene.set_status(block, None)
+            tab.scene.set_values(block, {})
 
     def _run_label(self, run_id: int) -> str:
         history = self._history()
@@ -693,36 +718,44 @@ class MainWindow(QMainWindow):
                      else "Run the flow from here")
             menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
             return menu
-        shown = f" ({self._run_label(tab.shown_run_id)})" if tab.shown_run_id else ""
+        run_id = tab.result_run(block_id)
+        shown = f" ({self._run_label(run_id)})" if run_id else ""
         rerun = menu.addAction(f"Run only this block, with the same inputs{shown}")
-        rerun.setEnabled(tab.shown_run_id is not None and not tab.running)
+        rerun.setEnabled(run_id is not None and not tab.running)
         rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
         choose = menu.addAction("Run only this block, with inputs I choose…")
         choose.setEnabled(not tab.running)
         choose.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id))
         onwards = menu.addAction(f"Run from this block on, with the same inputs{shown}")
         onwards.setToolTip("This block and every block after it; the blocks before it are not run again")
-        onwards.setEnabled(tab.shown_run_id is not None and not tab.running)
+        onwards.setEnabled(run_id is not None and not tab.running)
         onwards.triggered.connect(lambda: self.rerun_block(tab, block_id, on=True))
         choose_on = menu.addAction("Run from this block on, with inputs I choose…")
         choose_on.setEnabled(not tab.running)
         choose_on.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id, on=True))
+        results = menu.addAction("Results of this block…")
+        results.setToolTip("Its results in the earlier runs: when each run started, what started it, its values")
+        results.setEnabled(tab.doc.path is not None)
+        results.triggered.connect(lambda: self.show_block_results(tab, block_id))
         return menu
 
-    def _show_run(self, tab: FlowTab, run: RunProcess | None, keep_log=False):
-        """Put a run on the canvas. Its Log follows the earlier runs' messages (keep_log), or replaces them."""
-        tab.shown_run = run
-        tab.entries, tab.block_info = (tab.entries[-MAX_LOG_ENTRIES:] if keep_log else []), {}
-        tab.scene.clear_statuses()
-        if tab is self.current:
-            self.log.set_entries(list(tab.entries))
-            self.bottom_tabs.setCurrentWidget(self.log)
+    def show_block_results(self, tab: FlowTab, block_id: str):
+        """A block's results in the runs it took part in; one of those runs can be put on the canvas."""
+        history = self._history()
+        try:
+            results = history.block_results(str(tab.doc.path), block_id)
+        finally:
+            history.close()
+        dialog = dialogs.BlockResultsDialog(block_id, results, self)
+        if dialog.exec() and dialog.run_id is not None:
+            self.show_history_run(dialog.run_id, tab)
 
     def rerun_block(self, tab: FlowTab, block_id: str, on: bool = False):
-        """Run one block again (`on`: and every block after it), with the inputs it got in the run on the
-        canvas (e.g. after fixing it); the blocks before it are not run again."""
-        if tab.shown_run_id is None:
-            QMessageBox.information(self, "Run the flow first", "There is no run on the canvas to take the inputs from.")
+        """Run one block again (`on`: and every block after it), with the inputs it got in the run of the result
+        it shows (e.g. after fixing it); the blocks before it are not run again."""
+        run_id = tab.result_run(block_id)
+        if run_id is None:
+            QMessageBox.information(self, "Run the flow first", "This block shows no result to take the inputs from.")
             return
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
@@ -731,12 +764,13 @@ class MainWindow(QMainWindow):
         if flow is None:
             return
         blocks = blocks_from(flow, self.registry, block_id) if on else {block_id}
-        self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(tab.shown_run_id)],
+        self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(run_id)],
                        refresh=blocks)
 
     def run_block_with_inputs(self, tab: FlowTab, block_id: str, on: bool = False):
         """Run one block (`on`: and the blocks after it) with input values you type for it (filled in with
-        what reached it in the run on the canvas)."""
+        what reached it in the run of the result it shows; showing none, in the latest run among the results
+        the blocks connected into it show)."""
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
@@ -744,7 +778,9 @@ class MainWindow(QMainWindow):
         if flow is None:
             return
         names = [name for name in input_ports(flow, self.registry, block_id) if name != AFTER]
-        run_id, values, missing, typed = tab.shown_run_id, {}, {}, {}
+        run_id = tab.result_run(block_id) or max(
+            filter(None, (tab.result_run(src) for src, _, dst, _ in tab.doc.edges() if dst == block_id)), default=None)
+        values, missing, typed = {}, {}, {}
         if run_id is not None:
             try:
                 values, missing, typed = block_inputs(flow, self.registry, self.home, block_id, run_id)
@@ -755,7 +791,7 @@ class MainWindow(QMainWindow):
         if not dialog.exec():
             return
         args = ["--from" if on else "--only", block_id]
-        # Start from the run on the canvas (the rest of the flow's results carry over), unless that run has
+        # Start from that run (the rest of the flow's results carry over), unless that run has
         # nothing for a block without inputs: running it as it was then would be refused.
         if run_id is not None and (names or not missing):
             args += ["--inputs-from", str(run_id)]
@@ -790,12 +826,14 @@ class MainWindow(QMainWindow):
             return
         block = e.get("block")
         if kind == "run_started":
-            tab.shown_run_id, tab.following_latest = e["run_id"], True
+            tab.following_latest = True
             self._mark_seen(tab, e["run_id"])
+            tab.run_blocks = e["blocks"]
+            self._clear_blocks(tab, e["blocks"])  # the blocks it takes part in; the others keep what they show
             params = " ".join(f"{k}={v}" for k, v in e.get("params", {}).items())
             self._log(tab, _started_line(e["run_id"], e["ts"], params))
         elif kind == "block_started":
-            tab.block_info[block] = {"status": "running"}
+            tab.block_info[block] = {"status": "running", "run_id": e["run_id"]}
             text = "running" if e["attempt"] == 1 else f"running · attempt {e['attempt']}"
             tab.scene.set_status(block, "running", text)
         elif kind == "log":
@@ -807,17 +845,11 @@ class MainWindow(QMainWindow):
         self.flow_status.update_tab(tab)
 
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
+        """Show a block's result in run info["run_id"] (an event of it, or its row in the history)."""
         status = info.get("status")
-        cls = self.registry.get((tab.doc.blocks.get(block) or {}).get("type"))
-        if status == "skipped" and cls is not None and cls.is_trigger:
-            # A start block that did not start this run (e.g. a Schedule block when you press Run): it
-            # skipped nothing, so it looks as usual (a Schedule block shows when it starts the flow next).
-            tab.block_info.pop(block, None)
-            tab.scene.set_status(block, None)
-            tab.scene.set_values(block, {})
-            return
         tab.block_info[block] = {"status": status, "tables": info.get("tables") or {},
-                                 "previews": info.get("previews") or {}, "error": info.get("error")}
+                                 "previews": info.get("previews") or {}, "error": info.get("error"),
+                                 "run_id": info.get("run_id")}
         values = dict(info.get("previews") or {})
         if status == "success":
             values["done"] = "finished successfully"
@@ -854,7 +886,8 @@ class MainWindow(QMainWindow):
         if run is tab.shown_run:
             for block, info in tab.block_info.items():
                 if info.get("status") == "running":  # the process died mid-block
-                    self._apply_block_result(tab, block, {"status": "failed", "error": "the run process stopped unexpectedly"})
+                    self._apply_block_result(tab, block, {"status": "failed", "run_id": info["run_id"],
+                                                          "error": "the run process stopped unexpectedly"})
         self._load_last_run(tab)
         if tab is self.current:
             self._refresh_history(tab)
@@ -870,10 +903,17 @@ class MainWindow(QMainWindow):
     def _load_last_run(self, tab: FlowTab):
         if tab.doc.path is None:
             return
-        runs = []
+        lines = tab.doc.lines(self.registry)
+        runs, going, tab.line_results = [], set(), [(start, None) for start in lines]
         if self.home.history_db.exists():
             history = self._history()
-            runs = [r for r in history.runs(str(tab.doc.path), limit=20) if r["status"] != "running"]
+            runs = history.runs(str(tab.doc.path), limit=20)
+            going = {r["id"] for r in runs if r["status"] == "running"}
+            runs = [r for r in runs if r["status"] != "running"]
+            # How each start block's line last ended: in a run it started, or in a re-run of a block of its line.
+            tab.line_results = [(start, history.last_run(str(tab.doc.path), [start, *(f"{how} {b}" for b in line
+                                                                                     for how in ("only", "from"))]))
+                                for start, line in lines.items()]
             history.close()
         tab.last = runs[0] if runs else None
         self.flow_status.update_tab(tab)
@@ -881,13 +921,18 @@ class MainWindow(QMainWindow):
             # Just opened: runs you saw before start nothing (a flow opens clean); none yet: every run to
             # come is new.
             stored = self.settings.value(_seen_key(tab.doc.path))
-            tab.seen_up_to = int(stored) if stored is not None else runs[0]["id"] if runs else 0
+            tab.seen_up_to = tab.since_run = int(stored) if stored is not None else runs[0]["id"] if runs else 0
             self._mark_seen(tab, tab.seen_up_to)
-        if tab.following_latest and not tab.running and runs:
+        if tab.following_latest and not tab.running:
             # Each run you have not seen yet (e.g. started by the scheduler, also while this flow was closed),
-            # oldest first, its messages after the ones already shown.
-            for r in reversed([r for r in runs if r["id"] > tab.seen_up_to]):
-                self.show_history_run(r["id"], tab, keep_log=True)
+            # oldest first: its messages after the ones already shown, its results on its blocks. A run that was
+            # still going when a later one was seen (another line's) is new once it has finished.
+            unseen = [r["id"] for r in reversed(runs) if r["id"] > tab.seen_up_to or r["id"] in tab.going]
+            tab.going = going
+            for run_id in unseen:
+                self._show_log(tab, run_id, keep_log=True)
+            if unseen:
+                self._show_results(tab)
 
     def _mark_seen(self, tab: FlowTab, run_id: int):
         tab.seen_up_to = max(tab.seen_up_to or 0, run_id)
@@ -935,8 +980,9 @@ class MainWindow(QMainWindow):
             text = f"{run['flow']}  ·  running since {since} ({run_label(run['id'], None)})"
             path = Path(run["flow_path"]).resolve()
             upcoming = self._next_scheduled(path) if path in scheduled else None  # (the service runs only those)
-            if upcoming is not None:  # its soonest schedule
-                text += f"  ·  next run {upcoming:%Y-%m-%d %H:%M:%S}" + ("" if self._scheduler_on else " (service off)")
+            if upcoming is not None:  # its soonest schedule, which comes only while the service is on
+                text += (f"  ·  next run {upcoming:%Y-%m-%d %H:%M:%S}" if self.flow_status.scheduler_on else
+                         "  ·  scheduler service off")
             menu.addAction(text, lambda path=run["flow_path"]: self.open_flow(Path(path)))
 
     def _next_scheduled(self, path: Path) -> dt.datetime | None:
@@ -976,13 +1022,13 @@ class MainWindow(QMainWindow):
         self._refresh_schedule(tab)
         if scheduled and not self.scheduler_running():
             if paused(self.home):
-                self.statusBar().showMessage("This flow is scheduled, but the scheduler service is off (you paused "
-                                             "it): turn it on (top right) to run it.", 10000)
+                self.statusBar().showMessage("This flow is scheduled, but the scheduler service is off (you turned "
+                                             "it off): turn it on (top right) to run it.", 10000)
             else:
                 self.start_scheduler()
 
     def _start_scheduler_if_needed(self):
-        """Flows are scheduled: the scheduler service runs them (unless you paused it)."""
+        """Flows are scheduled: the scheduler service runs them (unless you turned it off)."""
         try:
             scheduled = bool(self.home.scheduled_flows())
         except ValueError:
@@ -1007,10 +1053,13 @@ class MainWindow(QMainWindow):
         for block_id, spec in tab.doc.blocks.items():
             if spec.get("type") == "trigger.schedule":
                 tab.scene.set_countdown(block_id, *schedule_countdown(spec.get("config") or {}, now, tab.scheduled,
-                                                                      self._scheduler_on, tab.doc.dirty))
+                                                                      self.flow_status.scheduler_on, tab.doc.dirty))
 
     def _show_scheduler_state(self, running: bool):
-        self._scheduler_on = running
+        if running != self.flow_status.scheduler_on:  # the tabs say when their flows run next only while it is on
+            self.flow_status.scheduler_on = running
+            for tab in self.tabs_list():
+                self.flow_status.update_tab(tab)
         self.scheduler_action.setIcon(scheduler_icon(running))
         self.scheduler_action.setText("Scheduler service on" if running else "Scheduler service off")
         version = running_scheduler_version(self.home) if running else None
@@ -1020,7 +1069,7 @@ class MainWindow(QMainWindow):
              f"{__version__}. Turn it off and on again here to run this version." if older else
              "The scheduler service runs in the background, also while the editor is closed (its icon is in the "
              "tray), and starts your scheduled flows at their times. It starts by itself when a flow is "
-             "scheduled. Click to pause it: no scheduled flow runs until you turn it on again.") if running else
+             "scheduled. Click to turn it off: no scheduled flow runs until you turn it on again.") if running else
             "The scheduler service is off: scheduled flows do not run. Click to turn it on.")
         if older and not self._offered_restart:
             self._offered_restart = True
@@ -1037,8 +1086,8 @@ class MainWindow(QMainWindow):
         try:
             os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Cannot stop the scheduler service", f"{e}\n\nPause it from its tray icon, "
-                                "then turn it on here (top right).")
+            QMessageBox.warning(self, "Cannot stop the scheduler service", f"{e}\n\nTurn it off from its tray "
+                                "icon, then turn it on here (top right).")
             return
         deadline = time.monotonic() + 15
 
@@ -1048,8 +1097,8 @@ class MainWindow(QMainWindow):
             elif time.monotonic() < deadline:
                 QTimer.singleShot(300, self, when_stopped)
             else:
-                QMessageBox.warning(self, "Cannot restart the scheduler service", "It did not stop. Pause it from "
-                                    "its tray icon, then turn it on here (top right).")
+                QMessageBox.warning(self, "Cannot restart the scheduler service", "It did not stop. Turn it off "
+                                    "from its tray icon, then turn it on here (top right).")
 
         QTimer.singleShot(300, self, when_stopped)
 
@@ -1068,7 +1117,7 @@ class MainWindow(QMainWindow):
         if not self.scheduler_running():
             self.start_scheduler(by_you=True)
             return
-        answer = QMessageBox.question(self, "Pause the scheduler service?",
+        answer = QMessageBox.question(self, "Turn off the scheduler service?",
                                       "No scheduled flow runs until you turn it on again (it does not start by "
                                       "itself meanwhile). Runs already going continue.")
         if answer == QMessageBox.Yes:
@@ -1112,27 +1161,49 @@ class MainWindow(QMainWindow):
         self.history_panel.show_runs(history.runs(str(tab.doc.path)))
         history.close()
 
-    def show_history_run(self, run_id: int, tab: FlowTab | None = None, keep_log=False):
-        """Show a past run: its results on the canvas, its messages in the Log (after the earlier
-        runs' messages with keep_log, else on their own)."""
+    def show_history_run(self, run_id: int, tab: FlowTab | None = None):
+        """Show a past run on purpose: only its results on the canvas (the newest run: each block's latest
+        result again, following the runs to come), its messages in the Log."""
         tab = tab or self.current
         if tab is None:
             return
+        tab.shown_run = None
+        newest = tab.last is None or run_id >= tab.last["id"]
+        if newest:  # it counts even if you had seen it before opening the flow
+            tab.since_run = min(tab.since_run, run_id - 1)
+        self._show_results(tab, None if newest else run_id)
+        self._show_log(tab, run_id)
+
+    def _show_results(self, tab: FlowTab, run_id: int | None = None):
+        """On the canvas: each block's result from the latest run (since the flow was opened) it took part in,
+        following the runs to come; or only run `run_id`'s results."""
         history = self._history()
-        run, blocks, logs = history.run(run_id), history.blocks(run_id), history.logs(run_id)
-        history.close()
-        self._show_run(tab, None, keep_log)
-        tab.shown_run_id = run_id
-        self._mark_seen(tab, run_id)
-        tab.following_latest = tab.last is None or run_id >= tab.last["id"]
-        for block, info in blocks.items():
+        try:
+            if run_id is None:
+                results = history.latest_block_results(str(tab.doc.path), tab.since_run)
+            else:
+                results = {block: {**info, "run_id": run_id} for block, info in history.blocks(run_id).items()}
+        finally:
+            history.close()
+        tab.following_latest = run_id is None
+        tab.block_info = {}
+        tab.scene.clear_statuses()
+        for block, info in results.items():
             self._apply_block_result(tab, block, info)
+
+    def _show_log(self, tab: FlowTab, run_id: int, keep_log=False):
+        """A past run's messages in the Log (after the earlier runs' messages with keep_log, else on their own)."""
+        history = self._history()
+        run, logs = history.run(run_id), history.logs(run_id)
+        history.close()
+        self._mark_seen(tab, run_id)
         if run:
             logs = [_started_line(run_id, run["started"]),
                     *logs, _finished_line(run_id, run["status"], run["finished"] or run["started"])]
-        tab.entries += logs
+        tab.entries = (tab.entries[-MAX_LOG_ENTRIES:] if keep_log else []) + logs
         if tab is self.current:
             self.log.set_entries(list(tab.entries))
+            self.bottom_tabs.setCurrentWidget(self.log)
             self.statusBar().showMessage(f"Showing {run_label(run_id, run['started'] if run else None)}", 5000)
 
     def closeEvent(self, event):

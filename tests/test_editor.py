@@ -525,7 +525,7 @@ def test_rerun_a_fixed_block_from_the_canvas(win, qtbot, tmp_path):
     win.start_run(tab, {})
     wait_done(qtbot, tab)
     assert tab.scene.nodes["compute"].status == "failed"
-    first_run = tab.shown_run_id
+    first_run = tab.result_run("compute")
 
     tab.doc.set_block_value("compute", "code", "open('result.txt', 'w').write(str(input * 2))")  # the fix
     win.rerun_block(tab, "compute")
@@ -534,7 +534,7 @@ def test_rerun_a_fixed_block_from_the_canvas(win, qtbot, tmp_path):
     assert (tmp_path / "result.txt").read_text() == "42" and (tmp_path / "loads.txt").read_text() == "x"
     assert tab.scene.nodes["compute"].status == "success"
     assert tab.scene.nodes["load"].status == "success"  # still showing the earlier run's result
-    assert tab.shown_run_id != first_run and not tab.doc.dirty  # the fix was saved before running
+    assert tab.result_run("compute") != first_run and not tab.doc.dirty  # the fix was saved before running
 
 
 def test_run_a_block_with_inputs_you_choose_from_the_canvas(win, qtbot, tmp_path, monkeypatch):
@@ -931,9 +931,9 @@ def test_schedule_countdown():
     daily = {"cron": "0 7 * * *"}
     assert schedule_countdown(daily, now, True, True, False)[0] == "next run in 02:13:05"
     assert schedule_countdown({"cron": "0 7 * * MON"}, now, True, True, False)[0] == "next run in 4d 02:13:05"
-    assert schedule_countdown(daily, now, True, False, False)[0] == "next Thu 07:00 · service off"
+    assert schedule_countdown(daily, now, True, False, False)[0] == "scheduler service off"  # no time: none comes
     assert schedule_countdown(daily, now, True, True, True)[0] == "next Thu 07:00 · save to schedule"
-    assert schedule_countdown({**daily, "active": False}, now, True, True, False)[0] == "paused"
+    assert schedule_countdown({**daily, "active": False}, now, True, True, False)[0] == "not active"
     assert schedule_countdown({}, now, True, True, False)[0] == "needs a time"
     assert schedule_countdown({"at": "2026-10-01 10:00"}, now, True, True, False)[0] == "no more runs"
     assert "Fri 16 Oct 2026 07:00" in schedule_countdown(daily, now, True, True, False)[1]
@@ -1390,13 +1390,15 @@ def test_a_start_blocks_menu_runs_the_flow_from_it(win, qtbot, tmp_path):
     """)
     tab = win.open_flow(flow)
 
-    for start, ran, skipped in (("manual", "health_check", "nightly_job"), ("nightly", "nightly_job", "health_check")):
+    # The other line's block keeps what it showed: nothing yet, then its result from the first run.
+    for start, ran, other, shows in (("manual", "health_check", "nightly_job", None),
+                                     ("nightly", "nightly_job", "health_check", "success")):
         actions = {a.text(): a for a in win._block_menu_for(tab, start).actions()}
         assert not any("same inputs" in t or "inputs I choose" in t for t in actions)  # nothing to retry in it
         (run,) = actions.values()
         run.trigger()
         qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
-        assert tab.scene.nodes[ran].status == "success" and tab.scene.nodes[skipped].status == "skipped"
+        assert tab.scene.nodes[ran].status == "success" and tab.scene.nodes[other].status == shows
         assert tab.scene.nodes[start].status == "success"
     assert (tmp_path / "checked.txt").exists() and (tmp_path / "nightly.txt").exists()
 
@@ -1422,8 +1424,9 @@ def test_each_flows_tab_shows_its_last_result_and_next_run(win, qtbot, tmp_path)
     index = win.tabs.indexOf(tab)
     assert not win.tabs.tabIcon(index).isNull()
     import re
-    tip = win.tabs.tabToolTip(index)  # e.g. ok 2026-10-16 13:15:42 · next 2026-10-17 02:00:00
-    assert re.search(r"ok \d{4}-\d\d-\d\d \d\d:\d\d:\d\d · next \d{4}-\d\d-\d\d 02:00:00", tip), tip
+    tip = win.tabs.tabToolTip(index)  # e.g. ok 2026-10-16 13:15:42 · scheduler service off
+    # (no scheduler service in these tests: while it is on, "· next 2026-10-17 02:00:00", see test_service_off.py)
+    assert re.search(r"ok \d{4}-\d\d-\d\d \d\d:\d\d:\d\d · scheduler service off$", tip), tip
     assert not hasattr(win, "flows_panel")  # the tabs say it: no separate list of flows
 
 
@@ -1453,7 +1456,8 @@ def test_run_from_a_block_on_from_the_canvas(win, qtbot, tmp_path):
     assert [t.split(" (")[0] for t in actions] == ["Run only this block, with the same inputs",
                                                    "Run only this block, with inputs I choose…",
                                                    "Run from this block on, with the same inputs",
-                                                   "Run from this block on, with inputs I choose…"]
+                                                   "Run from this block on, with inputs I choose…",
+                                                   "Results of this block…"]
     next(a for a in win._block_menu_for(tab, "compute").actions() if a.text().startswith("Run from")).trigger()
     qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
 
@@ -1523,8 +1527,8 @@ def test_flows_running_anywhere_are_listed_and_open_from_there(win, qtbot, tmp_p
 
         (item,) = win.running_flows.menu().actions()
         assert item.text().startswith("slow")
-        import re
-        assert re.search(r"next run \d{4}-\d\d-\d\d \d\d:00:00", item.text()), item.text()  # its soonest schedule
+        # its schedule: no next run while the scheduler service is off (as in these tests; see test_service_off.py)
+        assert item.text().endswith("  ·  scheduler service off") and "next run" not in item.text(), item.text()
         item.trigger()  # opens it
         assert win.current is not None and win.current.doc.path == flow.resolve()
     finally:

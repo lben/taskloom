@@ -32,7 +32,8 @@ class Schedule(Block):
         "at": fields.Text(required=False, help="Or one single time, e.g. 2026-10-08 15:30"),
         "misfire": fields.Choice(MISFIRE_POLICIES, default="run_once",
                                  help="Runs due while the computer was off: skip them, run the latest once, or run each"),
-        "active": fields.Bool(default=True, help="Untick to pause this schedule"),
+        "active": fields.Bool(default=True, help="Untick it and this schedule does not start the flow "
+                                                   "(the flow's other schedules are not affected)"),
     }
 
     def run(self, ctx):

@@ -28,6 +28,9 @@ CREATE INDEX IF NOT EXISTS logs_run ON logs (run_id, block);
 """
 
 
+RUN_COLUMNS = ("id", "flow", "flow_path", "params", "status", "started", "finished", "started_by")
+
+
 def run_label(run_id: int, started: str | None) -> str:
     """'run #12 · 2026-10-15 14:03:22': a run's number and when it started."""
     return f"run #{run_id}" + (f" · {started.replace('T', ' ')[:19]}" if started else "")
@@ -49,21 +52,26 @@ class History:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = connect(path)
         self._db.executescript(SCHEMA)
-        if "pid" not in {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}:
-            try:  # a history file from before runs recorded their process: it gets the column
-                self._db.execute("ALTER TABLE runs ADD COLUMN pid INTEGER")
-            except sqlite3.OperationalError:
-                pass  # another process added it just now
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
+        # A history file from before runs recorded their process, or what started them: it gets the column.
+        for name, kind in (("pid", "INTEGER"), ("started_by", "TEXT NOT NULL DEFAULT ''")):
+            if name not in columns:
+                try:
+                    self._db.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
+                except sqlite3.OperationalError:
+                    pass  # another process added it just now
         self._lock = threading.Lock()
 
     def _exec(self, sql, args=()):
         with self._lock:
             return self._db.execute(sql, args)
 
-    def start_run(self, flow: str, flow_path: str, params: dict, ts: str) -> int:
+    def start_run(self, flow: str, flow_path: str, params: dict, ts: str, started_by: str = "") -> int:
+        """`started_by`: the start blocks that started it ("manual, manual_2"), or "only load" / "from load"."""
         cur = self._exec(
-            "INSERT INTO runs (flow, flow_path, params, status, started, pid) VALUES (?, ?, ?, 'running', ?, ?)",
-            (flow, flow_path, json.dumps(params, default=str), ts, os.getpid()),
+            "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by) "
+            "VALUES (?, ?, ?, 'running', ?, ?, ?)",
+            (flow, flow_path, json.dumps(params, default=str), ts, os.getpid(), started_by),
         )
         return cur.lastrowid
 
@@ -108,11 +116,20 @@ class History:
     # --- reading, for the editor ---------------------------------------------
 
     def runs(self, flow_path: str | None = None, limit: int = 200) -> list[dict]:
-        sql, args = "SELECT id, flow, flow_path, params, status, started, finished FROM runs", []
+        sql, args = f"SELECT {', '.join(RUN_COLUMNS)} FROM runs", []
         if flow_path is not None:
             sql, args = sql + " WHERE flow_path=?", [flow_path]
         rows = self._exec(sql + " ORDER BY id DESC LIMIT ?", args + [limit])
-        return [dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), r)) for r in rows]
+        return [dict(zip(RUN_COLUMNS, r)) for r in rows]
+
+    def last_run(self, flow_path: str, started_by: list[str]) -> dict | None:
+        """The newest finished run of a flow file that one of `started_by` started: a start block (also
+        together with others, e.g. manual in "manual, manual_2"), or a re-run such as "only load"."""
+        match = " OR ".join(["instr(', ' || started_by || ', ', ?) > 0"] * len(started_by))
+        row = self._exec(f"SELECT {', '.join(RUN_COLUMNS)} FROM runs WHERE flow_path=? AND status != 'running' "
+                         f"AND ({match}) ORDER BY id DESC LIMIT 1",
+                         [flow_path, *(f", {name}, " for name in started_by)]).fetchone()
+        return dict(zip(RUN_COLUMNS, row)) if row else None
 
     def label(self, run_id: int) -> str:
         """'run #12 · 2026-10-15 14:03:22' (when it started), or 'run #12' if it is not known."""
@@ -120,14 +137,35 @@ class History:
         return run_label(run_id, run["started"] if run else None)
 
     def run(self, run_id: int) -> dict | None:
-        row = self._exec("SELECT id, flow, flow_path, params, status, started, finished FROM runs WHERE id=?", (run_id,)).fetchone()
-        return dict(zip(("id", "flow", "flow_path", "params", "status", "started", "finished"), row)) if row else None
+        row = self._exec(f"SELECT {', '.join(RUN_COLUMNS)} FROM runs WHERE id=?", (run_id,)).fetchone()
+        return dict(zip(RUN_COLUMNS, row)) if row else None
 
     def blocks(self, run_id: int) -> dict:
         rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews FROM blocks WHERE run_id=?",
                           (run_id,))
         return {r[0]: {"status": r[1], "attempts": r[2], "error": r[3], "summary": r[4],
                        "tables": json.loads(r[5] or "{}"), "previews": json.loads(r[6] or "{}")} for r in rows}
+
+    def latest_block_results(self, flow_path: str, after_run_id: int = 0) -> dict:
+        """Each block's result in the latest run of the flow file (after run `after_run_id`) it took part in:
+        {block: {run_id, started (the run's), started_by, status, attempts, error, summary, tables, previews}}.
+        Runs still going count with the blocks they have finished."""
+        rows = self._block_results("r.flow_path=? AND r.id>? ORDER BY r.id", (flow_path, after_run_id))
+        return {block: {k: v for k, v in result.items() if k != "finished"} for block, result in rows}
+
+    def block_results(self, flow_path: str, block: str, limit: int = 200) -> list[dict]:
+        """A block's results in the runs of the flow file it took part in, newest first: as
+        latest_block_results gives them, plus when the block finished."""
+        return [result for _, result in self._block_results("r.flow_path=? AND b.block=? ORDER BY r.id DESC LIMIT ?",
+                                                             (flow_path, block, limit))]
+
+    def _block_results(self, where: str, args) -> list[tuple[str, dict]]:
+        rows = self._exec("SELECT b.block, b.run_id, r.started, r.started_by, b.status, b.attempts, b.error, b.summary, "
+                          "b.tables, b.previews, b.finished FROM blocks b JOIN runs r ON r.id = b.run_id "
+                          f"WHERE b.status != 'running' AND {where}", args)
+        return [(r[0], {"run_id": r[1], "started": r[2], "started_by": r[3], "status": r[4], "attempts": r[5],
+                        "error": r[6], "summary": r[7], "tables": json.loads(r[8] or "{}"),
+                        "previews": json.loads(r[9] or "{}"), "finished": r[10]}) for r in rows]
 
     def logs(self, run_id: int) -> list[dict]:
         rows = self._exec("SELECT block, ts, level, message FROM logs WHERE run_id=? ORDER BY rowid", (run_id,))
