@@ -280,16 +280,23 @@ def test_the_scheduler_waits_until_the_next_due_time_and_at_most_15_seconds(env)
 
 
 PROBE = """
+import itertools
+import json
 import os
 import subprocess
 import time
 
 if os.environ.get("TEST_PROCESS_STARTS"):
+    _count = itertools.count()
+
     class RecordedPopen(subprocess.Popen):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            with open(os.path.join(os.environ["TEST_PROCESS_STARTS"], str(self.pid)), "w") as f:
-                f.write(repr(time.time()))
+        def __init__(self, args, *rest, **kwargs):
+            super().__init__(args, *rest, **kwargs)
+            record = {"time": time.time(), "args": [str(a) for a in args] if isinstance(args, list) else [str(args)]}
+            path = os.path.join(os.environ["TEST_PROCESS_STARTS"], f"{os.getpid()}-{next(_count)}")
+            with open(path + ".tmp", "w") as f:
+                json.dump(record, f)
+            os.replace(path + ".tmp", path)  # never read half-written
 
     subprocess.Popen = RecordedPopen
 """
@@ -297,8 +304,8 @@ if os.environ.get("TEST_PROCESS_STARTS"):
 
 @pytest.fixture
 def process_starts(env):
-    """A folder where the scheduler processes started with env.env write when they start each
-    process: <the process id> holds its time.time() (by a sitecustomize module)."""
+    """A folder where the processes started with env.env record each process they start (by a sitecustomize
+    module): its command line, and time.time() once it has started."""
     probe, starts = env.root / "probe", env.root / "starts"
     probe.mkdir()
     starts.mkdir()
@@ -309,12 +316,17 @@ def process_starts(env):
 
 
 def started_runs(env, starts) -> list[tuple[dt.datetime, float]]:
-    """(as-of time, when the scheduler started its process) of each run so far."""
+    """(as-of time, when the scheduler started its process) of each run so far that history has. Matched by the
+    as-of time the scheduler passes (on Windows a venv's python.exe is a launcher: the run's own process id differs)."""
+    ran = {dt.datetime.fromisoformat(r["when"]) for r in runs(env) if r["when"]}
     found = []
-    for run in runs(env):
-        start_file = starts / str(run["pid"])
-        if run["pid"] and start_file.exists():
-            found.append((dt.datetime.fromisoformat(run["when"]), float(start_file.read_text())))
+    for record in sorted(starts.glob("*-*[0-9]")):
+        started = json.loads(record.read_text())
+        args = started["args"]
+        if "run" in args and "--as-of" in args:
+            as_of = dt.datetime.fromisoformat(args[args.index("--as-of") + 1])
+            if as_of in ran:
+                found.append((as_of, started["time"]))
     return found
 
 

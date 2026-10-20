@@ -10,10 +10,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QWheelEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QGraphicsProxyWidget, QLabel, QStyle,  # noqa: E402
-                               QStyleOptionSpinBox, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QDockWidget, QGraphicsProxyWidget, QLabel,  # noqa: E402
+                               QStyle, QStyleOptionSpinBox, QWidget)
 
 from tests.test_editor import write_flow  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def room_for_the_canvas(win):
+    """The panels float, so the canvas has the window to itself: with them docked, a small screen (the Windows
+    runner's) leaves the canvas too narrow to show even a new flow at 100%."""
+    for dock in win.findChildren(QDockWidget):
+        dock.setFloating(True)
+    QApplication.processEvents()
 
 
 def settled(tab):
@@ -178,16 +187,17 @@ def test_percent_follows_the_mouse_wheel_and_the_buttons_go_on_from_there(win):
 
 
 def test_percent_shows_the_zoom_a_wide_flow_opens_with(win, tmp_path):
-    flow = write_flow(tmp_path / "wide.yaml", """
+    width = settled(win.new_flow()).view.viewport().width()  # the flow is about 1.4 times as wide as the canvas
+    flow = write_flow(tmp_path / "wide.yaml", f"""
         blocks:
           load:
             type: logic.python
-            config: {inputs: [], code: "output = 1"}
-            ui: {x: 0, y: 0}
+            config: {{inputs: [], code: "output = 1"}}
+            ui: {{x: 0, y: 0}}
           report:
             type: logic.python
-            config: {outputs: [], code: "print(input)"}
-            ui: {x: 600, y: 300}
+            config: {{outputs: [], code: "print(input)"}}
+            ui: {{x: {round(1.4 * width)}, y: 0}}
         edges:
           - load.output -> report.input
     """)
@@ -270,12 +280,12 @@ def test_control_stays_in_the_top_right_corner_of_the_visible_canvas(win, qtbot)
     assert corner_gaps(view) == gaps
 
     width = viewport.width()
-    win.resize(1700, 1000)  # the window is resized
-    qtbot.waitUntil(lambda: viewport.width() > width, timeout=5000)
-    assert corner_gaps(view) == gaps
-    width = viewport.width()
-    win.resizeDocks([win.inspector], [win.inspector.width() + 200], Qt.Horizontal)  # only the canvas is resized
+    win.resize(win.width() - 150, win.height() - 60)  # the window is resized (smaller: a screen may not fit it larger)
     qtbot.waitUntil(lambda: viewport.width() < width, timeout=5000)
+    assert corner_gaps(view) == gaps
+    height = viewport.height()
+    win.findChild(QDockWidget, "Output").setFloating(False)  # only the canvas is resized: a panel docks below it
+    qtbot.waitUntil(lambda: viewport.height() < height, timeout=5000)
     assert corner_gaps(view) == gaps
 
 
