@@ -13,7 +13,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QGraphicsProxyWidget, QLabel, QStyle,  # noqa: E402
                                QStyleOptionSpinBox, QWidget)
 
-from tests.test_editor import win, write_flow  # noqa: E402, F401
+from tests.test_editor import write_flow  # noqa: E402
 
 
 def settled(tab):

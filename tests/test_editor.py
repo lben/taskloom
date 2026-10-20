@@ -13,40 +13,12 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QComboBox, QDialogButtonBox, QFileDialog, QMessageBox, QToolButton  # noqa: E402
 
-from taskloom.config import Home  # noqa: E402
 from taskloom.editor.dialogs import AskDialog, OverlapDialog, RunDialog, SettingsDialog  # noqa: E402
 from taskloom.editor.document import FlowDocument  # noqa: E402
 from taskloom.editor.panels import CodeEdit  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
 REAL_START_SCHEDULER = MainWindow.start_scheduler
 from taskloom.history import History  # noqa: E402
-
-
-@pytest.fixture
-def win(qtbot, tmp_path, monkeypatch):
-    # The runner processes inherit this; never touch the real credential store.
-    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
-    # A message box would wait forever for a click; record it instead and fail the test.
-    shown = []
-    for name in ("information", "warning", "question"):
-        monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, _n=name, **k: shown.append((_n, a[1:3])) or QMessageBox.No))
-    from taskloom.editor import dialogs
-    monkeypatch.setattr(dialogs, "confirm_run_now", lambda *a, **k: (True, False))  # Run now: yes, run it
-    monkeypatch.setattr(dialogs, "offer_manual_start", lambda *a, **k: True)  # no start block: add one
-    # A real scheduler service would outlive the test (and run its flows): the tests that need one say so.
-    monkeypatch.setattr(MainWindow, "start_scheduler", lambda self, by_you=False: None)
-    w = MainWindow(Home(tmp_path / "home"))
-    w.message_boxes = shown
-    qtbot.addWidget(w)
-    w.show()
-    yield w
-    assert shown == [], f"unexpected message boxes: {shown}"
-    for tab in w.tabs_list():
-        for run in tab.runs:
-            if run.running:
-                run.proc.kill()
-                run.proc.waitForFinished(5000)
-        tab.doc.dirty = False
 
 
 def write_flow(path, text):

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QMessageBox, QSystemTrayIcon
 
-from tests.test_editor import REAL_START_SCHEDULER, win, write_flow  # noqa: F401
+from tests.test_editor import REAL_START_SCHEDULER, write_flow
 
 # Their Schedule block's time (once a year) never comes during a test: a scheduler service running then never
 # starts them.

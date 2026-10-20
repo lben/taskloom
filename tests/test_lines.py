@@ -20,7 +20,7 @@ from conftest import events  # noqa: E402
 from taskloom.editor import dialogs  # noqa: E402
 from taskloom.editor.panels import status_icon  # noqa: E402
 from taskloom.history import History  # noqa: E402
-from tests.test_editor import win, write_flow  # noqa: E402, F401
+from tests.test_editor import write_flow  # noqa: E402
 
 # What the user had: a Manual Start line (a health check, two inspections, a report) and, in the same flow,
 # a Schedule line (every minute); plus a block connected to no start block.
