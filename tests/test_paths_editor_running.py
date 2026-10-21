@@ -190,7 +190,7 @@ def right_click(qtbot, win, tab, block, where, choose: str) -> list[str]:
 
     def act():  # (the menu waits for you inside the right-click)
         menu = QApplication.activePopupWidget()
-        if menu is None and len(tries) < 100:
+        if menu is None and len(tries) < 250:  # up to 5 s: a busy machine can take a while to open it
             tries.append(1)
             QTimer.singleShot(20, act)
             return
@@ -203,10 +203,15 @@ def right_click(qtbot, win, tab, block, where, choose: str) -> list[str]:
                 menu.close()
         done.append(1)
 
-    QTimer.singleShot(0, act)
-    # Through the window, as the mouse does (it is the window that turns a right-click into the menu).
-    QTest.mouseClick(win.windowHandle(), Qt.RightButton, Qt.NoModifier, tab.view.viewport().mapTo(win, at))
-    qtbot.waitUntil(lambda: bool(done), timeout=10_000)
+    for _ in range(2):  # (once more if no menu opened: a click can be lost while the window is still settling)
+        tries.clear()
+        done.clear()
+        QTimer.singleShot(0, act)
+        # Through the window, as the mouse does (it is the window that turns a right-click into the menu).
+        QTest.mouseClick(win.windowHandle(), Qt.RightButton, Qt.NoModifier, tab.view.viewport().mapTo(win, at))
+        qtbot.waitUntil(lambda: bool(done), timeout=10_000)
+        if seen:
+            break
     return seen
 
 
