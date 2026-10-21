@@ -8,6 +8,7 @@ import linecache
 import os
 import sys
 import types
+from pathlib import Path
 
 import polars as pl
 from rich.console import Console
@@ -200,14 +201,14 @@ class ForEach(Block):
     def run(self, ctx, items):
         if not isinstance(items, (list, tuple)):
             raise TypeError(f"input 'items' must be a list, got {type(items).__name__}")
-        flow = load_flow(self.config.flow)
+        flow = load_flow(Path(self.config.flow).resolve())  # recorded as runs of that flow, as when it is run itself
         if self.config.param not in flow.params:
             raise ValueError(f"{self.config.flow} has no parameter '{self.config.param}'")
         results = []
         for item in items:
             ctx.check_cancelled()
             result = run_flow(flow, ctx.registry, ctx.home, {self.config.param: item},
-                              cancel=ctx.cancel_event, as_of=ctx.functions["now"]())
+                              cancel=ctx.cancel_event, as_of=ctx.as_of)
             ctx.log(f"{self.config.param}={item}: run #{result.run_id} {result.status}")
             results.append({"item": item, "run_id": result.run_id, "status": result.status})
             if result.status != "success" and self.config.stop_on_failure:

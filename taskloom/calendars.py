@@ -53,12 +53,18 @@ def load_calendar(name: str | None, calendars_dir: Path) -> Calendar:
         return Calendar("weekends")
     path = calendars_dir / f"{name}.yaml"
     if path.exists():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        unknown = set(data) - {"weekend", "base", "add", "remove"}
-        if unknown:
-            raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
-        weekend = [WEEKDAYS[str(d).lower()[:3]] for d in data.get("weekend", ["sat", "sun"])]
-        return Calendar(name, weekend, data.get("base"), data.get("add") or (), data.get("remove") or ())
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            unknown = set(data) - {"weekend", "base", "add", "remove"}
+            if unknown:
+                raise ValueError(f"unknown keys {sorted(unknown)}")
+            weekend = data.get("weekend", ["sat", "sun"])
+            days = [WEEKDAYS.get(str(d).lower()[:3]) for d in weekend] if isinstance(weekend, list) else [None]
+            if None in days:
+                raise ValueError(f"weekend is a list of days, e.g. [sat, sun], not {weekend!r}")
+            return Calendar(name, days, data.get("base"), data.get("add") or (), data.get("remove") or ())
+        except (yaml.YAMLError, ValueError, TypeError) as e:  # e.g. a date that does not exist: say which file
+            raise ValueError(f"{path}: {e}") from None
     return Calendar(name, base=name)
 
 

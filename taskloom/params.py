@@ -13,6 +13,8 @@ TYPES = ("text", "int", "float", "bool", "date", "datetime", "list")
 
 def coerce(type_: str, value):
     """Convert a value (or a command-line string) to a parameter type."""
+    if value is None:  # left empty (`value:` in the flow file): as the editor shows and previews it
+        value = ""
     if type_ == "text":
         return str(value)
     if type_ == "int":

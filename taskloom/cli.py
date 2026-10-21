@@ -147,16 +147,21 @@ def cmd_run(args, home: Home) -> int:
     if args.run_from and args.run_from in flow.blocks and getattr(
             registry.get(flow.blocks[args.run_from].type), "is_trigger", False):
         args.trigger, args.run_from = args.run_from, None  # from a start block: the flow, started by it
-    if (args.only or args.run_from) and args.inputs_from and not overrides:  # same parameters as that run
+    if (args.only or args.run_from) and args.inputs_from:
         from .history import History
 
         history = History(home.history_db)
         try:
-            overrides = {k: v for k, v in json.loads(history.run(args.inputs_from)["params"]).items() if k in flow.params}
-        except TypeError:
-            raise ValueError(f"there is no run #{args.inputs_from}") from None
+            earlier = history.run(args.inputs_from)
         finally:
             history.close()
+        if earlier is None:
+            raise ValueError(f"there is no run #{args.inputs_from}")
+        if earlier["flow_path"] != str(flow.path):  # run numbers are shared by all flows
+            raise ValueError(f"run #{args.inputs_from} is a run of {earlier['flow_path']}, not of this flow: "
+                             "choose a run of this flow")
+        if not overrides:  # same parameters as that run
+            overrides = {k: v for k, v in json.loads(earlier["params"]).items() if k in flow.params}
     result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
                       answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
                       given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
@@ -350,10 +355,17 @@ def main(argv=None) -> int:
     except (ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_INVALID
+    except KeyboardInterrupt:  # e.g. a second Ctrl+C during a run: it is recorded as cancelled
+        print("stopped", file=sys.stderr)
+        return EXIT_CANCELLED
 
 
 def run_cli(argv=None):
     """Entry point of the `taskloom` program."""
+    # On Windows, printed into a pipe or a file, stdout is in the ANSI code page (e.g. cp1252): text it cannot
+    # show (a flow named with → or 📈) is written escaped, as on stderr, instead of failing the command.
+    if sys.stdout is not None:  # None under pythonw (no console)
+        sys.stdout.reconfigure(errors="backslashreplace")
     if ARGS_VARIABLE in os.environ:  # how the editor starts its runs (not passed on to their blocks)
         argv = json.loads(os.environ.pop(ARGS_VARIABLE))
     code = main(argv)

@@ -378,6 +378,43 @@ def test_for_each_runs_a_flow_once_per_item(env):
     assert [s for (s,) in env.query("SELECT status FROM runs ORDER BY id")] == ["success"] * 3
 
 
+@pytest.mark.parametrize("how", ["--only", "--from"])
+def test_a_run_that_for_each_started_can_be_retried_from_its_flow_with_its_inputs(env, how):
+    inner = env.write("flows/inner.yaml", """
+        params:
+          region: {type: text, value: EU}
+        blocks:
+          load:
+            type: logic.python
+            config: {inputs: [], code: "output = params['region']"}
+          save:
+            type: logic.python
+            config: {outputs: [], code: "open('saved.txt', 'a').write(input)"}
+        edges:
+          - load.output -> save.input
+    """)
+    outer = env.write("flows/outer.yaml", """
+        blocks:
+          regions:
+            type: logic.python
+            config: {inputs: [], code: "output = ['US']"}
+          each:
+            type: logic.for_each
+            config: {flow: inner.yaml, param: region}
+        edges:
+          - regions.output -> each.items
+    """)
+    # Run from the test folder: inner.yaml is relative to the outer flow's folder, not to where it is run from.
+    assert env.taskloom("run", outer).returncode == 0
+    (child,), = env.query("SELECT id FROM runs WHERE params=?", '{"region": "US"}')
+
+    result = env.taskloom("run", inner, how, "save", "--inputs-from", child)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "flows" / "saved.txt").read_text(encoding="utf-8") == "USUS"  # what reached save in that run
+    assert env.query("SELECT params FROM runs ORDER BY id DESC LIMIT 1") == [('{"region": "US"}',)]
+
+
 def test_copy_or_move_onto_itself_is_refused_and_keeps_the_file(env):
     (env.root / "data").mkdir()
     (env.root / "data" / "x.csv").write_text("a,b\n1,2\n")

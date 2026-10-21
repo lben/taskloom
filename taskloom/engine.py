@@ -72,11 +72,14 @@ def redact(value):
 class Context:
     """What a block's run() receives as `ctx`."""
 
-    def __init__(self, *, block_id, attempt, params, functions, workspace, home, emit, run_cancel, attempt_cancel,
-                 answers=None, registry=None):
+    def __init__(self, *, block_id, attempt, params, as_of, functions, workspace, home, emit, run_cancel,
+                 attempt_cancel, answers=None, registry=None):
         self.block_id = block_id
         self.attempt = attempt
         self.params = dict(params)
+        # The time this run is for (its now()), with the flow's time zone if it has one: the as_of of runs started
+        # from this block.
+        self.as_of = as_of
         self.functions = functions  # the expression functions (today(), bdays(), …) for this run
         self.workspace = workspace
         self.home = home
@@ -157,8 +160,11 @@ def preview(value, limit: int = 4000) -> str:
     import polars as pl
 
     if isinstance(value, Table):
+        rows = value.head(20)
+        for secret in secret_forms():  # scrub the text cells, then cut them (a cut secret is no longer found)
+            rows = rows.with_columns(pl.col(pl.String).str.replace_all(secret, "***", literal=True))
         with pl.Config(tbl_rows=20, tbl_cols=20, fmt_str_lengths=60, tbl_width_chars=200):
-            return f"{value.summary()}\n{value.head(20)}"
+            return f"{value.summary()}\n{rows}"
     if isinstance(value, SecretStr):
         return "***"
     if isinstance(value, (dict, list, tuple)):
@@ -205,7 +211,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     errors, warnings = validate(flow, registry, home)
     if errors:
         raise FlowError(errors)
-    _, funcs = run_clock(flow, home, as_of)
+    now, funcs = run_clock(flow, home, as_of)
     values = P.resolve(flow.params, overrides or {}, funcs)
     texts = dict(given or {})  # as you typed them: shown again next time, and read again then
     start = only or run_from
@@ -223,18 +229,23 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     history = History(home.history_db)
     run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by)
     all_sinks = (history, *sinks)
+    running: dict = {}  # block -> attempt, for the blocks started and not finished
 
     def emit(event: dict):
         event = redact({"event": event.pop("event"), "run_id": run_id, "ts": _now(), **event})
+        if event["event"] == "block_started":
+            running[event["block"]] = event["attempt"]
         for sink in all_sinks:
             sink(event)
+        if event["event"] == "block_finished":  # once every sink has it
+            running.pop(event["block"], None)
 
     try:
         emit({"event": "run_started", "flow": flow.name, "params": {k: str(v) for k, v in values.items()},
               "blocks": sorted(part), "started_by": started_by})
         for message in registry.warnings + warnings:
             emit({"event": "log", "level": "WARNING", "message": message})
-        runner = _Runner(flow, registry, home, values, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
+        runner = _Runner(flow, registry, home, values, now, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
         runner.taking_part, runner.outside = part, set(flow.blocks) - part
         try:
             if start is not None:
@@ -257,8 +268,11 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                         flow, registry, home, part, source, run_from)
             status = runner.run()
         except BaseException:
-            # Never leave the run recorded as "running" (e.g. a forced second Ctrl+C).
-            emit({"event": "run_finished", "status": "cancelled" if cancel.is_set() else "failed"})
+            # Never leave the run, or a block of it, recorded as "running" (e.g. a forced second Ctrl+C).
+            status = "cancelled" if cancel.is_set() else "failed"
+            for block, attempt in list(running.items()):
+                emit({"event": "block_finished", "block": block, "status": status, "attempts": attempt})
+            emit({"event": "run_finished", "status": status})
             raise
         emit({"event": "run_finished", "status": status})
         _apply_retention(home, history)
@@ -269,9 +283,10 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
 
 
 class _Runner:
-    def __init__(self, flow, registry, home, values, funcs, emit, cancel, workspace, answers):
+    def __init__(self, flow, registry, home, values, now, funcs, emit, cancel, workspace, answers):
         self.flow, self.registry, self.home, self.answers = flow, registry, home, answers
-        self.values, self.funcs, self.emit, self.cancel, self.workspace = values, funcs, emit, cancel, workspace
+        self.values, self.now, self.funcs = values, now, funcs
+        self.emit, self.cancel, self.workspace = emit, cancel, workspace
         self.outputs: dict = {}
         self.blocked: set[str] = set()  # failed, or skipped because something before them failed
 
@@ -406,7 +421,7 @@ class _Runner:
             self.emit({"event": "block_started", "block": spec.id, "attempt": attempt})
             attempt_cancel = threading.Event()
             ctx = Context(
-                block_id=spec.id, attempt=attempt, params=self.values, functions=self.funcs,
+                block_id=spec.id, attempt=attempt, params=self.values, as_of=self.now, functions=self.funcs,
                 workspace=self.workspace / spec.id / f"attempt-{attempt}", home=self.home,
                 emit=self.emit, run_cancel=self.cancel, attempt_cancel=attempt_cancel, answers=self.answers,
                 registry=self.registry,

@@ -246,19 +246,21 @@ def block_config(cls, spec: BlockSpec) -> dict:
 
 
 def run_clock(flow: Flow, home, as_of: dt.datetime | None = None) -> tuple[dt.datetime, dict]:
-    """The run's fixed 'now' and the expression functions (calendar applied).
+    """The run's fixed 'now' (with the flow's time zone, if it has one) and the expression functions
+    (calendar applied; their now() is that time without the zone).
 
     `as_of` replaces 'now', e.g. the time a missed scheduled run was due. Like
-    schedules, it is in the machine's local time; with a flow time zone it is
-    converted, as the current time is.
+    schedules, it is in the machine's local time unless it has a time zone of its
+    own (e.g. the time of the run that For Each runs this flow from); with a flow
+    time zone it is converted, as the current time is.
     """
     tz = ZoneInfo(flow.timezone) if flow.timezone else None
     if as_of is not None:
-        now = as_of.astimezone(tz).replace(tzinfo=None) if tz else as_of
+        now = as_of.astimezone(tz) if tz or as_of.tzinfo else as_of
     else:
-        now = dt.datetime.now(tz).replace(tzinfo=None)
+        now = dt.datetime.now(tz)
     calendar = load_calendar(flow.calendar or home.settings()["calendar"], home.calendars_dir)
-    return now, functions(now, calendar, lambda name: load_calendar(name, home.calendars_dir))
+    return now, functions(now.replace(tzinfo=None), calendar, lambda name: load_calendar(name, home.calendars_dir))
 
 
 def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
@@ -271,6 +273,12 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
         if calendar_name:
             warnings += load_calendar(calendar_name, home.calendars_dir).warnings_for_year(now.year)
         P.resolve(flow.params, {}, funcs)
+        for key in ("keep_runs", "history_days"):  # used as a run ends: a mistake there is refused before it starts
+            value = home.settings()[key]
+            try:
+                int(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"settings.yaml: {key} must be a whole number, got {value!r}") from None
     except Exception as e:
         errors.append(str(e))
 
