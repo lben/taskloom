@@ -11,6 +11,7 @@ import queue
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 from .config import Home
@@ -62,7 +63,7 @@ class StdinControl:
             return self._answers.setdefault(ask_id, queue.Queue())
 
     def _read(self):
-        for line in sys.stdin:
+        for line in _stdin_lines():
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
@@ -81,6 +82,30 @@ class StdinControl:
             except queue.Empty:
                 if ctx.cancelled:
                     raise Cancelled()
+
+
+def _stdin_lines():
+    """The lines that arrive on stdin, until it closes.
+
+    On Windows, a read waiting on a pipe makes every other use of that pipe wait for it, and Java checks
+    stdin as it starts: a query would never start. So from a pipe (the editor), only what has arrived is read."""
+    if sys.platform == "win32":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel32, fd = ctypes.windll.kernel32, sys.stdin.fileno()
+        handle = msvcrt.get_osfhandle(fd)
+        if kernel32.GetFileType(handle) == 3:  # FILE_TYPE_PIPE
+            available, pending = wintypes.DWORD(), b""
+            while kernel32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(available), None):  # 0: closed
+                if not available.value:
+                    time.sleep(0.1)
+                    continue
+                *lines, pending = (pending + os.read(fd, available.value)).split(b"\n")
+                yield from (line.decode("utf-8", "replace") for line in lines)
+            return
+    yield from sys.stdin
 
 
 def _parse_overrides(items) -> dict:

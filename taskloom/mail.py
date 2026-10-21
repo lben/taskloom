@@ -19,6 +19,10 @@ import polars as pl
 
 from .report import Html, email_document, html_table
 
+# Not in Python's own table: without it, Windows (without Office) sends Excel files as unknown data.
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx")
+
+
 def _addresses(value) -> list[str]:
     if not value:
         return []
