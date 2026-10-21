@@ -926,7 +926,8 @@ def test_wait_pauses_then_passes_its_input_on_unchanged(env):
     assert (env.root / "out.txt").read_text() == "{'n': 1, 'items': [1, 2]}"
     assert (env.root / "idle.txt").read_text() == "None"  # nothing connected: nothing to pass on
     [(started, finished)] = env.query("SELECT started, finished FROM blocks WHERE run_id=? AND block='pause'", run_id)
-    assert (dt.datetime.fromisoformat(finished) - dt.datetime.fromisoformat(started)).total_seconds() >= 1.5
+    # (less a clock tick: the history stamps the wall clock, the wait counts on another clock; Windows ticks every ~16 ms)
+    assert (dt.datetime.fromisoformat(finished) - dt.datetime.fromisoformat(started)).total_seconds() >= 1.5 - 0.02
 
 
 # --- Config of every logic block that cannot work --------------------------------------------
