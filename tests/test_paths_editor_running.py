@@ -172,6 +172,7 @@ def right_click(qtbot, win, tab, block, where, choose: str) -> list[str]:
     """Right-click the block on the canvas at `where` ("title", "footer" — the message under it —, "countdown" —
     a Schedule block's next-run line —, or a port as (name, is_output)); note the items of the menu that opens and
     click the one starting with `choose` (greyed out: close the menu)."""
+    QApplication.processEvents()  # an opened flow centres itself just after: not under the mouse mid-click
     node = tab.scene.nodes[block]
     if where == "title":
         local = QPointF(node.footer.rect().center().x(), HEADER_H / 2)
