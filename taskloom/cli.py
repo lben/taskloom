@@ -162,10 +162,15 @@ def cmd_run(args, home: Home) -> int:
                              "choose a run of this flow")
         if not overrides:  # same parameters as that run
             overrides = {k: v for k, v in json.loads(earlier["params"]).items() if k in flow.params}
-    result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
-                      answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
-                      given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
-                      run_from=args.run_from)
+    try:
+        result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
+                          answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
+                          given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
+                          run_from=args.run_from)
+    except FlowError:  # refused: e.g. a block file that did not load is why its block type is unknown
+        for message in registry.warnings:
+            print(f"warning: {message}", file=sys.stderr)
+        raise
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
@@ -237,14 +242,14 @@ def cmd_secret_set(args, home: Home) -> int:
 def cmd_scheduler(args, home: Home) -> int:
     from . import scheduler
 
-    if args.at_login:
-        path = scheduler.set_start_at_login(home, args.at_login == "on")
-        print(f"start at login {'enabled' if args.at_login == 'on' else 'disabled'}: {path}")
-        return EXIT_OK
-    if args.unless_paused and scheduler.paused(home):
-        print("the scheduler service is off (you turned it off): not starting it (turn it on in the editor)")
-        return EXIT_OK
     try:
+        if args.at_login:
+            path = scheduler.set_start_at_login(home, args.at_login == "on")
+            print(f"start at login {'enabled' if args.at_login == 'on' else 'disabled'}: {path}")
+            return EXIT_OK
+        if args.unless_paused and scheduler.paused(home):
+            print("the scheduler service is off (you turned it off): not starting it (turn it on in the editor)")
+            return EXIT_OK
         return scheduler.serve(home, args.headless)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)

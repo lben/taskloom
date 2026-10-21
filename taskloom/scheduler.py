@@ -139,11 +139,22 @@ class Scheduler:
         self._start_or_wait(path, when)
 
     def _start_or_wait(self, path: str, when: tuple):
-        limit = self.home.settings()["max_concurrent_runs"]
-        if limit and len(self.runs) >= int(limit):
+        if self._at_limit():
             self.waiting.append((path, when))
         else:
             self._start(path, when)
+
+    def _at_limit(self) -> bool:
+        """As many runs are going as max_concurrent_runs allows. A mistake in the settings holds no run back
+        (a run that cannot go either says why): you are told, and the service goes on."""
+        try:
+            limit = self.home.settings()["max_concurrent_runs"]
+            if limit and not str(limit).isdigit():
+                raise ValueError(f"settings.yaml: max_concurrent_runs must be a whole number, got {limit!r}")
+        except (OSError, ValueError) as e:
+            self.notify("Mistake in the settings", str(e))
+            return False
+        return bool(limit) and len(self.runs) >= int(limit)
 
     def _start(self, path: str, when: tuple):
         as_of, block = when
@@ -192,10 +203,7 @@ class Scheduler:
                     self._tell(self._load(Path(run.flow)), "failure", f"{name} crashed", detail, desktop=False)
             if self.queued.get(run.flow):
                 self._start_or_wait(run.flow, self.queued[run.flow].pop(0))
-        while self.waiting:
-            limit = self.home.settings()["max_concurrent_runs"]
-            if limit and len(self.runs) >= int(limit):
-                break
+        while self.waiting and not self._at_limit():
             self._start(*self.waiting.pop(0))
 
     def _tell(self, flow, event: str, title: str, message: str, desktop: bool = True):
@@ -231,9 +239,12 @@ class Scheduler:
     def check_servers(self):
         """For each server in the keeper setting: start its scheduler if it is not running."""
         for entry in self.home.settings()["keeper"] or []:
-            name = entry.get("connection")
-            remote_home = entry.get("home", "~/.taskloom")
+            name = entry.get("connection") if isinstance(entry, dict) else entry
             try:
+                if not isinstance(entry, dict):
+                    raise ValueError("write a keeper entry as {connection: ..., command: ..., home: ...} "
+                                     "(Tools → Settings writes it so)")
+                remote_home = entry.get("home", "~/.taskloom")
                 session = ssh.Session(self.home.resolve_secrets(self.home.connections()[name]), self.home)
                 try:
                     if self._remote_alive(session, remote_home):
@@ -409,7 +420,10 @@ def startup_script(home: Home) -> str:
     """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
     # Unless you turned it off: then it stays off until you turn it on.
     command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler", "--unless-paused"])
-    return f'@echo off\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={home.root}"\nstart "" {command}\n'
+    # cmd.exe reads a script in the console's code page (e.g. 437): the lines after chcp are read as the UTF-8
+    # they are written in, so a folder such as C:\Users\José is not garbled.
+    return (f'@echo off\nchcp 65001 >nul\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={home.root}"\n'
+            f'start "" {command}\n')
 
 
 def startup_script_outdated(text: str, home: Home) -> bool:

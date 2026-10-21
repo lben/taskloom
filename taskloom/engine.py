@@ -929,7 +929,9 @@ def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:
     run, or every start block when the flow has no Manual Start (so pressing Run always runs it)."""
     starts = _start_blocks(flow, registry)
     if trigger is not None:
-        return {trigger} & starts
+        if trigger not in starts:  # e.g. renamed since the scheduler read the flow: nothing would run
+            raise ValueError(f"there is no start block named '{trigger}'")
+        return {trigger}
     manual = {b for b in starts if flow.blocks[b].type == "trigger.manual"}
     return manual or starts
 

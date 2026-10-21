@@ -27,7 +27,12 @@ KEYRING_SERVICE = "taskloom"
 def _load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except UnicodeDecodeError as e:  # e.g. UTF-16, as Windows PowerShell writes
+        raise ValueError(f"{path}: not UTF-8 text, save it as UTF-8 ({e})") from None
+    except yaml.YAMLError as e:
+        raise ValueError(f"{path}: {e}") from None
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a mapping at the top level")
     return data
@@ -110,6 +115,7 @@ class Home:
         data[name] = value
         fd = os.open(self._secrets_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.chmod(self._secrets_file, 0o600)  # the mode above is only for a new file: also one made by hand
             yaml.safe_dump(data, f)
         return str(self._secrets_file)
 

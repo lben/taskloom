@@ -91,7 +91,7 @@ def notify_settings(home, flow_notify: dict | None) -> tuple[list[str], list[str
     flow_notify = flow_notify or {}
     events = flow_notify.get("when", settings["notify_on"])
     to = _addresses(flow_notify.get("to") or settings["notify_email"])
-    return list(events), to, settings["smtp_connection"]
+    return [events] if isinstance(events, str) else list(events), to, settings["smtp_connection"]  # one, or a list
 
 
 def send_notice(home, flow_notify, event: str, subject: str, body: Html) -> bool:
