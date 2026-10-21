@@ -419,10 +419,13 @@ class ConnectionsDialog(QDialog):
 
         def done(code, _status):
             out = bytes(proc.readAllStandardOutput()).decode(errors="replace").strip()
-            err = bytes(proc.readAllStandardError()).decode(errors="replace").strip().removeprefix("error: ")
+            err = bytes(proc.readAllStandardError()).decode(errors="replace").strip()
+            # The reason is on the "error: " line; a driver's Java stack trace can follow it.
+            err = next((line.removeprefix("error: ")[:400] for line in err.splitlines() if line.startswith("error: ")),
+                       err[-400:])
             ok = code == 0
             self.test_result.setText(f"<span style='color:{'#1f8a4c' if ok else '#c0392b'}'>"
-                                     f"{'✓ ' + html.escape(out) if ok else '✕ ' + html.escape(err[-400:])}</span>")
+                                     f"{'✓ ' + html.escape(out) if ok else '✕ ' + html.escape(err)}</span>")
             self.test_button.setEnabled(True)
 
         proc.finished.connect(done)

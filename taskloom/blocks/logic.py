@@ -29,7 +29,7 @@ class CodeError(Exception):
     """An error in a Python Code block's code, with a readable report: the code around the
     failing line (a rich traceback) and the values of the variables at that moment."""
 
-    def __init__(self, error: Exception, filename: str, namespace: dict, helpers: set):
+    def __init__(self, error: BaseException, filename: str, namespace: dict, helpers: set):
         tb = error.__traceback__
         while tb is not None and tb.tb_frame.f_code.co_filename != filename:
             tb = tb.tb_next  # start at the block's own code, not Taskloom's
@@ -69,8 +69,9 @@ class PythonCode(Block):
         "outputs": fields.Names(default=["output"], outputs=True,
                                 help="Variables your code sets; unset ones are not produced."),
         "code": fields.Code("python"),
-        "use_environment": fields.Bool(default=False, help="Run in your own Python environment, with the packages "
-                                                           "you installed (Tools → Python environment)"),
+        "use_environment": fields.Bool(default=False, label="Run in my Python environment",
+                                       help="Run in your own Python environment, with the packages "
+                                            "you installed (Tools → Python environment)"),
     }
 
     @classmethod
@@ -96,6 +97,9 @@ class PythonCode(Block):
             linecache.cache[name] = lines
         try:
             exec(compile(self.config.code, filename, "exec"), namespace)
+        except SystemExit as e:  # sys.exit() ends your code there, not the run
+            if e.code not in (None, 0):
+                raise CodeError(e, filename, namespace, set(helpers)) from None
         except Exception as e:
             raise CodeError(e, filename, namespace, set(helpers)) from None
         # Outputs your code does not assign are not produced, so blocks after them are skipped.
@@ -233,8 +237,13 @@ class Inspect(Block):
         if self.config.message:
             # Secrets show as *** here: this text goes to the log and the run history.
             namespace = {**ctx.functions, "value": _masked(value), "params": _masked(ctx.params)}
+            # As written between the quotes of rf"""...""" (rf'''...''' if the text has """ in it): both kinds
+            # of quote can be in the text and in the {...} parts, backslashes stay as typed. {''} keeps a quote
+            # at the end from closing it early.
+            quotes = "'''" if '"""' in self.config.message else '"""'
+            source = "rf" + quotes + self.config.message + "{''}" + quotes
             try:
-                text = eval(compile("f" + repr(self.config.message), f"<block {ctx.block_id}>", "eval"), namespace)
+                text = eval(compile(source, f"<block {ctx.block_id}>", "eval"), namespace)
             except Exception as e:
                 raise ValueError(f"the message could not be filled in: {type(e).__name__}: {e}") from None
             ctx.log(text)

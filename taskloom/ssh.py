@@ -40,8 +40,8 @@ def connect(conn: dict, home, timeout: float = 20) -> paramiko.SSHClient:
     return client
 
 
-def run(client: paramiko.SSHClient, command: str, cancelled=lambda: False) -> tuple[int, str, str]:
-    """Run a shell command; returns (exit code, stdout, stderr). Stops waiting if cancelled()."""
+def run(client: paramiko.SSHClient, command: str, check_cancelled=lambda: None) -> tuple[int, str, str]:
+    """Run a shell command; returns (exit code, stdout, stderr). Stops waiting when check_cancelled() raises."""
     _, stdout, stderr = client.exec_command(command)
     channel = stdout.channel
     try:
@@ -53,8 +53,7 @@ def run(client: paramiko.SSHClient, command: str, cancelled=lambda: False) -> tu
                 err += channel.recv_stderr(65536)
             if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
                 break
-            if cancelled():
-                raise InterruptedError("cancelled")
+            check_cancelled()
             time.sleep(0.05)
         return channel.recv_exit_status(), out.decode(errors="replace"), err.decode(errors="replace")
     finally:
@@ -69,13 +68,13 @@ class Session:
         self.conn, self.home = conn, home
         self.client = connect(conn, home)
 
-    def run(self, command: str, cancelled=lambda: False) -> tuple[int, str, str]:
+    def run(self, command: str, check_cancelled=lambda: None) -> tuple[int, str, str]:
         try:
-            return run(self.client, command, cancelled)
+            return run(self.client, command, check_cancelled)
         except paramiko.ChannelException:
             self.client.close()
             self.client = connect(self.conn, self.home)
-            return run(self.client, command, cancelled)
+            return run(self.client, command, check_cancelled)
 
     def close(self):
         self.client.close()
@@ -103,8 +102,9 @@ def start_detached(command: str, workdir: str, log_file: str, pid_file: str) -> 
     group, so stopping it stops everything the command started. When the command ends, its exit
     code goes to `<pid_file>.exit`.
     """
-    # In a subshell, so an `exit` in the command does not skip recording its exit code.
-    inner = f"cd {remote_path(workdir)} || exit 1\n(\n{command}\n)\necho $? > {remote_path(exit_file(pid_file))}"
+    # In a subshell, so an `exit` in the command (or a failed cd) does not skip recording its exit code,
+    # and the exit file lands where the pid and log files do: a relative path is in the login folder.
+    inner = f"(\ncd {remote_path(workdir)} || exit 1\n{command}\n)\necho $? > {remote_path(exit_file(pid_file))}"
     launch = f"nohup sh -c {shlex.quote(inner)} >> {remote_path(log_file)} 2>&1 < /dev/null &"
     return (
         f"mkdir -p \"$(dirname {remote_path(log_file)})\" \"$(dirname {remote_path(pid_file)})\" && "

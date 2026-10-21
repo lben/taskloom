@@ -42,12 +42,24 @@ class SecretStr(str):
         return "'***'"
 
 
+def secret_forms() -> list[str]:
+    """Every secret seen in this process (of 4 characters or more), also as repr() and JSON write it inside
+    a quoted text (a \\ or quote escaped, ä as \\u00e4); longest first."""
+    import json
+
+    forms = {form for s in list(REVEALED) if len(s) >= 4
+             for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
+                          json.dumps(s, ensure_ascii=False)[1:-1])}
+    return sorted(forms, key=len, reverse=True)
+
+
 def redact(value):
     """Replace every secret seen in this process, wherever it appears (also inside text that code built
-    from it, like f"user:{password}"), before anything is logged, stored or printed."""
+    from it, like f"user:{password}", and written escaped, as in a list's repr), before anything is logged,
+    stored or printed."""
     if isinstance(value, str):
-        for secret in REVEALED:
-            if len(secret) >= 4 and secret in value:
+        for secret in secret_forms():
+            if secret in value:
                 value = value.replace(secret, "***")
         return value
     if isinstance(value, dict):

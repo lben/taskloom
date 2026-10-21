@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 EXE = ".exe" if sys.platform == "win32" else ""
+ARGS_VARIABLE = "TASKLOOM_ARGS"  # the command line program's arguments (a JSON list), instead of its own
 
 
 def frozen() -> bool:

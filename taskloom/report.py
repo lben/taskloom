@@ -109,6 +109,11 @@ def image_tag(cid: str, path: Path, width: int | None = None) -> str:
 CHART_KINDS = ["bar", "barh", "line", "area", "scatter", "pie", "hist"]
 
 
+def _values(column: pl.Series):
+    """A value column for matplotlib: numbers (DECIMAL too) as floats, an empty value as NaN (nothing drawn)."""
+    return column.cast(pl.Float64).to_numpy() if column.dtype.is_numeric() else column.to_list()
+
+
 def render_chart(df: pl.DataFrame, path: Path, kind: str, x: str | None, y: list[str], title: str = "",
                  width: int = 640, height: int = 360) -> Path:
     """Draw a chart to a PNG at 2x pixel density. One y axis; colors follow series order."""
@@ -136,11 +141,13 @@ def render_chart(df: pl.DataFrame, path: Path, kind: str, x: str | None, y: list
     if kind == "pie":
         if len(y) != 1:
             raise ValueError("a pie chart shows one y column")
-        values = df[y[0]].to_list()
-        if len(values) > len(SERIES):
+        # An empty value gets no slice; DECIMAL values become floats.
+        slices = [(label, v) for label, v in zip(labels, df[y[0]].cast(pl.Float64).to_list()) if v is not None]
+        if len(slices) > len(SERIES):
             raise ValueError(f"a pie chart can show at most {len(SERIES)} slices")
-        ax.pie(values, labels=labels, colors=SERIES[: len(values)], startangle=90, counterclock=False,
-               wedgeprops={"linewidth": 2, "edgecolor": SURFACE}, textprops={"color": TEXT_2, "fontsize": 9})
+        ax.pie([v for _, v in slices], labels=[label for label, _ in slices], colors=SERIES[: len(slices)],
+               startangle=90, counterclock=False, wedgeprops={"linewidth": 2, "edgecolor": SURFACE},
+               textprops={"color": TEXT_2, "fontsize": 9})
         ax.axis("equal")
     elif kind == "hist":
         for i, col in enumerate(y):
@@ -156,7 +163,7 @@ def render_chart(df: pl.DataFrame, path: Path, kind: str, x: str | None, y: list
         gap = thickness * 0.08  # a thin surface gap between the bars of a group
         for i, col in enumerate(y):
             offset = [p + (i - (n - 1) / 2) * (thickness + gap) for p in positions]
-            values = df[col].to_list()
+            values = _values(df[col])
             if kind == "bar":
                 ax.bar(offset, values, width=thickness, color=SERIES[i], label=col)
             else:
@@ -171,7 +178,7 @@ def render_chart(df: pl.DataFrame, path: Path, kind: str, x: str | None, y: list
                          padding=3, color=TEXT_2, fontsize=8)
     else:
         for i, col in enumerate(y):
-            values = df[col].to_list()
+            values = _values(df[col])
             if kind == "scatter":
                 ax.scatter(xs, values, s=36, color=SERIES[i], edgecolors=SURFACE, linewidths=1.5, label=col, zorder=3)
             else:

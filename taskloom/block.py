@@ -39,10 +39,11 @@ class fields:
         # Templated fields get `{param}` / `{param:format}` substitution at run time.
         template = False
 
-        def __init__(self, default=None, required: bool | None = None, help: str = ""):
+        def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = ""):
             self.default = default
             self.required = default is None if required is None else required
             self.help = help
+            self.label = label  # the name the editor shows; empty: made from the config key
 
         def coerce(self, value):
             return value
@@ -54,10 +55,17 @@ class fields:
             return str(value)
 
     class Int(Field):
+        def __init__(self, default=None, minimum: int | None = None, **kw):
+            super().__init__(default=default, **kw)
+            self.minimum = minimum
+
         def coerce(self, value):
             if isinstance(value, bool) or not isinstance(value, (int, str)):
                 raise ValueError(f"expected an integer, got {value!r}")
-            return int(value)
+            value = int(value)
+            if self.minimum is not None and value < self.minimum:
+                raise ValueError(f"expected {self.minimum} or more, got {value}")
+            return value
 
     class Float(Field):
         def coerce(self, value):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import smtplib
 import ssl
 
-from . import jdbc, ssh
+from . import jdbc, mail, ssh
 
 
 def test_connection(home, name: str) -> str:
@@ -25,7 +25,7 @@ def test_connection(home, name: str) -> str:
             raise RuntimeError(f"logged in, but running a command failed: {err.strip()}")
         return f"Connected to {conn['host']} as {conn['username']}"
     if kind == "smtp":
-        security = conn.get("security", "none")
+        security = mail.security_of(conn)
         port = int(conn.get("port") or {"ssl": 465, "starttls": 587}.get(security, 25))
         server = (smtplib.SMTP_SSL(conn["host"], port, timeout=30, context=ssl.create_default_context())
                   if security == "ssl" else smtplib.SMTP(conn["host"], port, timeout=30))

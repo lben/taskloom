@@ -8,15 +8,17 @@ A wildcard is allowed in the last part of a source path: `appserver:~/logs/*.log
 from __future__ import annotations
 
 import fnmatch
+import functools
 import glob
 import os
 import posixpath
 import shutil
 import stat
+from collections import Counter
 from contextlib import ExitStack
 
 from .. import ssh
-from ..block import Block, fields, ports
+from ..block import IDENTIFIER, Block, fields, ports
 
 CHUNK = 1 << 20
 
@@ -26,10 +28,16 @@ class LocalFiles:
 
     def expand(self, path: str) -> list[str]:
         path = os.path.expanduser(path)
-        return sorted(glob.glob(path)) if glob.has_magic(path) else ([path] if os.path.exists(path) else [])
+        if os.path.exists(path):  # an existing name such as report[1].csv is that file, not a pattern
+            return [path]
+        return sorted(glob.glob(path)) if glob.has_magic(path) else []
 
     def norm(self, path: str) -> str:
         return os.path.expanduser(path)
+
+    def key(self, path: str) -> str:
+        """The path to compare locations by: in full, with links resolved (and in lower case on Windows)."""
+        return os.path.normcase(os.path.realpath(path))
 
     def is_dir(self, path: str) -> bool:
         return os.path.isdir(path)
@@ -37,19 +45,28 @@ class LocalFiles:
     def exists(self, path: str) -> bool:
         return os.path.exists(path)
 
-    def files_under(self, root: str):
+    def walk(self, root: str):
+        """(path, path relative to root, is a folder) for every folder and file under root."""
         for folder, _, names in os.walk(root):
+            if folder != root:
+                yield folder, os.path.relpath(folder, root), True
             for name in names:
                 full = os.path.join(folder, name)
-                yield full, os.path.relpath(full, root)
+                yield full, os.path.relpath(full, root), False
+
+    def makedirs(self, folder: str):
+        os.makedirs(folder, exist_ok=True)
 
     def open(self, path: str, mode: str):
         if "w" in mode:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.makedirs(os.path.dirname(path) or ".")
         return open(path, mode)
 
     def remove(self, path: str):
-        shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)  # a link goes, never what it points to
 
     def close(self):
         pass
@@ -73,10 +90,24 @@ class ServerFiles:
 
     def expand(self, path: str) -> list[str]:
         path = self.norm(path)
+        if self._stat(path):  # an existing name such as report[1].csv is that file, not a pattern
+            return [path]
         folder, name = posixpath.split(path)
-        if glob.has_magic(name):
-            return sorted(posixpath.join(folder, n) for n in self.sftp.listdir(folder or ".") if fnmatch.fnmatch(n, name))
-        return [path] if self._stat(path) else []
+        if not glob.has_magic(name):
+            return []
+        try:
+            names = self.sftp.listdir(folder or ".")
+        except FileNotFoundError:  # no such folder: nothing found, as on this computer
+            return []
+        return sorted(posixpath.join(folder, n) for n in names if fnmatch.fnmatch(n, name))
+
+    @functools.cached_property
+    def _home(self) -> str:
+        return self.sftp.normalize(".")
+
+    def key(self, path: str) -> str:
+        """The path to compare locations by: in full (a path not starting with / is in the login folder)."""
+        return posixpath.normpath(posixpath.join(self._home, path))
 
     def is_dir(self, path: str) -> bool:
         st = self._stat(path)
@@ -85,28 +116,29 @@ class ServerFiles:
     def exists(self, path: str) -> bool:
         return self._stat(path) is not None
 
-    def files_under(self, root: str):
+    def walk(self, root: str):
+        """(path, path relative to root, is a folder) for every folder and file under root."""
         for entry in self.sftp.listdir_attr(root):
             full = posixpath.join(root, entry.filename)
-            if stat.S_ISDIR(entry.st_mode):
-                for sub, rel in self.files_under(full):
-                    yield sub, posixpath.join(entry.filename, rel)
-            else:
-                yield full, entry.filename
+            is_folder = stat.S_ISDIR(entry.st_mode)
+            yield full, entry.filename, is_folder
+            if is_folder:
+                for sub, rel, sub_is_folder in self.walk(full):
+                    yield sub, posixpath.join(entry.filename, rel), sub_is_folder
 
-    def _makedirs(self, folder: str):
+    def makedirs(self, folder: str):
         if not folder or self.is_dir(folder):
             return
-        self._makedirs(posixpath.dirname(folder))
+        self.makedirs(posixpath.dirname(folder))
         self.sftp.mkdir(folder)
 
     def open(self, path: str, mode: str):
         if "w" in mode:
-            self._makedirs(posixpath.dirname(path))
+            self.makedirs(posixpath.dirname(path))
         return self.sftp.open(path, mode)
 
     def remove(self, path: str):
-        if self.is_dir(path):
+        if stat.S_ISDIR(self.sftp.lstat(path).st_mode):  # a link goes, never what it points to
             for entry in self.sftp.listdir_attr(path):
                 self.remove(posixpath.join(path, entry.filename))
             self.sftp.rmdir(path)
@@ -121,21 +153,28 @@ class ServerFiles:
 def _open_location(ctx, location: str, stack: ExitStack):
     """(filesystem, path, where) for a location string; `where` is "local" or the connection name."""
     name, sep, path = location.partition(":")
-    if sep and len(name) > 1:  # one letter is a Windows drive, e.g. C:/data
-        conns = ctx.home.connections()
-        if conns.get(name, {}).get("kind") == "ssh":
-            fs = ServerFiles(ssh.connect(ctx.connection(name), ctx.home))
-            stack.callback(fs.close)
-            return fs, path, name
+    # One letter is a Windows drive, e.g. C:/data; connections.yaml may be edited by hand, so any name in it counts.
+    if sep and len(name) > 1 and (IDENTIFIER.match(name) or name in ctx.home.connections()):
+        conn = ctx.connection(name)  # a name that is not a connection is an error, not a local folder
+        if conn.get("kind") != "ssh":
+            raise ValueError(f"connection '{name}' is not an SSH connection")
+        fs = ServerFiles(ssh.connect(conn, ctx.home))
+        stack.callback(fs.close)
+        return fs, path, name
     return LocalFiles(), location, "local"
 
 
-def _same_file(where: str, a: str, b: str) -> bool:
+def _same_file(where: str, fs, a: str, b: str) -> bool:
     if where == "local":
         if os.path.exists(a) and os.path.exists(b):
             return os.path.samefile(a, b)
         return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
-    return posixpath.normpath(a) == posixpath.normpath(b)
+    return fs.key(a) == fs.key(b)
+
+
+def _within(fs, path: str, folder: str) -> bool:
+    """True when path is folder or inside it; names that differ only in case may be one folder, so count as one."""
+    return fs.sep_join(fs.key(path), "").casefold().startswith(fs.sep_join(fs.key(folder), "").casefold())
 
 
 def _copy_file(src_fs, src, dst_fs, dst, ctx):
@@ -153,24 +192,42 @@ def _copy(ctx, source: str, destination: str, overwrite: bool, move: bool) -> li
         matches = src_fs.expand(src)
         if not matches:
             raise FileNotFoundError(f"nothing found at {source}")
-        single_file = len(matches) == 1 and not glob.has_magic(src) and not src_fs.is_dir(matches[0])
-        into_folder = not single_file or destination.endswith(("/", "\\")) or dst_fs.is_dir(dst)
-        pairs = []
+        into_folder = (len(matches) > 1 or src_fs.is_dir(matches[0]) or destination.endswith(("/", "\\"))
+                       or dst_fs.is_dir(dst))
+        folders, pairs = [], []  # every folder is made, so empty ones are kept too
         for match in matches:
             base = os.path.basename(match.rstrip("/\\"))
             target = dst_fs.sep_join(dst, base) if into_folder else dst
             if src_fs.is_dir(match):
-                pairs += [(f, dst_fs.sep_join(target, *rel.replace("\\", "/").split("/"))) for f, rel in src_fs.files_under(match)]
+                # A move deletes its sources once copied, so it would delete a copy made inside one.
+                if move and src_where == dst_where and _within(dst_fs, target, match):
+                    raise ValueError(f"cannot move a folder into itself: {match}")
+                folders.append(target)
+                for found, rel, is_folder in src_fs.walk(match):
+                    to = dst_fs.sep_join(target, *rel.replace("\\", "/").split("/"))
+                    if is_folder:
+                        folders.append(to)
+                    else:
+                        pairs.append((found, to))
             else:
                 pairs.append((match, target))
         if src_where == dst_where:
-            same = [t for f, t in pairs if _same_file(src_where, f, t)]
+            same = [t for f, t in pairs if _same_file(src_where, dst_fs, f, t)]
             if same:  # writing a file onto itself would empty it (and a move would then delete it)
                 raise ValueError(f"cannot copy a file onto itself: {', '.join(same[:5])}")
+        # Names that differ only in case are one file on Windows, macOS and many servers and network folders.
+        keys = [dst_fs.key(t).casefold() for _, t in pairs]
+        counts = Counter(keys)
+        clashes = sorted({t for (_, t), k in zip(pairs, keys) if counts[k] > 1})
+        if clashes:  # the last would replace the others (and a move would then delete them all)
+            raise ValueError("several files would be copied to the same place (names that differ only in case "
+                             f"count as one): {', '.join(clashes[:5])}")
         if not overwrite:
             existing = [t for _, t in pairs if dst_fs.exists(t)]
             if existing:
                 raise FileExistsError(f"already exists (set overwrite to allow): {', '.join(existing[:5])}")
+        for folder in folders:
+            dst_fs.makedirs(folder)
         for src_file, target in pairs:
             _copy_file(src_fs, src_file, dst_fs, target, ctx)
         ctx.log(f"{'moved' if move else 'copied'} {len(pairs)} file(s) to {destination}")

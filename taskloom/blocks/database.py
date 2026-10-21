@@ -18,22 +18,23 @@ class RunQuery(Block):
     config = {
         "connection": fields.Connection(kind="jdbc"),
         "sql": fields.Code("sql", help="Use :name for parameters, e.g. where day_key = :day_key"),
-        "chunk_size": fields.Int(default=50_000, help="Rows fetched and written per chunk"),
+        "chunk_size": fields.Int(default=50_000, minimum=1, help="Rows fetched and written per chunk"),
     }
 
     def run(self, ctx, params=None):
         if params is not None and not isinstance(params, dict):
             raise TypeError(f"input 'params' must be a dict of name -> value, got {type(params).__name__}")
         values = {**ctx.params, **(params or {})}
-        sql, names = to_qmark(self.config.sql.strip().rstrip(";"))
+        sql, names = to_qmark(self.config.sql.strip().rstrip(";"), values)
         missing = [n for n in names if n not in values]
         if missing:
             raise KeyError(f"no value for bind parameter(s): {', '.join(':' + n for n in missing)}")
+        args = [a for n in names for a in (values[n] if isinstance(values[n], list) else [values[n]])]
         out = ctx.new_path("result.parquet")
         conn = jdbc.connect(ctx.connection(self.config.connection), jdbc.all_jars(ctx.home.connections()),
                             ctx.home.settings()["java_home"])
         try:
-            rows = jdbc.query_to_parquet(conn, sql, [values[n] for n in names], out, self.config.chunk_size, ctx)
+            rows = jdbc.query_to_parquet(conn, sql, args, out, self.config.chunk_size, ctx)
         finally:
             conn.close()
         ctx.log(f"query returned {rows:,} rows")

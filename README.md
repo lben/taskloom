@@ -158,7 +158,8 @@ taskloom editor examples/daily-sales-report.yaml
   installs packages with pip. Tick **Run in my Python environment** on a Python Code
   block to use them (`taskloom env create`, `taskloom env pip install NAME` from a terminal).
 - **`print()` in a Python Code block** goes to that block's Log (and run history), like
-  `log("...")`.
+  `log("...")`. `sys.exit()` ends the code there and the block succeeds; given a value other
+  than 0 (e.g. `sys.exit("no data")`) the block fails.
   The screen shows the environment in use; **Use an existing environment…** picks one you
   already have (the `python_env` setting).
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
@@ -189,7 +190,8 @@ edges:
   - q.result -> save.table
 ```
 
-- `:name` in SQL binds a parameter with its type; `{name:format}` fills text.
+- `:name` in SQL binds a parameter with its type (a `list` as its items, for
+  `where region in (:regions)`); `{name:format}` fills text.
 - Every block has an `error` output; connect it to handle failures.
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
 
@@ -209,7 +211,8 @@ explicit sizes (never `data:` URIs or SVG), plus a plain-text version.
 
 - **HTML Template** (Jinja2): `{{ table(totals) }}`, `{{ image(chart) }}`, `{{ params.day }}`.
 - **Send Email** takes any number of body parts and attachments; `save_copy` also
-  writes the email as an `.eml` file you can open in Outlook.
+  writes the email as an `.eml` file you can open in Outlook. Text is shown as written
+  (HTML comes from HTML Table and HTML Template).
 
 Notifications: set `notify_email`, `smtp_connection` and `notify_on` in Tools →
 Settings. Scheduled runs then email you on failure (or success / skipped runs). A flow

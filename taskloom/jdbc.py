@@ -17,13 +17,15 @@ _jvm_lock = threading.Lock()
 _INTS = {-7, -6, 5, 4, -5}  # BIT, TINYINT, SMALLINT, INTEGER, BIGINT
 _FLOATS = {6, 7, 8}  # FLOAT, REAL, DOUBLE
 _DECIMALS = {2, 3}  # NUMERIC, DECIMAL
+_BINARY = {-2, -3, -4, 2004}  # BINARY, VARBINARY, LONGVARBINARY, BLOB
 _BOOLEAN, _DATE, _TIMESTAMP = 16, 91, 93
 
 
 def start_jvm(classpath: list[str], java_home: str | None = None):
     """Start the JVM once per process with every JDBC driver jar on the classpath.
 
-    The classpath cannot change after the JVM starts, so all known jars go on it up front.
+    The classpath cannot change after the JVM starts, so all known jars go on it up front
+    (Java skips a jar that is missing; `connect` checks the jars of the connection it opens).
     `java_home` (the java_home setting) wins over the JAVA_HOME environment variable.
     """
     import jpype
@@ -31,9 +33,6 @@ def start_jvm(classpath: list[str], java_home: str | None = None):
 
     with _jvm_lock:
         if not jpype.isJVMStarted():
-            missing = [p for p in classpath if not Path(p).exists()]
-            if missing:
-                raise FileNotFoundError(f"JDBC driver jar(s) not found: {', '.join(missing)}")
             if java_home:
                 os.environ["JAVA_HOME"] = str(Path(java_home).expanduser())  # where JPype looks
             try:
@@ -50,13 +49,13 @@ def start_jvm(classpath: list[str], java_home: str | None = None):
             jpype.startJVM(jvm_path, classpath=classpath, convertStrings=True)
 
 
+def _jars(conn: dict) -> list[str]:
+    value = conn.get("jars") or []
+    return [str(Path(j).expanduser()) for j in ([value] if isinstance(value, str) else value)]
+
+
 def all_jars(connections: dict) -> list[str]:
-    jars: list[str] = []
-    for conn in connections.values():
-        if conn.get("kind") == "jdbc":
-            value = conn.get("jars") or []
-            jars += [value] if isinstance(value, str) else list(value)
-    return [str(Path(j).expanduser()) for j in dict.fromkeys(jars)]
+    return list(dict.fromkeys(j for conn in connections.values() if conn.get("kind") == "jdbc" for j in _jars(conn)))
 
 
 def connect(conn: dict, classpath: list[str], java_home: str | None = None):
@@ -64,6 +63,9 @@ def connect(conn: dict, classpath: list[str], java_home: str | None = None):
     for key in ("driver", "url"):
         if not conn.get(key):
             raise ValueError(f"JDBC connection needs '{key}'")
+    missing = [j for j in _jars(conn) if not Path(j).exists()]
+    if missing:
+        raise FileNotFoundError(f"JDBC driver jar(s) not found: {', '.join(missing)}")
     start_jvm(classpath, java_home)
     import jpype
 
@@ -77,6 +79,7 @@ def connect(conn: dict, classpath: list[str], java_home: str | None = None):
 def _bind(stmt, args):
     import jpype
 
+    refused = jpype.JClass("java.sql.SQLException")
     for i, value in enumerate(args, start=1):
         if value is None:
             stmt.setNull(i, 0)  # java.sql.Types.NULL
@@ -89,11 +92,45 @@ def _bind(stmt, args):
         elif isinstance(value, decimal.Decimal):
             stmt.setBigDecimal(i, jpype.JClass("java.math.BigDecimal")(str(value)))
         elif isinstance(value, dt.datetime):
-            stmt.setTimestamp(i, jpype.JClass("java.sql.Timestamp").valueOf(value.strftime("%Y-%m-%d %H:%M:%S.%f")))
+            # As java.time values dates and times pass as written; java.sql.Timestamp/Date would shift them by
+            # the computer's time zone (a time its clock skips) and the old Julian calendar (before 1582-10-15).
+            # Those are only for a driver that refuses java.time (no JDBC 4.2 support).
+            value = value.replace(tzinfo=None)
+            try:
+                stmt.setObject(i, jpype.JClass("java.time.LocalDateTime").parse(value.isoformat()))
+            except refused:
+                stmt.setTimestamp(i, jpype.JClass("java.sql.Timestamp").valueOf(value.isoformat(" ")))
         elif isinstance(value, dt.date):
-            stmt.setDate(i, jpype.JClass("java.sql.Date").valueOf(value.isoformat()))
+            try:
+                stmt.setObject(i, jpype.JClass("java.time.LocalDate").parse(value.isoformat()))
+            except refused:
+                stmt.setDate(i, jpype.JClass("java.sql.Date").valueOf(value.isoformat()))
         else:
             stmt.setString(i, str(value))
+
+
+def _time_reader(i, java_time: str, legacy, parse):
+    """Reads column i as a java.time value, which comes as written (see _bind). A driver without java.time
+    support refuses that (a driver older than JDBC 4.1 lacks the method); from then on the column is read
+    with `legacy`."""
+    import jpype
+
+    cls = jpype.JClass(java_time).class_
+    refused = (jpype.JClass("java.sql.SQLException"), jpype.JClass("java.lang.AbstractMethodError"))
+    use_java_time = True
+
+    def read(rs):
+        nonlocal use_java_time
+        value = None
+        if use_java_time:
+            try:
+                value = rs.getObject(i, cls)
+            except refused:
+                use_java_time = False
+        if not use_java_time:
+            value = legacy(rs)
+        return None if value is None else parse(str(value.toString()))
+    return read
 
 
 def _column(meta, i):
@@ -119,15 +156,15 @@ def _column(meta, i):
     if sql_type == _BOOLEAN:
         return name, pa.bool_(), nullable(lambda rs: bool(rs.getBoolean(i)))
     if sql_type == _DATE:
-        def read_date(rs):
-            v = rs.getDate(i)
-            return None if v is None else dt.date.fromisoformat(str(v.toString()))
-        return name, pa.date32(), read_date
+        return name, pa.date32(), _time_reader(i, "java.time.LocalDate", lambda rs: rs.getDate(i), dt.date.fromisoformat)
     if sql_type == _TIMESTAMP:
-        def read_timestamp(rs):
-            v = rs.getTimestamp(i)
-            return None if v is None else dt.datetime.fromisoformat(str(v.toString())[:26])
-        return name, pa.timestamp("us"), read_timestamp
+        return name, pa.timestamp("us"), _time_reader(
+            i, "java.time.LocalDateTime", lambda rs: rs.getTimestamp(i), lambda s: dt.datetime.fromisoformat(s[:26]))
+    if sql_type in _BINARY:
+        def read_hex(rs):  # as hex text: getString can garble bytes, and CSV and Excel files take text
+            v = rs.getBytes(i)
+            return None if v is None else bytes(v).hex()
+        return name, pa.string(), read_hex
     return name, pa.string(), lambda rs: rs.getString(i)
 
 

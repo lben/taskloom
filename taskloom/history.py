@@ -71,7 +71,7 @@ class History:
         cur = self._exec(
             "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by) "
             "VALUES (?, ?, ?, 'running', ?, ?, ?)",
-            (flow, flow_path, json.dumps(params, default=str), ts, os.getpid(), started_by),
+            (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by),
         )
         return cur.lastrowid
 

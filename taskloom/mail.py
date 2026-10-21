@@ -22,8 +22,8 @@ from .report import Html, email_document, html_table
 def _addresses(value) -> list[str]:
     if not value:
         return []
-    items = value if isinstance(value, (list, tuple)) else re.split(r"[;,]", str(value))
-    return [a.strip() for a in items if str(a).strip()]
+    items = value if isinstance(value, (list, tuple)) else [value]
+    return [a.strip() for item in items for a in re.split(r"[;,]", str(item)) if a.strip()]
 
 
 def build_message(sender: str, to, subject: str, body: Html, attachments=(), cc=()) -> EmailMessage:
@@ -52,11 +52,20 @@ def build_message(sender: str, to, subject: str, body: Html, attachments=(), cc=
     return msg
 
 
-def send(conn: dict, msg: EmailMessage, timeout: float = 60):
+def security_of(conn: dict) -> str:
+    """none, starttls or ssl; anything else is refused rather than sending in plain text."""
+    value = conn.get("security") or "none"
+    if value not in ("none", "starttls", "ssl"):
+        raise ValueError(f"SMTP connection security must be none, starttls or ssl, not '{value}'")
+    return value
+
+
+def send(conn: dict, msg: EmailMessage, timeout: float = 60) -> dict:
+    """Send the message; returns {address: (code, reply)} of the recipients the server refused."""
     for key in ("host", "sender"):
         if not conn.get(key):
             raise ValueError(f"SMTP connection needs '{key}'")
-    security = conn.get("security", "none")
+    security = security_of(conn)
     port = int(conn.get("port") or {"ssl": 465, "starttls": 587}.get(security, 25))
     if security == "ssl":
         server = smtplib.SMTP_SSL(conn["host"], port, timeout=timeout, context=ssl.create_default_context())
@@ -67,7 +76,7 @@ def send(conn: dict, msg: EmailMessage, timeout: float = 60):
             server.starttls(context=ssl.create_default_context())
         if conn.get("username"):
             server.login(conn["username"], conn.get("password") or "")
-        server.send_message(msg)
+        return server.send_message(msg)  # raises when it refuses every recipient
 
 
 # --- notifications ---------------------------------------------------------------------

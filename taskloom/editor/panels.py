@@ -372,7 +372,7 @@ class PropertiesPanel(QScrollArea):
                 continue  # in the When box
             widget = self._field_widget(key, f, config.get(key))
             words = key.replace("_", " ").capitalize().split(" ")
-            label = QLabel(" ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words))
+            label = QLabel(f.label or " ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words))
             if f.help:
                 label.setToolTip(f.help)
                 widget.setToolTip(f.help)
@@ -1095,6 +1095,8 @@ class FrameModel(QAbstractTableModel):
     def data(self, index, role=Qt.DisplayRole):
         if role == Qt.DisplayRole:
             value = self.df[index.row(), index.column()]
+            if isinstance(value, pl.Series):  # a list cell
+                value = value.to_list()
             return "" if value is None else str(value)
         return None
 

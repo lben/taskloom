@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signa
 
 from ..config import Home
 from ..history import History
-from ..launch import runner_command
+from ..launch import ARGS_VARIABLE, runner_command
 
 KILL_AFTER_MS = 6000  # after asking a run to stop, kill it if it is still going
 
@@ -41,10 +41,15 @@ class RunProcess(QObject):
 
     def start(self):
         program, *args = runner_command()
-        args += ["run", self.flow_path, "--json-events", "--interactive"]
+        run_args = ["run", self.flow_path, "--json-events", "--interactive"]
         for name, value in self.overrides.items():
-            args += ["--param", f"{name}={value}"]
-        self.proc.start(program, args + self.extra_args)
+            run_args += ["--param", f"{name}={value}"]
+        # In the environment, not as arguments: on macOS Qt decomposes a program's arguments (é becomes e and
+        # an accent), so an accented flow path or value would not reach the run as written.
+        env = self.proc.processEnvironment()
+        env.insert(ARGS_VARIABLE, json.dumps(run_args + self.extra_args))
+        self.proc.setProcessEnvironment(env)
+        self.proc.start(program, args)
 
     @property
     def running(self) -> bool:

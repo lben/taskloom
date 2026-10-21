@@ -40,21 +40,40 @@ def load_table(path):
 namespace = {"params": job["params"], "log": lambda *a: print(*a, flush=True)}
 for name, value in job["inputs"].items():
     namespace[name] = load_table(value["__table__"]) if isinstance(value, dict) and "__table__" in value else value
-import linecache
+import linecache, types
 filename = job["name"] + ".py"
 linecache.cache[filename] = (len(job["code"]), None, job["code"].splitlines(True), filename)
-try:
-    exec(compile(job["code"], filename, "exec"), namespace)
-except Exception:
+
+def fail(error):
+    """Report the error in your code with the values of your variables, then end with it (the last lines)."""
+    shown = {k: v for k, v in namespace.items() if k not in ("params", "log") and not k.startswith("__")
+             and not isinstance(v, (types.ModuleType, types.FunctionType, type))}
+    if shown:
+        print("Variables:")
+        for name, value in shown.items():
+            text = repr(value)
+            for secret in job["secrets"]:  # scrub, then cut: a cut must not leave part of a password
+                text = text.replace(secret, "***")
+            print(f"  {name} = {' '.join(text.split())[:300]}")
+    tb = error.__traceback__.tb_next  # from your code on, not this file's
     try:
         from rich.console import Console
         from rich.traceback import Traceback
-        Console(width=110, color_system=None).print(Traceback(extra_lines=2, word_wrap=True))
+        Console(width=110, color_system=None).print(
+            Traceback.from_exception(type(error), error, tb, extra_lines=2, word_wrap=True))
     except ImportError:
         import traceback
-        traceback.print_exc(file=sys.stdout)
+        traceback.print_exception(type(error), error, tb, file=sys.stdout)
     sys.stdout.flush()
     sys.exit(1)
+
+try:
+    exec(compile(job["code"], filename, "exec"), namespace)
+except SystemExit as error:  # sys.exit() ends your code there; 0 (or nothing) means it went well
+    if error.code not in (None, 0):
+        fail(error)
+except Exception as error:
+    fail(error)
 
 result = {}
 for name in job["outputs"]:
@@ -154,7 +173,7 @@ def _portable(value, table_type, secret_type):
 
 def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> dict:
     """Run a Python Code block's code in the environment; returns its outputs."""
-    from .engine import Cancelled, SecretStr
+    from .engine import Cancelled, SecretStr, secret_forms
     from .table import Table
 
     python = env_python(ctx.home)
@@ -166,9 +185,11 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> dict:
     helper, result_file = work / "helper.py", work / "result.pickle"
     helper.write_text(HELPER, encoding="utf-8")
     # Inputs can hold passwords (Ask User, secrets): they go through a pipe, never to a file.
+    # "secrets": what to mask in the Variables report, as redact() does.
     job = {"code": code, "outputs": outputs, "workspace": str(work), "name": ctx.block_id,
            "params": _portable(ctx.params, Table, SecretStr),
-           "inputs": {k: _portable(v, Table, SecretStr) for k, v in inputs.items()}}
+           "inputs": {k: _portable(v, Table, SecretStr) for k, v in inputs.items()},
+           "secrets": secret_forms()}
     proc = subprocess.Popen([str(python), "-I", str(helper), str(result_file)], cwd=os.getcwd(),
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             creationflags=_no_window())

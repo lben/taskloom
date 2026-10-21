@@ -16,6 +16,7 @@ from pathlib import Path
 from .config import Home
 from .engine import Cancelled, run_flow
 from .flow import FlowError, load_flow, validate
+from .launch import ARGS_VARIABLE
 from .registry import discover
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -328,6 +329,8 @@ def main(argv=None) -> int:
 
 def run_cli(argv=None):
     """Entry point of the `taskloom` program."""
+    if ARGS_VARIABLE in os.environ:  # how the editor starts its runs (not passed on to their blocks)
+        argv = json.loads(os.environ.pop(ARGS_VARIABLE))
     code = main(argv)
     jpype = sys.modules.get("jpype")
     if jpype is not None and jpype.isJVMStarted():

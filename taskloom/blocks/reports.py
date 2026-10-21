@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html as html_lib
-import re
 import uuid
 from pathlib import Path
 
@@ -29,7 +28,7 @@ def _frame(value, max_rows: int) -> tuple[pl.DataFrame, int]:
 
 
 def to_html(value, ctx=None) -> Html:
-    """Turn a block output into email HTML: Html, a table, a PNG path, text, or a list of these."""
+    """Turn a block output into email HTML: Html, a table, a PNG path, text (shown as written), or a list of these."""
     if value is None:
         return Html("")
     if isinstance(value, Html):
@@ -45,8 +44,6 @@ def to_html(value, ctx=None) -> Html:
     if text.lower().endswith(".png") and Path(text).exists():
         cid = f"img-{uuid.uuid4().hex[:12]}"
         return Html(image_tag(cid, Path(text)), {cid: text})
-    if re.search(r"<(/?[a-zA-Z][a-zA-Z0-9]*)(\s[^<>]*)?/?>", text):  # contains HTML tags
-        return Html(text)
     paragraphs = html_lib.escape(text).split("\n\n")
     return Html("".join(f'<p style="margin:0 0 10px;">{p.replace(chr(10), "<br>")}</p>' for p in paragraphs))
 
@@ -96,6 +93,17 @@ class Chart(Block):
         return {"image": str(path)}
 
 
+class _TemplateInputs(fields.Names):
+    """Input names of an HTML Template: not the names every template already has."""
+
+    def coerce(self, value):
+        names = super().coerce(value)
+        taken = {"table", "image", "params"} & set(names)
+        if taken:
+            raise ValueError(f"{', '.join(sorted(taken))}: the template already has these; choose other names")
+        return names
+
+
 class HtmlTemplate(Block):
     type_id = "reports.html_template"
     title = "HTML Template"
@@ -103,7 +111,7 @@ class HtmlTemplate(Block):
     category = "Reports"
     outputs = {"html": ports.Any()}
     config = {
-        "inputs": fields.Names(default=["table"], help="Available in the template under these names"),
+        "inputs": _TemplateInputs(default=["data"], help="Available in the template under these names"),
         "template": fields.Code("html", help="Jinja2: {{ table(sales) }}, {{ image(chart) }}, {{ params.day }}, "
                                              "{{ part }} for HTML from another block"),
     }
@@ -116,6 +124,8 @@ class HtmlTemplate(Block):
         images: dict[str, str] = {}
 
         def table(value, max_rows=500):
+            if isinstance(value, jinja2.Undefined):
+                value._fail_with_undefined_error()  # names the misspelt name
             df, total = _frame(value, max_rows)
             return Markup(html_table(df, max_rows, total))
 
@@ -254,6 +264,8 @@ class SendEmail(Block):
         if c.save_copy:
             Path(c.save_copy).parent.mkdir(parents=True, exist_ok=True)
             Path(c.save_copy).write_bytes(bytes(msg))
-        mail.send(conn, msg)
+        refused = mail.send(conn, msg)
         ctx.log(f"sent '{subject}' to {msg['To']} with {len(files)} attachment(s)")
+        for address, (code, reply) in refused.items():
+            ctx.warn(f"the mail server refused {address}, so it did not get the email: {code} {reply.decode(errors='replace')}")
         return {"sent": {"to": msg["To"], "subject": subject, "attachments": [str(f) for f in files]}}

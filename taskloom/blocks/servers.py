@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import socket
 import time
 import urllib.error
@@ -22,7 +23,7 @@ def _client(ctx, name):
 
 
 def _run(ctx, session, command) -> tuple[int, str, str]:
-    return session.run(command, lambda: ctx.cancelled)
+    return session.run(command, ctx.check_cancelled)
 
 
 class SSHCommand(Block):
@@ -173,6 +174,11 @@ class HealthCheck(Block):
             except OSError as e:
                 status = None
                 problems.append(f"{c.url}: {getattr(e, 'reason', e)}")
+            except http.client.InvalidURL:
+                raise  # a mistake in the url, not an unhealthy app
+            except http.client.HTTPException as e:  # it answered, but not with HTTP (e.g. another program's port)
+                status = None
+                problems.append(f"{c.url} did not answer like a web server ({type(e).__name__}: {str(e).strip()})")
             if status is not None and status != c.expect_status:
                 problems.append(f"{c.url} returned {status}, expected {c.expect_status}")
         if c.pid_file or c.port:

@@ -109,13 +109,22 @@ _SQL_TOKENS = re.compile(
 )
 
 
-def to_qmark(sql: str) -> tuple[str, list[str]]:
-    """Rewrite `:name` bind parameters as `?`; return the SQL and the names in order."""
+def to_qmark(sql: str, values: dict | None = None) -> tuple[str, list[str]]:
+    """Rewrite `:name` bind parameters as `?`; return the SQL and the names in order.
+
+    A list in `values` becomes one `?` per item, for `in (:names)`.
+    """
     names: list[str] = []
 
     def replace(match):
         if match.group(1):
-            names.append(match.group(1))
+            name = match.group(1)
+            names.append(name)
+            value = (values or {}).get(name)
+            if isinstance(value, list):
+                if not value:
+                    raise ValueError(f"bind parameter :{name} is an empty list")
+                return ", ".join("?" * len(value))
             return "?"
         return match.group(0)
 

@@ -23,7 +23,7 @@ from .. import __version__, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..config import Home
-from ..engine import block_inputs, blocks_from, input_ports
+from ..engine import block_inputs, input_ports
 from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
@@ -138,7 +138,9 @@ class FlowTab(QWidget):
         self.following_latest = True
         self.since_run = 0
         self.seen_up_to: int | None = None  # the newest run of this flow you have seen (or skipped) here
-        self.going: set[int] = set()  # its runs still going (in the history) when it last looked
+        # Its runs to show once they have finished, even if a newer one is seen first: those still going (in the
+        # history) when it last looked, and those begun just before one of yours.
+        self.going: set[int] = set()
         self.last: dict | None = None  # last finished run of this flow, from the history
         self.line_results: list[tuple[str, dict | None]] = []  # each start block, its line's last finished run
         self.scheduled = False  # listed for the scheduler
@@ -653,10 +655,10 @@ class MainWindow(QMainWindow):
                 f"({', '.join(starts)}) at once, as if their times had come. To start from one of them only, "
                 "right-click it.")
 
-    def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), refresh: set | None = None) -> RunProcess:
+    def start_run(self, tab: FlowTab, overrides: dict, extra_args=(), rerun: bool = False) -> RunProcess:
         """Start a run of the flow. Only the blocks it takes part in are cleared (when it starts, it says
-        which); the others keep the results they show. `refresh`: the blocks a re-run of one block (or of a
-        block and what follows it) runs, cleared now."""
+        which; one refused before it starts clears none); the others keep the results they show. `rerun`: it
+        runs one block again (or a block and what follows it)."""
         run = RunProcess(str(tab.doc.path), overrides, self.home, self, extra_args)
         run.event.connect(lambda e, t=tab, r=run: self._on_event(t, r, e))
         run.output.connect(lambda line, t=tab, r=run: self._on_output(t, r, line))
@@ -665,13 +667,11 @@ class MainWindow(QMainWindow):
         if not tab.following_latest:  # an older run was on the canvas: each block's latest result again
             self._show_results(tab)
         tab.shown_run, tab.run_blocks = run, []
-        if refresh is None:
+        if not rerun:
             tab.entries = tab.entries[-MAX_LOG_ENTRIES:]  # its messages follow the earlier runs'
             if tab is self.current:
                 self.log.set_entries(list(tab.entries))
                 self.bottom_tabs.setCurrentWidget(self.log)
-        else:
-            self._clear_blocks(tab, refresh)
         run.start()
         self.flow_status.update_tab(tab)
         return run
@@ -763,9 +763,7 @@ class MainWindow(QMainWindow):
         flow = self._ready_to_run(tab)  # saves your fix and checks the flow
         if flow is None:
             return
-        blocks = blocks_from(flow, self.registry, block_id) if on else {block_id}
-        self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(run_id)],
-                       refresh=blocks)
+        self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(run_id)], rerun=True)
 
     def run_block_with_inputs(self, tab: FlowTab, block_id: str, on: bool = False):
         """Run one block (`on`: and the blocks after it) with input values you type for it (filled in with
@@ -797,7 +795,7 @@ class MainWindow(QMainWindow):
             args += ["--inputs-from", str(run_id)]
         for name, text in dialog.given().items():
             args += ["--input", f"{name}={text}"]
-        self.start_run(tab, {}, args, refresh=blocks_from(flow, self.registry, block_id) if on else {block_id})
+        self.start_run(tab, {}, args, rerun=True)
 
     def stop(self, tab: FlowTab | None):
         if tab is None:
@@ -827,6 +825,14 @@ class MainWindow(QMainWindow):
         block = e.get("block")
         if kind == "run_started":
             tab.following_latest = True
+            # The runs of the flow since the editor last looked (another line's, e.g. started by the scheduler as
+            # you pressed Run now) are still to show, once they have finished.
+            history = self._history()
+            try:
+                tab.going |= {r["id"] for r in history.runs(str(tab.doc.path), limit=20)
+                              if (tab.seen_up_to or 0) < r["id"] < e["run_id"]}
+            finally:
+                history.close()
             self._mark_seen(tab, e["run_id"])
             tab.run_blocks = e["blocks"]
             self._clear_blocks(tab, e["blocks"])  # the blocks it takes part in; the others keep what they show
@@ -925,14 +931,16 @@ class MainWindow(QMainWindow):
             self._mark_seen(tab, tab.seen_up_to)
         if tab.following_latest and not tab.running:
             # Each run you have not seen yet (e.g. started by the scheduler, also while this flow was closed),
-            # oldest first: its messages after the ones already shown, its results on its blocks. A run that was
-            # still going when a later one was seen (another line's) is new once it has finished.
+            # oldest first: its messages after the ones already shown, its results on its blocks, and it in Run
+            # history. A run older than one seen (another line's) is new once it has finished.
             unseen = [r["id"] for r in reversed(runs) if r["id"] > tab.seen_up_to or r["id"] in tab.going]
             tab.going = going
             for run_id in unseen:
                 self._show_log(tab, run_id, keep_log=True)
             if unseen:
                 self._show_results(tab)
+                if tab is self.current:
+                    self._refresh_history(tab)
 
     def _mark_seen(self, tab: FlowTab, run_id: int):
         tab.seen_up_to = max(tab.seen_up_to or 0, run_id)
