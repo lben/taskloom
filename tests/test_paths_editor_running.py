@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 import time
 
 import pytest
@@ -180,6 +181,9 @@ def right_click(qtbot, win, tab, block, where, choose: str) -> list[str]:
         local = node.countdown_area.rect().center()
     else:
         local = node.ports[where].pos()
+    # Scrolled into view, as you would: the canvas can be narrower than the flow (on the Windows runner the
+    # offscreen platform has no fonts, so the panels' text is wide and leaves the canvas about 110 px).
+    tab.view.centerOn(node.mapToScene(local))
     at = tab.view.mapFromScene(node.mapToScene(local))
     assert tab.view.viewport().rect().contains(at), (where, at)  # on screen
     seen, tries, done = [], [], []
@@ -753,7 +757,8 @@ def test_a_flow_running_in_another_tab_keeps_its_messages_to_its_own_log(win, qt
 # --- Data preview ------------------------------------------------------------------------
 
 def test_data_preview_shows_a_table_as_a_grid_and_each_output_and_why_a_failed_block_has_none(win, qtbot, tmp_path):
-    flow = write_flow(tmp_path / "preview.yaml", """
+    flow = tmp_path / "preview.yaml"
+    flow.write_text(textwrap.dedent("""
         blocks:
           manual:
             type: trigger.manual
@@ -771,7 +776,7 @@ def test_data_preview_shows_a_table_as_a_grid_and_each_output_and_why_a_failed_b
         edges:
           - manual.start -> make.after
           - manual.start -> broken.after
-    """)
+    """), encoding="utf-8")  # a flow file is UTF-8 (as Taskloom saves it), not the system's default encoding
     tab = win.open_flow(flow)
     win.run_flow(tab)
     wait_runs(qtbot, tab, 1)

@@ -3,10 +3,10 @@
 
 import datetime as dt
 import json
-import os
 import signal
 import sqlite3
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -20,6 +20,15 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialogButtonBox, QFileDialog, QLabel, QLineEdit
 
 from taskloom.editor.dialogs import AskDialog, PythonEnvDialog, RunDialog
+from taskloom.editor.safety import pid_alive
+
+
+def write_utf8(env, relpath: str, text: str) -> Path:
+    """env.write in UTF-8, as the editor saves flows and Taskloom reads them (env.write uses this computer's
+    default encoding, which on Windows cannot hold ✓ or 東京)."""
+    path = env.root / relpath
+    path.write_text(textwrap.dedent(text), encoding="utf-8")
+    return path
 
 
 def logs(env, run_id, block, level=None):
@@ -47,9 +56,7 @@ def stored_text(home) -> str:
 def gone(pid: int, within: float = 5) -> bool:
     end = time.monotonic() + within
     while time.monotonic() < end:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not pid_alive(pid):  # (os.kill(pid, 0) would send Ctrl+C on Windows)
             return True
         time.sleep(0.1)
     return False
@@ -138,7 +145,7 @@ def test_an_output_the_code_does_not_set_is_not_produced_and_what_needs_it_is_sk
 
 
 def test_print_goes_to_the_log_but_print_into_a_file_goes_into_the_file(env):
-    flow = env.write("flow.yaml", """
+    flow = write_utf8(env, "flow.yaml", """
         blocks:
           talk:
             type: logic.python
@@ -269,7 +276,7 @@ def test_a_dataframe_the_code_sets_reaches_the_next_block_as_a_table(env):
 
 
 def test_unusual_characters_large_values_and_values_that_cannot_be_saved_pass_on_intact(env):
-    flow = env.write("flow.yaml", """
+    flow = write_utf8(env, "flow.yaml", """
         blocks:
           make:
             type: logic.python
@@ -955,7 +962,7 @@ def test_logic_block_config_that_cannot_work_is_refused_by_validate(env, block, 
 
 
 def ask_flow(env, config, extra=""):
-    return env.write("flow.yaml", f"""
+    return write_utf8(env, "flow.yaml", f"""
         {extra}
         blocks:
           ask:

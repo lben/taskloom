@@ -39,6 +39,11 @@ def start_jvm(classpath: list[str], java_home: str | None = None):
                 jvm_path = jpype.getDefaultJVMPath()
             except jpype.JVMNotFoundException:
                 jvm_path = None
+            # JPype falls back to a Java elsewhere (e.g. /usr/lib/jvm) when the java_home setting has none:
+            # the setting is what you asked for, so a Java elsewhere does not count.
+            if jvm_path and java_home and not Path(os.fsdecode(jvm_path)).resolve().is_relative_to(
+                    Path(java_home).expanduser().resolve()):
+                jvm_path = None
             if not jvm_path or not Path(os.fsdecode(jvm_path)).is_file():
                 raise FileNotFoundError(
                     "Java was not found; set java_home in settings.yaml (or the JAVA_HOME "

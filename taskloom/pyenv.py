@@ -22,6 +22,10 @@ from .launch import frozen
 # pandas/polars/pyarrow when they happen to be installed there).
 HELPER = r'''
 import pickle, sys
+# The pipe to Taskloom is read as UTF-8 (on Windows it would otherwise get the ANSI code page, e.g. cp1252):
+# what you print reaches the log as written, so a password in it is masked.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 result_file = sys.argv[1]
 job = pickle.load(sys.stdin.buffer)  # never written to disk: it can hold passwords
 
@@ -134,8 +138,11 @@ def _no_window() -> int:
 
 def create(home, python: str | None = None) -> str:
     command = [python] if python else base_python(home)
-    result = subprocess.run(command + ["-m", "venv", str(env_dir(home))], capture_output=True, text=True,
-                            creationflags=_no_window())
+    try:
+        result = subprocess.run(command + ["-m", "venv", str(env_dir(home))], capture_output=True, text=True,
+                                creationflags=_no_window())
+    except OSError as e:  # named here: on Windows the error does not say which file
+        raise OSError(f"could not start the Python {command[0]}: {e.strerror or e}") from None
     if result.returncode != 0:
         raise RuntimeError(f"could not create the environment: {result.stderr.strip() or result.stdout.strip()}")
     version = subprocess.run([str(env_python(home)), "--version"], capture_output=True, text=True,
@@ -147,11 +154,13 @@ def pip(home, args: list[str]) -> int:
     """Run pip in the environment, printing its output as it goes."""
     if not env_python(home).exists():
         raise FileNotFoundError("there is no Python environment yet: create it first (taskloom env create)")
-    # Through a pipe: without a window on Windows, pip would otherwise print to a hidden console.
+    # Through a pipe: without a window on Windows, pip would otherwise print to a hidden console. In UTF-8 (on
+    # Windows a pipe would get the ANSI code page), passed on as it is: the editor reads Taskloom's output as UTF-8.
     proc = subprocess.Popen([str(env_python(home)), "-m", "pip", *args], stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, creationflags=_no_window())
+                            stderr=subprocess.STDOUT, creationflags=_no_window(),
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     for line in proc.stdout:
-        sys.stdout.write(line.decode(errors="replace"))
+        sys.stdout.buffer.write(line)
         sys.stdout.flush()
     return proc.wait()
 

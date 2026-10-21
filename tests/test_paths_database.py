@@ -15,6 +15,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -563,18 +564,30 @@ def test_a_chunk_size_of_zero_does_not_hang_the_run(jdbc_env):
         assert "chunk_size" in told(jdbc_env, run), told(jdbc_env, run)
 
 
-def test_stop_during_a_big_query_cancels_the_run(jdbc_env):
-    flow = query_flow(jdbc_env, "select x as id, 'row-' || x as label from system_range(1, 50000000)", chunk_size=10_000)
+def test_stop_during_a_big_query_cancels_the_run(jdbc_env, h2_server):
+    # Lazy execution: H2 sends the rows as they are fetched, the way a database server streams a big result. By
+    # default it first builds all 50 million in its memory (about 5 GB), which can take many minutes on a smaller
+    # computer before the first row comes.
+    add_connection(jdbc_env, h2_server, "big_db", "big", "",
+                   url=f"jdbc:h2:tcp://localhost:{h2_server['port']}/mem:big;LAZY_QUERY_EXECUTION=TRUE")
+    flow = query_flow(jdbc_env, "select x as id, 'row-' || x as label from system_range(1, 50000000)",
+                      connection="big_db", chunk_size=10_000)
     proc = jdbc_env.popen("run", flow, "--json-events", "--interactive")
+    deadline = threading.Timer(120, proc.kill)  # rows that never come fail the test instead of hanging it
+    deadline.start()
     try:
         for line in proc.stdout:  # wait until rows are streaming
             event = json.loads(line) if line.startswith("{") else {}
             if event.get("event") == "log" and event.get("block") == "q":
                 break
+        else:  # the run ended, or was ended at the deadline, before any rows streamed
+            pytest.fail("no rows streamed: " + proc.communicate(timeout=60)[1])
+        deadline.cancel()
         proc.stdin.write('{"cancel": true}\n')  # what the editor's Stop sends
         proc.stdin.flush()
         out, _ = proc.communicate(timeout=60)
     finally:
+        deadline.cancel()
         if proc.poll() is None:
             proc.kill()
             proc.wait()

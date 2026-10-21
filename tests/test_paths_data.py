@@ -9,7 +9,9 @@ import datetime as dt
 import decimal
 import io
 import json
+import textwrap
 import zipfile
+from pathlib import Path
 
 import polars as pl
 import xlsxwriter
@@ -27,12 +29,13 @@ def put(env, relpath, content):
     if isinstance(content, bytes):
         path.write_bytes(content)
     else:
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content, encoding="utf-8", newline="")
     return path
 
 
 def run(env, flow_text, *args):
-    flow = env.write("flows/flow.yaml", flow_text)
+    # UTF-8, as the editor saves flows and the runner reads them (not the system's default encoding).
+    flow = put(env, "flow.yaml", textwrap.dedent(flow_text))
     return env.taskloom("run", flow, *args)
 
 
@@ -1404,7 +1407,8 @@ def _grid(win) -> tuple[list[str], list[list[str]]]:
 
 
 def test_data_preview_shows_a_table_as_a_grid_with_its_types_dates_and_nulls(win, qtbot, tmp_path):
-    (tmp_path / "sales.csv").write_text("day,region,amount,note\n2026-10-01,Zürich,1.5,a\n2026-10-02,EU,,\n")
+    (tmp_path / "sales.csv").write_text("day,region,amount,note\n2026-10-01,Zürich,1.5,a\n2026-10-02,EU,,\n",
+                                        encoding="utf-8")
     tab = _run_in_editor(win, qtbot, tmp_path / "preview.yaml", """
         blocks:
           start: {type: trigger.manual}
@@ -1480,7 +1484,8 @@ def test_data_preview_shows_values_that_are_not_tables_and_each_output(win, qtbo
     assert tab.last["status"] == "success"
 
     _select(tab, "save")
-    assert not win.preview.text.isHidden() and "out/rows.csv" in win.preview.text.toPlainText()
+    # The written file's path, with this system's separator (out\rows.csv on Windows).
+    assert not win.preview.text.isHidden() and str(Path("out/rows.csv")) in win.preview.text.toPlainText()
 
     _select(tab, "make")
     ports = win.preview.ports

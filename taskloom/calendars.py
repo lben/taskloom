@@ -53,7 +53,7 @@ def load_calendar(name: str | None, calendars_dir: Path) -> Calendar:
         return Calendar("weekends")
     path = calendars_dir / f"{name}.yaml"
     if path.exists():
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         unknown = set(data) - {"weekend", "base", "add", "remove"}
         if unknown:
             raise ValueError(f"{path}: unknown keys {sorted(unknown)}")

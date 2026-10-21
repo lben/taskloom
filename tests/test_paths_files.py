@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import sys
+import textwrap
 
 import pytest
 
@@ -16,8 +17,8 @@ PERMISSIONS = pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, r
 
 def run(env, text):
     """Write the flow next to the files it works on and run it; (CLI result, run id)."""
-    flow = env.write("flow.yaml", text)
-    result = env.taskloom("run", flow)
+    make(env.root, {"flow.yaml": textwrap.dedent(text)})  # in UTF-8, as the editor saves flows
+    result = env.taskloom("run", env.root / "flow.yaml")
     return result, env.last_run()[0]
 
 
@@ -49,7 +50,7 @@ def make(root, files: dict):
     for rel, text in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_text(text, encoding="utf-8", newline="")  # exactly this text, \n line ends on Windows too
 
 
 # --- Copy Files ------------------------------------------------------------------------------------------
@@ -621,7 +622,7 @@ def test_delete_a_pattern_deletes_only_the_matches_in_that_folder(env):
     assert result.returncode == 0, result.stderr
     assert tree(env.root / "work") == {"keep.csv": "k", "sub/c.tmp": "c"}
     assert tree(env.root / "other") == {"d.tmp": "d"}
-    assert output(env, run_id, "delete", "deleted") == ["work/a.tmp", "work/b.tmp"]
+    assert output(env, run_id, "delete", "deleted") == [os.path.join("work", "a.tmp"), os.path.join("work", "b.tmp")]
 
 
 def test_delete_something_that_is_not_there_deletes_nothing(env):

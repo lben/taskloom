@@ -9,6 +9,7 @@ import ipaddress
 import re
 import shutil
 import ssl
+import textwrap
 import zipfile
 from email import policy
 
@@ -32,7 +33,10 @@ DATA = """
 
 
 def run(env, text, *args, name="flow.yaml"):
-    return env.taskloom("run", env.write(name, text), *args)
+    """Run the flow saved as the editor saves flows: UTF-8, not the system's encoding (cp1252 on Windows)."""
+    path = env.root / name
+    path.write_text(textwrap.dedent(text), encoding="utf-8")
+    return env.taskloom("run", path, *args)
 
 
 def html_of(msg) -> str:
@@ -593,7 +597,7 @@ def test_html_template_mistakes_fail_the_block_clearly_and_send_nothing(env, smt
     assert set(failed) == {"typo", "broken", "no_logo"}
     assert "totls" in failed["typo"] and "undefined" in failed["typo"]
     assert "Syntax" in failed["broken"]
-    assert "pictures/logo.png" in failed["no_logo"]
+    assert re.search(r"pictures[\\/]+logo\.png", failed["no_logo"])  # on Windows: 'pictures\\logo.png'
     assert smtp.messages == []
     assert env.block_status(env.last_run()[0])["mail"] == "skipped"
 

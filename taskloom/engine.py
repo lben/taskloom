@@ -417,10 +417,11 @@ class _Runner:
                 result = self._attempt(cls(config), ctx, own, spec.timeout, attempt_cancel)
                 produced = self._check_outputs(result, out_ports, ctx)
                 summary = _summary(produced)
-            except Cancelled:
-                self.emit({"event": "block_finished", "block": spec.id, "status": "cancelled", "attempts": attempt})
-                return "cancelled", {}
             except Exception as e:
+                # Stopped: whatever the block raised as it stopped (e.g. a closed query or connection) is not a failure.
+                if isinstance(e, Cancelled) or self.cancel.is_set():
+                    self.emit({"event": "block_finished", "block": spec.id, "status": "cancelled", "attempts": attempt})
+                    return "cancelled", {}
                 if attempt == retry.max_attempts:
                     return self._fail(spec, attempt, e, inputs)
                 delay = retry.delay_after(attempt)
