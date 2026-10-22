@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+# Never the real credential store (macOS Keychain, Windows Credential Manager): not in the runs the tests start, and
+# not in the test process either (a test that looks up a secret itself would otherwise pick the real one for the
+# rest of the session). A test that needs a store sets its own.
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+
 REPO = Path(__file__).resolve().parents[1]
 H2_URL = "https://repo1.maven.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar"
 H2_SHA1 = "4fcc05d966ccdb2812ae8b9a718f69226c0cf4e2"
