@@ -37,15 +37,18 @@ class FlowDocument(QObject):
     def __init__(self, data: dict | None = None, path: Path | None = None):
         super().__init__()
         self.data = data if data is not None else new_flow_data()
-        self.data.setdefault("params", {})
-        self.data.setdefault("blocks", {})
-        self.data.setdefault("edges", [])
+        self._fill_in_lists()
         self.path = path
         self.dirty = False
         self.renamed: dict[str, str] = {}  # old block name -> new, until the canvas has followed it
         self._place_unpositioned()
         self._undo: list[dict] = []
         self._redo: list[dict] = []
+
+    def _fill_in_lists(self):
+        """`params:`, `blocks:` or `edges:` with nothing after it (YAML reads None): none, as the runner reads it."""
+        for key, empty in (("params", {}), ("blocks", {}), ("edges", [])):
+            self.data[key] = self.data.get(key) or empty
 
     def _place_unpositioned(self):
         """Give blocks without a saved position one, in columns by how far along the flow they are."""
@@ -71,8 +74,9 @@ class FlowDocument(QObject):
         return cls(data, Path(path))
 
     def save(self, path: Path | None = None):
-        self.path = Path(path or self.path)
-        self.path.write_text(yaml.safe_dump(self.data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        path = Path(path or self.path)
+        path.write_text(yaml.safe_dump(self.data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        self.path = path  # only once written: a file that cannot be written leaves the flow where it was
         self.dirty = False
         self.changed.emit()
 
@@ -131,7 +135,7 @@ class FlowDocument(QObject):
 
     def add_note(self, x: float, y: float, text: str = "Text") -> str:
         self._change()
-        notes = self.data.setdefault("notes", {})
+        notes = self.data["notes"] = self.data.get("notes") or {}  # (`notes:` with nothing after it is None)
         n = 1
         while f"note_{n}" in notes:
             n += 1
@@ -336,9 +340,7 @@ class FlowDocument(QObject):
         """Put back recovered unsaved changes (they stay unsaved until you save)."""
         self._change()
         self.data = data
-        self.data.setdefault("params", {})
-        self.data.setdefault("blocks", {})
-        self.data.setdefault("edges", [])
+        self._fill_in_lists()
         self._done()
 
     def set_params(self, params: dict):

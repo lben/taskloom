@@ -329,8 +329,8 @@ class MainWindow(QMainWindow):
         self.validate_action = act(m, "Validate", lambda: self.validate(self.current), "F7")
         m = bar.addMenu("&Tools")
         act(m, "Connections…", self.edit_connections)
-        act(m, "Settings…", lambda: SettingsDialog(self.home, self).exec())
-        act(m, "Python environment…", lambda: PythonEnvDialog(self.home, self).exec())
+        act(m, "Settings…", lambda: dialogs.open_dialog(self, SettingsDialog, self.home))
+        act(m, "Python environment…", lambda: dialogs.open_dialog(self, PythonEnvDialog, self.home))
         act(m, "Check flows…", lambda: self.check_flows())
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
@@ -459,9 +459,14 @@ class MainWindow(QMainWindow):
             if not chosen:
                 return False
             path = Path(chosen)
-        if path.resolve() != tab.doc.path:
+        before = tab.doc.path
+        try:
+            tab.doc.save(path.resolve())
+        except OSError as e:  # e.g. a read-only file, or a folder you may not write to
+            QMessageBox.warning(self, "Cannot save flow", f"{e}\n\nThe changes are not saved.")
+            return False
+        if tab.doc.path != before:
             tab.seen_up_to = None  # another file: which of its runs you saw is read again
-        tab.doc.save(path.resolve())
         self.safety.drop_copy(tab.tab_id)
         self._load_last_run(tab)
         self._sync_schedule(tab)
@@ -469,23 +474,30 @@ class MainWindow(QMainWindow):
         return True
 
     def edit_connections(self):
-        ConnectionsDialog(self.home, self).exec()
+        dialogs.open_dialog(self, ConnectionsDialog, self.home)
         self.properties.refresh()  # new or renamed connections show up in the block's lists
 
     def close_tab(self, tab: FlowTab | None) -> bool:
-        if tab is None:
+        if tab is None or not self._may_close(tab):
             return False
+        self._remove_tab(tab)
+        return True
+
+    def _may_close(self, tab: FlowTab) -> bool:
+        """Its unsaved changes saved or discarded, as you answer; False if you cancel (or saving fails)."""
         self._finish_editing(tab)  # what is being typed is an unsaved change too
         if tab.doc.dirty:
             answer = QMessageBox.question(self, "Unsaved changes", f"Save changes to {tab.doc.title}?",
                                           QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if answer == QMessageBox.Cancel or answer == QMessageBox.Save and not self.save(tab):
                 return False
+        return True
+
+    def _remove_tab(self, tab: FlowTab):
         tab.autosave.stop()
         self.safety.drop_copy(tab.tab_id)
         self.tabs.removeTab(self.tabs.indexOf(tab))
         self._save_session()
-        return True
 
     def _on_tab_changed(self, index):
         tab = self.current
@@ -1231,11 +1243,12 @@ class MainWindow(QMainWindow):
                     run.proc.kill()
         self._save_session()
         self._quitting = True  # closing the tabs below must not empty the remembered session
+        if not all(self._may_close(tab) for tab in self.tabs_list()):  # cancelled: every flow stays open
+            self._quitting = False
+            event.ignore()
+            return
         for tab in self.tabs_list():
-            if not self.close_tab(tab):
-                self._quitting = False
-                event.ignore()
-                return
+            self._remove_tab(tab)
         self.safety.stop()
         event.accept()
 

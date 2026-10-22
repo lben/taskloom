@@ -624,7 +624,7 @@ class PropertiesPanel(QScrollArea):
                     self._set_names(key, f, convert(w.text()))
                 else:
                     self._set(key, convert(w.text()))
-            except ValueError as e:
+            except (ValueError, yaml.YAMLError) as e:  # (YAML: a plugin field type's value, not finished)
                 self.error.setText(f"{key}: {e}")
                 self.error.show()
 
@@ -667,10 +667,10 @@ class PropertiesPanel(QScrollArea):
         return box
 
     def _open_connections(self, key, select=None, new_kind=None):
-        from .dialogs import ConnectionsDialog
+        from .dialogs import ConnectionsDialog, open_dialog
 
-        dialog = ConnectionsDialog(self.home, self.window(), select=select, new_kind=new_kind)
-        if dialog.exec() and new_kind and dialog.created in dialog.conns:
+        dialog = open_dialog(self.window(), ConnectionsDialog, self.home, select=select, new_kind=new_kind)
+        if dialog and new_kind and dialog.created in dialog.conns:
             self._set(key, dialog.created)  # use the connection just created
         self.refresh()
 
@@ -893,11 +893,18 @@ class ParametersPanel(QWidget):
     def _commit(self):
         if self.doc is None:
             return
-        params, problems = {}, []
-        for name, type_, kind, value in self._rows():
-            if not IDENTIFIER.match(name) or name in params:
-                problems.append(f"'{name}' is not a valid, unique name")
-                continue
+        # A name that is not allowed is kept, flagged (as the runner flags it), for you to put right. The name of
+        # another parameter is refused: the one renamed keeps its name (the rows are the flow's params, in order).
+        before, params, problems = list(self.doc.data["params"]), {}, []
+        rows = list(self._rows())
+        names = [name for name, *_ in rows]
+        for r, (name, type_, kind, value) in enumerate(rows):
+            if names.count(name) > 1 and r < len(before) and name != before[r]:
+                problems.append(f"'{name}' is the name of another parameter")
+                name = names[r] = before[r]
+                self.table.blockSignals(True)
+                self.table.item(r, 0).setText(name)
+                self.table.blockSignals(False)
             params[name] = {"type": type_, ("expr" if kind == "expression" else "value"): value}
         self._committing = True
         try:
@@ -912,7 +919,8 @@ class ParametersPanel(QWidget):
         day = self.as_of.date().toPython()
         now = dt.datetime.combine(day, dt.datetime.now().time())
         cal_name = self.doc.data.get("calendar") or self._setting("calendar")
-        values, notes = {}, list(problems)
+        values, notes = {}, [*problems, *(f"'{name}' is not a valid, unique name (letters, digits and _)"
+                                          for name, *_ in self._rows() if not IDENTIFIER.match(name))]
         try:
             calendar = load_calendar(cal_name, self.home.calendars_dir)
             funcs = functions(now, calendar, lambda n: load_calendar(n, self.home.calendars_dir))

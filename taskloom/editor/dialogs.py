@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -17,8 +18,20 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 
 from ..block import IDENTIFIER
 from ..config import SETTINGS_DEFAULTS
-from ..launch import runner_command
+from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
+
+
+def open_dialog(parent, cls, home, **kw) -> QDialog | None:
+    """Open a dialog of your files (settings, connections); the dialog if you closed it with OK or Save. A mistake
+    in one of the files, e.g. made by hand, is named instead: the dialog would write over what the file holds."""
+    try:
+        dialog = cls(home, parent, **kw)
+    except ValueError as e:
+        QMessageBox.warning(parent, "Mistake in a settings file",
+                            f"{e}\n\nIt is in {home.root}: put it right, then try again.")
+        return None
+    return dialog if dialog.exec() else None
 
 
 class RunDialog(QDialog):
@@ -241,9 +254,12 @@ class ConnectionsDialog(QDialog):
         enabled = self.current is not None
         for w in self.editor_widgets:
             w.setEnabled(enabled)
-        self.help.setText(self.HELP[kind] if enabled else "Click New… to add a connection.")
+        text = self.HELP.get(kind, f"A connection of a kind for blocks of your own ({kind}): its settings are kept "
+                                   "as they are in connections.yaml; change them there.")
+        self.help.setText(text if enabled else "Click New… to add a connection.")
         for key, edit in self.edits.items():
-            self.form.setRowVisible(self.jar_row if key == "jars" else edit, enabled and key in self.FIELDS[kind])
+            self.form.setRowVisible(self.jar_row if key == "jars" else edit,
+                                    enabled and key in self.FIELDS.get(kind, ()))
         self.edits["port"].setPlaceholderText({"ssh": "22", "smtp": "25 (or 587 with starttls, 465 with ssl)"}.get(kind, ""))
         for w in (self.props, self.props_label, self.add_prop, self.remove_prop):
             w.setVisible(enabled and kind == "jdbc")
@@ -283,8 +299,8 @@ class ConnectionsDialog(QDialog):
         if self.current is None or self.current not in self.conns:
             return
         kind, old = self._kind(), self.conns[self.current]
-        conn = {"kind": kind}
-        for key in self.FIELDS[kind]:
+        conn = {"kind": kind} if kind in self.FIELDS else {**old, "kind": kind}  # a kind of your blocks: as written
+        for key in self.FIELDS.get(kind, ()):
             text = self.edits[key].text().strip()
             if key == "jars":
                 conn["jars"] = [j.strip() for j in text.split(";") if j.strip()]
@@ -314,8 +330,11 @@ class ConnectionsDialog(QDialog):
         self._store_current()
         self.current = name or None
         conn = self.conns.get(name, {})
+        kind = conn.get("kind", "jdbc")
         self.kind.blockSignals(True)
-        self.kind.setCurrentIndex(max(self.kind.findData(conn.get("kind", "jdbc")), 0))
+        if self.kind.findData(kind) < 0:  # a kind for blocks of your own (fields.Connection("ftp"))
+            self.kind.addItem(str(kind), kind)
+        self.kind.setCurrentIndex(self.kind.findData(kind))
         self.kind.blockSignals(False)
         props = dict(conn.get("properties") or {})
         jars = conn.get("jars") or []
@@ -415,6 +434,8 @@ class ConnectionsDialog(QDialog):
         proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("TASKLOOM_HOME", str(self.home.root))
+        # Started as the editor starts runs: its output is then in UTF-8, as read below.
+        env.insert(ARGS_VARIABLE, json.dumps(["connection", "test", self.current]))
         proc.setProcessEnvironment(env)
 
         def done(code, _status):
@@ -430,7 +451,7 @@ class ConnectionsDialog(QDialog):
 
         proc.finished.connect(done)
         program, *args = runner_command()
-        proc.start(program, args + ["connection", "test", self.current])
+        proc.start(program, args)
 
     def _save(self):
         self._write()
@@ -444,10 +465,17 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.resize(640, 420)
         self.settings = home.settings()
+        numbers = {}
+        for key, value in (("keep_runs", self.settings["keep_runs"]),
+                           ("max_concurrent_runs", self.settings["max_concurrent_runs"] or 0)):
+            try:
+                numbers[key] = int(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"settings.yaml: {key} must be a whole number, got {value!r}") from None
         form = QFormLayout(self)
         self.calendar = QLineEdit(self.settings["calendar"] or "", placeholderText="weekends only, e.g. US or a calendars/<name>.yaml")
-        self.keep_runs = QSpinBox(minimum=1, maximum=100000, value=int(self.settings["keep_runs"]))
-        self.max_runs = QSpinBox(minimum=0, maximum=1000, value=int(self.settings["max_concurrent_runs"] or 0),
+        self.keep_runs = QSpinBox(minimum=1, maximum=100000, value=numbers["keep_runs"])
+        self.max_runs = QSpinBox(minimum=0, maximum=1000, value=numbers["max_concurrent_runs"],
                                  specialValueText="unlimited")
         self.java_home = QLineEdit(self.settings["java_home"] or "", placeholderText="uses JAVA_HOME if empty")
         browse = QToolButton(text="…")
@@ -839,12 +867,13 @@ class PythonEnvDialog(QDialog):
         env = QProcessEnvironment.systemEnvironment()
         env.insert("TASKLOOM_HOME", str(self.home.root))
         env.insert("PYTHONUNBUFFERED", "1")
+        env.insert(ARGS_VARIABLE, json.dumps(args))  # as the editor starts runs: output in UTF-8
         self.proc.setProcessEnvironment(env)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         self.proc.readyReadStandardOutput.connect(lambda: self._add_output(bytes(self.proc.readAllStandardOutput())))
         self.proc.finished.connect(self._finished)
         program, *rest = runner_command()
-        self.proc.start(program, rest + args)
+        self.proc.start(program, rest)
         self._show_status()
 
     def _finished(self, code, _status):

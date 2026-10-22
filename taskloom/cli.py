@@ -376,10 +376,13 @@ def main(argv=None) -> int:
 def run_cli(argv=None):
     """Entry point of the `taskloom` program."""
     # On Windows, printed into a pipe or a file, stdout is in the ANSI code page (e.g. cp1252): text it cannot
-    # show (a flow named with → or 📈) is written escaped, as on stderr, instead of failing the command.
-    if sys.stdout is not None:  # None under pythonw (no console)
-        sys.stdout.reconfigure(errors="backslashreplace")
-    if ARGS_VARIABLE in os.environ:  # how the editor starts its runs (not passed on to their blocks)
+    # show (a flow named with → or 📈) is written escaped, as on stderr, instead of failing the command. The
+    # editor reads the output as UTF-8, so started by the editor (its arguments in ARGS_VARIABLE) it writes UTF-8.
+    encoding = "utf-8" if ARGS_VARIABLE in os.environ else None
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:  # None under pythonw (no console)
+            stream.reconfigure(encoding=encoding, errors="backslashreplace")
+    if ARGS_VARIABLE in os.environ:  # how the editor starts it (not passed on to the blocks of a run)
         argv = json.loads(os.environ.pop(ARGS_VARIABLE))
     code = main(argv)
     jpype = sys.modules.get("jpype")
