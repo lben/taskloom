@@ -254,7 +254,8 @@ the newer one saved), and starting at login switches to the newest version you o
 One scheduler service runs every scheduled flow. Each run starts at its time (within a
 second). The service checks at least every 15 seconds and then rereads changed flow files,
 so a new cron line applies shortly after you save, without restarting it; a new or changed
-schedule counts from that moment (nothing before it counts as missed).
+schedule, or one turned back on (Active ticked again, the flow scheduled again), counts from
+that moment (nothing before it counts as missed).
 
 At each check, of the times that came since the previous check only the most recent can be
 on time, and only if it is at most 2 minutes old; the others were missed (the scheduler
@@ -283,7 +284,8 @@ stops the app and everything it started, forcing whatever has not stopped after 
 
 On a server without root or crontab, run `taskloom scheduler --headless` there and
 list the server in the `keeper` setting (Tools → Settings) on your PC: your
-scheduler checks it every 5 minutes and starts it again after a server reboot.
+scheduler checks it every 5 minutes and starts it again after a server reboot (or tells
+you why it could not).
 
 ## Checking flows after an update
 

@@ -1022,11 +1022,13 @@ class MainWindow(QMainWindow):
         """A saved flow with a Schedule block is run by the scheduler; without one it is not."""
         scheduled = bool(schedules_of(tab.doc.data)[0])
         try:
-            was = tab.doc.path in self.home.scheduled_flows()
-        except ValueError:
-            was = False
-        if scheduled != was:
-            self.home.set_scheduled(tab.doc.path, scheduled)
+            if scheduled != (tab.doc.path in self.home.scheduled_flows()):
+                self.home.set_scheduled(tab.doc.path, scheduled)
+        except ValueError as e:  # e.g. edited by hand: writing it again would lose the flows it lists
+            if scheduled:
+                QMessageBox.warning(self, "Flow not scheduled", f"This flow is saved, but not scheduled: {e}\n\n"
+                                    "Put that file right, then save the flow again.")
+            scheduled = False
         self._refresh_schedule(tab)
         if scheduled and not self.scheduler_running():
             if paused(self.home):

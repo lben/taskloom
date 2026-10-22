@@ -99,7 +99,10 @@ def send_notice(home, flow_notify, event: str, subject: str, body: Html) -> bool
     events, to, conn_name = notify_settings(home, flow_notify)
     if event not in events or not to or not conn_name:
         return False
-    conn = home.resolve_secrets(home.connections()[conn_name])
+    connections = home.connections()
+    if conn_name not in connections:
+        raise ValueError(f"no connection named '{conn_name}' in connections.yaml")
+    conn = home.resolve_secrets(connections[conn_name])
     send(conn, build_message(conn["sender"], to, subject, body))
     return True
 

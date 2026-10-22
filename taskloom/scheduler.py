@@ -33,6 +33,7 @@ TICK_SECONDS = 15
 ON_TIME_GRACE = dt.timedelta(minutes=2)  # later than this, a run counts as missed
 HEARTBEAT_STALE_SECONDS = 120
 KEEPER_INTERVAL_SECONDS = 300
+KEEPER_START_SECONDS = 30  # how long the keeper waits for a server scheduler it started to check
 CATCH_UP_LIMIT = 100
 
 
@@ -43,7 +44,8 @@ class _Run:
     proc: subprocess.Popen
     run_id: int | None = None
     status: str | None = None
-    errors: list = field(default_factory=list)
+    errors: list = field(default_factory=list)  # what failed: "<block>: <error>"
+    output: list = field(default_factory=list)  # its last lines that are not events (e.g. why it was refused)
     reader: threading.Thread | None = None
 
 
@@ -54,8 +56,10 @@ class Scheduler:
         self.runs: list[_Run] = []
         self.queued: dict[str, list[dt.datetime]] = {}  # per flow, waiting for its previous run
         self.waiting: list[tuple[str, dt.datetime]] = []  # waiting for a free slot (max_concurrent_runs)
-        self.messages: queue.Queue = queue.Queue()  # from the keeper thread
+        self.messages: queue.Queue = queue.Queue()  # from the keeper thread and the emails being sent
         self._flows: dict[str, tuple[float, object]] = {}
+        self._sending: list[threading.Thread] = []  # emails being sent
+        self._list_error: str | None = None  # why scheduled.yaml cannot be read (told once)
         home.root.mkdir(parents=True, exist_ok=True)
         self._db = history_connect(home.history_db)
         self._db.execute("CREATE TABLE IF NOT EXISTS schedule_state (trigger TEXT PRIMARY KEY, last TEXT NOT NULL)")
@@ -96,14 +100,16 @@ class Scheduler:
     def tick(self, now: dt.datetime | None = None):
         now = now or dt.datetime.now()
         self._poll()
-        while not self.messages.empty():
-            self.notify(*self.messages.get())
-        for path in self.home.scheduled_flows():
+        paths = self._scheduled_flows()
+        on, unreadable = set(), []
+        for path in paths or []:
             flow = self._load(path)
-            if flow is None:
+            if flow is None:  # (its schedules keep their state until it can be read again)
+                unreadable.append(f"{path}#")
                 continue
             for i, trigger in enumerate(flow.triggers):
                 key = f"{path}#{trigger.block or i}#{trigger.text}"
+                on.add(key)
                 last = self._last(key)
                 if last is None:  # a new schedule starts from now; nothing is "missed"
                     self._set_last(key, now)
@@ -124,11 +130,32 @@ class Scheduler:
                                    f"{flow.name}: {missed} run(s) were due while the scheduler was off")
                 for n, as_of in enumerate(to_run):
                     self._request(str(path), flow, (as_of, trigger.block), force_queue=n > 0)
+        if paths is not None:
+            # A schedule that is off (its Schedule block's Active unticked, its flow not in scheduled.yaml) is
+            # forgotten: on again, it starts from then as a new one does, and the times while it was off neither
+            # run nor count as missed.
+            stored = {row[0] for row in self._db.execute("SELECT trigger FROM schedule_state")}
+            off = [key for key in stored - on if not key.startswith(tuple(unreadable))]
+            self._db.executemany("DELETE FROM schedule_state WHERE trigger=?", [(key,) for key in off])
         self._write_heartbeat()
 
+    def _scheduled_flows(self) -> list[Path] | None:
+        """The flows in scheduled.yaml; None (and one notification, until that changes) if it cannot be read."""
+        try:
+            paths = self.home.scheduled_flows()
+        except (OSError, ValueError) as e:  # e.g. edited by hand: you are told, and the service goes on
+            if str(e) != self._list_error:
+                self.notify("The list of scheduled flows cannot be read",
+                            f"{e}\n(no scheduled flow starts until it is put right)")
+            self._list_error = str(e)
+            return None
+        self._list_error = None
+        return paths
+
     def _request(self, path: str, flow, when: tuple, force_queue: bool = False):
-        """`when` is (due time, Schedule block or None)."""
-        if any(r.flow == path for r in self.runs) or self.queued.get(path):
+        """`when` is (due time, Schedule block or None). A run waiting for a free slot counts as going."""
+        if (any(r.flow == path for r in self.runs) or self.queued.get(path)
+                or any(waiting == path for waiting, _ in self.waiting)):
             policy = "queue" if force_queue else flow.overlap
             if policy == "skip":
                 self._tell(flow, "skipped", "Run skipped", f"{flow.name}: the previous run is still going")
@@ -162,8 +189,11 @@ class Scheduler:
                                       "--as-of", as_of.isoformat(sep=" ", timespec="minutes")]
         if block:
             command += ["--trigger", block]
+        # errors="replace": a program the run starts (Java, a console tool) may write bytes that are not text in
+        # this encoding straight to the output; reading must go on, or the run hangs once the pipe is full.
         proc = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            errors="replace",
             env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -178,7 +208,9 @@ class Scheduler:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                run.errors = (run.errors + [line.rstrip()])[-20:]
+                event = None
+            if not isinstance(event, dict):  # not an event: what the run or a program it started printed
+                run.output = (run.output + [line.rstrip()])[-20:]
                 continue
             if event.get("event") == "run_started":
                 run.run_id = event["run_id"]
@@ -197,7 +229,7 @@ class Scheduler:
                 history.close()
             if run.status != "success":
                 name = Path(run.flow).stem
-                detail = run.errors[-1] if run.errors else f"exit code {run.proc.returncode}"
+                detail = (run.errors or run.output or [f"exit code {run.proc.returncode}"])[-1]
                 self.notify(f"{name} {run.status or 'failed'}", detail)
                 if run.status is None:  # it crashed, so it could not email about itself
                     self._tell(self._load(Path(run.flow)), "failure", f"{name} crashed", detail, desktop=False)
@@ -205,31 +237,43 @@ class Scheduler:
                 self._start_or_wait(run.flow, self.queued[run.flow].pop(0))
         while self.waiting and not self._at_limit():
             self._start(*self.waiting.pop(0))
+        while not self.messages.empty():
+            self.notify(*self.messages.get())
 
     def _tell(self, flow, event: str, title: str, message: str, desktop: bool = True):
-        """A desktop notification, plus an email if the flow's notify settings ask for this event."""
+        """A desktop notification, plus an email if the flow's notify settings ask for this event. The email is
+        sent on a thread of its own, so a mail server slow to answer holds up no run (a problem is told after)."""
         if desktop:
             self.notify(title, message)
-        try:
-            mail.send_notice(self.home, flow.notify if flow else None, event, f"[Taskloom] {title}",
-                             Html(f"<p>{html.escape(message)}</p>"))
-        except Exception as e:
-            self.notify("Cannot send email", str(e))
+        flow_notify = flow.notify if flow else None
+
+        def send():
+            try:
+                mail.send_notice(self.home, flow_notify, event, f"[Taskloom] {title}",
+                                 Html(f"<p>{html.escape(message)}</p>"))
+            except Exception as e:
+                self.messages.put(("Cannot send email", str(e)))
+
+        sending = threading.Thread(target=send, daemon=True)
+        sending.start()
+        self._sending = [t for t in self._sending if t.is_alive()] + [sending]
 
     def _write_heartbeat(self):
         (self.home.root / "scheduler.heartbeat").write_text(str(int(time.time())))
 
     def wait_for_runs(self, timeout: float = 120):
-        """Tick until every started and queued run has finished (used by tests and on shutdown)."""
+        """Poll until every started and queued run has finished and every email is sent (used by tests)."""
         deadline = time.monotonic() + timeout
-        while (self.runs or any(self.queued.values()) or self.waiting) and time.monotonic() < deadline:
+        while (self.runs or any(self.queued.values()) or self.waiting
+               or any(t.is_alive() for t in self._sending)) and time.monotonic() < deadline:
             time.sleep(0.2)
             self._poll()
+        self._poll()  # what the last emails told
 
     def seconds_to_next_check(self, now: dt.datetime) -> float:
         """How long the loop waits after its check at `now`: until the soonest due time, so that run starts
         on time, and at most TICK_SECONDS (edited flows, finished and queued runs)."""
-        times = [t for path in self.home.scheduled_flows() if (flow := self._load(path))
+        times = [t for path in self._scheduled_flows() or [] if (flow := self._load(path))
                  for t in (trigger.next_after(now) for trigger in flow.triggers) if t]
         seconds = (min(times) - now).total_seconds() if times else TICK_SECONDS
         return max(0.0, min(TICK_SECONDS, seconds))
@@ -238,23 +282,39 @@ class Scheduler:
 
     def check_servers(self):
         """For each server in the keeper setting: start its scheduler if it is not running."""
-        for entry in self.home.settings()["keeper"] or []:
+        try:
+            entries = self.home.settings()["keeper"] or []
+        except (OSError, ValueError) as e:  # you are told, and the keeper goes on checking
+            self.messages.put(("Mistake in the settings", str(e)))
+            return
+        for entry in entries:
             name = entry.get("connection") if isinstance(entry, dict) else entry
             try:
                 if not isinstance(entry, dict):
                     raise ValueError("write a keeper entry as {connection: ..., command: ..., home: ...} "
                                      "(Tools → Settings writes it so)")
                 remote_home = entry.get("home", "~/.taskloom")
-                session = ssh.Session(self.home.resolve_secrets(self.home.connections()[name]), self.home)
+                connections = self.home.connections()
+                if name not in connections:
+                    raise ValueError(f"no connection named '{name}' in connections.yaml")
+                session = ssh.Session(self.home.resolve_secrets(connections[name]), self.home)
                 try:
                     if self._remote_alive(session, remote_home):
                         continue
                     command = f"env TASKLOOM_HOME={ssh.remote_path(remote_home)} {entry['command']} scheduler --headless"
-                    code, _, err = session.run(ssh.start_detached(
+                    heartbeat = ssh.remote_path(f"{remote_home}/scheduler.heartbeat")
+                    # (without the old heartbeat, a heartbeat says that the one started now checks)
+                    code, _, err = session.run(f"rm -f {heartbeat} && " + ssh.start_detached(
                         command, "~", f"{remote_home}/scheduler.log", f"{remote_home}/scheduler.pid"))
                     if code != 0:
                         raise RuntimeError(err.strip())
-                    self.messages.put(("Server scheduler restarted", f"{name}: the scheduler was not running and was started"))
+                    problem = self._start_problem(session, remote_home)
+                    if problem:
+                        self.messages.put(("Server scheduler not started",
+                                           f"{name}: the scheduler could not be started: {problem}"))
+                    else:
+                        self.messages.put(("Server scheduler restarted",
+                                           f"{name}: the scheduler was not running and was started"))
                 finally:
                     session.close()
             except Exception as e:
@@ -269,6 +329,22 @@ class Scheduler:
         lines = out.split()
         numbers = [int(x) for x in lines[1:] if x.isdigit()]
         return lines[:1] == ["up"] and len(numbers) == 2 and numbers[1] - numbers[0] < HEARTBEAT_STALE_SECONDS
+
+    @staticmethod
+    def _start_problem(session, remote_home: str) -> str | None:
+        """None once the scheduler just started has checked (written its heartbeat); else why it has not."""
+        exit_file, heartbeat, log = (ssh.remote_path(f"{remote_home}/{name}")
+                                     for name in (ssh.exit_file("scheduler.pid"), "scheduler.heartbeat", "scheduler.log"))
+        for _ in range(KEEPER_START_SECONDS):
+            time.sleep(1)
+            _, out, _ = session.run(f'echo "$(cat {exit_file} 2>/dev/null)"; echo "$(cat {heartbeat} 2>/dev/null)"; '
+                                    f"tail -n 1 {log} 2>/dev/null")
+            exited, beat, last = [part.strip() for part in (out.split("\n", 2) + ["", ""])[:3]]
+            if exited:
+                return f"it stopped at once (exit code {exited})" + (f": {last}" if last else "")
+            if beat:
+                return None
+        return f"it has not checked anything {KEEPER_START_SECONDS} s after it started (see {remote_home}/scheduler.log)"
 
 
 def _keeper_loop(scheduler: Scheduler, stop: threading.Event):
@@ -418,17 +494,22 @@ def startup_file() -> Path:
 
 def startup_script(home: Home) -> str:
     """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
-    # Unless you turned it off: then it stays off until you turn it on.
-    command = " ".join(f'"{a}"' if " " in a else a for a in [*windowed_command(), "scheduler", "--unless-paused"])
+    # The program is quoted, so a folder named e.g. R&D is not read as two commands.
+    program = " ".join(f'"{_in_script(a)}"' for a in windowed_command())
     # cmd.exe reads a script in the console's code page (e.g. 437): the lines after chcp are read as the UTF-8
     # they are written in, so a folder such as C:\Users\José is not garbled.
-    return (f'@echo off\nchcp 65001 >nul\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={home.root}"\n'
-            f'start "" {command}\n')
+    return (f'@echo off\nchcp 65001 >nul\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={_in_script(home.root)}"\n'
+            f'start "" {program} scheduler --unless-paused\n')  # unless you turned it off: then it stays off
+
+
+def _in_script(text) -> str:
+    """Text as a cmd.exe script writes it: also inside quotes, cmd.exe reads %NAME% as a variable."""
+    return str(text).replace("%", "%%")
 
 
 def startup_script_outdated(text: str, home: Home) -> bool:
     """A start-at-login script for this Taskloom folder that starts an older Taskloom than this one."""
-    if f'TASKLOOM_HOME={home.root}"' not in text:
+    if f'TASKLOOM_HOME={_in_script(home.root)}"' not in text:
         return False  # another Taskloom folder's: not ours to change
     import re
 

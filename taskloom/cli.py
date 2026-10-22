@@ -42,7 +42,15 @@ def _print_event(event: dict):
 
 
 def _print_json(event: dict):
-    print(json.dumps(event, default=str), flush=True)
+    try:
+        print(json.dumps(event, default=str), flush=True)
+    except OSError:
+        # Nothing reads them any more (e.g. the scheduler service was turned off): the run goes on, and what it
+        # prints from now on goes nowhere.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        for stream in (sys.stdout, sys.stderr):
+            os.dup2(devnull, stream.fileno())
+        os.close(devnull)
 
 
 class StdinControl:
