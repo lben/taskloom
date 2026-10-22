@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
 from ..engine import lines as start_lines
-from ..flow import _EDGE, FlowError, flow_from_data
+from ..flow import _EDGE, FlowError, flow_from_data, read_flow_file
 
 UNDO_LIMIT = 200
 
@@ -68,7 +68,7 @@ class FlowDocument(QObject):
 
     @classmethod
     def load(cls, path: Path) -> "FlowDocument":
-        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        data = read_flow_file(Path(path)) or {}
         if not isinstance(data, dict):
             raise ValueError(f"{path}: not a flow file")
         return cls(data, Path(path))

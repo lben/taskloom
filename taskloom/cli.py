@@ -219,6 +219,8 @@ def cmd_check(args, home: Home) -> int:
     from . import upgrade
 
     registry = discover(home.blocks_dir)
+    for message in registry.warnings:  # e.g. a block file that did not load is why its block type is unknown
+        print(f"warning: {message}", file=sys.stderr)
     paths = [Path(p) for p in args.flows] or home.scheduled_flows()
     if not paths:
         print("no flows to check: name them, e.g. taskloom check my-flow.yaml (without names: the scheduled flows)")

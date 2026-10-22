@@ -55,6 +55,8 @@ class Retry:
     def parse(cls, data) -> "Retry":
         if not data:
             return cls()
+        if not isinstance(data, dict):
+            raise ValueError(f"retry looks like {{policy: fixed, delay: 30s, max_attempts: 3}}, got {data!r}")
         data = dict(data)
         policy = data.pop("policy", "none")
         if policy not in ("none", "fixed", "exponential"):
@@ -64,15 +66,20 @@ class Retry:
         unknown = set(data) - allowed
         if unknown:
             raise ValueError(f"unknown retry setting(s) for policy {policy}: {sorted(unknown)}")
-        retry = cls(policy=policy, max_attempts=1 if policy == "none" else int(data.get("max_attempts", 3)))
+        retry = cls(policy=policy)
         if "delay" in data:
             retry.delay = parse_duration(data["delay"])
         for key in ("initial", "max_delay"):
             if key in data:
                 setattr(retry, key, parse_duration(data[key]))
-        retry.factor = float(data.get("factor", retry.factor))
-        retry.jitter = float(data.get("jitter", retry.jitter))
-        if retry.max_attempts < 1 or not 0 <= retry.jitter <= 1 or retry.factor < 1:
+        try:
+            retry.max_attempts = 1 if policy == "none" else int(data.get("max_attempts", 3))
+            retry.factor = float(data.get("factor", retry.factor))
+            retry.jitter = float(data.get("jitter", retry.jitter))
+            valid = retry.max_attempts >= 1 and retry.factor >= 1 and 0 <= retry.jitter <= 1
+        except (TypeError, ValueError):  # not a number, e.g. max_attempts: three
+            valid = False
+        if not valid:
             raise ValueError("retry needs max_attempts >= 1, factor >= 1 and jitter between 0 and 1")
         return retry
 
@@ -120,11 +127,40 @@ class Flow:
     edges: list[Edge]
 
 
+class _FlowLoader(yaml.SafeLoader):
+    """YAML as a flow file is read. A name written twice in one place is an error (plain YAML keeps the last one,
+    dropping the other without a word), and a name such as yes or off is that name (plain YAML reads it as
+    true / false, so a block named yes would not be the 'yes' its connections name)."""
+
+    def construct_mapping(self, node, deep=False):
+        lines = {}
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:bool":
+                key_node.tag = "tag:yaml.org,2002:str"
+            if isinstance(key_node, yaml.ScalarNode) and key_node.tag != "tag:yaml.org,2002:merge":
+                key, line = self.construct_object(key_node), key_node.start_mark.line + 1
+                if key in lines:
+                    raise yaml.constructor.ConstructorError(
+                        None, None, f"'{key}' is written twice, on lines {lines[key]} and {line}")
+                lines[key] = line
+        return super().construct_mapping(node, deep)
+
+
+def read_flow_file(path: Path):
+    """What the flow file at `path` holds. Raises OSError, or ValueError saying why it is not readable YAML."""
+    try:
+        return yaml.load(path.read_text(encoding="utf-8"), _FlowLoader)
+    except UnicodeDecodeError as e:  # e.g. UTF-16, as Windows PowerShell writes
+        raise ValueError(f"not UTF-8 text, save it as UTF-8 ({e})") from None
+    except yaml.YAMLError as e:
+        raise ValueError(str(e)) from None
+
+
 def load_flow(path) -> Flow:
     path = Path(path)
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as e:
+        data = read_flow_file(path)
+    except (OSError, ValueError) as e:
         raise FlowError([f"cannot read {path}: {e}"]) from None
     return flow_from_data(data, path)
 
@@ -134,12 +170,16 @@ def flow_from_data(data, path: Path) -> Flow:
     if not isinstance(data, dict):
         raise FlowError([f"{path}: expected a mapping at the top level"])
     errors = []
-    if data.get("taskloom", FORMAT_VERSION) != FORMAT_VERSION:
-        errors.append(f"unsupported flow format taskloom: {data.get('taskloom')} (this version reads {FORMAT_VERSION})")
+    version = data.get("taskloom", FORMAT_VERSION)
+    if not isinstance(version, int):
+        errors.append(f"taskloom: {version!r} is not a flow format: write it as a number (this version reads "
+                      f"taskloom: {FORMAT_VERSION})")
+    elif version != FORMAT_VERSION:
+        errors.append(f"unsupported flow format taskloom: {version} (this version reads {FORMAT_VERSION})")
     errors += [f"unknown top-level key '{k}'" for k in data if k not in FLOW_KEYS]
 
     flow_params = {}
-    for name, spec in (data.get("params") or {}).items():
+    for name, spec in _mapping(data.get("params"), "params", errors).items():
         if not IDENTIFIER.match(str(name)):
             errors.append(f"params.{name}: not a valid name")
         elif not isinstance(spec, dict) or spec.get("type") not in P.TYPES:
@@ -150,7 +190,7 @@ def flow_from_data(data, path: Path) -> Flow:
             flow_params[name] = spec
 
     blocks = {}
-    for block_id, spec in (data.get("blocks") or {}).items():
+    for block_id, spec in _mapping(data.get("blocks"), "blocks", errors).items():
         where = f"blocks.{block_id}"
         if not IDENTIFIER.match(str(block_id)) or block_id == ERROR_PORT:
             errors.append(f"{where}: not a valid block id")
@@ -159,12 +199,16 @@ def flow_from_data(data, path: Path) -> Flow:
             errors.append(f"{where}: needs a 'type'")
             continue
         errors += [f"{where}: unknown key '{k}'" for k in spec if k not in BLOCK_KEYS]
+        if spec.get("version") is not None and not isinstance(spec["version"], int):
+            errors.append(f"{where}: version must be a whole number, got {spec['version']!r}")
+            continue
         try:
             blocks[block_id] = BlockSpec(
                 id=block_id, type=str(spec["type"]), version=spec.get("version"),
-                config=dict(spec.get("config") or {}), retry=Retry.parse(spec.get("retry")),
+                config=dict(_mapping(spec.get("config"), f"{where}.config", errors)),
+                retry=Retry.parse(spec.get("retry")),
                 timeout=parse_duration(spec["timeout"]) if spec.get("timeout") is not None else None,
-                ui=dict(spec.get("ui") or {}),
+                ui=dict(_mapping(spec.get("ui"), f"{where}.ui", errors)),
             )
         except (ValueError, TypeError) as e:
             errors.append(f"{where}: {e}")
@@ -198,6 +242,15 @@ def flow_from_data(data, path: Path) -> Flow:
     )
 
 
+def _mapping(value, where: str, errors: list) -> dict:
+    """A part of the flow file that holds names, each followed by ':' (left empty: none). Anything else is an
+    error, added to `errors`, and read as none."""
+    if value and not isinstance(value, dict):
+        errors.append(f"{where}: expected a mapping: each name followed by ':' and its value")
+        return {}
+    return value or {}
+
+
 def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
     """The flow's schedules: active Schedule blocks and the flow-level `triggers:` list."""
     triggers, errors = [], []
@@ -206,18 +259,22 @@ def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
             triggers.append(Trigger(trigger))
         except ValueError as e:
             errors.append(f"triggers[{i}]: {e}")
-    for block_id, spec in (data.get("blocks") or {}).items():
+    blocks = data.get("blocks")
+    for block_id, spec in (blocks.items() if isinstance(blocks, dict) else ()):  # else: flow_from_data says so
         if not isinstance(spec, dict) or spec.get("type") != "trigger.schedule":
             continue
         config = spec.get("config") or {}
-        if config.get("active", True) is False:
+        if not isinstance(config, dict) or config.get("active", True) is False:
             continue
         timing = {k: config[k] for k in ("cron", "at", "misfire") if config.get(k) not in (None, "")}
+        if ("cron" in timing) == ("at" in timing):
+            errors.append(f"blocks.{block_id}: a Schedule block needs either cron (e.g. 0 7 * * MON-FRI) "
+                          "or at (e.g. 2026-10-08 15:30)")
+            continue
         try:
             triggers.append(Trigger({"schedule": timing}, block=block_id))
-        except ValueError:
-            errors.append(f"blocks.{block_id}: a Schedule block needs either cron (e.g. 0 7 * * MON-FRI) "
-                          "or at (e.g. 2026-10-08 15:30), and a valid misfire")
+        except ValueError as e:  # e.g. what is wrong with its cron line
+            errors.append(f"blocks.{block_id}: {e}")
     return triggers, errors
 
 
@@ -369,7 +426,22 @@ def order(flow: Flow) -> list[str]:
                 if indegree[e.dst] == 0:
                     ready.append(e.dst)
         ready.sort(key=list(flow.blocks).index)
-    if len(result) != len(flow.blocks):
-        cyclic = sorted(set(flow.blocks) - set(result))
+    if len(result) != len(flow.blocks):  # left out: the blocks in a cycle and those after one
+        cyclic = sorted(b for b in flow.blocks if b not in result and _leads_back(flow, b))
         raise FlowError([f"the flow has a cycle through: {', '.join(cyclic)}"])
     return result
+
+
+def _leads_back(flow: Flow, block_id: str) -> bool:
+    """Whether connections lead from the block back to itself."""
+    seen, todo = set(), [block_id]
+    while todo:
+        current = todo.pop()
+        for e in flow.edges:
+            if e.src == current:
+                if e.dst == block_id:
+                    return True
+                if e.dst not in seen:
+                    seen.add(e.dst)
+                    todo.append(e.dst)
+    return False

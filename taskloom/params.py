@@ -95,7 +95,10 @@ def render(template: str, values: dict) -> str:
 
 
 def template_names(template: str) -> set[str]:
-    return {name for _, name, _, _ in string.Formatter().parse(template) if name}
+    names = {name for _, name, _, _ in string.Formatter().parse(template) if name is not None}
+    if "" in names:  # e.g. {} or {:>5}: render would refuse it
+        raise ValueError("'{}' names no parameter")
+    return names
 
 
 _SQL_TOKENS = re.compile(

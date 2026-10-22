@@ -24,7 +24,7 @@ import yaml
 
 from .block import all_ports
 from .flow import (_EDGE, ERROR_PORT, FORMAT_VERSION, BlockSpec, FlowError, block_config, flow_from_data,
-                   unconnected_starts, validate)
+                   read_flow_file, unconnected_starts, validate)
 
 # Format version N -> a function that turns a flow of version N into one of version N + 1.
 MIGRATIONS: dict = {}
@@ -54,8 +54,8 @@ def check(path, registry, home) -> Report:
 def _check(path: Path, registry, home) -> Report:
     report = Report(path)
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as e:
+        data = read_flow_file(path)
+    except (OSError, ValueError) as e:
         report.problems.append(f"cannot read it: {e}")
         return report
     if not isinstance(data, dict):
@@ -63,11 +63,11 @@ def _check(path: Path, registry, home) -> Report:
         return report
     new = copy.deepcopy(data)
     version = new.get("taskloom", FORMAT_VERSION)
-    if not isinstance(version, int) or version > FORMAT_VERSION:
+    if isinstance(version, int) and version > FORMAT_VERSION:
         report.problems.append(f"it was made by a newer Taskloom (flow format {version}; this version knows "
                                f"{FORMAT_VERSION}): update Taskloom")
         return report
-    while version < FORMAT_VERSION:
+    while isinstance(version, int) and version < FORMAT_VERSION:  # not a number: the checks below say so
         if version not in MIGRATIONS:
             report.problems.append(f"this version cannot update flow format {version} (it reads "
                                    f"{FORMAT_VERSION}): fix the file by hand, or ask for help")

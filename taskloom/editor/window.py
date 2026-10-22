@@ -24,7 +24,7 @@ from .. import params as P
 from ..block import AFTER
 from ..config import Home
 from ..engine import block_inputs, input_ports
-from ..flow import FlowError, load_flow, run_clock, schedules_of, validate
+from ..flow import FlowError, load_flow, read_flow_file, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -1011,9 +1011,9 @@ class MainWindow(QMainWindow):
             mtime = path.stat().st_mtime
             cached = self._schedules_cache.get(path)
             if cached is None or cached[0] != mtime:
-                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                data = read_flow_file(path) or {}
                 cached = self._schedules_cache[path] = (mtime, schedules_of(data)[0] if isinstance(data, dict) else [])
-        except (OSError, yaml.YAMLError):
+        except (OSError, ValueError):  # e.g. not UTF-8, or not YAML
             return None
         now = dt.datetime.now()
         return min((t for t in (trigger.next_after(now) for trigger in cached[1]) if t), default=None)
