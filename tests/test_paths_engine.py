@@ -915,7 +915,7 @@ def test_a_connection_password_never_reaches_the_terminal_the_history_or_the_run
             config:
               inputs: [problem]
               outputs: []
-              code: "open('handled.txt', 'w').write(problem['error'] + problem['traceback'])"
+              code: "open('handled.txt', 'w', encoding='utf-8').write(problem['error'] + problem['traceback'])"
         edges:
           - login.login -> look.value
           - login.login -> use.login
@@ -933,10 +933,10 @@ def test_a_connection_password_never_reaches_the_terminal_the_history_or_the_run
 
     assert (env.root / "got.txt").read_text() == PASSWORD  # the code had the password itself
     assert env.block_status(run_id) == {"login": "success", "look": "success", "use": "failed", "handler": "success"}
-    assert "refused for user:" in (env.root / "handled.txt").read_text()
+    assert "refused for user:" in (env.root / "handled.txt").read_text(encoding="utf-8")
     assert retry.returncode == 2 and "held a password" in retry.stderr  # never saved, so a re-run cannot have it
     places = {"the terminal": terminal + retry.stdout + retry.stderr,
-              "the error handler's input": (env.root / "handled.txt").read_text()}
+              "the error handler's input": (env.root / "handled.txt").read_text(encoding="utf-8")}
     for path in env.home.rglob("*"):
         if path.is_file() and path.name != "secrets.yaml":  # the history, the run folders
             places[str(path.relative_to(env.home))] = path.read_bytes().decode("latin-1")
