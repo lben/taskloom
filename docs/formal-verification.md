@@ -32,7 +32,7 @@ Each scheduler model is one flow with overlap skip, so at most one run of that f
 
 A pass is a pass of that model. It is not a pass of every Taskloom flow.
 
-Pre-fix line numbers are from `d6d6a16`. Fixed-module line numbers are from this PR.
+Pre-fix line numbers are from `d6d6a16`. Fixed-module line numbers were checked against `09ade8d84dfb6f3a06fedcb6983d9a3880c53c61`.
 
 ## Charts
 

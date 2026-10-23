@@ -20,7 +20,7 @@ Re-run the check when a change touches any of these:
 
 ## Sync
 
-Last confirmed at commit `SYNC_COMMIT`.
+Last confirmed at commit `09ade8d84dfb6f3a06fedcb6983d9a3880c53c61`.
 
 The pre-fix modules (`SchedulerCheck`, `CatchUpBusy`, `RetryGrace`, `Watchdog`) cite line numbers from `d6d6a16`. The `*Fixed` modules, `OverlapSkip`, and `BlockRun` cite the code at the sync commit. Move the sync commit forward only after you have opened each cited line, confirmed the model still matches, and `specs/formal/check.sh` still exits 0. A green run on a spec you have not re-read is not a confirmation.
 
