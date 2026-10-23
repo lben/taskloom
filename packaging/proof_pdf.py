@@ -1,15 +1,18 @@
-"""Make one PDF of the proofs that tests/proofs recorded (run with PROOF_DIR set; see tests/proofs/conftest.py):
+"""Make one PDF of the proofs that tests/proofs recorded (run with PROOF_DIR set; see tests/proofs/README.md):
 
     python packaging/proof_pdf.py <proof_dir> <out.pdf> [--ci-url URL] [--title TEXT]
 
-A title page (Taskloom version, date, platform, the CI run, each proof passed or failed), then each proof: what was
-asked and what was checked, then the steps with the screenshots (what to look at under each), text and notes.
+A cover (Taskloom version, date, platform, the CI run, and each change with its result and summary), then each
+change as a short story: what was asked and the idea; why this design; each step with its screenshot; what was
+checked.
 """
 
 import argparse
+import datetime as dt
 import html
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -17,20 +20,34 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # it shows no window
 if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unless pointed at them
     os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
-from PySide6.QtCore import QMarginsF, QSizeF, QUrl  # noqa: E402
+from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QImage, QPageLayout, QPageSize, QPainter,  # noqa: E402
                            QPdfWriter, QPen, QTextDocument)
 
-TITLE = "Taskloom: proof that it works"
-OK, FAILED, GREY = "#1a7f37", "#c62828", "#666666"
-MARK = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Apple Symbols'; font-weight: bold"
+TITLE = "Proof that it works"
+DPI = 96  # pages are laid out in screen pixels, what the screenshots are in
+INK, MUTED, FAINT, RULE = "#1f2328", "#59636e", "#8c959f", "#d0d7de"
+ACCENT = "#e8590c"  # as the highlights on the screenshots (tests/proofs/conftest.py)
+OK, FAILED = "#1a7f37", "#c62828"
+ASKED_TINT, IDEA_TINT, IDEA_BAR, CARD_TINT = "#fff4e6", "#edf3fc", "#3b6fb6", "#f6f8fa"
+FONTS = ["Segoe UI", "Helvetica Neue", "Arial", "DejaVu Sans"]
+SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Apple Symbols'"
 MONO = "font-family: Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New'; font-size: 8pt; white-space: pre-wrap"
-CAPTION_ROOM = 170  # under and over a screenshot on its page: its step, a note, its caption (in screen pixels)
+FOOTER = 28  # under each page's text: the footer line
+MAX_ZOOM = 1.5  # a close-up is shown at most this much bigger than on the screen
+GAP = 16
 
 
-def mark(ok: bool, text: str) -> str:
-    return (f"<span style=\"color: {OK if ok else FAILED}\"><span style=\"{MARK}\">{'✓' if ok else '✗'}</span> "
-            f"{html.escape(text)}</span>")
+def esc(text: str) -> str:
+    """Text as HTML, with ①, ②… drawn as the badges on the screenshots."""
+    return re.sub("[①-⑳]", lambda m: f"<img src=\"badge{ord(m.group()) - 0x245F}\" width=\"17\" height=\"17\" "
+                                      "style=\"vertical-align: middle\">", html.escape(text))
+
+
+def mark(ok: bool, text: str, size: str = "") -> str:
+    style = f"color: {OK if ok else FAILED}" + (f"; font-size: {size}" if size else "")
+    return (f"<span style=\"{style}\"><span style=\"{SYMBOLS}; font-weight: bold\">{'✓' if ok else '✗'}</span>"
+            f"&nbsp;{esc(text)}</span>")
 
 
 def outcome(record: dict) -> str:
@@ -39,7 +56,45 @@ def outcome(record: dict) -> str:
     return mark(False, "not shown (skipped)" if record["status"] == "skipped" else record["status"])
 
 
-def title_page(title: str, records: list, session: dict | None, ci_url: str) -> str:
+def label(text: str, color: str = MUTED, space: int = 0) -> str:
+    """A small capitals line over what it names (`space`: above it)."""
+    return (f"<p style=\"color: {color}; font-size: 8.5pt; font-weight: 600; text-transform: uppercase; "
+            f"letter-spacing: 1.5px; margin-top: {space}px; margin-bottom: 6px\">{esc(text)}</p>")
+
+
+def box(content: str, tint: str, bar: str) -> str:
+    """Content in a tinted box with a coloured bar on its left."""
+    return (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr><td width=\"5\" bgcolor=\"{bar}\"></td>"
+            f"<td bgcolor=\"{tint}\" style=\"padding: 14px 18px\">{content}</td></tr></table>")
+
+
+def paragraphs(texts: list, size: str = "11pt") -> str:
+    """The paragraphs; none: that the proof does not say what it must (it failed)."""
+    if not texts:
+        return f"<p>{mark(False, 'Not said: a proof must say this.')}</p>"
+    return "".join(f"<p style=\"font-size: {size}; line-height: 135%; margin-bottom: 10px\">{esc(t)}</p>"
+                   for t in texts)
+
+
+def columns(left: str, right: str, split: int = 48) -> str:
+    return (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 22px\"><tr>"
+            f"<td width=\"{split}%\" valign=\"top\">"
+            f"{left}</td><td width=\"4%\"></td><td valign=\"top\">{right}</td></tr></table>")
+
+
+def heading(over: str, title: str, over_color: str = ACCENT) -> str:
+    return (label(over, over_color) +
+            f"<p style=\"font-size: 24pt; font-weight: 600; color: {INK}; margin-top: 0\">"
+            f"{esc(title)}</p>")
+
+
+def when(record: dict) -> str:
+    started = dt.datetime.fromisoformat(record["started"])
+    zone = started.tzname() or ""
+    return f"{started.day} {started:%B %Y}, {started:%H:%M}" + (f" ({zone})" if zone else "")
+
+
+def cover(title: str, records: list, session: dict | None, ci_url: str, pages: list) -> str:
     problems = []
     if session is None:
         problems.append("The proof run did not finish: proofs may be missing.")
@@ -48,63 +103,161 @@ def title_page(title: str, records: list, session: dict | None, ci_url: str) -> 
     if not records:
         problems.append("No proof was recorded.")
     if failed := sum(r["status"] != "passed" for r in records):
-        problems.append(f"{failed} of {len(records)} proofs did not pass.")
-    summary = "<br>".join(mark(False, p) for p in problems) or mark(
-        True, f"All {len(records)} proofs passed." if len(records) > 1 else "The proof passed.")
-    about = [("Taskloom", ", ".join(sorted({r["version"] for r in records})) or "unknown"),
-             ("Date", min((r["started"] for r in records), default="").replace("T", " ")),
-             ("Platform", "; ".join(sorted({r["platform"] for r in records})))]
-    rows = "".join(f"<tr><td><b>{name}</b></td><td>{html.escape(value)}</td></tr>" for name, value in about)
+        problems.append(f"{failed} of {len(records)} changes did not pass their proof.")
+    verdict = "<br>".join(mark(False, p, "15pt") for p in problems) or mark(
+        True, "The change passed its proof." if len(records) == 1 else f"All {len(records)} changes passed their "
+                                                                       "proofs.", "15pt")
+    about = [("Version", ", ".join(sorted({r["version"] for r in records})) or "unknown"),
+             ("Date", when(min(records, key=lambda r: r["started"])) if records else "unknown"),
+             ("Platform", "; ".join(sorted({r["platform"] for r in records})) or "unknown")]
     if ci_url:
-        rows += f"<tr><td><b>CI run</b></td><td><a href=\"{html.escape(ci_url)}\">{html.escape(ci_url)}</a></td></tr>"
-    listed = "".join(f"<tr><td>{i}</td><td>{html.escape(r['title'])}</td><td>{outcome(r)}</td></tr>"
-                     for i, r in enumerate(records, 1))
-    return (f"<h1>{html.escape(title)}</h1>"
-            "<p>Each feature or fix, shown working in the running app: what was asked, what was done, what the app "
-            "showed, and what was checked.</p>"
-            f"<table cellpadding=\"3\">{rows}</table>"
-            f"<p style=\"font-size: 14pt; margin-top: 16px\">{summary}</p>"
-            "<table border=\"1\" cellspacing=\"0\" cellpadding=\"5\" width=\"100%\"><tr><th width=\"4%\">#</th>"
-            f"<th align=\"left\">Proof</th><th align=\"left\" width=\"22%\">Result</th></tr>{listed}</table>")
+        about.append(("CI run", f"<a href=\"{html.escape(ci_url)}\" style=\"color: {IDEA_BAR}\">"
+                                f"{html.escape(ci_url)}</a>"))
+    facts = "".join(f"<tr><td style=\"color: {MUTED}; padding: 3px 18px 3px 0\">{name}</td>"
+                    f"<td style=\"padding: 3px 0\">{value if name == 'CI run' else esc(value)}</td></tr>"
+                    for name, value in about)
+    cell = f"valign=\"top\" style=\"padding: 12px 0; border-top: 1px solid {RULE}"
+    listed = "".join(
+        f"<tr><td width=\"5%\" {cell}; font-size: 18pt; font-weight: 600; color: {ACCENT}\">{i}</td>"
+        f"<td {cell}\"><span style=\"font-size: 13pt; font-weight: 600\">{esc(r['title'])}</span><br>"
+        f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span></td>"
+        f"<td width=\"14%\" {cell}; padding-left: 14px\">{outcome(r)}</td>"
+        f"<td width=\"8%\" align=\"right\" {cell}; color: {MUTED}\">page {page}</td></tr>"
+        for i, (r, page) in enumerate(zip(records, pages), 1))
+    return (label("Taskloom", ACCENT) +
+            f"<p style=\"font-size: 34pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
+            f"<p style=\"font-size: 13pt; color: {MUTED}; line-height: 140%; margin-bottom: 22px\">Each change in this "
+            "version, shown working in the running app: what was asked, the idea behind it and why it is built that "
+            "way, then the app doing it, step by step, with what was checked.</p>"
+            f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 18px\">{facts}</table>"
+            f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 26px\"><tr><td>{verdict}</td></tr></table>"
+            f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 30px\"><tr>"
+            f"<td colspan=\"4\">{label('In this proof')}</td></tr>{listed}</table>")
 
 
-def section(number: int, record: dict, images: dict) -> str:
-    entries = record["entries"]
-    checks = [e for e in entries if e["kind"] == "check"]
-    parts = [f"<h2 style=\"page-break-before: always\">Proof {number}: {html.escape(record['title'])}</h2>",
-             f"<p>{outcome(record)}&nbsp;&nbsp;<span style=\"color: {GREY}; font-size: 8pt\">"
-             f"{html.escape(record['test'])}</span></p>",
-             f"<p><b>What was asked:</b> <i>“{html.escape(record['asked'])}”</i></p>",
-             "<p><b>What was checked</b> (each again below, where it was checked):</p>",
-             "".join(f"<p style=\"margin-left: 16px\">{mark(e['ok'], e['text'])}</p>" for e in checks)
-             or f"<p style=\"margin-left: 16px\">{mark(False, 'nothing was checked')}</p>"]
-    if record["error"]:
-        parts.append(f"<p style=\"color: {FAILED}\"><b>What went wrong</b></p>"
-                     f"<p style=\"{MONO}\">{html.escape(record['error'])}</p>")
-    step = shot = 0
-    for i, entry in enumerate(entries):
-        kind = entry["kind"]
-        if kind == "step":
+def story(number: int, total: int, record: dict) -> list:
+    """The two pages that tell the change: what was asked and the idea; why this design."""
+    over = f"Change {number} of {total}"
+    asked = box(f"<p style=\"font-size: 18pt; font-style: italic; line-height: 135%; color: {INK}\">"
+                f"“{esc(record['asked'])}”</p>", ASKED_TINT, ACCENT)
+    idea = box(paragraphs(record["idea"], "13pt"), IDEA_TINT, IDEA_BAR)
+    # What each step does (its first sentence), as a map of what is to come.
+    steps = [re.split(r"(?<=[.!?])\s", e["text"], maxsplit=1)[0] for e in record["entries"] if e["kind"] == "step"]
+    shown = "".join(f"<tr><td width=\"26\" style=\"color: {ACCENT}; font-weight: 600; padding: 3px 0\">{i}</td>"
+                    f"<td style=\"padding: 3px 0\">{esc(text)}</td></tr>" for i, text in enumerate(steps, 1))
+    roadmap = (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 28px; "
+               f"font-size: 11pt\"><tr><td colspan=\"2\">{label('How it is shown, step by step')}</td></tr>"
+               f"{shown}</table>") if steps else ""
+    first = (heading(over, record["title"]) + f"<p style=\"font-size: 11pt\">{outcome(record)}</p>"
+             + columns(label("What you asked") + asked + roadmap, label("The idea") + idea, 44))
+    cards = "".join(
+        f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-bottom: 10px\"><tr>"
+        f"<td bgcolor=\"{CARD_TINT}\" style=\"padding: 12px 16px\"><p style=\"font-size: 11pt; font-weight: 600; "
+        f"margin-bottom: 4px\">{esc(a['option'])}</p><p style=\"color: {MUTED}; line-height: 140%\">"
+        f"{esc(a['why_not'])}</p></td></tr></table>" for a in record["alternatives"])
+    why = (heading(over, "Why this design")
+           + columns(label("Why it is the simplest way") + paragraphs(record["why_simplest"])
+                     + label("How it fits the rest of Taskloom", space=16) + paragraphs(record["fits"]),
+                     label("Other ways it could have been done, and why not") + (cards or paragraphs([])), 50))
+    return [first, why]
+
+
+def groups(entries: list) -> list:
+    """The entries, a page each: a screenshot with the steps, notes and checks around it."""
+    pages = [[]]
+    for entry in entries:
+        if entry["kind"] in ("step", "shot") and any(e["kind"] == "shot" for e in pages[-1]):
+            pages.append([])
+        pages[-1].append(entry)
+    return [page for page in pages if page]
+
+
+def step_page(over: str, page: list, step: int, steps: int, images: dict, body: QSizeF, measure) -> tuple[str, int]:
+    """One step's page: what you do, the screenshot (with its close-up) as big as fits, what to see, the checks;
+    and the number of the last step on it."""
+    top = []
+    for entry in page:
+        if entry["kind"] == "step":
             step += 1
-            # A step shown in a screenshot starts a page, so it is on the page of its screenshot.
-            following = next((e["kind"] for e in entries[i + 1:] if e["kind"] in ("step", "shot")), None)
-            new_page = " style=\"page-break-before: always\"" if following == "shot" else ""
-            parts.append(f"<p{new_page}><b>Step {step}.</b> {html.escape(entry['text'])}</p>")
-        elif kind == "shot":
-            shot += 1
-            name, width, height = images[entry["file"]]
-            window = f" · window “{html.escape(entry['window'])}”" if entry["window"] else ""
-            parts.append(f"<p align=\"center\"><img src=\"{name}\" width=\"{width}\" height=\"{height}\"></p>"
-                         f"<p align=\"center\"><span style=\"color: {GREY}; font-size: 8pt\">Screenshot {shot}{window}"
-                         f"</span><br>{html.escape(entry['caption'])}</p>")
-        elif kind == "text":
-            parts.append(f"<p>{html.escape(entry['caption'])}</p>"
-                         f"<p style=\"{MONO}; background-color: #f3f3f3\">{html.escape(entry['text'])}</p>")
-        elif kind == "note":
-            parts.append(f"<p style=\"color: #555555\"><i>Note: {html.escape(entry['text'])}</i></p>")
-        elif kind == "check":
-            parts.append(f"<p>{mark(entry['ok'], entry['text'])}</p>")
-    return "".join(parts)
+            top.append(f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-bottom: 8px\"><tr>"
+                       f"<td width=\"46\" valign=\"top\" style=\"font-size: 26pt; font-weight: 600; color: {ACCENT}\">"
+                       f"{step}</td><td valign=\"top\">{label(f'{over} · See it working · Step {step} of {steps}')}"
+                       f"<p style=\"font-size: 13pt; line-height: 135%\">{esc(entry['text'])}</p></td></tr></table>")
+        elif entry["kind"] == "note":
+            top.append(f"<p style=\"color: {MUTED}; font-style: italic; margin-left: 46px\">{esc(entry['text'])}</p>")
+        elif entry["kind"] == "text":
+            top.append(f"<p style=\"margin-left: 46px\">{esc(entry['caption'])}</p>"
+                       f"<p style=\"{MONO}; background-color: {CARD_TINT}; margin-left: 46px\">"
+                       f"{html.escape(entry['text'])}</p>")
+    if not any(e["kind"] == "step" for e in page):  # a second screenshot of a step
+        top.insert(0, label(f"{over} · See it working · Step {step}, continued"))
+    shot = next((e for e in page if e["kind"] == "shot"), None)
+    checks = "".join(f"<p style=\"margin-bottom: 5px\">{mark(e['ok'], e['text'])}</p>"
+                     for e in page if e["kind"] == "check")
+    bottom = ""
+    if shot or checks:
+        see = label("What you see") + paragraphs([shot["caption"]], "12pt") if shot else ""
+        bottom = (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 10px\"><tr>"
+                  f"<td valign=\"top\" style=\"padding-right: 24px\">{see}</td>"
+                  + (f"<td width=\"38%\" valign=\"top\">{label('Checked')}{checks}</td>" if checks else "")
+                  + "</tr></table>")
+
+    def html_with(pictures: str) -> str:
+        return "".join(top) + pictures + bottom
+
+    if shot is None:
+        return html_with(""), step
+    room = QSizeF(body.width() - 12, body.height() - measure(html_with("")) - 24)
+    return html_with(pictures(shot, images, room)), step
+
+
+def pictures(shot: dict, images: dict, room: QSizeF) -> str:
+    """The screenshot, as big as fits `room` (not bigger than on the screen). With a close-up: the close-up as big
+    as fits (up to MAX_ZOOM) beside it, or under it when that shows it half as big again, and the window in the room
+    left."""
+    name, full = images[shot["file"]]
+    caption = f"<br><span style=\"color: {FAINT}; font-size: 8pt\">{{}}</span>"
+    if "zoom" not in shot:
+        scale = min(1.0, room.width() / full.width(), room.height() / full.height())
+        return f"<p align=\"center\"><img src=\"{name}\" width=\"{full.width() * scale:.0f}\" " \
+               f"height=\"{full.height() * scale:.0f}\"></p>"
+    zoom_name, zoom = images[shot["zoom"]]
+    room = QSizeF(room.width(), room.height() - 20)  # for the line under each picture
+    beside = min(MAX_ZOOM, room.height() / zoom.height(), (room.width() * 0.62 - GAP) / zoom.width())
+    under = min(MAX_ZOOM, room.width() / zoom.width(), (room.height() * 0.7 - GAP - 20) / zoom.height())
+    side = beside >= under / 1.5  # beside reads better: the window, then what to look at in it
+    if side:
+        z = beside
+        s = min(1.0, (room.width() - GAP - zoom.width() * z) / full.width(), room.height() / full.height())
+    else:
+        z = under
+        s = min(1.0, room.width() / full.width(), (room.height() - GAP - 20 - zoom.height() * z) / full.height())
+    window = (f"<img src=\"{name}\" width=\"{full.width() * s:.0f}\" height=\"{full.height() * s:.0f}\">"
+              + caption.format("The whole window: the dashed frame is the close-up"))
+    close_up = (f"<img src=\"{zoom_name}\" width=\"{zoom.width() * z:.0f}\" height=\"{zoom.height() * z:.0f}\">"
+                + caption.format("Close-up"))
+    if side:
+        return (f"<table align=\"center\" cellspacing=\"0\" cellpadding=\"0\"><tr><td valign=\"middle\">{window}</td>"
+                f"<td width=\"{GAP}\"></td><td valign=\"middle\">{close_up}</td></tr></table>")
+    return f"<p align=\"center\">{window}</p><p align=\"center\" style=\"margin-top: {GAP}px\">{close_up}</p>"
+
+
+def checked(over: str, record: dict) -> str:
+    checks = [e for e in record["entries"] if e["kind"] == "check"]
+    passed = sum(e["ok"] for e in checks)
+    if record["status"] == "passed":
+        verdict = mark(True, f"All {passed} checks passed." if passed != 1 else "The check passed.", "15pt")
+    else:
+        verdict = mark(False, "The proof did not pass" + (" (skipped)." if record["status"] == "skipped" else "."),
+                       "15pt")
+    listed = "".join(f"<p style=\"font-size: 11.5pt; margin-bottom: 8px\">{mark(e['ok'], e['text'])}</p>"
+                     for e in checks) or f"<p>{mark(False, 'Nothing was checked.')}</p>"
+    wrong = ""
+    if record["error"]:
+        wrong = (label("What went wrong", FAILED, space=18) +
+                 box(f"<p style=\"{MONO}\">{html.escape(record['error'])}</p>", "#fdecea", FAILED))
+    return (heading(over, "What was checked") + f"<p style=\"margin-top: 10px; margin-bottom: 18px\">{verdict}</p>"
+            + listed + wrong)
 
 
 def framed(image: QImage) -> QImage:
@@ -117,48 +270,118 @@ def framed(image: QImage) -> QImage:
     return image
 
 
+def badge(number: int) -> QImage:
+    """A numbered badge, as tests/proofs/conftest.py draws it on the screenshots (drawn big: it is shown small)."""
+    image = QImage(96, 96, QImage.Format_ARGB32)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor("white"), 8))
+    painter.setBrush(QColor(ACCENT))
+    painter.drawEllipse(QRectF(4, 4, 88, 88))
+    font = QFont()
+    font.setFamilies(FONTS)
+    font.setPixelSize(52)
+    font.setBold(True)
+    painter.setFont(font)
+    painter.setPen(QColor("white"))
+    painter.drawText(QRectF(0, 0, 96, 96), Qt.AlignCenter, str(number))
+    painter.end()
+    return image
+
+
 def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
-    app = QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
+    QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
     proofs = sorted(((folder, json.loads((folder / "proof.json").read_text(encoding="utf-8")))
                      for folder in (proof_dir.iterdir() if proof_dir.is_dir() else [])
                      if (folder / "proof.json").is_file()), key=lambda p: p[1]["started"])
     session_file = proof_dir / "session.json"
     session = json.loads(session_file.read_text()) if session_file.is_file() else None
+    records = [record for _, record in proofs]
 
     writer = QPdfWriter(str(out))
-    writer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Landscape, QMarginsF(10, 10, 10, 10),
+    writer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Landscape, QMarginsF(12, 12, 12, 12),
                                      QPageLayout.Millimeter))
-    writer.setTitle(title)
+    writer.setTitle(f"Taskloom: {title}")
     writer.setCreator("Taskloom packaging/proof_pdf.py")
-    # Laid out in screen pixels (what the screenshots are in), on pages the size of the paper's printable area.
-    dpi = app.primaryScreen().logicalDotsPerInch()
     paper = writer.pageLayout().paintRect(QPageLayout.Inch)
-    page = QSizeF(paper.width() * dpi, paper.height() * dpi)
-    doc = QTextDocument()
-    doc.setPageSize(page)
-    doc.setDocumentMargin(6)  # also between pages: nothing of the next page shows at the bottom of one
+    body = QSizeF(paper.width() * DPI, paper.height() * DPI - FOOTER)  # each page's text, above its footer
     font = QFont()
-    font.setFamilies(["Segoe UI", "Helvetica Neue", "Arial", "DejaVu Sans"])
+    font.setFamilies(FONTS)
     font.setPointSize(10)
-    doc.setDefaultFont(font)
-    doc.setDefaultStyleSheet("p { margin-top: 4px; margin-bottom: 4px }")
+    resources = {f"badge{n}": badge(n) for n in range(1, 21)}
 
-    sections = []
+    def document(text: str, paged: bool = True) -> QTextDocument:
+        doc = QTextDocument()
+        doc.setDefaultFont(font)
+        doc.setDocumentMargin(8)
+        doc.setDefaultStyleSheet(f"body {{ color: {INK} }} p {{ margin-top: 0; margin-bottom: 4px }}")
+        for name, image in resources.items():
+            doc.addResource(QTextDocument.ImageResource, QUrl(name), image)
+        if paged:
+            doc.setPageSize(body)
+        else:
+            doc.setTextWidth(body.width())
+        doc.setHtml(f"<html><body>{text}</body></html>")
+        return doc
+
+    def measure(text: str) -> float:
+        return document(text, paged=False).size().height()
+
+    pages = []  # (html, footer)
+    starts = []  # the page each change starts on
     for number, (folder, record) in enumerate(proofs, 1):
         images = {}
         for entry in record["entries"]:
-            if entry["kind"] == "shot":
-                name = f"proof{number}/{entry['file']}"
-                image = framed(QImage(str(folder / entry["file"])))
-                doc.addResource(QTextDocument.ImageResource, QUrl(name), image)
-                # As big as on the screen, or smaller to fit the page with its step and caption.
-                scale = min(dpi / 96, (page.width() - 12) / image.width(),
-                            (page.height() - 12 - CAPTION_ROOM) / image.height())
-                images[entry["file"]] = (name, round(image.width() * scale), round(image.height() * scale))
-        sections.append(section(number, record, images))
-    doc.setHtml(f"<html><body>{title_page(title, [r for _, r in proofs], session, ci_url)}"
-                f"{''.join(sections)}</body></html>")
-    doc.print_(writer)
+            for file in (entry.get("file"), entry.get("zoom")):
+                if entry["kind"] == "shot" and file:
+                    name = f"proof{number}/{file}"
+                    resources[name] = framed(QImage(str(folder / file)))
+                    images[file] = (name, resources[name].size())
+        over = f"Change {number}"
+        footer = f"Change {number}: {record['title']}"
+        starts.append(len(pages))
+        pages += [(text, footer) for text in story(number, len(proofs), record)]
+        step, steps = 0, sum(e["kind"] == "step" for e in record["entries"])
+        for page in groups(record["entries"]):
+            text, step = step_page(over, page, step, steps, images, body, measure)
+            pages.append((text, footer))
+        pages.append((checked(over, record), footer))
+
+    docs = [document(text) for text, _ in pages]
+    counts = [doc.pageCount() for doc in docs]
+    first = [sum(counts[:i]) for i in range(len(counts))]
+    cover_doc = document(cover(title, records, session, ci_url, [0] * len(records)))  # how many pages it takes
+    shift = cover_doc.pageCount()
+    cover_doc = document(cover(title, records, session, ci_url, [shift + first[i] + 1 for i in starts]))
+    docs, footers = [cover_doc, *docs], ["", *(footer for _, footer in pages)]
+    total = sum(doc.pageCount() for doc in docs)
+
+    painter = QPainter(writer)
+    painter.setRenderHint(QPainter.LosslessImageRendering)  # screenshots as sharp as on the screen, not as JPEG
+    painter.scale(writer.resolution() / DPI, writer.resolution() / DPI)
+    small = QFont(font)
+    small.setPixelSize(11)  # in the page's pixels (a point size would count the PDF's resolution too)
+    number = 0
+    for doc, footer in zip(docs, footers):
+        for i in range(doc.pageCount()):
+            if number:
+                writer.newPage()
+            number += 1
+            painter.save()
+            painter.translate(0, -i * body.height())
+            doc.drawContents(painter, QRectF(0, i * body.height(), body.width(), body.height()))
+            painter.restore()
+            if not footer:  # the cover
+                continue
+            painter.setFont(small)
+            painter.setPen(QColor(FAINT))
+            line = QRectF(8, body.height() + 6, body.width() - 16, FOOTER - 6)
+            painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter,
+                             f"Taskloom {', '.join(sorted({r['version'] for r in records}))} · {title}")
+            painter.drawText(line, Qt.AlignHCenter | Qt.AlignVCenter, footer)
+            painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, f"{number} / {total}")
+    painter.end()
 
 
 def main():
