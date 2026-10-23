@@ -1,0 +1,57 @@
+---
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  state "Block did not finish in time | attempt 1 in the grace period" as p0
+  state "Block did not finish in time | attempt 2 in the grace period" as p1
+  state "Block did not finish in time | attempt 3 in the grace period" as p2
+  state "Block did not finish in time | failed" as p3
+  state "Block in progress | attempt 1 running" as p4
+  state "Block in progress | attempt 2 running" as p5
+  state "Block in progress | attempt 3 running" as p6
+  state "Block raised an error | attempt 1 in the grace period" as p7
+  state "Block raised an error | attempt 2 in the grace period" as p8
+  state "Block raised an error | attempt 3 in the grace period" as p9
+  state "Block raised an error | failed" as p10
+  state "Block returned a value | attempt 1 returned during the grace period" as p11
+  state "Block returned a value | attempt 2 in the grace period" as p12
+  state "Block returned a value | attempt 2 returned during the grace period" as p13
+  state "Block returned a value | attempt 2 running" as p14
+  state "Block returned a value | attempt 3 in the grace period" as p15
+  state "Block returned a value | attempt 3 returned during the grace period" as p16
+  state "Block returned a value | attempt 3 running" as p17
+  state "Block returned a value | failed" as p18
+  state "Block returned a value | kept as success" as p19
+  [*] --> p4
+  p4 --> p11 : the block returns a value during the grace period
+  p4 --> p0 : the grace period ends with the block still going
+  p4 --> p7 : the block raises an error
+  p11 --> p14 : the engine throws that result away
+  p0 --> p5 : the engine tries again
+  p7 --> p5 : the engine tries again
+  p14 --> p13 : the block returns a value during the grace period
+  p14 --> p12 : the grace period ends with the block still going
+  p14 --> p12 : the block raises an error
+  p5 --> p13 : the block returns a value during the grace period
+  p5 --> p1 : the grace period ends with the block still going
+  p5 --> p8 : the block raises an error
+  p13 --> p17 : the engine throws that result away
+  p12 --> p17 : the engine tries again
+  p1 --> p6 : the engine tries again
+  p8 --> p6 : the engine tries again
+  p17 --> p16 : the block returns a value during the grace period
+  p17 --> p15 : the grace period ends with the block still going
+  p17 --> p15 : the block raises an error
+  p6 --> p16 : the block returns a value during the grace period
+  p6 --> p2 : the grace period ends with the block still going
+  p6 --> p9 : the block raises an error
+  p16 --> p18 : the engine throws that result away
+  p15 --> p18 : the last attempt fails
+  p2 --> p3 : the last attempt fails
+  p9 --> p10 : the last attempt fails
+  p11 --> p19 : with the fix, the engine keeps that result
+  p13 --> p19 : with the fix, the engine keeps that result
+  p16 --> p19 : with the fix, the engine keeps that result

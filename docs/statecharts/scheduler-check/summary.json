@@ -1,0 +1,106 @@
+{
+  "view": "customer",
+  "second": {
+    "role": "fix",
+    "label": "the fix",
+    "lacks": []
+  },
+  "modelStates": 26,
+  "modelTransitions": 25,
+  "chartStates": 36,
+  "chartTransitions": 42,
+  "chartStatus": {
+    "works": 7,
+    "wrong": 0,
+    "fixed": 29
+  },
+  "chartGroups": [
+    {
+      "name": "Waiting to check",
+      "color": "#d6eaf8",
+      "states": 3
+    },
+    {
+      "name": "Every chosen run is kept",
+      "color": "#d5f5e3",
+      "states": 14
+    },
+    {
+      "name": "A run was skipped",
+      "color": "#fdebd0",
+      "states": 7
+    },
+    {
+      "name": "A run was dropped",
+      "color": "#f5b7b1",
+      "states": 12
+    }
+  ],
+  "mixedGroups": [],
+  "regions": {
+    "drawn": false,
+    "why": "the regions do not combine into the flat chart, with 88 difference(s), such as states only in EXPECTED (no path from the start reaches them in the spec, or the spec renamed them): Run once | 6:31 finished, 6:32 dropped, 6:33 dropped"
+  },
+  "classes": [
+    {
+      "n": 1,
+      "end": "Catch up: 6:31 running, 6:32 waiting its turn, 6:33 skipped",
+      "invariant": "CatchUpKeepsEveryTime",
+      "rule": "Catch-up keeps every minute in the check while the scheduler is still running.",
+      "cause": "Catch-up starts 6:31 and queues 6:32, then skips 6:33 because that minute is still a few seconds away",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 5,
+      "fix": "Catch up: 6:31 running, 6:32 waiting its turn, 6:33 waiting its turn"
+    },
+    {
+      "n": 2,
+      "end": "Catch up: 6:31 running, 6:32 dropped, 6:33 dropped, scheduler is off",
+      "invariant": "QueuedWorkIsNotDropped",
+      "rule": "A run that was accepted is not thrown away when the scheduler stops.",
+      "cause": "The scheduler stops while a catch-up run is only in memory, and that run is gone",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 3,
+      "fix": "Catch up: 6:31 running, 6:32 waiting its turn, 6:33 waiting its turn, scheduler is off"
+    },
+    {
+      "n": 3,
+      "end": "Run once: 6:31 counted as missed, 6:32 running, 6:33 skipped",
+      "invariant": "RunOnceKeepsTheNewest",
+      "rule": "Run once keeps the newest minute and does not start an older one.",
+      "cause": "The check a few seconds early starts 6:32 and skips 6:33, so run once loses the newest minute",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 1,
+      "fix": "Run once: 6:31 counted as missed, 6:32 counted as missed, 6:33 running"
+    },
+    {
+      "n": 4,
+      "end": "Skip missed runs: 6:31 counted as missed, 6:32 running, 6:33 skipped",
+      "invariant": "SkipCountsTheMissedRuns",
+      "rule": "Skip counts every earlier minute as missed.",
+      "cause": "The early check runs 6:32 and counts only 6:31 as missed, so one missed minute is never counted",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 1,
+      "fix": "Skip missed runs: 6:31 counted as missed, 6:32 counted as missed, 6:33 running"
+    },
+    {
+      "n": 5,
+      "end": "Skip missed runs: 6:31 counted as missed, 6:32 running, 6:33 skipped",
+      "invariant": "SkipKeepsTheOnTimeRun",
+      "rule": "Skip starts the on-time minute.",
+      "cause": "The check a few seconds early starts 6:32 and skips 6:33, the minute that was on time",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 1,
+      "fix": "Skip missed runs: 6:31 counted as missed, 6:32 counted as missed, 6:33 running"
+    }
+  ],
+  "codeLike": [],
+  "uncited": {
+    "SchedulerCheck.tla": [],
+    "SchedulerCheckFixed.tla": []
+  }
+}

@@ -1,0 +1,31 @@
+---
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  state "In progress | attempt 1 running" as p0
+  state "In progress | attempt 2 running" as p1
+  state "In progress | attempt 3 running" as p2
+  state "In progress | waiting to start" as p3
+  state "Settled | attempt 1 cancelled" as p4
+  state "Settled | attempt 1 succeeded" as p5
+  state "Settled | attempt 2 cancelled" as p6
+  state "Settled | attempt 2 succeeded" as p7
+  state "Settled | attempt 3 cancelled" as p8
+  state "Settled | attempt 3 failed" as p9
+  state "Settled | attempt 3 succeeded" as p10
+  state "Settled | cancelled before it started" as p11
+  [*] --> p3
+  p3 --> p0 : the block starts
+  p3 --> p11 : the run is cancelled
+  p0 --> p5 : the attempt succeeds
+  p0 --> p1 : the attempt fails and try 2 starts
+  p0 --> p4 : the run is cancelled
+  p1 --> p7 : the attempt succeeds
+  p1 --> p2 : the attempt fails and try 3 starts
+  p1 --> p6 : the run is cancelled
+  p2 --> p10 : the attempt succeeds
+  p2 --> p9 : the last attempt fails
+  p2 --> p8 : the run is cancelled

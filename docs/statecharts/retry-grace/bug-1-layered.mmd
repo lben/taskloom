@@ -1,0 +1,46 @@
+---
+title: "A block that finishes during the timeout grace, bug 1"
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  %% second model (fix): the fix
+  classDef plainFixed fill:#f4f6f7,stroke:#1e8449,stroke-width:4px,color:#145a32
+  classDef group0 fill:#d6eaf8,stroke:#6b757c,color:#1b2631
+  classDef group0Path fill:#d6eaf8,stroke:#1f3a93,stroke-width:4px,color:#1b2631
+  classDef group1 fill:#d5f5e3,stroke:#6b7b72,color:#1b2631
+  classDef group1Fixed fill:#d5f5e3,stroke:#1e8449,stroke-width:4px,color:#145a32
+  classDef group2 fill:#f5b7b1,stroke:#7b5c59,color:#1b2631
+  classDef group2Fixed fill:#f5b7b1,stroke:#1e8449,stroke-width:4px,color:#145a32
+  state "Legend" as legend {
+    state "Still trying" as legendGroup0
+    state "Success kept" as legendGroup1
+    state "Success discarded" as legendGroup2
+    state "Fixed or new with the fix" as legendFixed
+  }
+  class legendGroup0 group0
+  class legendGroup1 group1
+  class legendGroup2 group2
+  class legendFixed plainFixed
+  state "Block in progress: attempt<br/>1 running" as g0 {
+    state "attempt 1, running, worker<br/>none, saw value false" as s0
+  }
+  state "Block returned a value:<br/>attempt 1 returned during<br/>the grace period" as g1 {
+    state "attempt 1, grace, worker<br/>value, saw value true" as s1
+  }
+  state "Block returned a value:<br/>attempt 2 running" as g2 {
+    state "attempt 2, running, worker<br/>none, saw value true" as s2
+  }
+  state "Block returned a value:<br/>kept as success" as g3 {
+    state "attempt 1, succeeded,<br/>worker value, saw value<br/>true" as s3
+  }
+  [*] --> s0
+  s0 --> s1 : 1. the block returns a value<br/>during the grace period<br/>[FinishWork]
+  s1 --> s2 : 2. the engine throws that<br/>result away [Decide]
+  s1 --> s3 : with the fix, the engine keeps<br/>that result [Decide]
+  class s0 group0Path
+  class s1 group0Path
+  class s2 group2Fixed
+  class s3 group1Fixed

@@ -66,6 +66,12 @@ class Scheduler:
         home.root.mkdir(parents=True, exist_ok=True)
         self._db = history_connect(home.history_db)
         self._db.execute("CREATE TABLE IF NOT EXISTS schedule_state (trigger TEXT PRIMARY KEY, last TEXT NOT NULL)")
+        # Runs accepted but not started yet (queued, or waiting for a free slot). The queue itself is in memory;
+        # this table is what a restart reads, so turning the scheduler off does not drop them.
+        self._db.execute("CREATE TABLE IF NOT EXISTS schedule_pending "
+                         "(flow TEXT NOT NULL, as_of TEXT NOT NULL, block TEXT NOT NULL, "
+                         "PRIMARY KEY (flow, as_of, block))")
+        self._load_pending()
 
     # --- state ------------------------------------------------------------------
 
@@ -76,6 +82,38 @@ class Scheduler:
     def _set_last(self, key: str, when: dt.datetime):
         self._db.execute("INSERT INTO schedule_state VALUES (?, ?) ON CONFLICT (trigger) DO UPDATE SET last=excluded.last",
                          (key, when.isoformat()))
+
+    def _remember(self, path: str, when: tuple):
+        """Keep a run that has been accepted but not started, so a restart still runs it."""
+        as_of, block = when
+        self._db.execute("INSERT INTO schedule_pending VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                         (path, as_of.isoformat(), block or ""))
+
+    def _forget(self, path: str, when: tuple):
+        """The run has started (its process keeps going if the scheduler stops)."""
+        as_of, block = when
+        self._db.execute("DELETE FROM schedule_pending WHERE flow=? AND as_of=? AND block=?",
+                         (path, as_of.isoformat(), block or ""))
+
+    def _load_pending(self):
+        rows = self._db.execute("SELECT flow, as_of, block FROM schedule_pending ORDER BY as_of, rowid")
+        for flow, as_of, block in rows:
+            self.queued.setdefault(flow, []).append((dt.datetime.fromisoformat(as_of), block or None))
+
+    def _busy(self, path: str) -> bool:
+        """A run of this flow is going, queued, or waiting for a free slot."""
+        return (any(r.flow == path for r in self.runs) or bool(self.queued.get(path))
+                or any(waiting == path for waiting, _ in self.waiting))
+
+    def _drain_idle(self):
+        """Start a persisted or leftover queued run whose flow has nothing going (after a restart)."""
+        for path in list(self.queued):
+            pending = self.queued.get(path) or []
+            if not pending:
+                continue
+            if any(r.flow == path for r in self.runs) or any(w == path for w, _ in self.waiting):
+                continue
+            self._start_or_wait(path, pending.pop(0))
 
     def _load(self, path: Path):
         """The flow, cached until the file changes; None (and one notification) if it cannot be read."""
@@ -103,6 +141,7 @@ class Scheduler:
     def tick(self, now: dt.datetime | None = None):
         now = now or dt.datetime.now()
         self._poll()
+        self._drain_idle()
         paths = self._scheduled_flows()
         on, unreadable = set(), []
         for path in paths or []:
@@ -120,22 +159,40 @@ class Scheduler:
                 due = trigger.due(last, now + EARLY_START)  # since the previous check, and the ones soon
                 if not due:
                     continue
-                self._set_last(key, now + EARLY_START)
+                # Times in the early window are the newest in this check (the run that should begin on time).
+                # Misfire applies to them together with the times already due. Asking for every soon time
+                # as well as the newest past time dropped the on-time run: the past one had just started,
+                # and overlap skip then refused the soon one.
                 past, soon = [t for t in due if t <= now], [t for t in due if t > now]
                 if trigger.misfire == "run_once":
-                    to_run = past[-1:]
+                    chosen = (past + soon)[-1:]  # one run, for the most recent time
+                    to_run = [t for t in chosen if t <= now]
+                    early = [t for t in chosen if t > now]
                 elif trigger.misfire == "catch_up":
-                    to_run = past[:CATCH_UP_LIMIT]
-                else:  # skip: only the most recent time can be on time; the others were missed
-                    to_run = past[-1:] if past and now - past[-1] <= ON_TIME_GRACE else []
-                    missed = len(past) - len(to_run)
+                    room = CATCH_UP_LIMIT
+                    to_run = past[:room]
+                    early = soon[: max(0, room - len(to_run))]
+                else:  # skip: only the on-time run. The one we start early is that run; older times were missed.
+                    if soon:
+                        to_run, early, missed = [], soon[:1], len(past)
+                    elif past and now - past[-1] <= ON_TIME_GRACE:
+                        to_run, early, missed = past[-1:], [], len(past) - 1
+                    else:
+                        to_run, early, missed = [], [], len(past)
                     if missed:
                         self._tell(flow, "skipped", "Missed runs skipped",
                                    f"{flow.name}: {missed} run(s) were due while the scheduler was off")
-                for n, as_of in enumerate(to_run):
-                    self._request(str(path), flow, (as_of, trigger.block), force_queue=n > 0)
-                for as_of in soon:  # on time: its process starts now, to begin at its time
-                    self._request(str(path), flow, (as_of, trigger.block))
+                planned = to_run + early
+                self._set_last(key, now + EARLY_START)
+                # A catch-up of more than one time runs one after another, including behind a run that is
+                # already going. force_queue on every time but the first used to skip the oldest and, when
+                # the soon time was requested on its own, skip the on-time run too.
+                path_s = str(path)
+                busy = self._busy(path_s)
+                serial = trigger.misfire == "catch_up" and len(planned) > 1
+                for n, as_of in enumerate(planned):
+                    self._request(path_s, flow, (as_of, trigger.block),
+                                  force_queue=serial and (n > 0 or busy))
         if paths is not None:
             # A schedule that is off (its Schedule block's Active unticked, its flow not in scheduled.yaml) is
             # forgotten: on again, it starts from then as a new one does, and the times while it was off neither
@@ -160,15 +217,16 @@ class Scheduler:
 
     def _request(self, path: str, flow, when: tuple, force_queue: bool = False):
         """`when` is (due time, Schedule block or None). A run waiting for a free slot counts as going."""
-        if (any(r.flow == path for r in self.runs) or self.queued.get(path)
-                or any(waiting == path for waiting, _ in self.waiting)):
+        if self._busy(path):
             policy = "queue" if force_queue else flow.overlap
             if policy == "skip":
                 self._tell(flow, "skipped", "Run skipped", f"{flow.name}: the previous run is still going")
                 return
             if policy == "queue":
+                self._remember(path, when)
                 self.queued.setdefault(path, []).append(when)
                 return
+        self._remember(path, when)
         self._start_or_wait(path, when)
 
     def _start_or_wait(self, path: str, when: tuple):
@@ -209,6 +267,7 @@ class Scheduler:
         run.reader = threading.Thread(target=self._read, args=(run,), daemon=True)
         run.reader.start()
         self.runs.append(run)
+        self._forget(path, when)  # the process is started; it keeps going if the scheduler stops
 
     @staticmethod
     def _read(run: _Run):
@@ -311,6 +370,8 @@ class Scheduler:
                 try:
                     if self._remote_alive(session, remote_home):
                         continue
+                    # A hung scheduler still holds the folder lock, so a new one cannot start until it is stopped.
+                    self._stop_hung(session, remote_home)
                     command = f"env TASKLOOM_HOME={ssh.remote_path(remote_home)} {entry['command']} scheduler --headless"
                     heartbeat = ssh.remote_path(f"{remote_home}/scheduler.heartbeat")
                     # (without the old heartbeat, a heartbeat says that the one started now checks)
@@ -329,6 +390,23 @@ class Scheduler:
                     session.close()
             except Exception as e:
                 self.messages.put(("Cannot check server", f"{name}: {e}"))
+
+    @staticmethod
+    def _stop_hung(session, remote_home: str):
+        """Stop a scheduler process that is still running but no longer checking.
+
+        Only a process whose command line says it is the scheduler is signalled, so a reused pid is left alone.
+        The folder lock is released when that process exits, which is what lets the new scheduler start.
+        """
+        pid_file = ssh.remote_path(f"{remote_home}/scheduler.pid")
+        session.run(
+            f"pid=$(cat {pid_file} 2>/dev/null || true); "
+            f'if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null '
+            f'&& grep -aq scheduler "/proc/$pid/cmdline" 2>/dev/null; then '
+            f'kill "$pid" 2>/dev/null || true; '
+            f'i=0; while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 25 ]; do i=$((i+1)); sleep 0.2; done; '
+            f'kill -KILL "$pid" 2>/dev/null || true; fi'
+        )
 
     @staticmethod
     def _remote_alive(session, remote_home: str) -> bool:

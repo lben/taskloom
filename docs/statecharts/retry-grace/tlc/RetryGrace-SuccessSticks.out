@@ -1,0 +1,115 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 88 and seed -5829495256814558912 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 15621] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /workspace/specs/formal/RetryGrace.tla
+Parsing file /tmp/tlc-IgXNf3/tmp/Integers.tla
+Parsing file /tmp/tlc-IgXNf3/tmp/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module RetryGrace
+Starting... (2026-10-23 12:44:11)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-23 12:44:11.
+Error: Invariant SuccessSticks is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 1
+/\ sawValue = FALSE
+
+State 2: <FinishWork line 24, col 3 to line 29, col 22 of module RetryGrace>
+/\ returned = "value"
+/\ phase = "grace"
+/\ attempt = 1
+/\ sawValue = TRUE
+
+State 3: <Decide line 33, col 3 to line 37, col 75 of module RetryGrace>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 2
+/\ sawValue = TRUE
+
+Error: Invariant SuccessSticks is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 1
+/\ sawValue = FALSE
+
+State 2: <FinishWork line 24, col 3 to line 29, col 22 of module RetryGrace>
+/\ returned = "stuck"
+/\ phase = "grace"
+/\ attempt = 1
+/\ sawValue = FALSE
+
+State 3: <Decide line 33, col 3 to line 37, col 75 of module RetryGrace>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 2
+/\ sawValue = FALSE
+
+State 4: <FinishWork line 24, col 3 to line 29, col 22 of module RetryGrace>
+/\ returned = "value"
+/\ phase = "grace"
+/\ attempt = 2
+/\ sawValue = TRUE
+
+State 5: <Decide line 33, col 3 to line 37, col 75 of module RetryGrace>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 3
+/\ sawValue = TRUE
+
+Error: Invariant SuccessSticks is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 1
+/\ sawValue = FALSE
+
+State 2: <FinishWork line 24, col 3 to line 29, col 22 of module RetryGrace>
+/\ returned = "stuck"
+/\ phase = "grace"
+/\ attempt = 1
+/\ sawValue = FALSE
+
+State 3: <Decide line 33, col 3 to line 37, col 75 of module RetryGrace>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 2
+/\ sawValue = FALSE
+
+State 4: <FinishWork line 24, col 3 to line 29, col 22 of module RetryGrace>
+/\ returned = "stuck"
+/\ phase = "grace"
+/\ attempt = 2
+/\ sawValue = FALSE
+
+State 5: <Decide line 33, col 3 to line 37, col 75 of module RetryGrace>
+/\ returned = "none"
+/\ phase = "running"
+/\ attempt = 3
+/\ sawValue = FALSE
+
+State 6: <FinishWork line 24, col 3 to line 29, col 22 of module RetryGrace>
+/\ returned = "value"
+/\ phase = "grace"
+/\ attempt = 3
+/\ sawValue = TRUE
+
+State 7: <Decide line 33, col 3 to line 37, col 75 of module RetryGrace>
+/\ returned = "value"
+/\ phase = "failed"
+/\ attempt = 3
+/\ sawValue = TRUE
+
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 3.8E-18
+19 states generated, 14 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 7.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
+Finished in 00s at (2026-10-23 12:44:11)

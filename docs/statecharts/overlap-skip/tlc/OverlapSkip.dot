@@ -1,0 +1,15 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+7096488966683551333 [label="/\\ going = \"running\"\n/\\ phase = \"before\"\n/\\ minute = \"due\"",style = filled]
+7096488966683551333 -> 345255985026505249 [label="Check",color="black",fontcolor="black"];
+345255985026505249 [label="/\\ going = \"running\"\n/\\ phase = \"checked\"\n/\\ minute = \"skipped\""];
+7096488966683551333 -> 8149669808526033392 [label="Finish",color="black",fontcolor="black"];
+8149669808526033392 [label="/\\ going = \"done\"\n/\\ phase = \"before\"\n/\\ minute = \"due\""];
+345255985026505249 -> 8666947223702896218 [label="Finish",color="black",fontcolor="black"];
+8666947223702896218 [label="/\\ going = \"done\"\n/\\ phase = \"checked\"\n/\\ minute = \"skipped\""];
+{rank = same; 7096488966683551333;}
+{rank = same; 345255985026505249;}
+}
+}

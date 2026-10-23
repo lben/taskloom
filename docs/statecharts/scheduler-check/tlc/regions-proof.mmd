@@ -1,0 +1,89 @@
+---
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  state "Catch up | 6:31 finished, 6:32 dropped, 6:33 dropped" as p0
+  state "Catch up | 6:31 finished, 6:32 dropped, 6:33 dropped, scheduler is off" as p1
+  state "Catch up | 6:31 finished, 6:32 dropped, 6:33 skipped" as p2
+  state "Catch up | 6:31 finished, 6:32 dropped, 6:33 skipped, scheduler is off" as p3
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 dropped" as p4
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 dropped, scheduler is off" as p5
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 finished" as p6
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 running" as p7
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 skipped" as p8
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 waiting its turn" as p9
+  state "Catch up | 6:31 finished, 6:32 finished, 6:33 waiting its turn, scheduler is off" as p10
+  state "Catch up | 6:31 finished, 6:32 running, 6:33 dropped" as p11
+  state "Catch up | 6:31 finished, 6:32 running, 6:33 dropped, scheduler is off" as p12
+  state "Catch up | 6:31 finished, 6:32 running, 6:33 skipped" as p13
+  state "Catch up | 6:31 finished, 6:32 running, 6:33 waiting its turn" as p14
+  state "Catch up | 6:31 finished, 6:32 running, 6:33 waiting its turn, scheduler is off" as p15
+  state "Catch up | 6:31 finished, 6:32 waiting its turn, 6:33 waiting its turn" as p16
+  state "Catch up | 6:31 finished, 6:32 waiting its turn, 6:33 waiting its turn, scheduler is off" as p17
+  state "Catch up | 6:31 running, 6:32 dropped, 6:33 dropped" as p18
+  state "Catch up | 6:31 running, 6:32 dropped, 6:33 dropped, scheduler is off" as p19
+  state "Catch up | 6:31 running, 6:32 dropped, 6:33 skipped" as p20
+  state "Catch up | 6:31 running, 6:32 dropped, 6:33 skipped, scheduler is off" as p21
+  state "Catch up | 6:31 running, 6:32 waiting its turn, 6:33 skipped" as p22
+  state "Catch up | 6:31 running, 6:32 waiting its turn, 6:33 waiting its turn" as p23
+  state "Catch up | 6:31 running, 6:32 waiting its turn, 6:33 waiting its turn, scheduler is off" as p24
+  state "Catch up | waiting for the check" as p25
+  state "Run once | 6:31 counted as missed, 6:32 counted as missed, 6:33 finished" as p26
+  state "Run once | 6:31 counted as missed, 6:32 counted as missed, 6:33 running" as p27
+  state "Run once | 6:31 counted as missed, 6:32 finished, 6:33 skipped" as p28
+  state "Run once | 6:31 counted as missed, 6:32 running, 6:33 skipped" as p29
+  state "Run once | waiting for the check" as p30
+  state "Skip missed runs | 6:31 counted as missed, 6:32 counted as missed, 6:33 finished" as p31
+  state "Skip missed runs | 6:31 counted as missed, 6:32 counted as missed, 6:33 running" as p32
+  state "Skip missed runs | 6:31 counted as missed, 6:32 finished, 6:33 skipped" as p33
+  state "Skip missed runs | 6:31 counted as missed, 6:32 running, 6:33 skipped" as p34
+  state "Skip missed runs | waiting for the check" as p35
+  [*] --> p30
+  [*] --> p35
+  [*] --> p25
+  [*] --> p23
+  p30 --> p29 : the check skips 6:33
+  p35 --> p34 : the check skips 6:33
+  p25 --> p22 : the check skips 6:33
+  p23 --> p14 : the running job finishes
+  p23 --> p19 : the scheduler stops and drops a waiting run
+  p29 --> p28 : the running job finishes
+  p34 --> p33 : the running job finishes
+  p22 --> p13 : the running job finishes
+  p22 --> p21 : the scheduler stops and drops a waiting run
+  p14 --> p7 : the running job finishes
+  p14 --> p12 : the scheduler stops and drops a waiting run
+  p19 --> p1 : the running job finishes
+  p19 --> p18 : the scheduler starts again
+  p13 --> p8 : the running job finishes
+  p21 --> p3 : the running job finishes
+  p21 --> p20 : the scheduler starts again
+  p7 --> p6 : the running job finishes
+  p12 --> p5 : the running job finishes
+  p12 --> p11 : the scheduler starts again
+  p1 --> p0 : the scheduler starts again
+  p18 --> p0 : the running job finishes
+  p3 --> p2 : the scheduler starts again
+  p20 --> p2 : the running job finishes
+  p5 --> p4 : the scheduler starts again
+  p11 --> p4 : the running job finishes
+  p30 --> p27 : with the fix, the check keeps 6:33
+  p35 --> p32 : with the fix, the check keeps 6:33
+  p25 --> p23 : with the fix, the check keeps 6:33
+  p23 --> p24 : with the fix, the scheduler stops
+  p27 --> p26 : with the fix, the running job finishes
+  p32 --> p31 : with the fix, the running job finishes
+  p14 --> p15 : with the fix, the scheduler stops
+  p24 --> p17 : with the fix, the running job finishes
+  p24 --> p23 : with the fix, the scheduler starts again
+  p15 --> p10 : with the fix, the running job finishes
+  p15 --> p14 : with the fix, the scheduler starts again
+  p17 --> p16 : with the fix, the scheduler starts again
+  p10 --> p9 : with the fix, the scheduler starts again
+  p16 --> p17 : with the fix, the scheduler stops
+  p16 --> p14 : with the fix, a waiting job starts
+  p9 --> p10 : with the fix, the scheduler stops
+  p9 --> p7 : with the fix, a waiting job starts

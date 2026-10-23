@@ -1,0 +1,18 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+-1455613999313333020 [label="/\\ older = \"running\"\n/\\ phase = \"before\"\n/\\ onTime = \"due\"\n/\\ previous = \"due\"",style = filled]
+-1455613999313333020 -> 8423077294846906255 [label="Check",color="black",fontcolor="black"];
+8423077294846906255 [label="/\\ older = \"running\"\n/\\ phase = \"checked\"\n/\\ onTime = \"queued\"\n/\\ previous = \"skipped\""];
+-1455613999313333020 -> -2270807558886538348 [label="Finish",color="black",fontcolor="black"];
+-2270807558886538348 [label="/\\ older = \"done\"\n/\\ phase = \"before\"\n/\\ onTime = \"due\"\n/\\ previous = \"due\""];
+8423077294846906255 -> -3431682562898883234 [label="Finish",color="black",fontcolor="black"];
+-3431682562898883234 [label="/\\ older = \"done\"\n/\\ phase = \"checked\"\n/\\ onTime = \"running\"\n/\\ previous = \"skipped\""];
+-3431682562898883234 -> 6238157607730685618 [label="Finish",color="black",fontcolor="black"];
+6238157607730685618 [label="/\\ older = \"done\"\n/\\ phase = \"checked\"\n/\\ onTime = \"done\"\n/\\ previous = \"skipped\""];
+{rank = same; -1455613999313333020;}
+{rank = same; 8423077294846906255;}
+{rank = same; -3431682562898883234;}
+}
+}

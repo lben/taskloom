@@ -1,0 +1,62 @@
+---
+title: "A block attempt"
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  classDef group0 fill:#d6eaf8,stroke:#6b757c,color:#1b2631
+  classDef group1 fill:#d5f5e3,stroke:#6b7b72,color:#1b2631
+  classDef group2 fill:#fdebd0,stroke:#7f7668,color:#1b2631
+  classDef group3 fill:#e8daef,stroke:#746d78,color:#1b2631
+  state "Legend" as legend {
+    state "In progress" as legendGroup0
+    state "Succeeded" as legendGroup1
+    state "Failed" as legendGroup2
+    state "Cancelled" as legendGroup3
+  }
+  class legendGroup0 group0
+  class legendGroup1 group1
+  class legendGroup2 group2
+  class legendGroup3 group3
+  state "In progress" as g0 {
+    state "attempt 1 running" as s0
+    state "attempt 2 running" as s1
+    state "attempt 3 running" as s2
+    state "waiting to start" as s3
+  }
+  state "Settled" as g1 {
+    state "attempt 1 cancelled" as s4
+    state "attempt 1 succeeded" as s5
+    state "attempt 2 cancelled" as s6
+    state "attempt 2 succeeded" as s7
+    state "attempt 3 cancelled" as s8
+    state "attempt 3 failed" as s9
+    state "attempt 3 succeeded" as s10
+    state "cancelled before it<br/>started" as s11
+  }
+  [*] --> s3
+  s3 --> s0 : the block starts
+  s3 --> s11 : the run is cancelled
+  s0 --> s5 : the attempt succeeds
+  s0 --> s1 : the attempt fails and try 2<br/>starts
+  s0 --> s4 : the run is cancelled
+  s1 --> s7 : the attempt succeeds
+  s1 --> s2 : the attempt fails and try 3<br/>starts
+  s1 --> s6 : the run is cancelled
+  s2 --> s10 : the attempt succeeds
+  s2 --> s9 : the last attempt fails
+  s2 --> s8 : the run is cancelled
+  class s0 group0
+  class s1 group0
+  class s2 group0
+  class s3 group0
+  class s4 group3
+  class s5 group1
+  class s6 group3
+  class s7 group1
+  class s8 group3
+  class s9 group2
+  class s10 group1
+  class s11 group3

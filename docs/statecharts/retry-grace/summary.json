@@ -1,0 +1,62 @@
+{
+  "view": "customer",
+  "second": {
+    "role": "fix",
+    "label": "the fix",
+    "lacks": []
+  },
+  "modelStates": 23,
+  "modelTransitions": 28,
+  "chartStates": 20,
+  "chartTransitions": 27,
+  "chartStatus": {
+    "works": 14,
+    "wrong": 0,
+    "fixed": 6
+  },
+  "chartGroups": [
+    {
+      "name": "Still trying",
+      "color": "#d6eaf8",
+      "states": 14
+    },
+    {
+      "name": "Success kept",
+      "color": "#d5f5e3",
+      "states": 1
+    },
+    {
+      "name": "Success discarded",
+      "color": "#f5b7b1",
+      "states": 2
+    },
+    {
+      "name": "Run failed",
+      "color": "#fdebd0",
+      "states": 3
+    }
+  ],
+  "mixedGroups": [],
+  "regions": {
+    "drawn": false,
+    "why": "\"Block returned a value: attempt 2 in the grace period\" is \"Fixed or new with the fix\", and its two region states would show \"Works today\""
+  },
+  "classes": [
+    {
+      "n": 1,
+      "end": "Block returned a value: attempt 2 running",
+      "invariant": "SuccessSticks",
+      "rule": "A value returned during the grace period is the attempt's result.",
+      "cause": "The block finished during the timeout grace and the engine threw that result away",
+      "readerSteps": 2,
+      "modelSteps": 3,
+      "counterexamples": 3,
+      "fix": "Block returned a value: kept as success"
+    }
+  ],
+  "codeLike": [],
+  "uncited": {
+    "RetryGrace.tla": [],
+    "RetryGraceFixed.tla": []
+  }
+}

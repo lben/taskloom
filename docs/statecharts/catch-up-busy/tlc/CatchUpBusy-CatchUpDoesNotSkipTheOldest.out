@@ -1,0 +1,29 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 105 and seed 2649817598595148745 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 14711] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /workspace/specs/formal/CatchUpBusy.tla
+Semantic processing of module CatchUpBusy
+Starting... (2026-10-23 12:43:57)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-23 12:43:57.
+Error: Invariant CatchUpDoesNotSkipTheOldest is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ older = "running"
+/\ phase = "before"
+/\ onTime = "due"
+/\ previous = "due"
+
+State 2: <Check line 18, col 3 to line 25, col 20 of module CatchUpBusy>
+/\ older = "running"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "skipped"
+
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 1.1E-19
+3 states generated, 2 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 2.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 1 and the 95th percentile is 1).
+Finished in 00s at (2026-10-23 12:43:57)

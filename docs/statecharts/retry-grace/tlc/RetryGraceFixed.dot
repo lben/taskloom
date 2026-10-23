@@ -1,0 +1,47 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+8281968942341814195 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 1\n/\\ sawValue = FALSE",style = filled]
+8281968942341814195 -> 7838235880364098146 [label="FinishWork",color="black",fontcolor="black"];
+7838235880364098146 [label="/\\ returned = \"value\"\n/\\ phase = \"grace\"\n/\\ attempt = 1\n/\\ sawValue = TRUE"];
+8281968942341814195 -> 7160707710895244798 [label="FinishWork",color="black",fontcolor="black"];
+7160707710895244798 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 1\n/\\ sawValue = FALSE"];
+8281968942341814195 -> 4710208479458873107 [label="FinishWork",color="black",fontcolor="black"];
+4710208479458873107 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 1\n/\\ sawValue = FALSE"];
+7838235880364098146 -> 9171168872394364790 [label="Decide",color="black",fontcolor="black"];
+9171168872394364790 [label="/\\ returned = \"value\"\n/\\ phase = \"succeeded\"\n/\\ attempt = 1\n/\\ sawValue = TRUE"];
+7160707710895244798 -> 4102941177760833323 [label="Decide",color="black",fontcolor="black"];
+4102941177760833323 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 2\n/\\ sawValue = FALSE"];
+4710208479458873107 -> 4102941177760833323 [label="Decide",color="black",fontcolor="black"];
+4102941177760833323 -> 2799241834084887290 [label="FinishWork",color="black",fontcolor="black"];
+2799241834084887290 [label="/\\ returned = \"value\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = TRUE"];
+4102941177760833323 -> 2972397905418644838 [label="FinishWork",color="black",fontcolor="black"];
+2972397905418644838 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = FALSE"];
+4102941177760833323 -> 811175925603755915 [label="FinishWork",color="black",fontcolor="black"];
+811175925603755915 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = FALSE"];
+2799241834084887290 -> 3844223480324669422 [label="Decide",color="black",fontcolor="black"];
+3844223480324669422 [label="/\\ returned = \"value\"\n/\\ phase = \"succeeded\"\n/\\ attempt = 2\n/\\ sawValue = TRUE"];
+2972397905418644838 -> 73693431057496227 [label="Decide",color="black",fontcolor="black"];
+73693431057496227 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+811175925603755915 -> 73693431057496227 [label="Decide",color="black",fontcolor="black"];
+73693431057496227 -> 2246657493629209970 [label="FinishWork",color="black",fontcolor="black"];
+2246657493629209970 [label="/\\ returned = \"value\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+73693431057496227 -> 1203948388444277486 [label="FinishWork",color="black",fontcolor="black"];
+1203948388444277486 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+73693431057496227 -> 3653752727995023363 [label="FinishWork",color="black",fontcolor="black"];
+3653752727995023363 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+2246657493629209970 -> 913158051765180518 [label="Decide",color="black",fontcolor="black"];
+913158051765180518 [label="/\\ returned = \"value\"\n/\\ phase = \"succeeded\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+1203948388444277486 -> 360563031438288363 [label="Decide",color="black",fontcolor="black"];
+360563031438288363 [label="/\\ returned = \"stuck\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+3653752727995023363 -> -3766332433958907564 [label="Decide",color="black",fontcolor="black"];
+-3766332433958907564 [label="/\\ returned = \"error\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+{rank = same; 8281968942341814195;}
+{rank = same; 7838235880364098146;7160707710895244798;4710208479458873107;}
+{rank = same; 4102941177760833323;}
+{rank = same; 2972397905418644838;2799241834084887290;811175925603755915;}
+{rank = same; 73693431057496227;}
+{rank = same; 2246657493629209970;1203948388444277486;3653752727995023363;}
+}
+}

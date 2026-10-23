@@ -1,0 +1,25 @@
+---
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  state "After the check | 6:31 finished, 6:32 finished, 6:33 finished" as p0
+  state "After the check | 6:31 finished, 6:32 finished, 6:33 running" as p1
+  state "After the check | 6:31 finished, 6:32 running, 6:33 waiting its turn" as p2
+  state "After the check | 6:31 finished, 6:32 skipped, 6:33 finished" as p3
+  state "After the check | 6:31 finished, 6:32 skipped, 6:33 running" as p4
+  state "After the check | 6:31 running, 6:32 skipped, 6:33 waiting its turn" as p5
+  state "After the check | 6:31 running, 6:32 waiting its turn, 6:33 waiting its turn" as p6
+  state "Before the check | 6:31 finished, 6:32 still due, 6:33 still due" as p7
+  state "Before the check | 6:31 running, 6:32 still due, 6:33 still due" as p8
+  [*] --> p8
+  p8 --> p5 : the check skips 6:32
+  p8 --> p7 : the running job finishes
+  p5 --> p4 : the running job finishes
+  p4 --> p3 : the running job finishes
+  p8 --> p6 : with the fix, the check queues 6:32 and 6:33
+  p6 --> p2 : with the fix, the running job finishes
+  p2 --> p1 : with the fix, the running job finishes
+  p1 --> p0 : with the fix, the running job finishes

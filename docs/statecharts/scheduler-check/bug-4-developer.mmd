@@ -1,0 +1,35 @@
+---
+title: "Scheduler check in the early window, bug 4"
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  %% second model (fix): the fix
+  classDef plainFixed fill:#f4f6f7,stroke:#1e8449,stroke-width:4px,color:#145a32
+  classDef group0 fill:#d6eaf8,stroke:#6b757c,color:#1b2631
+  classDef group0Path fill:#d6eaf8,stroke:#1f3a93,stroke-width:4px,color:#1b2631
+  classDef group1 fill:#d5f5e3,stroke:#6b7b72,color:#1b2631
+  classDef group1Fixed fill:#d5f5e3,stroke:#1e8449,stroke-width:4px,color:#145a32
+  classDef group2 fill:#fdebd0,stroke:#7f7668,color:#1b2631
+  classDef group2Fixed fill:#fdebd0,stroke:#1e8449,stroke-width:4px,color:#145a32
+  state "Legend" as legend {
+    state "Waiting to check" as legendGroup0
+    state "Every chosen run is kept" as legendGroup1
+    state "A run was skipped" as legendGroup2
+    state "Fixed or new with the fix" as legendFixed
+  }
+  class legendGroup0 group0
+  class legendGroup1 group1
+  class legendGroup2 group2
+  class legendFixed plainFixed
+  state "skip, before, scheduler<br/>up: 6:31 due, 6:32 due,<br/>6:33 due" as s0
+  state "skip, checked, scheduler<br/>up: 6:31 missed, 6:32<br/>missed, 6:33 running" as s1
+  state "skip, checked, scheduler<br/>up: 6:31 missed, 6:32<br/>running, 6:33 skipped" as s2
+  [*] --> s0
+  s0 --> s2 : 1. the check skips 6:33<br/>[Check]
+  s0 --> s1 : with the fix, the check keeps<br/>6:33 [Check]
+  class s0 group0Path
+  class s1 group1Fixed
+  class s2 group2Fixed

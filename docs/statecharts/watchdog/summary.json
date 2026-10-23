@@ -1,0 +1,57 @@
+{
+  "view": "customer",
+  "second": {
+    "role": "fix",
+    "label": "the fix",
+    "lacks": []
+  },
+  "modelStates": 5,
+  "modelTransitions": 3,
+  "chartStates": 5,
+  "chartTransitions": 4,
+  "chartStatus": {
+    "works": 4,
+    "wrong": 0,
+    "fixed": 1
+  },
+  "chartGroups": [
+    {
+      "name": "Not checked yet",
+      "color": "#d6eaf8",
+      "states": 3
+    },
+    {
+      "name": "Scheduler is checking",
+      "color": "#d5f5e3",
+      "states": 1
+    },
+    {
+      "name": "Scheduler left hung",
+      "color": "#f5b7b1",
+      "states": 1
+    }
+  ],
+  "mixedGroups": [],
+  "regions": {
+    "drawn": false,
+    "why": "6 region states are not fewer than the 5 flat states"
+  },
+  "classes": [
+    {
+      "n": 1,
+      "end": "After the keeper looks: scheduler is hung, and you were told why",
+      "invariant": "AHungSchedulerIsReplaced",
+      "rule": "After the keeper looks, a scheduler that was dead or hung is checking again.",
+      "cause": "The hung scheduler still holds the folder lock, so the new one cannot start",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 1,
+      "fix": "After the keeper looks: scheduler is checking"
+    }
+  ],
+  "codeLike": [],
+  "uncited": {
+    "Watchdog.tla": [],
+    "WatchdogFixed.tla": []
+  }
+}

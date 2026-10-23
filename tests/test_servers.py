@@ -1,8 +1,12 @@
 """Server and file blocks against a real SSH server on localhost."""
 
+import os
+import subprocess
 import sys
+import textwrap
 import time
 import urllib.request
+from pathlib import Path
 
 import paramiko
 import pytest
@@ -13,6 +17,16 @@ from taskloom.config import Home
 from taskloom.scheduler import Scheduler
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the test server runs commands in /bin/sh")
+
+
+def _scheduler_command() -> str:
+    """How the keeper starts Taskloom on the test SSH server.
+
+    That server runs the command with HOME set to its own folder, so Python would not see this
+    checkout or the packages installed for the user running the test.
+    """
+    root = Path(__file__).resolve().parents[1]
+    return f"PYTHONPATH={root} PYTHONUSERBASE={Path.home() / '.local'} {sys.executable} -m taskloom.cli"
 
 
 def _kill_from_pid_file(path):
@@ -81,7 +95,7 @@ def test_keeper_starts_and_restarts_the_server_scheduler(env, server):
     env.write("home/settings.yaml", f"""
         keeper:
           - connection: appserver
-            command: "{sys.executable} -m taskloom.cli"
+            command: "{_scheduler_command()}"
             home: "~/.taskloom"
     """)
     scheduler = Scheduler(Home(env.home))
@@ -106,6 +120,86 @@ def test_keeper_starts_and_restarts_the_server_scheduler(env, server):
         assert pid_file.read_text().strip() != first_pid
     finally:
         _kill_from_pid_file(pid_file)
+
+
+def test_the_keeper_stops_a_hung_scheduler_so_another_can_start(env, server):
+    """A hung scheduler still holds the folder lock. Starting another one failed at once and the hung
+    process was left running, so the server stayed without a scheduler that checks."""
+    remote = server.home_path / ".taskloom"
+    remote.mkdir()
+    script = textwrap.dedent("""
+        import os, time
+        from taskloom.config import Home
+        from taskloom.scheduler import acquire_lock
+        home = Home.default()
+        acquire_lock(home)
+        (home.root / "scheduler.pid").write_text(str(os.getpid()), encoding="utf-8")
+        (home.root / "scheduler.heartbeat").write_text(str(int(time.time()) - 600), encoding="utf-8")
+        (home.root / "stand-in.ready").write_text("ready", encoding="utf-8")
+        time.sleep(120)
+    """)
+    hung = subprocess.Popen(
+        [sys.executable, "-c", script],
+        env={**os.environ, "TASKLOOM_HOME": str(remote), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"},
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    env.write("home/settings.yaml", f"""
+        keeper:
+          - connection: appserver
+            command: "{_scheduler_command()}"
+            home: "~/.taskloom"
+    """)
+    scheduler = Scheduler(Home(env.home))
+    try:
+        deadline = time.monotonic() + 10
+        while not (remote / "stand-in.ready").exists() and hung.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert (remote / "stand-in.ready").exists()
+        checked = time.time()
+        scheduler.check_servers()
+        title, message = scheduler.messages.get_nowait()
+        assert title == "Server scheduler restarted", (title, message)
+        assert "was started" in message
+        deadline = time.monotonic() + 5
+        while hung.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert hung.poll() is not None  # the hung process was stopped, not left holding the lock
+        beat = int((remote / "scheduler.heartbeat").read_text(encoding="utf-8"))
+        assert beat >= checked - 1
+    finally:
+        if hung.poll() is None:
+            hung.kill()
+        hung.wait(timeout=15)
+        _kill_from_pid_file(remote / "scheduler.pid")
+
+
+def test_the_keeper_leaves_an_unrelated_process_in_the_pid_file(env, server):
+    """A stale heartbeat must not let the keeper kill whatever pid happens to be in the file."""
+    remote = server.home_path / ".taskloom"
+    remote.mkdir()
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    (remote / "scheduler.pid").write_text(str(sleeper.pid), encoding="utf-8")
+    (remote / "scheduler.heartbeat").write_text(str(int(time.time()) - 600), encoding="utf-8")
+    env.write("home/settings.yaml", f"""
+        keeper:
+          - connection: appserver
+            command: "{_scheduler_command()}"
+            home: "~/.taskloom"
+    """)
+    scheduler = Scheduler(Home(env.home))
+    try:
+        scheduler.check_servers()
+        title, message = scheduler.messages.get_nowait()
+        assert title == "Server scheduler restarted", (title, message)
+        assert sleeper.poll() is None
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+        sleeper.wait(timeout=15)
+        _kill_from_pid_file(remote / "scheduler.pid")
 
 
 def test_ssh_command_output_and_failure(env, server):
@@ -231,7 +325,7 @@ def test_servers_that_allow_one_command_per_connection(env, server, monkeypatch)
         assert {b: i["status"] for b, i in blocks.items()} == {"start": "success", "check": "success", "stop": "success"}
 
         # The keeper also runs two commands per server: it must cope too.
-        env.write("home/settings.yaml", f"keeper:\n  - {{connection: appserver, command: '{sys.executable} -m taskloom.cli', home: '~/.taskloom'}}\n")
+        env.write("home/settings.yaml", "keeper:\n  - {connection: appserver, command: '" + _scheduler_command() + "', home: '~/.taskloom'}\n")
         scheduler = Scheduler(home)
         scheduler.check_servers()
         assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"

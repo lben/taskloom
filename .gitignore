@@ -6,5 +6,6 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
+specs/formal/states/
 .DS_Store
 examples/out/

@@ -1,0 +1,16 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 95 and seed -1471919063140103614 with 4 workers on 4 cores with 3330MB heap and 64MB offheap memory [pid: 16293] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /workspace/specs/formal/Watchdog.tla
+Semantic processing of module Watchdog
+Starting... (2026-10-23 12:44:21)
+Computing initial states...
+Computed 2 initial states...
+Finished computing initial states: 3 distinct states generated at 2026-10-23 12:44:21.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 2.7E-19
+6 states generated, 5 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 2.
+The average outdegree of the complete state graph is 0 (minimum is 0, the maximum 1 and the 95th percentile is 1).
+Finished in 00s at (2026-10-23 12:44:21)

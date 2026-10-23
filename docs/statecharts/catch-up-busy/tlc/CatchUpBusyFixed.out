@@ -1,0 +1,15 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 89 and seed 8707405346046284011 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 14737] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /workspace/specs/formal/CatchUpBusyFixed.tla
+Semantic processing of module CatchUpBusyFixed
+Starting... (2026-10-23 12:43:58)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-23 12:43:58.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 0.0
+6 states generated, 6 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 5.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
+Finished in 00s at (2026-10-23 12:43:58)

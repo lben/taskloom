@@ -1,0 +1,62 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+3777565550007190427 [label="/\\ older = \"due\"\n/\\ up = TRUE\n/\\ policy = \"run_once\"\n/\\ phase = \"before\"\n/\\ onTime = \"due\"\n/\\ previous = \"due\"",style = filled]
+-503105642034863127 [label="/\\ older = \"due\"\n/\\ up = TRUE\n/\\ policy = \"skip\"\n/\\ phase = \"before\"\n/\\ onTime = \"due\"\n/\\ previous = \"due\"",style = filled]
+-2544236097563062792 [label="/\\ older = \"due\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"before\"\n/\\ onTime = \"due\"\n/\\ previous = \"due\"",style = filled]
+-4912563158593972668 [label="/\\ older = \"running\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"queued\"\n/\\ previous = \"queued\"",style = filled]
+3777565550007190427 -> 639136570279980603 [label="Check",color="black",fontcolor="black"];
+639136570279980603 [label="/\\ older = \"missed\"\n/\\ up = TRUE\n/\\ policy = \"run_once\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"running\""];
+-503105642034863127 -> -4175558517567130555 [label="Check",color="black",fontcolor="black"];
+-4175558517567130555 [label="/\\ older = \"missed\"\n/\\ up = TRUE\n/\\ policy = \"skip\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"running\""];
+-2544236097563062792 -> 5674056298801353189 [label="Check",color="black",fontcolor="black"];
+5674056298801353189 [label="/\\ older = \"running\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"queued\""];
+-4912563158593972668 -> -1669407754737528361 [label="Finish",color="black",fontcolor="black"];
+-1669407754737528361 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"queued\"\n/\\ previous = \"running\""];
+-4912563158593972668 -> 4510660927715640767 [label="Stop",color="black",fontcolor="black"];
+4510660927715640767 [label="/\\ older = \"running\"\n/\\ up = FALSE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"dropped\""];
+-4912563158593972668 -> 4510660927715640767 [label="Stop",color="black",fontcolor="black"];
+639136570279980603 -> -2715890615658992535 [label="Finish",color="black",fontcolor="black"];
+-2715890615658992535 [label="/\\ older = \"missed\"\n/\\ up = TRUE\n/\\ policy = \"run_once\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"done\""];
+-4175558517567130555 -> -3646542797987404404 [label="Finish",color="black",fontcolor="black"];
+-3646542797987404404 [label="/\\ older = \"missed\"\n/\\ up = TRUE\n/\\ policy = \"skip\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"done\""];
+5674056298801353189 -> 5456153624732089815 [label="Finish",color="black",fontcolor="black"];
+5456153624732089815 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"running\""];
+5674056298801353189 -> -5624418840947652133 [label="Stop",color="black",fontcolor="black"];
+-5624418840947652133 [label="/\\ older = \"running\"\n/\\ up = FALSE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"dropped\""];
+-1669407754737528361 -> -4353923924330330276 [label="Finish",color="black",fontcolor="black"];
+-4353923924330330276 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"running\"\n/\\ previous = \"done\""];
+-1669407754737528361 -> 4669350456039107490 [label="Stop",color="black",fontcolor="black"];
+4669350456039107490 [label="/\\ older = \"done\"\n/\\ up = FALSE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"running\""];
+4510660927715640767 -> -2250386535103783518 [label="Finish",color="black",fontcolor="black"];
+-2250386535103783518 [label="/\\ older = \"done\"\n/\\ up = FALSE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"dropped\""];
+4510660927715640767 -> -5006041749079695442 [label="Resume",color="black",fontcolor="black"];
+-5006041749079695442 [label="/\\ older = \"running\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"dropped\""];
+5456153624732089815 -> -3498849401017936326 [label="Finish",color="black",fontcolor="black"];
+-3498849401017936326 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"done\""];
+-5624418840947652133 -> 8047404444262175174 [label="Finish",color="black",fontcolor="black"];
+8047404444262175174 [label="/\\ older = \"done\"\n/\\ up = FALSE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"dropped\""];
+-5624418840947652133 -> 3886023081883390922 [label="Resume",color="black",fontcolor="black"];
+3886023081883390922 [label="/\\ older = \"running\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"dropped\""];
+-4353923924330330276 -> -8478915538735330330 [label="Finish",color="black",fontcolor="black"];
+-8478915538735330330 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"done\"\n/\\ previous = \"done\""];
+4669350456039107490 -> -1210160970140811785 [label="Finish",color="black",fontcolor="black"];
+-1210160970140811785 [label="/\\ older = \"done\"\n/\\ up = FALSE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"done\""];
+4669350456039107490 -> -4263998200808394317 [label="Resume",color="black",fontcolor="black"];
+-4263998200808394317 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"running\""];
+-2250386535103783518 -> 7267372620683462579 [label="Resume",color="black",fontcolor="black"];
+7267372620683462579 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"dropped\""];
+-5006041749079695442 -> 7267372620683462579 [label="Finish",color="black",fontcolor="black"];
+8047404444262175174 -> -1463109063577941033 [label="Resume",color="black",fontcolor="black"];
+-1463109063577941033 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"skipped\"\n/\\ previous = \"dropped\""];
+3886023081883390922 -> -1463109063577941033 [label="Finish",color="black",fontcolor="black"];
+-1210160970140811785 -> -3613114471490685321 [label="Resume",color="black",fontcolor="black"];
+-3613114471490685321 [label="/\\ older = \"done\"\n/\\ up = TRUE\n/\\ policy = \"catch_up\"\n/\\ phase = \"checked\"\n/\\ onTime = \"dropped\"\n/\\ previous = \"done\""];
+-4263998200808394317 -> -3613114471490685321 [label="Finish",color="black",fontcolor="black"];
+{rank = same; -2544236097563062792;3777565550007190427;-4912563158593972668;-503105642034863127;}
+{rank = same; 5674056298801353189;-4175558517567130555;4510660927715640767;639136570279980603;-1669407754737528361;}
+{rank = same; -5006041749079695442;5456153624732089815;-2250386535103783518;-5624418840947652133;-4353923924330330276;4669350456039107490;}
+{rank = same; 3886023081883390922;-4263998200808394317;-1210160970140811785;8047404444262175174;}
+}
+}

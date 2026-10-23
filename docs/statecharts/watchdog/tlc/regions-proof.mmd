@@ -1,0 +1,19 @@
+---
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  state "After the keeper looks | scheduler is checking" as p0
+  state "After the keeper looks | scheduler is hung, and you were told why" as p1
+  state "Before the keeper looks | scheduler is checking" as p2
+  state "Before the keeper looks | scheduler is hung" as p3
+  state "Before the keeper looks | scheduler is not running" as p4
+  [*] --> p4
+  [*] --> p2
+  [*] --> p3
+  p4 --> p0 : the keeper starts the scheduler
+  p2 --> p0 : the keeper leaves the scheduler alone
+  p3 --> p1 : the keeper tries to start another scheduler
+  p3 --> p0 : with the fix, the keeper stops the hung scheduler and starts a new one

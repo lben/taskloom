@@ -1,0 +1,15 @@
+---
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  state "After the check | 6:31 finished, 6:32 skipped" as p0
+  state "After the check | 6:31 running, 6:32 skipped" as p1
+  state "Before the check | 6:31 finished, 6:32 still due" as p2
+  state "Before the check | 6:31 running, 6:32 still due" as p3
+  [*] --> p3
+  p3 --> p1 : the check skips the one new minute
+  p3 --> p2 : the running job finishes
+  p1 --> p0 : the running job finishes

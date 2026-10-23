@@ -1,0 +1,45 @@
+---
+title: "The keeper and a server scheduler"
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  %% second model (fix): the fix
+  classDef plainFixed fill:#f4f6f7,stroke:#1e8449,stroke-width:4px,color:#145a32
+  classDef group0 fill:#d6eaf8,stroke:#6b757c,color:#1b2631
+  classDef group1 fill:#d5f5e3,stroke:#6b7b72,color:#1b2631
+  classDef group2 fill:#f5b7b1,stroke:#7b5c59,color:#1b2631
+  classDef group2Fixed fill:#f5b7b1,stroke:#1e8449,stroke-width:4px,color:#145a32
+  state "Legend" as legend {
+    state "Not checked yet" as legendGroup0
+    state "Scheduler is checking" as legendGroup1
+    state "Scheduler left hung" as legendGroup2
+    state "Fixed or new with the fix" as legendFixed
+  }
+  class legendGroup0 group0
+  class legendGroup1 group1
+  class legendGroup2 group2
+  class legendFixed plainFixed
+  state "After the keeper looks" as g0 {
+    state "scheduler is checking" as s0
+    state "scheduler is hung, and you<br/>were told why" as s1
+  }
+  state "Before the keeper looks" as g1 {
+    state "scheduler is checking" as s2
+    state "scheduler is hung" as s3
+    state "scheduler is not running" as s4
+  }
+  [*] --> s2
+  [*] --> s3
+  [*] --> s4
+  s4 --> s0 : the keeper starts the<br/>scheduler
+  s2 --> s0 : the keeper leaves the<br/>scheduler alone
+  s3 --> s1 : the keeper tries to start<br/>another scheduler
+  s3 --> s0 : with the fix, the keeper stops<br/>the hung scheduler and starts<br/>a new one
+  class s0 group1
+  class s1 group2Fixed
+  class s2 group0
+  class s3 group0
+  class s4 group0

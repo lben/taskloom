@@ -1,0 +1,31 @@
+{
+  "view": "customer",
+  "modelStates": 4,
+  "modelTransitions": 3,
+  "chartStates": 4,
+  "chartTransitions": 3,
+  "chartStatus": {
+    "works": 4,
+    "wrong": 0,
+    "fixed": 0
+  },
+  "chartGroups": [
+    {
+      "name": "Waiting to check",
+      "color": "#d6eaf8",
+      "states": 2
+    },
+    {
+      "name": "Overlap skip",
+      "color": "#d5f5e3",
+      "states": 2
+    }
+  ],
+  "mixedGroups": [],
+  "regions": {
+    "drawn": false,
+    "why": "6 region states are not fewer than the 4 flat states"
+  },
+  "classes": [],
+  "codeLike": []
+}

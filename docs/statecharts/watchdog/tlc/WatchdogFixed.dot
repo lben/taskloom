@@ -1,0 +1,14 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+7836474156048832297 [label="/\\ remote = \"down\"\n/\\ told = FALSE\n/\\ phase = \"before\"",style = filled]
+2119387897728461944 [label="/\\ remote = \"up\"\n/\\ told = FALSE\n/\\ phase = \"before\"",style = filled]
+291953365019095897 [label="/\\ remote = \"hung\"\n/\\ told = FALSE\n/\\ phase = \"before\"",style = filled]
+7836474156048832297 -> 7914995352338249408 [label="Check",color="black",fontcolor="black"];
+7914995352338249408 [label="/\\ remote = \"up\"\n/\\ told = FALSE\n/\\ phase = \"checked\""];
+2119387897728461944 -> 7914995352338249408 [label="Check",color="black",fontcolor="black"];
+291953365019095897 -> 7914995352338249408 [label="Check",color="black",fontcolor="black"];
+{rank = same; 7836474156048832297;2119387897728461944;291953365019095897;}
+}
+}

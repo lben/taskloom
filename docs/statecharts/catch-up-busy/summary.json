@@ -1,0 +1,57 @@
+{
+  "view": "customer",
+  "second": {
+    "role": "fix",
+    "label": "the fix",
+    "lacks": []
+  },
+  "modelStates": 5,
+  "modelTransitions": 4,
+  "chartStates": 9,
+  "chartTransitions": 8,
+  "chartStatus": {
+    "works": 2,
+    "wrong": 0,
+    "fixed": 7
+  },
+  "chartGroups": [
+    {
+      "name": "Waiting to check",
+      "color": "#d6eaf8",
+      "states": 2
+    },
+    {
+      "name": "Both new minutes are kept",
+      "color": "#d5f5e3",
+      "states": 4
+    },
+    {
+      "name": "A minute was skipped",
+      "color": "#fdebd0",
+      "states": 3
+    }
+  ],
+  "mixedGroups": [],
+  "regions": {
+    "drawn": false,
+    "why": "11 region states are not fewer than the 9 flat states"
+  },
+  "classes": [
+    {
+      "n": 1,
+      "end": "After the check: 6:31 running, 6:32 skipped, 6:33 waiting its turn",
+      "invariant": "CatchUpDoesNotSkipTheOldest",
+      "rule": "Catch-up does not skip the oldest minute of a backlog while a run is going.",
+      "cause": "6:31 is still running, so catch-up skips 6:32 and only queues 6:33",
+      "readerSteps": 1,
+      "modelSteps": 2,
+      "counterexamples": 1,
+      "fix": "After the check: 6:31 running, 6:32 waiting its turn, 6:33 waiting its turn"
+    }
+  ],
+  "codeLike": [],
+  "uncited": {
+    "CatchUpBusy.tla": [],
+    "CatchUpBusyFixed.tla": []
+  }
+}

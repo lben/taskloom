@@ -1,0 +1,174 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 74 and seed 3801211900480254310 with 1 worker on 4 cores with 3330MB heap and 64MB offheap memory [pid: 12409] (Linux 6.12.94+ amd64, Ubuntu 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /workspace/specs/formal/SchedulerCheck.tla
+Parsing file /tmp/tlc-VZrfYi/tmp/Integers.tla
+Parsing file /tmp/tlc-VZrfYi/tmp/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module SchedulerCheck
+Starting... (2026-10-23 12:43:26)
+Computing initial states...
+Computed 2 initial states...
+Finished computing initial states: 4 distinct states generated at 2026-10-23 12:43:26.
+Error: Invariant CatchUpKeepsEveryTime is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ older = "due"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "before"
+/\ onTime = "due"
+/\ previous = "due"
+
+State 2: <Check line 38, col 3 to line 46, col 29 of module SchedulerCheck>
+/\ older = "running"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "skipped"
+/\ previous = "queued"
+
+Error: Invariant CatchUpKeepsEveryTime is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ older = "running"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "queued"
+
+State 2: <Stop line 67, col 3 to line 73, col 32 of module SchedulerCheck>
+/\ older = "running"
+/\ up = FALSE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "dropped"
+
+State 3: <Resume line 76, col 3 to line 78, col 57 of module SchedulerCheck>
+/\ older = "running"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "dropped"
+
+Error: Invariant CatchUpKeepsEveryTime is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ older = "running"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "queued"
+
+State 2: <Finish line 51, col 3 to line 62, col 36 of module SchedulerCheck>
+/\ older = "done"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "running"
+
+State 3: <Stop line 67, col 3 to line 73, col 32 of module SchedulerCheck>
+/\ older = "done"
+/\ up = FALSE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "running"
+
+State 4: <Resume line 76, col 3 to line 78, col 57 of module SchedulerCheck>
+/\ older = "done"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "running"
+
+Error: Invariant CatchUpKeepsEveryTime is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ older = "running"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "queued"
+
+State 2: <Stop line 67, col 3 to line 73, col 32 of module SchedulerCheck>
+/\ older = "running"
+/\ up = FALSE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "dropped"
+
+State 3: <Finish line 51, col 3 to line 62, col 36 of module SchedulerCheck>
+/\ older = "done"
+/\ up = FALSE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "dropped"
+
+State 4: <Resume line 76, col 3 to line 78, col 57 of module SchedulerCheck>
+/\ older = "done"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "dropped"
+
+Error: Invariant CatchUpKeepsEveryTime is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ older = "running"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "queued"
+
+State 2: <Finish line 51, col 3 to line 62, col 36 of module SchedulerCheck>
+/\ older = "done"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "queued"
+/\ previous = "running"
+
+State 3: <Stop line 67, col 3 to line 73, col 32 of module SchedulerCheck>
+/\ older = "done"
+/\ up = FALSE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "running"
+
+State 4: <Finish line 51, col 3 to line 62, col 36 of module SchedulerCheck>
+/\ older = "done"
+/\ up = FALSE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "done"
+
+State 5: <Resume line 76, col 3 to line 78, col 57 of module SchedulerCheck>
+/\ older = "done"
+/\ up = TRUE
+/\ policy = "catch_up"
+/\ phase = "checked"
+/\ onTime = "dropped"
+/\ previous = "done"
+
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 4.9E-18
+21 states generated, 15 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 4.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
+Finished in 00s at (2026-10-23 12:43:26)

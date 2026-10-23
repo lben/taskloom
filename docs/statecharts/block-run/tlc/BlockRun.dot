@@ -1,0 +1,33 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+-6948597215397744115 [label="/\\ phase = \"idle\"\n/\\ attempt = 0",style = filled]
+-6948597215397744115 -> 1977674170498013059 [label="Start",color="black",fontcolor="black"];
+1977674170498013059 [label="/\\ phase = \"running\"\n/\\ attempt = 1"];
+-6948597215397744115 -> -4531713517512964064 [label="Cancel",color="black",fontcolor="black"];
+-4531713517512964064 [label="/\\ phase = \"cancelled\"\n/\\ attempt = 0"];
+1977674170498013059 -> -1733794941837751287 [label="Succeed",color="black",fontcolor="black"];
+-1733794941837751287 [label="/\\ phase = \"succeeded\"\n/\\ attempt = 1"];
+1977674170498013059 -> 3369828298193145520 [label="Retry",color="black",fontcolor="black"];
+3369828298193145520 [label="/\\ phase = \"running\"\n/\\ attempt = 2"];
+1977674170498013059 -> 6057440336694927600 [label="Cancel",color="black",fontcolor="black"];
+6057440336694927600 [label="/\\ phase = \"cancelled\"\n/\\ attempt = 1"];
+3369828298193145520 -> -3294868587100564166 [label="Succeed",color="black",fontcolor="black"];
+-3294868587100564166 [label="/\\ phase = \"succeeded\"\n/\\ attempt = 2"];
+3369828298193145520 -> -4915591517478607264 [label="Retry",color="black",fontcolor="black"];
+-4915591517478607264 [label="/\\ phase = \"running\"\n/\\ attempt = 3"];
+3369828298193145520 -> 7036396344334989763 [label="Cancel",color="black",fontcolor="black"];
+7036396344334989763 [label="/\\ phase = \"cancelled\"\n/\\ attempt = 2"];
+-4915591517478607264 -> 5136919487770541546 [label="Succeed",color="black",fontcolor="black"];
+5136919487770541546 [label="/\\ phase = \"succeeded\"\n/\\ attempt = 3"];
+-4915591517478607264 -> -5213737180708274866 [label="GiveUp",color="black",fontcolor="black"];
+-5213737180708274866 [label="/\\ phase = \"failed\"\n/\\ attempt = 3"];
+-4915591517478607264 -> -816829088882847469 [label="Cancel",color="black",fontcolor="black"];
+-816829088882847469 [label="/\\ phase = \"cancelled\"\n/\\ attempt = 3"];
+{rank = same; -6948597215397744115;}
+{rank = same; 1977674170498013059;}
+{rank = same; 3369828298193145520;}
+{rank = same; -4915591517478607264;}
+}
+}

@@ -1,0 +1,32 @@
+---
+title: "One new minute while a run is still going"
+config:
+  markdownAutoWrap: false
+  state:
+    useMaxWidth: false
+---
+stateDiagram-v2
+  classDef group0 fill:#d6eaf8,stroke:#6b757c,color:#1b2631
+  classDef group1 fill:#d5f5e3,stroke:#6b7b72,color:#1b2631
+  state "Legend" as legend {
+    state "Waiting to check" as legendGroup0
+    state "Overlap skip" as legendGroup1
+  }
+  class legendGroup0 group0
+  class legendGroup1 group1
+  state "After the check" as g0 {
+    state "6:31 finished, 6:32<br/>skipped" as s0
+    state "6:31 running, 6:32 skipped" as s1
+  }
+  state "Before the check" as g1 {
+    state "6:31 finished, 6:32 still<br/>due" as s2
+    state "6:31 running, 6:32 still<br/>due" as s3
+  }
+  [*] --> s3
+  s3 --> s1 : the check skips the one new<br/>minute
+  s3 --> s2 : the running job finishes
+  s1 --> s0 : the running job finishes
+  class s0 group1
+  class s1 group1
+  class s2 group0
+  class s3 group0

@@ -516,7 +516,16 @@ class _Runner:
                 raise Cancelled()
             if deadline is not None and time.monotonic() > deadline:
                 attempt_cancel.set()
-                done.wait(STOP_GRACE_SECONDS)
+                finished = done.wait(STOP_GRACE_SECONDS)
+                # It already returned a result in the grace period: that result stands. Treating it as a
+                # timeout retried work that had finished (or failed a run that had succeeded).
+                if finished and "error" not in result:
+                    break
+                # A cooperative block raises Cancelled when the attempt is told to stop. The run was not
+                # cancelled, so this attempt timed out and may be retried. Any other error is the block's own.
+                if finished and "error" in result and not (
+                        isinstance(result["error"], Cancelled) and not self.cancel.is_set()):
+                    raise result["error"]
                 raise TimeoutError(f"timed out after {timeout:g} s")
         if "error" in result:
             raise result["error"]

@@ -157,6 +157,35 @@ def test_user_block_overrides_builtin_and_broken_user_files_are_reported(env):
     assert "could not load user block file" in result.stderr and "broken.py" in result.stderr
 
 
+def test_a_block_that_finishes_during_the_timeout_grace_is_kept(env):
+    """The attempt used to be failed as soon as the deadline passed, even when the block returned during the
+    two seconds it is given to stop. The finished work was then retried."""
+    flow = env.write("flow.yaml", """
+        blocks:
+          slow:
+            type: logic.python
+            config:
+              inputs: []
+              outputs: []
+              code: |
+                import time
+                from pathlib import Path
+                time.sleep(0.4)
+                p = Path("marker.txt")
+                p.write_text(str(int(p.read_text()) + 1) if p.exists() else "1")
+            timeout: 150ms
+            retry: {policy: fixed, delay: 50ms, max_attempts: 3}
+    """)
+
+    result = env.taskloom("run", flow)
+
+    assert result.returncode == 0, result.stderr
+    assert (env.root / "marker.txt").read_text() == "1"
+    run_id, status = env.last_run()
+    assert status == "success"
+    assert env.query("SELECT status, attempts FROM blocks WHERE run_id=?", run_id) == [("success", 1)]
+
+
 def test_block_timeout_fails_the_attempt(env):
     flow = env.write("flow.yaml", """
         blocks:

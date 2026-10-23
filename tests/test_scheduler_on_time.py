@@ -417,3 +417,137 @@ def test_the_headless_scheduler_starts_a_runs_process_a_few_seconds_before_its_t
     assert as_of == due
     ahead = due.timestamp() - process_started  # a few seconds early: loaded by its time, it begins then
     assert 0 < ahead < 15, f"its process started {ahead:.2f} s before {due}"
+
+
+def _release(env):
+    (env.root / "go.txt").write_text("go")
+
+
+def _hold_until_released(misfire: str) -> str:
+    """A per-minute flow whose run waits until go.txt appears next to the flow."""
+    return f"""
+        params:
+          when: {{type: datetime, expr: "now()"}}
+        overlap: skip
+        blocks:
+          every_minute:
+            type: trigger.schedule
+            config: {{cron: "* * * * *", misfire: {misfire}}}
+          hold:
+            type: logic.python
+            config:
+              inputs: []
+              outputs: []
+              code: |
+                import time
+                from pathlib import Path
+                while not Path("go.txt").exists():
+                    time.sleep(0.05)
+        edges:
+          - every_minute.start -> hold.after
+    """
+
+
+@pytest.mark.parametrize("misfire, expected, skipped", [
+    ("run_once", ["06:33"], None),
+    ("skip", ["06:33"], 2),  # 06:31 and 06:32 were missed; 06:33 is the on-time run, started early
+    ("catch_up", ["06:31", "06:32", "06:33"], None),
+])
+def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expected, skipped):
+    """A check a few seconds before the minute used to start the previous minute and then skip this one.
+
+    The previous run had just been requested, overlap skip (the default) refused the on-time run, and `last`
+    had already moved past it, so that minute never ran.
+    """
+    notes = []
+    home = schedule(env, every_minute(misfire))
+    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+    scheduler.tick(at("06:30:00"))  # first sight: nothing is due yet
+    scheduler.tick(at("06:32:56"))  # 5 s early window reaches 06:33; 06:31 and 06:32 are already due
+    scheduler.wait_for_runs()
+
+    assert whens(env) == expected, notes
+    if skipped:
+        (message,) = missed_notes(notes)
+        assert re.search(rf"\b{skipped}\b", message), message
+    else:
+        assert missed_notes(notes) == []
+    assert [n for n in notes if n[0] == "Run skipped"] == []
+
+
+def test_catch_up_while_a_run_is_going_does_not_drop_the_oldest_time(env):
+    """catch_up queues every time but the first behind the run it just started. The first still used overlap
+    skip, so with a run already going the oldest missed time was skipped and only the later ones ran."""
+    notes = []
+    home = schedule(env, _hold_until_released("catch_up"))
+    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+    try:
+        scheduler.tick(at("06:30:00"))
+        scheduler.tick(at("06:31:00"))  # 06:31 starts and holds
+        scheduler.tick(at("06:33:00"))  # 06:32 and 06:33 are due while 06:31 is still going
+        _release(env)
+        scheduler.wait_for_runs(timeout=30)
+    finally:
+        _release(env)
+        for run in list(scheduler.runs):
+            if run.proc.poll() is None:
+                run.proc.kill()
+
+    assert whens(env) == ["06:31", "06:32", "06:33"], notes
+    assert [n for n in notes if n[0] == "Run skipped"] == []
+
+
+def test_one_catch_up_time_while_a_run_is_going_still_follows_overlap_skip(env):
+    """overlap skip still applies when a single new time comes due. catch_up queues a backlog, not every tick."""
+    notes = []
+    home = schedule(env, _hold_until_released("catch_up"))
+    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+    try:
+        scheduler.tick(at("06:30:00"))
+        scheduler.tick(at("06:31:00"))
+        scheduler.tick(at("06:32:00"))  # only 06:32, and 06:31 has not finished
+        assert any(title == "Run skipped" for title, _ in notes), notes
+        _release(env)
+        scheduler.wait_for_runs(timeout=30)
+    finally:
+        _release(env)
+        for run in list(scheduler.runs):
+            if run.proc.poll() is None:
+                run.proc.kill()
+
+    assert whens(env) == ["06:31"], notes
+
+
+def test_queued_catch_up_runs_still_happen_after_the_scheduler_restarts(env):
+    """Accepted catch-up runs used to live only in memory, while `last` was already moved past them, so a
+    restart dropped every run that had not started."""
+    notes = []
+    home = schedule(env, """
+        params:
+          when: {type: datetime, expr: "now()"}
+        blocks:
+          hourly:
+            type: trigger.schedule
+            config: {cron: "0 * * * *", misfire: catch_up}
+          note:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - hourly.start -> note.after
+    """)
+    first = Scheduler(home, lambda title, message: notes.append((title, message)))
+    first.tick(at("06:30:00"))
+    first.tick(at("09:30:00"))  # 07:00 starts; 08:00 and 09:00 wait for it
+    queued = [when for times in first.queued.values() for when, _ in times]
+    assert [t.strftime("%H:%M") for t in queued] == ["08:00", "09:00"]
+    # The scheduler process is gone: its in-memory queue goes with it. The runs it already started keep going.
+    restarted = Scheduler(home, lambda title, message: notes.append((title, message)))
+    restarted.tick(at("09:30:00"))
+    restarted.wait_for_runs()
+    for run in list(first.runs):
+        if run.proc.poll() is None:
+            run.proc.wait(timeout=30)
+
+    # 07:00 was already started by the first scheduler. A restart does not adopt that process, so its
+    # history row can be written after the 08:00 run the new scheduler starts itself.
+    assert sorted(whens(env)) == ["07:00", "08:00", "09:00"], (whens(env), notes)

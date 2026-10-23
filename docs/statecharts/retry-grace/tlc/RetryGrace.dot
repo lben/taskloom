@@ -1,0 +1,63 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+9166381283323622081 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 1\n/\\ sawValue = FALSE",style = filled]
+9166381283323622081 -> 1324555087938768889 [label="FinishWork",color="black",fontcolor="black"];
+1324555087938768889 [label="/\\ returned = \"value\"\n/\\ phase = \"grace\"\n/\\ attempt = 1\n/\\ sawValue = TRUE"];
+9166381283323622081 -> 7738968047912532514 [label="FinishWork",color="black",fontcolor="black"];
+7738968047912532514 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 1\n/\\ sawValue = FALSE"];
+9166381283323622081 -> 698488073451775287 [label="FinishWork",color="black",fontcolor="black"];
+698488073451775287 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 1\n/\\ sawValue = FALSE"];
+1324555087938768889 -> 7417601633211405987 [label="Decide",color="black",fontcolor="black"];
+7417601633211405987 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 2\n/\\ sawValue = TRUE"];
+7738968047912532514 -> -5692302744549796498 [label="Decide",color="black",fontcolor="black"];
+-5692302744549796498 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 2\n/\\ sawValue = FALSE"];
+698488073451775287 -> -5692302744549796498 [label="Decide",color="black",fontcolor="black"];
+7417601633211405987 -> -2570248945696692138 [label="FinishWork",color="black",fontcolor="black"];
+-2570248945696692138 [label="/\\ returned = \"value\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = TRUE"];
+7417601633211405987 -> 8260529958943448640 [label="FinishWork",color="black",fontcolor="black"];
+8260529958943448640 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = TRUE"];
+7417601633211405987 -> 1185745668507418965 [label="FinishWork",color="black",fontcolor="black"];
+1185745668507418965 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = TRUE"];
+-5692302744549796498 -> -2570248945696692138 [label="FinishWork",color="black",fontcolor="black"];
+-5692302744549796498 -> -6533824165633892979 [label="FinishWork",color="black",fontcolor="black"];
+-6533824165633892979 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = FALSE"];
+-5692302744549796498 -> -4069880955511553384 [label="FinishWork",color="black",fontcolor="black"];
+-4069880955511553384 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 2\n/\\ sawValue = FALSE"];
+-2570248945696692138 -> -1162238163936173039 [label="Decide",color="black",fontcolor="black"];
+-1162238163936173039 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+8260529958943448640 -> -1162238163936173039 [label="Decide",color="black",fontcolor="black"];
+1185745668507418965 -> -1162238163936173039 [label="Decide",color="black",fontcolor="black"];
+-6533824165633892979 -> 4048343807989786588 [label="Decide",color="black",fontcolor="black"];
+4048343807989786588 [label="/\\ returned = \"none\"\n/\\ phase = \"running\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+-4069880955511553384 -> 4048343807989786588 [label="Decide",color="black",fontcolor="black"];
+-1162238163936173039 -> 6159481580825860836 [label="FinishWork",color="black",fontcolor="black"];
+6159481580825860836 [label="/\\ returned = \"value\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+-1162238163936173039 -> -320538606923338510 [label="FinishWork",color="black",fontcolor="black"];
+-320538606923338510 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+-1162238163936173039 -> -7396345959173245977 [label="FinishWork",color="black",fontcolor="black"];
+-7396345959173245977 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+4048343807989786588 -> 6159481580825860836 [label="FinishWork",color="black",fontcolor="black"];
+4048343807989786588 -> 3205800317749145407 [label="FinishWork",color="black",fontcolor="black"];
+3205800317749145407 [label="/\\ returned = \"stuck\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+4048343807989786588 -> 5668513759213760554 [label="FinishWork",color="black",fontcolor="black"];
+5668513759213760554 [label="/\\ returned = \"error\"\n/\\ phase = \"grace\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+6159481580825860836 -> 497369289369729128 [label="Decide",color="black",fontcolor="black"];
+497369289369729128 [label="/\\ returned = \"value\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+-320538606923338510 -> 123397276012049599 [label="Decide",color="black",fontcolor="black"];
+123397276012049599 [label="/\\ returned = \"stuck\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+-7396345959173245977 -> 6498464555163462668 [label="Decide",color="black",fontcolor="black"];
+6498464555163462668 [label="/\\ returned = \"error\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = TRUE"];
+3205800317749145407 -> -3006688653410928782 [label="Decide",color="black",fontcolor="black"];
+-3006688653410928782 [label="/\\ returned = \"stuck\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+5668513759213760554 -> -8223763514688229439 [label="Decide",color="black",fontcolor="black"];
+-8223763514688229439 [label="/\\ returned = \"error\"\n/\\ phase = \"failed\"\n/\\ attempt = 3\n/\\ sawValue = FALSE"];
+{rank = same; 9166381283323622081;}
+{rank = same; 698488073451775287;7738968047912532514;1324555087938768889;}
+{rank = same; 7417601633211405987;-5692302744549796498;}
+{rank = same; -6533824165633892979;1185745668507418965;-4069880955511553384;8260529958943448640;-2570248945696692138;}
+{rank = same; -1162238163936173039;4048343807989786588;}
+{rank = same; 3205800317749145407;-7396345959173245977;5668513759213760554;-320538606923338510;6159481580825860836;}
+}
+}
