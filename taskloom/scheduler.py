@@ -77,6 +77,11 @@ class Scheduler:
         self._db.execute("INSERT INTO schedule_state VALUES (?, ?) ON CONFLICT (trigger) DO UPDATE SET last=excluded.last",
                          (key, when.isoformat()))
 
+    def _busy(self, path: str) -> bool:
+        """A run of this flow is going, queued, or waiting for a free slot."""
+        return (any(r.flow == path for r in self.runs) or bool(self.queued.get(path))
+                or any(waiting == path for waiting, _ in self.waiting))
+
     def _load(self, path: Path):
         """The flow, cached until the file changes; None (and one notification) if it cannot be read."""
         try:
@@ -120,22 +125,40 @@ class Scheduler:
                 due = trigger.due(last, now + EARLY_START)  # since the previous check, and the ones soon
                 if not due:
                     continue
-                self._set_last(key, now + EARLY_START)
+                # Times in the early window are the newest in this check (the run that should begin on time).
+                # Misfire applies to them together with the times already due. Asking for every soon time
+                # as well as the newest past time dropped the on-time run: the past one had just started,
+                # and overlap skip then refused the soon one.
                 past, soon = [t for t in due if t <= now], [t for t in due if t > now]
                 if trigger.misfire == "run_once":
-                    to_run = past[-1:]
+                    chosen = (past + soon)[-1:]  # one run, for the most recent time
+                    to_run = [t for t in chosen if t <= now]
+                    early = [t for t in chosen if t > now]
                 elif trigger.misfire == "catch_up":
-                    to_run = past[:CATCH_UP_LIMIT]
-                else:  # skip: only the most recent time can be on time; the others were missed
-                    to_run = past[-1:] if past and now - past[-1] <= ON_TIME_GRACE else []
-                    missed = len(past) - len(to_run)
+                    room = CATCH_UP_LIMIT
+                    to_run = past[:room]
+                    early = soon[: max(0, room - len(to_run))]
+                else:  # skip: only the on-time run. The one we start early is that run; older times were missed.
+                    if soon:
+                        to_run, early, missed = [], soon[:1], len(past)
+                    elif past and now - past[-1] <= ON_TIME_GRACE:
+                        to_run, early, missed = past[-1:], [], len(past) - 1
+                    else:
+                        to_run, early, missed = [], [], len(past)
                     if missed:
                         self._tell(flow, "skipped", "Missed runs skipped",
                                    f"{flow.name}: {missed} run(s) were due while the scheduler was off")
-                for n, as_of in enumerate(to_run):
-                    self._request(str(path), flow, (as_of, trigger.block), force_queue=n > 0)
-                for as_of in soon:  # on time: its process starts now, to begin at its time
-                    self._request(str(path), flow, (as_of, trigger.block))
+                planned = to_run + early
+                self._set_last(key, now + EARLY_START)
+                # A catch-up of more than one time runs one after another, including behind a run that is
+                # already going. force_queue on every time but the first used to skip the oldest and, when
+                # the soon time was requested on its own, skip the on-time run too.
+                path_s = str(path)
+                busy = self._busy(path_s)
+                serial = trigger.misfire == "catch_up" and len(planned) > 1
+                for n, as_of in enumerate(planned):
+                    self._request(path_s, flow, (as_of, trigger.block),
+                                  force_queue=serial and (n > 0 or busy))
         if paths is not None:
             # A schedule that is off (its Schedule block's Active unticked, its flow not in scheduled.yaml) is
             # forgotten: on again, it starts from then as a new one does, and the times while it was off neither
@@ -160,8 +183,7 @@ class Scheduler:
 
     def _request(self, path: str, flow, when: tuple, force_queue: bool = False):
         """`when` is (due time, Schedule block or None). A run waiting for a free slot counts as going."""
-        if (any(r.flow == path for r in self.runs) or self.queued.get(path)
-                or any(waiting == path for waiting, _ in self.waiting)):
+        if self._busy(path):
             policy = "queue" if force_queue else flow.overlap
             if policy == "skip":
                 self._tell(flow, "skipped", "Run skipped", f"{flow.name}: the previous run is still going")
