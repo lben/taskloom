@@ -9,6 +9,10 @@ import datetime as dt
 import decimal
 import io
 import json
+import os
+import sqlite3
+import subprocess
+import sys
 import textwrap
 import zipfile
 from pathlib import Path
@@ -554,12 +558,12 @@ def test_data_block_config_mistakes_are_reported_before_anything_runs(env):
         result = env.taskloom(command, flow)
         assert result.returncode == 2
         errors = result.stderr
-        assert "blocks.a: config.format: expected one of" in errors and "'excel'" in errors and "'xlsx'" in errors
-        assert "blocks.b: config.path is required" in errors
-        assert "blocks.c: unknown config key(s) ['delimiter']" in errors
-        assert "blocks.d: config.sql is required" in errors
-        assert "blocks.e: config.code is required" in errors
-        assert "blocks.f: config.format: expected one of" in errors
+        assert "a: Format: expected one of" in errors and "'excel'" in errors and "'xlsx'" in errors
+        assert "b: Path is required" in errors
+        assert "c: unknown setting(s) ['delimiter']" in errors
+        assert "d: SQL is required" in errors
+        assert "e: Code is required" in errors
+        assert "f: Format: expected one of" in errors
     assert not (env.home / "history.db").exists()  # nothing ran
 
 
@@ -1167,9 +1171,9 @@ def test_sql_input_names_must_be_names_and_be_connected(env):
     result = env.taskloom("validate", flow)
 
     assert result.returncode == 2
-    assert "blocks.a: config.inputs: after: every block already has these" in result.stderr
-    assert "blocks.b: config.inputs: expected a list of names" in result.stderr
-    assert "blocks.c: config.inputs: duplicate names" in result.stderr
+    assert "a: Inputs: after: every block already has these" in result.stderr
+    assert "b: Inputs: expected a list of names" in result.stderr
+    assert "c: Inputs: duplicate names" in result.stderr
     assert "blocks.d: required input 'orders' is not connected" in result.stderr
 
 
@@ -1521,8 +1525,6 @@ def test_data_preview_shows_the_table_of_the_run_opened_from_run_history(win, qt
 
 
 def test_data_preview_of_a_run_whose_files_were_cleaned_up_says_so(win, qtbot, tmp_path):
-    (tmp_path / "home").mkdir(exist_ok=True)
-    (tmp_path / "home" / "settings.yaml").write_text("keep_runs: 1\n")
     flow = write_flow(tmp_path / "cleaned.yaml", """
         blocks:
           start: {type: trigger.manual}
@@ -1530,17 +1532,26 @@ def test_data_preview_of_a_run_whose_files_were_cleaned_up_says_so(win, qtbot, t
         edges:
           - start.start -> q.after
     """)
+    other = write_flow(tmp_path / "other.yaml", """
+        blocks:
+          note: {type: logic.python, config: {inputs: [], code: "output = 1"}}
+    """)
     tab = win.open_flow(flow)
     for n in (1, 2):
         win.run_flow(tab)
         qtbot.waitUntil(lambda: not tab.running and tab.last is not None and len(tab.runs) == n, timeout=60_000)
     first = min(r.run_id for r in tab.runs)
+    win.show_history_run(first)  # on the canvas while it is deleted:
+    with sqlite3.connect(win.home.history_db) as db:  # it started longer ago than keep_runs_for (5 years)...
+        db.execute("UPDATE runs SET started='2020-01-01T00:00:00' WHERE id=?", (first,))
+    subprocess.run([sys.executable, "-m", "taskloom.cli", "run", str(other)], check=True, capture_output=True,
+                   env={**os.environ, "TASKLOOM_HOME": str(win.home.root)}, timeout=120)  # ...and another flow's run ends
+    assert not (win.home.runs_dir / str(first)).exists()
 
-    win.show_history_run(first)
     _select(tab, "q")
 
     assert win.preview.label.text().startswith("Cannot preview:")
-    assert "keep_runs" in win.preview.label.text()
+    assert "keep_runs_for" in win.preview.label.text()
 
 
 def test_data_preview_shows_a_timestamp_with_a_time_zone(win, qtbot, tmp_path):

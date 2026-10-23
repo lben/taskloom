@@ -30,6 +30,9 @@ from .launch import runner_command, windowed_command
 from .report import Html
 
 TICK_SECONDS = 15
+# A run's process starts this long before its time: loaded by then, it begins at its time.
+EARLY_START = dt.timedelta(seconds=5)
+NOT_DUE = 3  # the exit code of a run started early that did not begin (see why_not_due)
 ON_TIME_GRACE = dt.timedelta(minutes=2)  # later than this, a run counts as missed
 HEARTBEAT_STALE_SECONDS = 120
 KEEPER_INTERVAL_SECONDS = 300
@@ -113,23 +116,26 @@ class Scheduler:
                 last = self._last(key)
                 if last is None:  # a new schedule starts from now; nothing is "missed"
                     self._set_last(key, now)
-                    continue
-                due = trigger.due(last, now)  # since the previous check
+                    last = now
+                due = trigger.due(last, now + EARLY_START)  # since the previous check, and the ones soon
                 if not due:
                     continue
-                self._set_last(key, now)
+                self._set_last(key, now + EARLY_START)
+                past, soon = [t for t in due if t <= now], [t for t in due if t > now]
                 if trigger.misfire == "run_once":
-                    to_run = due[-1:]
+                    to_run = past[-1:]
                 elif trigger.misfire == "catch_up":
-                    to_run = due[:CATCH_UP_LIMIT]
+                    to_run = past[:CATCH_UP_LIMIT]
                 else:  # skip: only the most recent time can be on time; the others were missed
-                    to_run = due[-1:] if now - due[-1] <= ON_TIME_GRACE else []
-                    missed = len(due) - len(to_run)
+                    to_run = past[-1:] if past and now - past[-1] <= ON_TIME_GRACE else []
+                    missed = len(past) - len(to_run)
                     if missed:
                         self._tell(flow, "skipped", "Missed runs skipped",
                                    f"{flow.name}: {missed} run(s) were due while the scheduler was off")
                 for n, as_of in enumerate(to_run):
                     self._request(str(path), flow, (as_of, trigger.block), force_queue=n > 0)
+                for as_of in soon:  # on time: its process starts now, to begin at its time
+                    self._request(str(path), flow, (as_of, trigger.block))
         if paths is not None:
             # A schedule that is off (its Schedule block's Active unticked, its flow not in scheduled.yaml) is
             # forgotten: on again, it starts from then as a new one does, and the times while it was off neither
@@ -185,8 +191,10 @@ class Scheduler:
 
     def _start(self, path: str, when: tuple):
         as_of, block = when
+        # Started early, it loads, then waits for its time (a time that has passed: it begins at once).
         command = runner_command() + ["run", path, "--json-events", "--notify",
-                                      "--as-of", as_of.isoformat(sep=" ", timespec="minutes")]
+                                      "--as-of", as_of.isoformat(sep=" ", timespec="minutes"),
+                                      "--start-at", as_of.isoformat(timespec="seconds"), "--if-scheduled"]
         if block:
             command += ["--trigger", block]
         # errors="replace": a program the run starts (Java, a console tool) may write bytes that are not text in
@@ -227,7 +235,8 @@ class Scheduler:
                 history = History(self.home.history_db)
                 history.mark_crashed(run.run_id, dt.datetime.now().isoformat(timespec="milliseconds"))
                 history.close()
-            if run.status != "success":
+            # (one that did not begin, as its schedule or the service was turned off before its time: nothing to tell)
+            if run.status != "success" and not (run.run_id is None and run.proc.returncode == NOT_DUE):
                 name = Path(run.flow).stem
                 detail = (run.errors or run.output or [f"exit code {run.proc.returncode}"])[-1]
                 self.notify(f"{name} {run.status or 'failed'}", detail)
@@ -271,11 +280,12 @@ class Scheduler:
         self._poll()  # what the last emails told
 
     def seconds_to_next_check(self, now: dt.datetime) -> float:
-        """How long the loop waits after its check at `now`: until the soonest due time, so that run starts
-        on time, and at most TICK_SECONDS (edited flows, finished and queued runs)."""
+        """How long the loop waits after its check at `now`: until EARLY_START before the soonest due time it has
+        not started yet, so that run begins on time, and at most TICK_SECONDS (edited flows, finished and queued
+        runs)."""
         times = [t for path in self._scheduled_flows() or [] if (flow := self._load(path))
-                 for t in (trigger.next_after(now) for trigger in flow.triggers) if t]
-        seconds = (min(times) - now).total_seconds() if times else TICK_SECONDS
+                 for t in (trigger.next_after(now + EARLY_START) for trigger in flow.triggers) if t]
+        seconds = (min(times) - EARLY_START - now).total_seconds() if times else TICK_SECONDS
         return max(0.0, min(TICK_SECONDS, seconds))
 
     # --- keeping server schedulers alive ----------------------------------------------
@@ -402,6 +412,25 @@ def acquire_lock(home: Home):
         handle.close()
         raise RuntimeError(f"a scheduler is already running for {home.root}") from None
     return handle
+
+
+def why_not_due(home: Home, path: Path, block: str | None, when: dt.datetime) -> str | None:
+    """Why a run the scheduler service started early, for the time `when` of the flow `path`'s Schedule block
+    `block` (None: its flow-level schedule), does not begin at that time: the service was turned off, or that
+    schedule no longer runs then (Active unticked, changed, the flow taken off scheduled.yaml). None: it begins."""
+    try:
+        acquire_lock(home).close()  # nobody holds it: no scheduler service runs
+        return "the scheduler service is off"
+    except RuntimeError:
+        pass
+    try:
+        listed = path in [p.resolve() for p in home.scheduled_flows()]
+        triggers = load_flow(path).triggers if listed else []
+    except (OSError, ValueError, FlowError) as e:
+        return f"{path.name} cannot be read: {e}"
+    if any(t.block == block and t.next_after(when - dt.timedelta(seconds=1)) == when for t in triggers):
+        return None
+    return f"{path.name} is not scheduled at {when:%Y-%m-%d %H:%M} any more"
 
 
 def serve(home: Home, headless: bool) -> int:

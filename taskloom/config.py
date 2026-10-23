@@ -5,7 +5,10 @@ Everything lives under one folder: $TASKLOOM_HOME, or ~/.taskloom by default.
 
 from __future__ import annotations
 
+import calendar
+import datetime as dt
 import os
+import re
 import stat
 import sys
 from dataclasses import dataclass
@@ -14,14 +17,37 @@ from pathlib import Path
 import yaml
 
 SETTINGS_DEFAULTS = {
-    "calendar": None, "keep_runs": 20, "java_home": None, "max_concurrent_runs": None, "keeper": [],
+    "calendar": None, "java_home": None, "max_concurrent_runs": None, "keeper": [],
     "notify_email": None, "notify_on": ["failure"], "smtp_connection": None, "python": None, "python_env": None,
-    "history_days": 365,  # runs, their logs and their values are kept this long
+    "keep_runs_for": "5 years",  # runs (their history, logs and files) that started longer ago are deleted
 }
 SECRET_PREFIX = "secret:"
 # Every secret value this process has seen; run output is scrubbed of them (see engine.redact).
 REVEALED: set[str] = set()
 KEYRING_SERVICE = "taskloom"
+
+
+def keep_runs_for(settings: dict) -> tuple[int, str]:
+    """keep_runs_for as (number, unit), e.g. '18 months' -> (18, 'months'); ValueError if it cannot be read."""
+    value = settings["keep_runs_for"]
+    match = re.fullmatch(r"([1-9][0-9]*) *(day|month|year)s?", str(value).strip())
+    if match is None:
+        raise ValueError(f"settings.yaml: keep_runs_for must be a whole number (1 or more) of days, months or years, "
+                         f"e.g. 5 years, 18 months or 90 days; got {value!r}")
+    return int(match[1]), match[2] + "s"
+
+
+def runs_kept_since(settings: dict) -> dt.datetime:
+    """Runs that started before this are deleted: keep_runs_for before now (months and years as on a calendar)."""
+    number, unit = keep_runs_for(settings)
+    now = dt.datetime.now()
+    try:
+        if unit == "days":
+            return now - dt.timedelta(days=number)
+        year, month = divmod(now.year * 12 + now.month - 1 - number * (12 if unit == "years" else 1), 12)
+        return now.replace(year=year, month=month + 1, day=min(now.day, calendar.monthrange(year, month + 1)[1]))
+    except (OverflowError, ValueError):  # further back than dates go: every run is kept
+        return dt.datetime.min
 
 
 def _load_yaml(path: Path) -> dict:

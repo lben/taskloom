@@ -1,8 +1,8 @@
 """File blocks: copy, move and delete between local folders (incl. network shares) and servers.
 
-A location is a local path (C:/data/x.csv, \\\\server\\share\\x.csv, /home/me/x.csv) or
-`<ssh connection>:<path>` on a server, e.g. `appserver:~/app/config.yaml`.
-A wildcard is allowed in the last part of a source path: `appserver:~/logs/*.log`.
+Each path has a setting saying where it is: on this computer (C:/data/x.csv, \\\\server\\share\\x.csv,
+/home/me/x.csv) when left empty, or on the server of an SSH connection (~/app/config.yaml on appserver).
+A wildcard is allowed in the last part of a source path: ~/logs/*.log.
 """
 
 from __future__ import annotations
@@ -150,18 +150,35 @@ class ServerFiles:
         self.client.close()
 
 
-def _open_location(ctx, location: str, stack: ExitStack):
-    """(filesystem, path, where) for a location string; `where` is "local" or the connection name."""
-    name, sep, path = location.partition(":")
-    # One letter is a Windows drive, e.g. C:/data; connections.yaml may be edited by hand, so any name in it counts.
-    if sep and len(name) > 1 and (IDENTIFIER.match(name) or name in ctx.home.connections()):
-        conn = ctx.connection(name)  # a name that is not a connection is an error, not a local folder
-        if conn.get("kind") != "ssh":
-            raise ValueError(f"connection '{name}' is not an SSH connection")
-        fs = ServerFiles(ssh.connect(conn, ctx.home))
-        stack.callback(fs.close)
-        return fs, path, name
-    return LocalFiles(), location, "local"
+class _Path(fields.Text):
+    """A path, on this computer or on the server chosen in the setting labelled `server`."""
+
+    def __init__(self, server: str, **kw):
+        super().__init__(**kw)
+        self.server = server
+
+    def coerce(self, value):
+        value = str(value)
+        name, sep, rest = value.partition(":")
+        # The form connection:path is gone; never read it as a path on this computer (C: is a Windows drive).
+        if sep and len(name) > 1 and IDENTIFIER.match(name):
+            raise ValueError(f"'{value}' names the server before the path, which is no longer read: choose {name} "
+                             f"in '{self.server}' and write the path alone, {rest}")
+        return value
+
+
+def _open_location(ctx, server: str | None, stack: ExitStack):
+    """(filesystem, where) for a path on this computer (no server) or on the server of an SSH connection;
+    `where` is "local" or the connection name."""
+    if not server:
+        return LocalFiles(), "local"
+    fs = ServerFiles(ssh.connect(ctx.connection(server), ctx.home))
+    stack.callback(fs.close)
+    return fs, server
+
+
+def _shown(path: str, server: str | None) -> str:
+    return f"{path} on {server}" if server else path
 
 
 def _same_file(where: str, fs, a: str, b: str) -> bool:
@@ -184,14 +201,15 @@ def _copy_file(src_fs, src, dst_fs, dst, ctx):
             fout.write(chunk)
 
 
-def _copy(ctx, source: str, destination: str, overwrite: bool, move: bool) -> list[str]:
+def _copy(ctx, config, move: bool) -> list[str]:
+    source, destination = config.source, config.destination
     with ExitStack() as stack:
-        src_fs, src, src_where = _open_location(ctx, source, stack)
-        dst_fs, dst, dst_where = _open_location(ctx, destination, stack)
-        dst = dst_fs.norm(dst)
-        matches = src_fs.expand(src)
+        src_fs, src_where = _open_location(ctx, config.source_server, stack)
+        dst_fs, dst_where = _open_location(ctx, config.destination_server, stack)
+        dst = dst_fs.norm(destination)
+        matches = src_fs.expand(source)
         if not matches:
-            raise FileNotFoundError(f"nothing found at {source}")
+            raise FileNotFoundError(f"nothing found at {_shown(source, config.source_server)}")
         into_folder = (len(matches) > 1 or src_fs.is_dir(matches[0]) or destination.endswith(("/", "\\"))
                        or dst_fs.is_dir(dst))
         folders, pairs = [], []  # every folder is made, so empty ones are kept too
@@ -222,60 +240,80 @@ def _copy(ctx, source: str, destination: str, overwrite: bool, move: bool) -> li
         if clashes:  # the last would replace the others (and a move would then delete them all)
             raise ValueError("several files would be copied to the same place (names that differ only in case "
                              f"count as one): {', '.join(clashes[:5])}")
-        if not overwrite:
+        if not config.overwrite:
             existing = [t for _, t in pairs if dst_fs.exists(t)]
             if existing:
-                raise FileExistsError(f"already exists (set overwrite to allow): {', '.join(existing[:5])}")
+                raise FileExistsError(f"already exists (turn on Overwrite to replace it): {', '.join(existing[:5])}")
         for folder in folders:
             dst_fs.makedirs(folder)
         for src_file, target in pairs:
             _copy_file(src_fs, src_file, dst_fs, target, ctx)
-        ctx.log(f"{'moved' if move else 'copied'} {len(pairs)} file(s) to {destination}")
+        ctx.log(f"{'moved' if move else 'copied'} {len(pairs)} file(s) to "
+                f"{_shown(destination, config.destination_server)}")
         if move:
             for match in matches:
                 src_fs.remove(match)
         return [t for _, t in pairs]
 
 
+WHERE = ("This computer (its folders and network folders, e.g. \\\\fileserver\\share), or the server of one of "
+         "your SSH connections (Tools > Connections)")
+FILES = ("a file (C:/data/sales.csv, ~/outbox/sales.csv), a folder with everything in it (C:/data/reports), or a "
+         "pattern in the last part (C:/data/*.csv, ~/logs/app-*.log)")
+
+
 class CopyFiles(Block):
     type_id = "files.copy"
     title = "Copy Files"
-    description = 'Copies files or folders: on this computer, to or from a network folder, or to or from a server.'
+    description = ("Copies a file, a folder with everything in it, or the files matching a pattern. For the source "
+                   "and the destination, choose where each is: this computer (also network folders) or a server.")
     category = "Files"
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"files": ports.Any()}
     config = {
-        "source": fields.Text(help="A file, folder or pattern; server paths as connection:path"),
-        "destination": fields.Text(help="A file path, or a folder (end with /)"),
-        "overwrite": fields.Bool(default=True),
+        "source_server": fields.Server(label="Source on", help=f"Where the source is: {WHERE}"),
+        "source": _Path("Source on", help=f"What to copy or move: {FILES}"),
+        "destination_server": fields.Server(label="Destination on", help=f"Where the destination is: {WHERE}"),
+        "destination": _Path("Destination on", help=(
+            "A folder, ending with / (C:/archive/, ~/incoming/): what is copied or moved goes into it, a folder "
+            "with its name. Or, for one file, its new name (C:/archive/sales-old.csv). Missing folders are made.")),
+        "overwrite": fields.Bool(default=True, help=(
+            "On: a file already at the destination is replaced. Off: if any file is already there, nothing is "
+            "copied and the block fails.")),
     }
 
     def run(self, ctx, after=None):
-        return {"files": _copy(ctx, self.config.source, self.config.destination, self.config.overwrite, move=False)}
+        return {"files": _copy(ctx, self.config, move=False)}
 
 
 class MoveFiles(CopyFiles):
     type_id = "files.move"
     title = "Move Files"
-    description = 'Moves files or folders: on this computer, to or from a network folder, or to or from a server.'
+    description = ("Moves a file, a folder with everything in it, or the files matching a pattern: copies them, then "
+                   "deletes them where they were. For the source and the destination, choose where each is: this "
+                   "computer (also network folders) or a server.")
 
     def run(self, ctx, after=None):
-        return {"files": _copy(ctx, self.config.source, self.config.destination, self.config.overwrite, move=True)}
+        return {"files": _copy(ctx, self.config, move=True)}
 
 
 class DeleteFiles(Block):
     type_id = "files.delete"
     title = "Delete Files"
-    description = 'Deletes files or folders, on this computer or on a server.'
+    description = ("Deletes a file, a folder with everything in it, or the files matching a pattern, on this "
+                   "computer (also network folders) or on a server. Nothing there: nothing is deleted.")
     category = "Files"
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"deleted": ports.Any()}
-    config = {"path": fields.Text(help="A file, folder or pattern; server paths as connection:path")}
+    config = {
+        "server": fields.Server(label="Path on", help=f"Where the path is: {WHERE}"),
+        "path": _Path("Path on", help=f"What to delete: {FILES}. A link is deleted, never what it points to."),
+    }
 
     def run(self, ctx, after=None):
         with ExitStack() as stack:
-            fs, path, _ = _open_location(ctx, self.config.path, stack)
-            matches = fs.expand(path)
+            fs, _ = _open_location(ctx, self.config.server, stack)
+            matches = fs.expand(self.config.path)
             for match in matches:
                 fs.remove(match)
         ctx.log(f"deleted {len(matches)} item(s)")

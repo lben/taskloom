@@ -27,7 +27,7 @@ blocks:
     config: {connection: deploy_target, pid_file: "~/.taskloom/scheduler.pid"}
   upload:
     type: files.copy
-    config: {source: "{archive}", destination: "deploy_target:~/taskloom-runner.tar.gz"}
+    config: {source: "{archive}", destination_server: deploy_target, destination: "~/taskloom-runner.tar.gz"}
   extract:
     type: servers.remote_extract
     config: {connection: deploy_target, archive: "~/taskloom-runner.tar.gz", destination: "~"}

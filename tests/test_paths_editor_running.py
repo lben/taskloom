@@ -472,7 +472,8 @@ def test_dont_ask_me_again_turns_off_run_nows_question_only_when_you_run(win, qt
     assert (tmp_path / "count.txt").read_text() == "xx" and [r.status for r in tab.runs] == ["success"] * 2
 
 
-def test_run_now_runs_every_manual_start_and_a_start_blocks_menu_only_its_own(win, qtbot, tmp_path, monkeypatch):
+def test_run_now_with_all_of_them_runs_every_manual_start_and_a_start_blocks_menu_only_its_own(
+        win, qtbot, tmp_path, monkeypatch):
     flow = write_flow(tmp_path / "two_manual.yaml", """
         blocks:
           manual:
@@ -497,13 +498,14 @@ def test_run_now_runs_every_manual_start_and_a_start_blocks_menu_only_its_own(wi
           - nightly.start -> night.after
     """)
     said = []
-    monkeypatch.setattr(dialogs, "confirm_run_now", lambda parent, name, what: said.append(what) or (True, False))
+    monkeypatch.setattr(dialogs, "confirm_run_now", lambda parent, name, what, starts=(), chosen=None:
+                        said.append((what, list(starts))) or (True, False))  # (True: All of them)
     tab = win.open_flow(flow)
 
-    win.run_action.trigger()
+    win.run_action.trigger()  # asked which Manual Start: All of them
     both = wait_runs(qtbot, tab, 1)
 
-    assert "Manual Start blocks (manual, manual_2)" in said[0], said
+    assert "Manual Start blocks (manual, manual_2)" in said[0][0] and said[0][1] == ["manual", "manual_2"], said
     assert shown(tab) == {"manual": ("success", both), "first": ("success", both), "manual_2": ("success", both),
                           "second": ("success", both), "nightly": (None, None), "night": (None, None)}
 
@@ -1234,8 +1236,8 @@ def test_a_block_without_inputs_added_after_one_that_ran_runs_alone_with_inputs_
     wait_runs(qtbot, tab, 1)
     added = tab.doc.add_block("logic.python", 400, 0, appending("added.txt")["config"])  # a block you add
     tab.doc.connect("first", "done", added, "after")
-    # It shows no result: "with the same inputs" cannot run it, so this is how to try it alone.
-    assert not menu_action(win, tab, added, "Run only this block, with the same inputs").isEnabled()
+    # It shows no result, but the block connected into it does: "with the same inputs" takes that run.
+    assert menu_action(win, tab, added, "Run only this block, with the same inputs").isEnabled()
     seen = {}
     press_run_as_shown(monkeypatch, seen)
 

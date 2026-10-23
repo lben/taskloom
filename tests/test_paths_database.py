@@ -529,10 +529,10 @@ def test_validate_and_run_report_connection_and_parameter_mistakes(jdbc_env):
         assert output.returncode == 2
         errors = [line for line in output.stderr.splitlines() if line.startswith("error:")]
         assert len(errors) == 4, output.stderr
-        assert "blocks.a" in errors[0] and "'nope'" in errors[0]
-        assert "blocks.b" in errors[1] and "ssh" in errors[1] and "jdbc" in errors[1]
-        assert "blocks.c" in errors[2] and ":missing_bind" in errors[2]
-        assert "blocks.d" in errors[3] and "{missing_text}" in errors[3]
+        assert errors[0].startswith("error: a: Connection: ") and "'nope'" in errors[0]
+        assert errors[1].startswith("error: b: Connection: ") and "ssh" in errors[1] and "jdbc" in errors[1]
+        assert errors[2].startswith("error: c: SQL: ") and ":missing_bind" in errors[2]
+        assert errors[3].startswith("error: d: SQL: ") and "{missing_text}" in errors[3]
     assert not (jdbc_env.home / "history.db").exists() or jdbc_env.query("SELECT count(*) FROM runs") == [(0,)]
 
 
@@ -561,7 +561,7 @@ def test_a_chunk_size_of_zero_does_not_hang_the_run(jdbc_env):
     if run.returncode == 0:
         assert result(jdbc_env).read().column("ID").to_pylist() == [1, 2, 3]
     else:  # or refused (before or during the run), naming the field
-        assert "chunk_size" in told(jdbc_env, run), told(jdbc_env, run)
+        assert "Chunk size" in told(jdbc_env, run), told(jdbc_env, run)
 
 
 def test_stop_during_a_big_query_cancels_the_run(jdbc_env, h2_server):

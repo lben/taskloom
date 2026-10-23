@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from .config import Home
-from .engine import Cancelled, run_flow
+from .engine import Cancelled, finished_text, run_flow
 from .flow import FlowError, load_flow, validate
 from .launch import ARGS_VARIABLE
 from .registry import discover
@@ -31,8 +31,7 @@ def _print_event(event: dict):
     elif kind == "block_started":
         line = f"{ts} {block}started (attempt {event['attempt']})"
     elif kind == "block_finished":
-        detail = event.get("summary") or event.get("error") or ""
-        line = f"{ts} {block}{event['status']}" + (f" · {detail}" if detail else "")
+        line = f"{ts} {block}{finished_text(event)}"
     elif kind == "run_started":
         params = " ".join(f"{k}={v}" for k, v in event["params"].items())
         line = f"{ts} run #{event['run_id']} of {event['flow']} started" + (f" · {params}" if params else "")
@@ -127,6 +126,8 @@ def _parse_overrides(items) -> dict:
 
 
 def cmd_run(args, home: Home) -> int:
+    start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None
+    early = start_at is not None and start_at.timestamp() > time.time()  # started before its time
     flow = load_flow(Path(args.flow).resolve())
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
     os.chdir(flow.path.parent)
@@ -144,7 +145,8 @@ def cmd_run(args, home: Home) -> int:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, on_signal)
     answers = StdinControl(cancel) if args.interactive else None
-    as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else None
+    # Its now() is when it begins.
+    as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else (start_at if early else None)
     overrides = _parse_overrides(args.param)
     if args.input and not (args.only or args.run_from):
         raise ValueError("--input gives a value to an input of the block that --only (or --from) runs")
@@ -164,17 +166,29 @@ def cmd_run(args, home: Home) -> int:
         finally:
             history.close()
         if earlier is None:
-            raise ValueError(f"there is no run #{args.inputs_from}")
+            raise ValueError(f"there is no run #{args.inputs_from} (runs older than keep_runs_for are deleted)")
         if earlier["flow_path"] != str(flow.path):  # run numbers are shared by all flows
             raise ValueError(f"run #{args.inputs_from} is a run of {earlier['flow_path']}, not of this flow: "
                              "choose a run of this flow")
         if not overrides:  # same parameters as that run
             overrides = {k: v for k, v in json.loads(earlier["params"]).items() if k in flow.params}
+    if args.if_scheduled:
+        from .scheduler import NOT_DUE, why_not_due
+
+    def wait_for_start():  # loaded and checked: it begins at --start-at
+        while (left := start_at.timestamp() - time.time()) > 0:
+            if cancel.wait(min(left, 1)):
+                raise KeyboardInterrupt  # stopped before it began: nothing is recorded
+        why = why_not_due(home, flow.path, args.trigger, start_at) if early and args.if_scheduled else None
+        if why:
+            print(f"not begun: {why}", file=sys.stderr, flush=True)
+            raise SystemExit(NOT_DUE)
+
     try:
         result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
                           answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
                           given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
-                          run_from=args.run_from)
+                          run_from=args.run_from, before_start=wait_for_start if start_at else None)
     except FlowError:  # refused: e.g. a block file that did not load is why its block type is unknown
         for message in registry.warnings:
             print(f"warning: {message}", file=sys.stderr)
@@ -319,6 +333,14 @@ def main(argv=None) -> int:
     p.add_argument("--input", metavar="NAME=VALUE", action="append", default=[],
                    help="with --only or --from: give this input a value (a Python expression, e.g. 42, 'text', [1, 2], "
                         "table('data.csv'); empty for no value) instead of the one it got in --inputs-from")
+    p.add_argument("--start-at", metavar="DATETIME",
+                   help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS) to "
+                        "begin the run; at once if it has passed (the scheduler starts each run a few seconds early "
+                        "so)")
+    p.add_argument("--if-scheduled", action="store_true",
+                   help="if started before --start-at: begin then only if the scheduler service runs and the flow's "
+                        "schedule (its --trigger) still has that time, else end with exit code 3 (the scheduler "
+                        "sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")

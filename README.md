@@ -58,7 +58,11 @@ taskloom editor examples/daily-sales-report.yaml
   Hover over a block to see what it does.
 - **Zoom** with the mouse wheel or the control at the top right of the canvas: it shows the
   zoom, and **+** and **−** zoom in and out by the step between them (5% by default, change
-  it with its arrows), from 20% to 300%.
+  it with its arrows), from 20% to 300%. Or click the zoom, type one (`150` or `150%`) and
+  press Enter.
+- **Copy and paste** (Ctrl+C, Ctrl+V or the Edit menu) the selected blocks and texts, in the
+  same flow or into another one: the copies get new names and are selected, to move them;
+  Undo takes the whole paste back.
 - Two kinds of connectors: **circles carry data** (an output into an input), **diamonds set
   the order**. Every block has a **done** diamond output (it fires when the block succeeded)
   and a **run after** diamond input: connect `done` → `run after` to run blocks one after
@@ -68,12 +72,15 @@ taskloom editor examples/daily-sales-report.yaml
   after** diamond of the first block:
   - **Manual Start**: the flow runs when you press **Run now** (F5), or right-click the
     block → **Run the flow from here** (with several, only what follows that one runs).
+    In a flow with several Manual Starts, Run now asks which one to start, or **All of
+    them**, offering first the one you chose last time in that flow.
   - **Schedule**: the flow runs by itself at the times you set (the scheduler service
     runs it, see Schedules); under the block, a countdown to its next run. Set the times in Properties →
     **When**: repeating (every few minutes, hour, day, weekday, chosen days, month, or a
     cron line) or one time (a date and time), with the next runs shown. Right-click it →
     **Run the flow now, as if its time had come** to try it. Saving a flow
-    with a Schedule block schedules it.
+    with a Schedule block schedules it. The scheduler service runs the saved file: while a
+    scheduled flow has unsaved changes, its tab and Schedule blocks say so.
   A flow starts from its start blocks: a new flow comes with a Manual Start, and Run now
   offers to add one to a flow without (connected to its first blocks). A flow can have
   both kinds. A run includes the blocks after the start block that started it, the blocks
@@ -89,7 +96,9 @@ taskloom editor examples/daily-sales-report.yaml
   canvas each block shows its result from the latest run it took part in, so a block shared
   by two lines shows the most recent one.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
-  previews parameter values on any day; **Flow** sets the name and calendar.
+  previews parameter values on any day; **Flow** sets the name (a new flow takes its file's
+  name when you first save it) and calendar.
+- The **+** just right of the last tab opens a new flow (as File → New flow).
 - Each open flow's tab shows its last result (a coloured dot; a red ✕ while any line's last
   run failed) and, when it is scheduled, a clock; hover the tab for how each start block's
   line last ended (e.g. `manual: ok 2026-10-20 10:28:20`; re-running a block counts for the
@@ -99,15 +108,17 @@ taskloom editor examples/daily-sales-report.yaml
   and this list say so instead of a next run.
 - **Run now** (it first says what it will run; you can turn that off) saves, checks and
   runs the flow in a separate process: blocks show their
-  status live, the **Log** shows the selected block's messages, **Data preview** shows
+  status live, the **Log** shows the selected block's messages (when a block finishes, its line
+  gives the full path of each table it produced, to copy; what a database driver or library
+  prints shows as plain `OUTPUT`), **Data preview** shows
   everything the selected block produced (tables as a grid, other values as text), and
   **Run history** reopens any past run; its **Started by** column says what started each
   run: its start blocks (e.g. `manual`, `nightly`), or `only BLOCK` / `from BLOCK` for a
   re-run. **Stop** cancels.
 - **After a run, hover** over any input, output or connection line to see the value that
-  went through it. Every run's values are kept in **Run history** (double-click a run, then
-  hover) for `history_days` (365 by default). Hover over the message under a block to read
-  all of it. The canvas follows the runs of the flow, including scheduled ones: each block
+  went through it (a table over 10 rows: its first 5 rows, `…`, its last 5). Every run's
+  values are kept in **Run history** (double-click a run, then hover) for `keep_runs_for`
+  (5 years by default). Hover over the message under a block to read all of it. The canvas follows the runs of the flow, including scheduled ones: each block
   shows its result from the latest run it took part in, and a run that starts clears only
   its own blocks. Opening an older run from Run history shows only that run (the blocks not
   in it show nothing) until you start a run or open the newest one. A flow you open starts
@@ -127,8 +138,9 @@ taskloom editor examples/daily-sales-report.yaml
   any font installed on your computer. Text does not run.
 - **Retry after a fix:** right-click the block →
   - **Run only this block, with the same inputs**: only that block runs, with what reached
-    it in the run its result on the canvas comes from (the menu names that run); the other
-    blocks keep their results
+    it in the run its result on the canvas comes from (the menu names that run; a block
+    showing no result, e.g. one added since: the latest run among the results of the blocks
+    connected into it); the other blocks keep their results
     (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
   - **Run from this block on, with the same inputs** (or **with inputs I choose…**): that
     block and every block after it
@@ -168,7 +180,11 @@ taskloom editor examples/daily-sales-report.yaml
   list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
-  secure store, never in a file) and click **Save and test connection**.
+  secure store, never in a file) and click **Save and test connection**. For a database,
+  choosing the driver .jar file(s) with **…** fills in the Driver class from the jar
+  (JDBC 4 drivers name it in `META-INF/services/java.sql.Driver`): when the jar names several,
+  you choose one; when it names none (an older driver), a note says so and you type it. A
+  class you typed is replaced only if you say so.
 
 ## Flows
 
@@ -209,6 +225,8 @@ chart and an HTML table, and emails them. Emails are built for desktop Outlook:
 table layout, CSS moved into `style=""` attributes, charts as inline images with
 explicit sizes (never `data:` URIs or SVG), plus a plain-text version.
 
+- **Chart**: `x_label` and `y_label` name its axes, e.g. column `store_id` shown as `Store ID`
+  (empty: the column names; a pie chart has no axes).
 - **HTML Template** (Jinja2): `{{ table(totals) }}`, `{{ image(chart) }}`, `{{ params.day }}`.
 - **Send Email** takes any number of body parts and attachments; `save_copy` also
   writes the email as an `.eml` file you can open in Outlook. Text is shown as written
@@ -251,8 +269,11 @@ The scheduler service keeps running when you open a newer Taskloom: the editor t
 restart it with the newer version (a scheduler from an older version may not read flows
 the newer one saved), and starting at login switches to the newest version you opened.
 
-One scheduler service runs every scheduled flow. Each run starts at its time (within a
-second). The service checks at least every 15 seconds and then rereads changed flow files,
+One scheduler service runs every scheduled flow. Each run begins at its time: the service
+starts the run's process a few seconds early, to load the flow and wait, so the Log says the
+run started at its time (from a terminal: `taskloom run FLOW --start-at 2026-10-08T15:30:00`).
+A run whose schedule goes off before then (the service turned off, Active unticked, the flow
+taken off) does not begin. The service checks at least every 15 seconds and then rereads changed flow files,
 so a new cron line applies shortly after you save, without restarting it; a new or changed
 schedule, or one turned back on (Active ticked again, the flow scheduled again), counts from
 that moment (nothing before it counts as missed).
@@ -271,7 +292,32 @@ A run's parameters are computed for the time it was due (that is what `now()` me
 ## Servers
 
 Add an SSH connection (Tools → Connections) and use the Servers and Files blocks.
-File locations on a server are written `connection:path`, e.g. `appserver:~/app/`.
+
+**Copy Files**, **Move Files** and **Delete Files** work on this computer (its folders and
+network folders, e.g. `\\fileserver\share`) and on servers. For each path, Properties shows
+where it is, **This computer** or one of your SSH connections (**Source on**, **Destination
+on**, **Path on**), with the path in its own field:
+
+- **Source** (and Delete's **Path**): a file (`C:/data/sales.csv`, `~/outbox/sales.csv`), a
+  folder with everything in it (`C:/data/reports`), or a pattern in the last part
+  (`~/logs/*.log`). Delete Files deletes a link, never what it points to.
+- **Destination**: a folder, ending with `/` (`~/incoming/`): what is copied goes into it, a
+  folder with its name; or, for one file, its new name. Missing folders are made.
+- **Overwrite** (on unless you untick it) replaces a file already there; off, nothing is
+  copied if any file is already there, and the block fails. Move Files copies, then deletes
+  the source.
+
+```yaml
+fetch:
+  type: files.copy
+  config: {source_server: appserver, source: "~/outbox/*.csv", destination: "inbox/"}
+clean:
+  type: files.delete
+  config: {server: appserver, path: "~/outbox/*.csv"}
+```
+
+A path written the old way, `connection:path` (e.g. `appserver:~/app/`), is refused, saying
+what to change: choose the connection where the path is, and write the path alone.
 
 An app watchdog is a flow: Health Check (URL and/or PID file) → `unhealthy` →
 Start Remote Process → Health Check, scheduled every few minutes.
@@ -306,7 +352,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | File | Purpose |
 |---|---|
 | `connections.yaml` | Database connections, e.g. a JDBC driver, URL, jar and properties |
-| `settings.yaml` | `calendar`, `keep_runs`, `history_days`, `java_home`, `max_concurrent_runs`, `keeper`, notifications |
+| `settings.yaml` | `calendar`, `keep_runs_for`, `java_home`, `max_concurrent_runs`, `keeper`, notifications |
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
@@ -331,6 +377,12 @@ warehouse:
 Store the password with `taskloom secret set warehouse_password` (Windows Credential
 Manager / macOS Keychain, or a private `secrets.yaml` on headless Linux). JDBC needs
 Java; set `java_home` in `settings.yaml` (or `JAVA_HOME`) if it is not found.
+
+Runs are kept for `keep_runs_for` in `settings.yaml`: a number and `days`, `months` or
+`years`, e.g. `18 months` or `90 days` (5 years by default). As a run ends, every run that
+started longer ago is deleted: its history, block results and logs, and its folder in
+`runs/` with its files. A run still going is never deleted, and a re-run keeps the tables it
+reused from an older run. Tools → Settings shows it, with how much space the runs take now.
 
 ## Writing a block
 

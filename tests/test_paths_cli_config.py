@@ -409,29 +409,6 @@ def test_an_unknown_setting_is_refused_naming_it(env):
     assert not (env.root / "ran.txt").exists() and runs_recorded(env) == 0
 
 
-def test_without_history_days_a_run_is_kept_365_days(env):
-    # README: every run's values are kept in Run history for `history_days` (365 by default).
-    flow = write(env, """
-        blocks:
-          say:
-            type: logic.python
-            config: {inputs: [], code: "print('a line in the log'); output = 42"}
-    """)
-    for _ in range(2):
-        assert env.taskloom("run", flow).returncode == 0
-    now = dt.datetime.now()
-    for run_id, days_ago in ((1, 366), (2, 364)):
-        env.query("UPDATE runs SET started=? WHERE id=?",
-                  (now - dt.timedelta(days=days_ago)).isoformat(timespec="milliseconds"), run_id)
-
-    ran = env.taskloom("run", flow)  # forgets the runs older than history_days as it ends
-
-    assert ran.returncode == 0, ran.stderr
-    assert env.query("SELECT id FROM runs ORDER BY id") == [(2,), (3,)]
-    for table in ("blocks", "logs"):
-        assert env.query(f"SELECT DISTINCT run_id FROM {table} ORDER BY run_id") == [(2,), (3,)], table
-
-
 BROKEN_FILES = {
     "not YAML": "keep_runs: [5\n".encode("utf-8"),
     # Windows PowerShell 5 (`echo ... > file`, Out-File) writes UTF-16.

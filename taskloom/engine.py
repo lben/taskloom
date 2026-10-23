@@ -19,7 +19,7 @@ import polars as pl
 from . import params as P
 from .block import AFTER, DONE, all_ports
 from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
-from .config import REVEALED
+from .config import REVEALED, runs_kept_since
 from .history import History
 from .table import Table
 
@@ -154,16 +154,21 @@ def _now() -> str:
 
 
 def preview(value, limit: int = 4000) -> str:
-    """A readable look at any value: a table's first rows, text, or a list/dict as JSON."""
+    """A readable look at any value: a table's rows (over 10: its first 5, a row of …, its last 5), text, or a
+    list/dict as JSON."""
     import json
 
     import polars as pl
 
     if isinstance(value, Table):
-        rows = value.head(20)
+        total, lazy = value.num_rows, value.scan()
+        # Over 10 rows: the first 6 and the last 5, which Polars shows as the first 5, a row of …, the last 5.
+        rows = lazy.head(10).collect() if total <= 10 else pl.concat([lazy.head(6).collect(),
+                                                                      lazy.slice(total - 5).collect()])
         for secret in secret_forms():  # scrub the text cells, then cut them (a cut secret is no longer found)
             rows = rows.with_columns(pl.col(pl.String).str.replace_all(secret, "***", literal=True))
-        with pl.Config(tbl_rows=20, tbl_cols=20, fmt_str_lengths=60, tbl_width_chars=200):
+        with pl.Config(tbl_rows=10, tbl_cols=20, fmt_str_lengths=60, tbl_width_chars=200,
+                       tbl_hide_dataframe_shape=True):  # the summary says how many rows it has
             return f"{value.summary()}\n{rows}"
     if isinstance(value, SecretStr):
         return "***"
@@ -188,6 +193,13 @@ def inline(value, limit: int = 300) -> str:
     return " ".join(preview(value).split())[:limit]
 
 
+def finished_text(event: dict) -> str:
+    """A finished block's line (after its name): its status, its summary or error, and the full path of the file
+    of each table it produced, to copy."""
+    detail = event.get("summary") or event.get("error")
+    return " · ".join([event["status"], *([detail] if detail else []), *(event.get("tables") or {}).values()])
+
+
 def _summary(produced: dict) -> str:
     parts = []
     for port, value in produced.items():
@@ -199,7 +211,7 @@ def _summary(produced: dict) -> str:
 def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
              answers=None, as_of: dt.datetime | None = None, trigger: str | None = None,
              only: str | None = None, inputs_from: int | None = None, given: dict | None = None,
-             run_from: str | None = None) -> RunResult:
+             run_from: str | None = None, before_start=None) -> RunResult:
     """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions.
 
     `trigger` is the Schedule block that started a scheduled run; None means a manual run.
@@ -207,6 +219,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     `given` ({input: Python expression}; empty means no value) instead.
     `run_from` runs that block (with the inputs it got in run `inputs_from`) and every block after it;
     the blocks before them are not run again: what they held in run `inputs_from` is used.
+    `before_start` is called once the flow is loaded and checked, just before its run is recorded and begins
+    (`taskloom run --start-at` waits there for its time).
     """
     errors, warnings = validate(flow, registry, home)
     if errors:
@@ -225,6 +239,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     started_by = (f"only {only}" if only else f"from {run_from}" if run_from
                   else ", ".join(b for b in flow.blocks if b in fired))
     cancel = cancel or threading.Event()
+    if before_start is not None:
+        before_start()
 
     history = History(home.history_db)
     run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by)
@@ -276,7 +292,6 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
             raise
         emit({"event": "run_finished", "status": status})
         _apply_retention(home, history)
-        history.prune(int(home.settings()["history_days"]))
     finally:
         history.close()
     return RunResult(run_id, status, runner.outputs)
@@ -566,7 +581,7 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
     a full run would give it now, from what the blocks before it hold (e.g. after fixing one of them).
     Raises ValueError when that run's files are gone."""
     input_ports(flow, registry, only)  # a block that exists
-    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs)"
+    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs_for)"
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
         raise ValueError(cleaned)
@@ -703,7 +718,7 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
         if before:
             raise ValueError(f"{before[0].dst} needs what {before[0].src} holds: say which run's to use (--inputs-from)")
         return {}, set(), set(), set()
-    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs)"
+    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs_for)"
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
         raise ValueError(f"{cleaned}: run the whole flow instead")
@@ -937,15 +952,13 @@ def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:
 
 
 def _apply_retention(home, history: History):
-    """Delete the workspace folders of old runs, keeping the newest `keep_runs`.
+    """Delete the runs that started longer ago than keep_runs_for: their folders, then their history.
 
-    Runs still in progress (possibly in other processes) are never touched.
+    Runs still in progress (possibly in other processes) are never touched. A run whose folder cannot be
+    deleted yet (e.g. a file in it is open on Windows) stays in the history, to be deleted as a later run ends.
     """
-    keep = int(home.settings()["keep_runs"])
-    if not home.runs_dir.is_dir():
-        return
-    runs = sorted((p for p in home.runs_dir.iterdir() if p.is_dir() and p.name.isdigit()), key=lambda p: int(p.name))
-    running = history.running_ids()  # read after listing, so a run that just started is included
-    old = [p for p in runs[: max(len(runs) - keep, 0)] if int(p.name) not in running]
-    for path in old:
-        shutil.rmtree(path, ignore_errors=True)
+    for run_id in history.old_runs(runs_kept_since(home.settings())):
+        folder = home.runs_dir / str(run_id)
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
+            history.forget(run_id)

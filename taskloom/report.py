@@ -115,8 +115,9 @@ def _values(column: pl.Series):
 
 
 def render_chart(df: pl.DataFrame, path: Path, kind: str, x: str | None, y: list[str], title: str = "",
-                 width: int = 640, height: int = 360) -> Path:
-    """Draw a chart to a PNG at 2x pixel density. One y axis; colors follow series order."""
+                 width: int = 640, height: int = 360, x_label: str = "", y_label: str = "") -> Path:
+    """Draw a chart to a PNG at 2x pixel density. One y axis; colors follow series order. The axes are labelled
+    x_label and y_label (empty: the column names); a pie chart has none."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -193,10 +194,12 @@ def render_chart(df: pl.DataFrame, path: Path, kind: str, x: str | None, y: list
         ax.tick_params(colors=TEXT_2, labelsize=8, length=0)
         ax.grid(axis="x" if kind == "barh" else "y", color=GRID, linewidth=0.8)
         ax.set_axisbelow(True)
-        if x and kind not in ("hist",):
-            (ax.set_ylabel if kind == "barh" else ax.set_xlabel)(x, color=TEXT_2, fontsize=9)
-        if len(y) == 1 and kind != "hist":
-            (ax.set_xlabel if kind == "barh" else ax.set_ylabel)(y[0], color=TEXT_2, fontsize=9)
+        x_label = x_label or (x if x and kind != "hist" else "")
+        y_label = y_label or (y[0] if len(y) == 1 and kind != "hist" else "")
+        if x_label:  # horizontal bars: the x column's categories go up the side
+            (ax.set_ylabel if kind == "barh" else ax.set_xlabel)(x_label, color=TEXT_2, fontsize=9)
+        if y_label:
+            (ax.set_xlabel if kind == "barh" else ax.set_ylabel)(y_label, color=TEXT_2, fontsize=9)
         if len(y) > 1:
             ax.legend(frameon=False, fontsize=8, labelcolor=TEXT_2, loc="upper left", bbox_to_anchor=(0, 1.12), ncol=len(y))
     if title:

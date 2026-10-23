@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import html
 import math
+import re
+from pathlib import Path
 
 import polars as pl
 import yaml
@@ -18,7 +20,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QVBoxLayout, QWidget)
 
 from .. import params as P
-from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields
+from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields, setting_label
 from ..calendars import load_calendar
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
@@ -229,6 +231,8 @@ class FlowTabsStatus(QObject):
         if tab.next_run:
             subtitle += (f" · next {tab.next_run:%Y-%m-%d %H:%M:%S}" if self.scheduler_on else
                          " · scheduler service off")
+        if tab.scheduled and tab.doc.dirty:
+            subtitle += "\nunsaved · the scheduler runs the saved version: save the flow to apply your changes"
         self.tabs.setTabToolTip(index, f"{tab.doc.path or 'not saved yet'}\n{subtitle}")
         self.tabs.setTabIcon(index, status_icon(status, self._frame, clock=tab.next_run is not None))
         self.tabs.tabBar().setTabTextColor(index, QColor(STATUS_COLORS["failed"]) if status == "failed"
@@ -371,8 +375,7 @@ class PropertiesPanel(QScrollArea):
             if when and key in ("cron", "at"):
                 continue  # in the When box
             widget = self._field_widget(key, f, config.get(key))
-            words = key.replace("_", " ").capitalize().split(" ")
-            label = QLabel(f.label or " ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words))
+            label = QLabel(setting_label(key, f))
             if f.help:
                 label.setToolTip(f.help)
                 widget.setToolTip(f.help)
@@ -620,12 +623,15 @@ class PropertiesPanel(QScrollArea):
 
         def commit():
             try:
+                value = convert(w.text())
+                if value is not None:
+                    f.coerce(value)  # a value it cannot take is told, naming this setting, before anything changes
                 if isinstance(f, fields.Names):
-                    self._set_names(key, f, convert(w.text()))
+                    self._set_names(key, f, value)
                 else:
-                    self._set(key, convert(w.text()))
+                    self._set(key, value)
             except (ValueError, yaml.YAMLError) as e:  # (YAML: a plugin field type's value, not finished)
-                self.error.setText(f"{key}: {e}")
+                self.error.setText(f"{setting_label(key, f)}: {e}")
                 self.error.show()
 
         w.editingFinished.connect(commit)
@@ -634,7 +640,7 @@ class PropertiesPanel(QScrollArea):
             row = QHBoxLayout(box)
             row.setContentsMargins(0, 0, 0, 0)
             browse = QToolButton(text="…")
-            browse.clicked.connect(lambda: self._browse(w, commit))
+            browse.clicked.connect(lambda: self._browse(w, commit, f.files))
             row.addWidget(w)
             row.addWidget(browse)
             return box
@@ -647,7 +653,8 @@ class PropertiesPanel(QScrollArea):
         except ValueError:
             names = []
         combo = QComboBox()
-        combo.addItem("" if names else "(no connections yet: click New…)", "")
+        combo.addItem("This computer" if isinstance(f, fields.Server) else
+                      "" if names else "(no connections yet: click New…)", "")
         for name in names:
             combo.addItem(name, name)
         if value and value not in names:
@@ -674,10 +681,13 @@ class PropertiesPanel(QScrollArea):
             self._set(key, dialog.created)  # use the connection just created
         self.refresh()
 
-    def _browse(self, line_edit, commit):
-        path, _ = QFileDialog.getSaveFileName(self, "Choose a file", line_edit.text(),
-                                              options=QFileDialog.DontConfirmOverwrite)
+    def _browse(self, line_edit, commit, files):
+        path, chosen = QFileDialog.getSaveFileName(self, "Choose a file", line_edit.text(), ";;".join(files),
+                                                   options=QFileDialog.DontConfirmOverwrite)
         if path:
+            extension = re.search(r"\(\*(\.\w+)\)", chosen)
+            if extension and not Path(path).suffix:  # a name typed without one gets the chosen kind's
+                path += extension.group(1)
             line_edit.setText(path)
             commit()
 
@@ -1185,7 +1195,7 @@ class PreviewPanel(QWidget):
             df = lazy.head(self.PREVIEW_ROWS).collect()
         except Exception as e:
             self.view.setModel(None)
-            self.label.setText(f"Cannot preview: {e} (old run folders are cleaned up after keep_runs runs)")
+            self.label.setText(f"Cannot preview: {e} (runs older than keep_runs_for are cleaned up)")
             return
         self.view.setModel(FrameModel(df))
         self.label.setText(f"{self.block_id}.{port}: {total:,} rows × {df.width} columns"

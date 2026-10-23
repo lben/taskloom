@@ -20,7 +20,9 @@ KILL_AFTER_MS = 6000  # after asking a run to stop, kill it if it is still going
 
 class RunProcess(QObject):
     event = Signal(dict)
-    output = Signal(str)  # text the runner printed outside of events (errors)
+    # Text printed outside of events, with its level: ERROR for Taskloom's own errors, OUTPUT for what other
+    # programs print (e.g. a database driver's or a library's messages).
+    output = Signal(str, str)
     finished = Signal(str)  # final status: success | failed | cancelled
 
     def __init__(self, flow_path: str, overrides: dict, home: Home, parent=None, extra_args=()):
@@ -78,7 +80,7 @@ class RunProcess(QObject):
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                self.output.emit(line.decode(errors="replace"))
+                self.output.emit("OUTPUT", line.decode(errors="replace"))
                 continue
             if event.get("event") == "run_started":
                 self.run_id = event["run_id"]
@@ -87,9 +89,10 @@ class RunProcess(QObject):
             self.event.emit(event)
 
     def _read_stderr(self):
-        # With --json-events, stderr only carries problems (invalid flow, crashes).
+        # With --json-events, the runner prints only its errors here ("error: ..." and the "warning: ..." before
+        # them when it refuses a run); anything else is what the blocks' libraries print.
         for line in bytes(self.proc.readAllStandardError()).decode(errors="replace").splitlines():
-            self.output.emit(line)
+            self.output.emit("ERROR" if line.startswith(("error: ", "warning: ")) else "OUTPUT", line)
 
     def _on_finished(self, exit_code, exit_status):
         self._read_stdout()
@@ -99,6 +102,6 @@ class RunProcess(QObject):
                 history = History(self.home.history_db)
                 history.mark_crashed(self.run_id, dt.datetime.now().isoformat(timespec="milliseconds"))
                 history.close()
-                self.output.emit(f"the run process stopped unexpectedly (exit code {exit_code})")
+                self.output.emit("ERROR", f"the run process stopped unexpectedly (exit code {exit_code})")
             self.status = "failed"
         self.finished.emit(self.status)

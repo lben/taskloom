@@ -161,7 +161,7 @@ def test_overwrite_written_as_text_is_refused_before_anything_is_copied(env):
     result = env.taskloom("run", flow)
 
     assert result.returncode == 2
-    assert "overwrite" in result.stderr and "true or false" in result.stderr
+    assert "copy: Overwrite: " in result.stderr and "true or false" in result.stderr
     assert (env.root / "out" / "new.csv").read_text() == "keep me"
 
 
@@ -761,16 +761,16 @@ def test_folders_with_subfolders_spaces_and_unicode_to_and_from_a_server(env, se
         blocks:
           upload:
             type: files.copy
-            config: {source: "Site Files", destination: "appserver:~/deploy/2026 v1/"}
+            config: {source: "Site Files", destination_server: appserver, destination: "~/deploy/2026 v1/"}
           download:
             type: files.copy
-            config: {source: "appserver:~/deploy/2026 v1/Site Files", destination: "check/"}
+            config: {source_server: appserver, source: "~/deploy/2026 v1/Site Files", destination: "check/"}
           fetch:
             type: files.move
-            config: {source: "appserver:~/outbox/*.csv", destination: "Inbox ✓/"}
+            config: {source_server: appserver, source: "~/outbox/*.csv", destination: "Inbox ✓/"}
           clean:
             type: files.delete
-            config: {path: "appserver:~/deploy"}
+            config: {server: appserver, path: "~/deploy"}
         edges:
           - upload.files -> download.after
           - download.files -> fetch.after
@@ -795,13 +795,14 @@ def test_overwrite_off_keeps_the_servers_files(env, server):
         blocks:
           upload_all:
             type: files.copy
-            config: {source: "out/*.csv", destination: "appserver:~/incoming/", overwrite: false}
+            config: {source: "out/*.csv", destination_server: appserver, destination: "~/incoming/", overwrite: false}
           move_one:
             type: files.move
-            config: {source: "out/b.csv", destination: "appserver:~/incoming/b.csv", overwrite: false}
+            config: {source: "out/b.csv", destination_server: appserver, destination: "~/incoming/b.csv",
+                     overwrite: false}
           upload_new:
             type: files.copy
-            config: {source: "out/a.csv", destination: "appserver:~/fresh/", overwrite: false}
+            config: {source: "out/a.csv", destination_server: appserver, destination: "~/fresh/", overwrite: false}
     """)
 
     assert tree(server.home_path / "incoming") == {"b.csv": "keep me"}  # not even a.csv, which was not there
@@ -824,10 +825,10 @@ def test_overwrite_on_replaces_longer_files_to_and_from_a_server(env, server):
         blocks:
           upload:
             type: files.copy
-            config: {source: out/report.csv, destination: "appserver:~/incoming/"}
+            config: {source: out/report.csv, destination_server: appserver, destination: "~/incoming/"}
           fetch:
             type: files.move
-            config: {source: "appserver:~/outbox/report.csv", destination: "inbox/"}
+            config: {source_server: appserver, source: "~/outbox/report.csv", destination: "inbox/"}
     """)
 
     assert result.returncode == 0, result.stderr
@@ -849,13 +850,13 @@ def test_changes_a_server_refuses_fail_clearly_and_change_nothing(env, server):
             blocks:
               over_file:
                 type: files.copy
-                config: {source: out/b.csv, destination: "appserver:~/incoming/"}
+                config: {source: out/b.csv, destination_server: appserver, destination: "~/incoming/"}
               into_folder:
                 type: files.copy
-                config: {source: out/a.csv, destination: "appserver:~/locked/"}
+                config: {source: out/a.csv, destination_server: appserver, destination: "~/locked/"}
               delete:
                 type: files.delete
-                config: {path: "appserver:~/locked/old.csv"}
+                config: {server: appserver, path: "~/locked/old.csv"}
         """)
     finally:
         locked.chmod(0o755)
@@ -882,7 +883,7 @@ def test_a_move_from_a_server_folder_it_cannot_change_fails_and_does_not_count_a
             blocks:
               fetch:
                 type: files.move
-                config: {source: "appserver:~/outbox/*.csv", destination: "inbox/"}
+                config: {source_server: appserver, source: "~/outbox/*.csv", destination: "inbox/"}
               next:
                 type: files.delete
                 config: {path: "processed/keep.txt"}
@@ -908,7 +909,8 @@ def test_a_server_file_copied_onto_itself_written_two_ways_is_refused(env, serve
         blocks:
           copy:
             type: files.copy
-            config: {{source: "appserver:~/app/config.yaml", destination: "appserver:{server.home_path}/app/"}}
+            config: {{source_server: appserver, source: "~/app/config.yaml", destination_server: appserver,
+                      destination: "{server.home_path}/app/"}}
     """)
 
     assert (server.home_path / "app" / "config.yaml").read_text() == "port: 8080\n", "the file was emptied"
@@ -927,7 +929,8 @@ def test_moving_into_a_folder_inside_the_source_on_a_server_loses_nothing(env, s
         blocks:
           archive:
             type: files.move
-            config: {{source: "appserver:{source}", destination: "appserver:{destination}"}}
+            config: {{source_server: appserver, source: "{source}", destination_server: appserver,
+                      destination: "{destination}"}}
     """)
 
     kept = set(tree(server.home_path / "logs").values())
@@ -947,10 +950,10 @@ def test_delete_on_a_server_never_deletes_what_links_point_to(env, server):
         blocks:
           clean_deploy:
             type: files.delete
-            config: {path: "appserver:~/deploy"}
+            config: {server: appserver, path: "~/deploy"}
           clean_cache:
             type: files.delete
-            config: {path: "appserver:~/cache/*"}
+            config: {server: appserver, path: "~/cache/*"}
     """)
 
     assert tree(home / "releases") == {"r1/app.jar": "r1", "r2/app.jar": "r2"}  # never what a link points to
@@ -963,17 +966,18 @@ def test_delete_on_a_server_never_deletes_what_links_point_to(env, server):
 
 @POSIX
 def test_a_misspelled_connection_name_is_an_error_not_a_local_folder(env, server):
-    make(env.root, {"out/a.csv": "a"})
-    result, run_id = run(env, """
+    make(env.root, {"out/a.csv": "a", "flow.yaml": textwrap.dedent("""
         blocks:
           upload:
             type: files.copy
-            config: {source: "out/a.csv", destination: "apserver:~/incoming/"}
-    """)
+            config: {source: "out/a.csv", destination_server: apserver, destination: "incoming/"}
+    """)})
 
-    assert result.returncode == 1, "reported success, but nothing reached the server"
-    assert "apserver" in error(env, run_id, "upload")
-    assert not (env.root / "apserver:~").exists()
+    result = env.taskloom("run", env.root / "flow.yaml")
+
+    assert result.returncode == 2, "not refused before it starts"
+    assert "upload: Destination on: no connection named 'apserver'" in result.stderr, result.stderr
+    assert not (env.root / "incoming").exists()
 
 
 # --- In the editor ---------------------------------------------------------------------------------------
@@ -982,6 +986,7 @@ def test_a_misspelled_connection_name_is_an_error_not_a_local_folder(env, server
 def test_copy_files_set_up_in_the_editor(win, qtbot, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QCheckBox, QFileDialog, QLineEdit
 
+    from taskloom.blocks.files import CopyFiles
     from test_editor import add_from_palette, drag_port_to_port, wait_done
 
     make(tmp_path, {"reports/east.csv": "e", "reports/west.csv": "w"})
@@ -995,8 +1000,8 @@ def test_copy_files_set_up_in_the_editor(win, qtbot, tmp_path, monkeypatch):
     def field(help_text):
         return next(e for e in win.properties.findChildren(QLineEdit) if e.toolTip() == help_text)
 
-    for help_text, value in (("A file, folder or pattern; server paths as connection:path", "reports/*.csv"),
-                             ("A file path, or a folder (end with /)", "outbox/")):
+    for help_text, value in ((CopyFiles.config["source"].help, "reports/*.csv"),
+                             (CopyFiles.config["destination"].help, "outbox/")):
         edit = field(help_text)
         edit.setText(value)
         edit.editingFinished.emit()
@@ -1026,17 +1031,17 @@ def test_a_missing_server_source_fails_clearly(env, server):
         blocks:
           missing_file:
             type: files.copy
-            config: {source: "appserver:~/logs/app.log", destination: "got/"}
+            config: {source_server: appserver, source: "~/logs/app.log", destination: "got/"}
           no_match:
             type: files.copy
-            config: {source: "appserver:~/logs/*.log", destination: "got/"}
+            config: {source_server: appserver, source: "~/logs/*.log", destination: "got/"}
           missing_folder:
             type: files.move
-            config: {source: "appserver:~/old_logs/*.log", destination: "got/"}
+            config: {source_server: appserver, source: "~/old_logs/*.log", destination: "got/"}
     """)
 
     assert result.returncode == 1
-    assert "nothing found at appserver:~/logs/app.log" in error(env, run_id, "missing_file")
-    assert "nothing found at appserver:~/logs/*.log" in error(env, run_id, "no_match")
+    assert "nothing found at ~/logs/app.log on appserver" in error(env, run_id, "missing_file")
+    assert "nothing found at ~/logs/*.log on appserver" in error(env, run_id, "no_match")
     assert "old_logs" in error(env, run_id, "missing_folder")
     assert not (env.root / "got").exists()

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt
+from PySide6.QtCore import QLocale, QProcess, QProcessEnvironment, Qt
 
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from ..block import IDENTIFIER
-from ..config import SETTINGS_DEFAULTS
+from ..config import SETTINGS_DEFAULTS, keep_runs_for
 from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
 
@@ -136,10 +137,12 @@ class ConnectionsDialog(QDialog):
     FIELDS = {"jdbc": ("driver", "url", "jars", "username"), "ssh": ("host", "port", "username", "key_file"),
               "smtp": ("host", "port", "security", "username", "sender")}
     HELP = {
-        "jdbc": "A database you query with Run Query. Ask your database team for the driver .jar file, "
-                "the driver class and the JDBC URL. Extra settings (timeouts, …) go in the table below.",
-        "ssh": "A server you reach with SSH: for the Servers blocks, and file locations written name:path. "
-               "Use your login and password, or a key file instead of a password.",
+        "jdbc": "A database you query with Run Query. Ask your database team for the driver .jar file and the "
+                "JDBC URL; choosing the jar fills in the driver class. Extra settings (timeouts, …) go in the "
+                "table below.",
+        "ssh": "A server you reach with SSH: for the Servers blocks, and for files on a server (choose it where a "
+               "path is, in Copy, Move or Delete Files). Use your login and password, or a key file instead of a "
+               "password.",
         "smtp": "The mail server Send Email and notifications use. Inside a company this is often a relay "
                 "on port 25 that needs no login; ask your IT team.",
     }
@@ -190,8 +193,14 @@ class ConnectionsDialog(QDialog):
         browse = QToolButton(text="…")
         jar_layout.addWidget(self.edits["jars"])
         jar_layout.addWidget(browse)
+        self.driver_note = QLabel("No driver class found in the jar (an older driver): type it above; the "
+                                  "driver's documentation names it.")
+        self.driver_note.setWordWrap(True)
+        self.driver_note.setStyleSheet("color: palette(placeholder-text);")
         for key, edit in self.edits.items():
             self.form.addRow(self.LABELS[key], self.jar_row if key == "jars" else edit)
+            if key == "driver":
+                self.form.addRow("", self.driver_note)
         self.password = QLineEdit(echoMode=QLineEdit.Password)
         self.password_status = QLabel()
         self.form.addRow("Password", self.password)
@@ -261,6 +270,7 @@ class ConnectionsDialog(QDialog):
             self.form.setRowVisible(self.jar_row if key == "jars" else edit,
                                     enabled and key in self.FIELDS.get(kind, ()))
         self.edits["port"].setPlaceholderText({"ssh": "22", "smtp": "25 (or 587 with starttls, 465 with ssl)"}.get(kind, ""))
+        self.form.setRowVisible(self.driver_note, False)  # until you choose jars that name no driver class
         for w in (self.props, self.props_label, self.add_prop, self.remove_prop):
             w.setVisible(enabled and kind == "jdbc")
         self.form.setRowVisible(self.password, enabled)
@@ -406,6 +416,26 @@ class ConnectionsDialog(QDialog):
         paths, _ = QFileDialog.getOpenFileNames(self, "JDBC driver jars", "", "Jar files (*.jar)")
         if paths:
             self.edits["jars"].setText("; ".join(paths))
+            self._fill_driver(paths)
+
+    def _fill_driver(self, jars):
+        """Driver class from the jars (JDBC 4 drivers name it); one you typed is replaced only if you say so."""
+        from ..jdbc import driver_classes
+
+        found, typed = driver_classes(jars), self.edits["driver"].text().strip()
+        self.form.setRowVisible(self.driver_note, not found)
+        if not found or typed in found:
+            return
+        if typed and QMessageBox.question(
+                self, "Driver class", f"The jar names the driver class {' or '.join(found)}, not {typed}, the one "
+                                      "you typed.\n\nUse the one the jar names?") != QMessageBox.Yes:
+            return
+        chosen, ok = found[0], True
+        if len(found) > 1:
+            chosen, ok = QInputDialog.getItem(self, "Driver class", "The jar names several driver classes; choose "
+                                                                    "the one to use:", found, 0, False)
+        if ok:
+            self.edits["driver"].setText(chosen)
 
     def _write(self):
         """Save connections.yaml and any new passwords (to the secret store)."""
@@ -458,6 +488,22 @@ class ConnectionsDialog(QDialog):
         self.accept()
 
 
+def _folder_size(folder) -> int:
+    """The bytes the files in `folder` hold, added up as a file manager does. (scandir: on Windows, without
+    opening each file, so years of runs add up quickly.)"""
+    total = 0
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:  # none yet, or deleted meanwhile, e.g. as a run ends
+        return 0
+    for entry in entries:
+        try:
+            total += _folder_size(entry.path) if entry.is_dir(follow_symlinks=False) else entry.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
 class SettingsDialog(QDialog):
     def __init__(self, home, parent=None):
         super().__init__(parent)
@@ -465,18 +511,26 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.resize(640, 420)
         self.settings = home.settings()
-        numbers = {}
-        for key, value in (("keep_runs", self.settings["keep_runs"]),
-                           ("max_concurrent_runs", self.settings["max_concurrent_runs"] or 0)):
-            try:
-                numbers[key] = int(value)
-            except (TypeError, ValueError):
-                raise ValueError(f"settings.yaml: {key} must be a whole number, got {value!r}") from None
+        number, unit = keep_runs_for(self.settings)
+        try:
+            max_runs = int(self.settings["max_concurrent_runs"] or 0)
+        except (TypeError, ValueError):
+            raise ValueError("settings.yaml: max_concurrent_runs must be a whole number, "
+                             f"got {self.settings['max_concurrent_runs']!r}") from None
         form = QFormLayout(self)
         self.calendar = QLineEdit(self.settings["calendar"] or "", placeholderText="weekends only, e.g. US or a calendars/<name>.yaml")
-        self.keep_runs = QSpinBox(minimum=1, maximum=100000, value=numbers["keep_runs"])
-        self.max_runs = QSpinBox(minimum=0, maximum=1000, value=numbers["max_concurrent_runs"],
-                                 specialValueText="unlimited")
+        self.keep_runs_for = QSpinBox(minimum=1, maximum=100000, value=number)
+        self.keep_runs_unit = QComboBox()
+        self.keep_runs_unit.addItems(["days", "months", "years"])
+        self.keep_runs_unit.setCurrentText(unit)
+        size = QLocale.c().formattedDataSize(_folder_size(home.runs_dir), 1, QLocale.DataSizeTraditionalFormat)
+        keep_row = QWidget()
+        keep = QHBoxLayout(keep_row)
+        keep.setContentsMargins(0, 0, 0, 0)
+        for widget in (self.keep_runs_for, self.keep_runs_unit, QLabel(f"the runs take {size} now")):
+            keep.addWidget(widget)
+        keep.addStretch()
+        self.max_runs = QSpinBox(minimum=0, maximum=1000, value=max_runs, specialValueText="unlimited")
         self.java_home = QLineEdit(self.settings["java_home"] or "", placeholderText="uses JAVA_HOME if empty")
         browse = QToolButton(text="…")
         browse.clicked.connect(self._browse)
@@ -486,7 +540,7 @@ class SettingsDialog(QDialog):
         row.addWidget(self.java_home)
         row.addWidget(browse)
         form.addRow("Default calendar", self.calendar)
-        form.addRow("Keep files of last runs", self.keep_runs)
+        form.addRow("Keep runs for", keep_row)
         form.addRow("Scheduled runs at once", self.max_runs)
         form.addRow("Java folder", java_row)
         self.at_login = QCheckBox("Start the scheduler service when I log in")
@@ -556,7 +610,9 @@ class SettingsDialog(QDialog):
             values = [(self.keeper.item(r, c).text().strip() if self.keeper.item(r, c) else "") for c in range(3)]
             if values[0] and values[1]:
                 keeper.append({"connection": values[0], "command": values[1], "home": values[2] or "~/.taskloom"})
-        data = {**self.settings, "calendar": self.calendar.text().strip() or None, "keep_runs": self.keep_runs.value(),
+        number, unit = self.keep_runs_for.value(), self.keep_runs_unit.currentText()
+        data = {**self.settings, "calendar": self.calendar.text().strip() or None,
+                "keep_runs_for": f"{number} {unit.removesuffix('s') if number == 1 else unit}",
                 "max_concurrent_runs": self.max_runs.value() or None,
                 "java_home": self.java_home.text().strip() or None, "keeper": keeper,
                 "notify_email": self.notify_email.text().strip() or None,
@@ -580,10 +636,20 @@ def offer_manual_start(parent, flow_name: str) -> bool:
         QMessageBox.Yes | QMessageBox.Cancel) == QMessageBox.Yes
 
 
-def confirm_run_now(parent, flow_name: str, what: str) -> tuple[bool, bool]:
-    """Ask before Run now: (run it, and do not ask again)."""
+def confirm_run_now(parent, flow_name: str, what: str, starts=(), chosen: str | None = None) -> tuple[bool | str, bool]:
+    """Ask before Run now: (what to run, and do not ask again). What to run: False (nothing: cancelled), True (run
+    it), or, given `starts` (its Manual Starts) to choose from, the one chosen (True: All of them). `chosen`, the
+    choice made last time, is offered first; else All of them."""
     box = QMessageBox(QMessageBox.Question, "Run now?", f"<b>Run {html.escape(flow_name)} now?</b><br><br>"
-                      f"{html.escape(what)}", QMessageBox.Yes | QMessageBox.Cancel, parent)
+                      f"{html.escape(what)}", QMessageBox.Cancel if starts else QMessageBox.Yes | QMessageBox.Cancel,
+                      parent)
+    if starts:  # one button for each, and All of them
+        choices = {box.addButton(start, QMessageBox.AcceptRole): start for start in starts}
+        everything = box.addButton("All of them", QMessageBox.AcceptRole)
+        box.setDefaultButton(next((b for b, start in choices.items() if start == chosen), everything))
+        box.exec()
+        clicked = box.clickedButton()
+        return (True if clicked is everything else choices.get(clicked, False)), False
     box.button(QMessageBox.Yes).setText("Run")
     never = QCheckBox("Don't ask me again")
     box.setCheckBox(never)

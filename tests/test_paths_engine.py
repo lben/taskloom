@@ -977,8 +977,7 @@ def test_a_password_in_a_table_never_shows_in_its_preview_even_where_a_long_cell
 
 # --- run folders, retention and settings ------------------------------------------------------------------------
 
-def test_keep_runs_keeps_the_newest_run_folders_and_a_rerun_from_a_cleaned_up_run_says_so(env):
-    env.write("home/settings.yaml", "keep_runs: 2\n")
+def test_runs_older_than_keep_runs_for_are_deleted_and_a_rerun_from_one_says_so(env):
     flow = write(env, """
         blocks:
           load:
@@ -990,20 +989,22 @@ def test_keep_runs_keeps_the_newest_run_folders_and_a_rerun_from_a_cleaned_up_ru
         edges:
           - load.output -> save.t
     """)
-    for _ in range(4):
+    for _ in range(3):
         assert env.taskloom("run", flow).returncode == 0
+    env.query("UPDATE runs SET started='2020-01-01T00:00:00' WHERE id < 3")  # older than keep_runs_for (5 years)
+    assert env.taskloom("run", flow).returncode == 0  # deletes runs 1 and 2 as it ends
 
     assert sorted(p.name for p in (env.home / "runs").iterdir()) == ["3", "4"]
-    assert env.query("SELECT id, status FROM runs ORDER BY id") == [(i, "success") for i in (1, 2, 3, 4)]  # history_days
+    assert env.query("SELECT id, status FROM runs ORDER BY id") == [(3, "success"), (4, "success")]
 
     result = env.taskloom("run", flow, "--only", "save", "--inputs-from", 1)
-    assert result.returncode == 2 and "keep_runs" in result.stderr, result.stderr
+    assert result.returncode == 2 and "keep_runs_for" in result.stderr, result.stderr
     result = env.taskloom("run", flow, "--only", "save", "--inputs-from", 4)
     assert result.returncode == 0, result.stderr
     assert (env.root / "rows.txt").read_text() == "33333"
 
 
-@pytest.mark.parametrize("setting", ["keep_runs: lots", "history_days: forever"])
+@pytest.mark.parametrize("setting", ["keep_runs_for: lots"])
 def test_a_retention_setting_that_is_not_a_number_is_reported_naming_it(env, setting):
     env.write("home/settings.yaml", setting + "\n")
     flow = write(env, """
@@ -1198,9 +1199,9 @@ INVALID_FLOWS = {
     "block without a type": ("blocks:\n  a: {config: {seconds: 0}}\n", "blocks.a: needs a 'type'"),
     "unknown block key": (WAIT_A + ", retries: 3}\n", "blocks.a: unknown key 'retries'"),
     "unknown block type": ("blocks:\n  a: {type: logic.sleep}\n", "unknown block type 'logic.sleep'"),
-    "unknown setting": ("blocks:\n  a: {type: logic.wait, config: {secs: 1}}\n", "unknown config key(s) ['secs']"),
-    "setting of the wrong kind": ("blocks:\n  a: {type: logic.wait, config: {seconds: soon}}\n", "config.seconds"),
-    "missing setting": ("blocks:\n  a: {type: logic.wait}\n", "config.seconds is required"),
+    "unknown setting": ("blocks:\n  a: {type: logic.wait, config: {secs: 1}}\n", "unknown setting(s) ['secs']"),
+    "setting of the wrong kind": ("blocks:\n  a: {type: logic.wait, config: {seconds: soon}}\n", "a: Seconds:"),
+    "missing setting": ("blocks:\n  a: {type: logic.wait}\n", "a: Seconds is required"),
     "block from a newer version": (WAIT_A + ", version: 99}\n", "saved with version 99"),
     "connection that cannot be read": (WAIT_AB + "edges:\n  - a.value => b.value\n", "cannot read 'a.value => b.value'"),
     "connection to an unknown block": (WAIT_AB + "edges:\n  - a.value -> z.value\n", "unknown block"),

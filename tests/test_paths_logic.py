@@ -315,8 +315,8 @@ def test_unusual_characters_large_values_and_values_that_cannot_be_saved_pass_on
     ("{outputs: [error], code: 'pass'}", "error: every block already has these; choose other names"),
     ("{inputs: ['my input'], code: 'pass'}", "expected a list of names (letters, digits, _)"),
     ("{inputs: [a, a], code: 'pass'}", "duplicate names"),
-    ("{inputs: []}", "config.code is required"),
-    ("{code: 'pass', use_environment: 'yes'}", "config.use_environment: expected true or false"),
+    ("{inputs: []}", "Code is required"),
+    ("{code: 'pass', use_environment: 'yes'}", "Run in my Python environment: expected true or false"),
 ], ids=["input-after", "output-done", "output-error", "space", "duplicate", "no-code", "use-environment-text"])
 def test_python_code_config_that_cannot_work_is_refused_before_running(env, config, problem):
     flow = env.write("flow.yaml", f"""
@@ -934,18 +934,18 @@ def test_wait_pauses_then_passes_its_input_on_unchanged(env):
 
 
 @pytest.mark.parametrize("block, problem", [
-    ("{type: logic.if}", "config.condition is required"),
-    ("{type: logic.wait}", "config.seconds is required"),
-    ("{type: logic.wait, config: {seconds: soon}}", "config.seconds"),
-    ("{type: logic.ask_user}", "config.prompt is required"),
+    ("{type: logic.if}", "Condition is required"),
+    ("{type: logic.wait}", "Seconds is required"),
+    ("{type: logic.wait, config: {seconds: soon}}", "Seconds:"),
+    ("{type: logic.ask_user}", "Prompt is required"),
     ("{type: logic.ask_user, config: {prompt: 'Go?', kind: number}}",
-     "config.kind: expected one of ['text', 'password', 'yes_no', 'choice']"),
-    ("{type: logic.ask_user, config: {prompt: 'Go?', kind: choice, options: EU}}", "config.options: expected a list"),
+     "Kind: expected one of ['text', 'password', 'yes_no', 'choice']"),
+    ("{type: logic.ask_user, config: {prompt: 'Go?', kind: choice, options: EU}}", "Options: expected a list"),
     ("{type: logic.ask_user, config: {prompt: 'Region for {country}?'}}", "unknown parameter {country}"),
-    ("{type: logic.for_each, config: {param: region}}", "config.flow is required"),
-    ("{type: logic.for_each, config: {flow: inner.yaml}}", "config.param is required"),
+    ("{type: logic.for_each, config: {param: region}}", "Flow is required"),
+    ("{type: logic.for_each, config: {flow: inner.yaml}}", "Param is required"),
     ("{type: logic.for_each, config: {flow: inner.yaml, param: region, stop_on_failure: maybe}}",
-     "config.stop_on_failure: expected true or false"),
+     "Stop on failure: expected true or false"),
 ], ids=["if-no-condition", "wait-no-seconds", "wait-not-a-number", "ask-no-prompt", "ask-unknown-kind",
         "ask-options-not-a-list", "ask-unknown-parameter", "each-no-flow", "each-no-param", "each-stop-not-bool"])
 def test_logic_block_config_that_cannot_work_is_refused_by_validate(env, block, problem):

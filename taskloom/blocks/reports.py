@@ -77,7 +77,10 @@ class Chart(Block):
     config = {
         "kind": fields.Choice(CHART_KINDS, default="bar"),
         "x": fields.Text(required=False, help="Column for categories / the x axis"),
+        "x_label": fields.Text(required=False, help="Name shown on the x axis, e.g. Store ID; "
+                                                    "default the x column's"),
         "y": fields.List(help="One or more value columns (one per series)"),
+        "y_label": fields.Text(required=False, help="Name shown on the value axis; default the y column's"),
         "title": fields.Text(required=False),
         "width": fields.Int(default=640),
         "height": fields.Int(default=360),
@@ -89,7 +92,8 @@ class Chart(Block):
         df, total = _frame(table, c.max_points)
         if total > c.max_points:
             ctx.warn(f"charting the first {c.max_points:,} of {total:,} rows")
-        path = render_chart(df, ctx.new_path("chart.png"), c.kind, c.x, c.y, c.title or "", c.width, c.height)
+        path = render_chart(df, ctx.new_path("chart.png"), c.kind, c.x, c.y, c.title or "", c.width, c.height,
+                            c.x_label or "", c.y_label or "")
         return {"image": str(path)}
 
 
@@ -154,7 +158,7 @@ class ToExcel(Block):
     category = "Reports"
     outputs = {"file": ports.Any()}
     config = {
-        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.xlsx"),
+        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.xlsx", files=["Excel workbook (*.xlsx)"]),
         "sheets": fields.Names(default=["table"], help="One input and sheet per name"),
         "chart": fields.Choice(["none"] + list(_EXCEL_CHART_TYPES), default="none", help="A native Excel chart"),
         "chart_sheet": fields.Text(required=False, help="Sheet with the chart data; default the first"),
@@ -192,12 +196,12 @@ class ToExcel(Block):
     def _add_chart(workbook, frames, c):
         sheet = c.chart_sheet or next(iter(frames))
         if sheet not in frames:
-            raise ValueError(f"chart_sheet '{sheet}' is not one of the sheets {list(frames)}")
+            raise ValueError(f"Chart sheet: '{sheet}' is not one of the sheets {list(frames)}")
         df = frames[sheet]
         columns = list(df.columns)
         missing = [col for col in ([c.chart_x] if c.chart_x else []) + list(c.chart_y) if col not in columns]
         if missing or not c.chart_y:
-            raise ValueError(f"chart needs chart_y columns from {columns}" + (f"; unknown: {missing}" if missing else ""))
+            raise ValueError(f"the chart needs Chart y: columns from {columns}" + (f"; unknown: {missing}" if missing else ""))
         chart = workbook.add_chart({"type": _EXCEL_CHART_TYPES[c.chart]})
         last = len(df)
         for i, col in enumerate(c.chart_y):

@@ -99,7 +99,10 @@ class fields:
             return str(value)
 
     class Path(Text):
-        pass
+        def __init__(self, default=None, files=(), **kw):
+            super().__init__(default=default, **kw)
+            # The kinds of file its browse button offers, e.g. ["Excel workbook (*.xlsx)"]; none: any file.
+            self.files = list(files)
 
     class Connection(Field):
         def __init__(self, kind: str, default=None, **kw):
@@ -108,6 +111,12 @@ class fields:
 
         def coerce(self, value):
             return str(value)
+
+    class Server(Connection):
+        """Where a path is: on this computer (left empty) or on the server of an SSH connection."""
+
+        def __init__(self, **kw):
+            super().__init__("ssh", required=False, **kw)
 
     class List(Field):
         """A list of text values."""
@@ -133,6 +142,12 @@ class fields:
             if taken:
                 raise ValueError(f"{', '.join(sorted(taken))}: every block already has these; choose other names")
             return list(value)
+
+
+def setting_label(key: str, f: fields.Field) -> str:
+    """The name the editor's Properties panel shows for the setting `key` (and messages about it use)."""
+    words = key.replace("_", " ").capitalize().split(" ")
+    return f.label or " ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words)
 
 
 class Block:

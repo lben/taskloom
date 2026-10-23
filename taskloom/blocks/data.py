@@ -137,7 +137,8 @@ class WriteFile(Block):
     inputs = {"table": ports.Table()}
     outputs = {"file": ports.Any()}
     config = {
-        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.csv"),
+        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.csv",
+                            files=["CSV file (*.csv)", "Excel workbook (*.xlsx)", "Parquet file (*.parquet)"]),
         "format": fields.Choice(_FORMATS, default="auto"),
     }
 

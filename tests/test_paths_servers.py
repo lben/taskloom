@@ -305,7 +305,7 @@ def test_ssh_command_with_single_braces_is_refused_before_anything_runs(env, ser
     result = env.taskloom("run", flow)
 
     assert result.returncode == 2
-    assert "blocks.cmd.config.command" in result.stderr and "HOME" in result.stderr
+    assert "cmd: Command:" in result.stderr and "HOME" in result.stderr
     assert not (server.home_path / "ran.txt").exists()
 
 
@@ -427,9 +427,9 @@ def test_every_server_block_refuses_a_missing_or_non_ssh_connection_before_runni
 
     assert result.returncode == 2
     for block in ("cmd", "stop", "extract"):
-        assert f"blocks.{block}.config.connection: connection 'mailer' is smtp, expected ssh" in result.stderr
+        assert f"{block}: Connection: connection 'mailer' is smtp, expected ssh" in result.stderr
     for block in ("start", "check"):
-        assert f"blocks.{block}.config.connection: no connection named 'nosuch' in connections.yaml" in result.stderr
+        assert f"{block}: Connection: no connection named 'nosuch' in connections.yaml" in result.stderr
     assert not (server.home_path / "ran.txt").exists()
 
 
@@ -629,9 +629,9 @@ def test_server_block_settings_of_the_wrong_type_are_refused_before_anything_run
     result = env.taskloom("run", _write_flow(env, blocks))
 
     assert result.returncode == 2
-    for block, field in (("cmd", "fail_on_error"), ("start", "check_after"), ("stop", "grace"), ("check", "port")):
-        assert f"blocks.{block}: config.{field}: " in result.stderr, (block, result.stderr)
-    assert "blocks.nocommand: config.command is required" in result.stderr
+    for block, field in (("cmd", "Fail on error"), ("start", "Check after"), ("stop", "Grace"), ("check", "Port")):
+        assert f"{block}: {field}: " in result.stderr, (block, result.stderr)
+    assert "nocommand: Command is required" in result.stderr
     assert "Traceback" not in result.stderr
     assert not (server.home_path / "ran.txt").exists()
 
@@ -1087,9 +1087,9 @@ def test_health_check_configuration_mistakes_fail_clearly(env, server):
 
     assert result.returncode == 1
     assert status == {"nothing": "failed", "pid_alone": "failed", "port_alone": "failed"}
-    assert _error(env, run_id, "nothing") == "ValueError: configure at least one check: url, pid_file or port"
-    assert _error(env, run_id, "pid_alone") == "ValueError: pid_file and port checks need a connection"
-    assert _error(env, run_id, "port_alone") == "ValueError: pid_file and port checks need a connection"
+    assert _error(env, run_id, "nothing") == "ValueError: set at least one check: URL, PID file or Port"
+    assert _error(env, run_id, "pid_alone") == "ValueError: the PID file and Port checks need a Connection"
+    assert _error(env, run_id, "port_alone") == "ValueError: the PID file and Port checks need a Connection"
 
 
 # --- Remote Extract -------------------------------------------------------------------------------------

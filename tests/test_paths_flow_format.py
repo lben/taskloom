@@ -347,7 +347,7 @@ WRONG_KINDS = {
     "path: an unknown parameter": ("label: x, where: 'out/{day:%Y}/{nope}.txt'", "where", "unknown parameter {nope}"),
     "sql: an unknown bind parameter": ("label: x, query: 'select :nope'", "query", "unknown bind parameter :nope"),
     "sql: an unknown parameter": ("label: x, query: 'select {nope}'", "query", "unknown parameter {nope}"),
-    "required: left out": ("text: x", "label", "config.label is required"),
+    "required: left out": ("text: x", "label", "Label is required"),
 }
 
 
@@ -359,8 +359,7 @@ def test_a_setting_of_the_wrong_kind_is_refused_naming_the_block_the_setting_and
     result = env.taskloom("validate", flow)
 
     assert refused(result), result.stderr
-    assert any("blocks.k" in line and f"config.{name}" in line and problem in line for line in errors(result)), \
-        result.stderr
+    assert any(f"k: {name.capitalize()}" in line and problem in line for line in errors(result)), result.stderr
 
 
 def test_each_kind_of_setting_reaches_the_block_as_written_and_one_left_out_gets_its_default(env):
@@ -418,7 +417,7 @@ def test_empty_braces_in_a_setting_are_refused_before_anything_runs(env):
 
     validated, ran = env.taskloom("validate", flow), env.taskloom("run", flow)
 
-    assert refused(validated) and "config.path" in validated.stderr, validated.stdout + validated.stderr
+    assert refused(validated) and "save: Path:" in validated.stderr, validated.stdout + validated.stderr
     assert refused(ran) and runs_recorded(env) == 0, ran.stderr  # refused before a run starts, like {0}
 
 
@@ -755,7 +754,7 @@ def test_check_keeps_the_connections_of_a_block_whose_settings_are_wrong_and_say
     assert result.returncode == 2, result.stdout
     [can_fix] = [line for line in result.stdout.splitlines() if line.startswith("  can fix: ")]
     assert can_fix == "  can fix: remove the connection gone.output -> use.a: there is no block 'gone'", result.stdout
-    assert any(line.startswith("  needs you: blocks.p: ") and "duplicate names" in line
+    assert any(line.startswith("  needs you: p: Inputs: ") and "duplicate names" in line
                for line in result.stdout.splitlines()), result.stdout
     after = yaml.safe_load(flow.read_text(encoding="utf-8"))
     assert after["blocks"] == before["blocks"]

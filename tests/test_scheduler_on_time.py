@@ -12,7 +12,7 @@ import pytest
 
 from taskloom.config import Home
 from taskloom.history import History
-from taskloom.scheduler import Scheduler
+from taskloom.scheduler import EARLY_START, Scheduler
 
 DAY = dt.date(2026, 1, 5)
 
@@ -221,7 +221,8 @@ def test_an_edited_schedule_starts_from_now(env):
 # --- 1: how long the scheduler waits before its next check --------------------------------------
 
 
-def test_the_scheduler_waits_until_the_next_due_time_and_at_most_15_seconds(env):
+def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_15_seconds(env):
+    """It wakes EARLY_START before a due time: that run's process starts then, to begin at its time."""
     home = Home(env.home)
     scheduler = Scheduler(home)
     assert scheduler.seconds_to_next_check(at("10:00:00")) == pytest.approx(15)  # nothing is scheduled
@@ -269,7 +270,7 @@ def test_the_scheduler_waits_until_the_next_due_time_and_at_most_15_seconds(env)
         ("10:29:57", 3),  # the Schedule block at 10:30
         ("10:29:59.999", 0.001),
     ]:
-        now = at(clock)
+        now = at(clock) - EARLY_START  # each clock as long before as its runs' processes start early
         scheduler.tick(now)
         waited = scheduler.seconds_to_next_check(now)
         assert seconds <= waited + 1e-6 and waited <= min(seconds + 0.01, 15), (clock, waited)  # never before
@@ -380,7 +381,7 @@ run_cli(["scheduler"])
 """
 
 
-def test_the_tray_scheduler_starts_a_run_within_a_second_of_its_time(env, process_starts):
+def test_the_tray_scheduler_starts_a_runs_process_a_few_seconds_before_its_time(env, process_starts):
     """The reported case: the countdown reached 0 at hh:mm:00 but the run started at about hh:mm:13."""
     schedule(env, every_minute())
     service = subprocess.Popen([sys.executable, "-c", TRAY_SCHEDULER], env={**env.env, "QT_QPA_PLATFORM": "offscreen"},
@@ -395,11 +396,12 @@ def test_the_tray_scheduler_starts_a_run_within_a_second_of_its_time(env, proces
     assert found, "no run started"
     (as_of, process_started), = found
     assert as_of == due
-    assert 0 <= process_started - due.timestamp() < 1.0, f"started {process_started - due.timestamp():.2f} s after {due}"
+    ahead = due.timestamp() - process_started  # a few seconds early: loaded by its time, it begins then
+    assert 0 < ahead < 15, f"its process started {ahead:.2f} s before {due}"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")
-def test_the_headless_scheduler_starts_a_run_within_a_second_of_its_time(env, process_starts):
+def test_the_headless_scheduler_starts_a_runs_process_a_few_seconds_before_its_time(env, process_starts):
     schedule(env, every_minute())
     wait_for_clock(lambda second: 2 <= second <= 50)  # it starts (and first checks) well before the minute
     service = env.popen("scheduler", "--headless")
@@ -413,4 +415,5 @@ def test_the_headless_scheduler_starts_a_run_within_a_second_of_its_time(env, pr
     assert found, "no run started"
     (as_of, process_started), = found
     assert as_of == due
-    assert 0 <= process_started - due.timestamp() < 1.0, f"started {process_started - due.timestamp():.2f} s after {due}"
+    ahead = due.timestamp() - process_started  # a few seconds early: loaded by its time, it begins then
+    assert 0 < ahead < 15, f"its process started {ahead:.2f} s before {due}"

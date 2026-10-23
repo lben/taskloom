@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import heapq
 import html
 import os
 import signal
@@ -14,16 +15,16 @@ import uuid
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtCore import QMargins, QPoint, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox, QSizePolicy,
-                               QTabWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayout, QMainWindow, QMenu, QMessageBox,
+                               QSizePolicy, QTabBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import __version__, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..config import Home
-from ..engine import block_inputs, input_ports
+from ..engine import block_inputs, finished_text, input_ports
 from ..flow import FlowError, load_flow, read_flow_file, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
@@ -60,6 +61,10 @@ def _finished_line(run_id: int, status: str, ts: str) -> dict:
 def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, scheduler_on: bool,
                        unsaved: bool) -> tuple[str, str]:
     """(Text under a Schedule block, its tooltip): when it starts the flow next."""
+    if scheduled and unsaved:
+        return "unsaved · the scheduler runs the saved version", (
+            "This flow has unsaved changes: the scheduler service runs the saved version of it. Save the flow to "
+            "apply your changes.")
     if config.get("active", True) is False:
         return "not active", "This schedule is not active: it does not start the flow. Tick Active to use it."
     timing = {k: config[k] for k in ("cron", "at") if config.get(k) not in (None, "")}
@@ -73,7 +78,7 @@ def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, schedule
     if not upcoming:
         return "no more runs", "Its time has passed."
     tip = "Next runs:<br>" + "<br>".join(f"{t:%a %d %b %Y %H:%M}" for t in upcoming)
-    if unsaved or not scheduled:
+    if not scheduled:
         return f"next {upcoming[0]:%a %H:%M} · save to schedule", tip + "<br><br>Save the flow to schedule this."
     if not scheduler_on:  # no time: none comes while it is off
         return "scheduler service off", ("The scheduler service is off, so this schedule does not start the flow. "
@@ -84,9 +89,15 @@ def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, schedule
     return f"next run in {f'{days}d ' if days else ''}{clock}", tip
 
 
-def _seen_key(path) -> str:
-    """Where editor.ini remembers the newest run of a flow you have seen."""
-    return "seen/" + hashlib.sha1(str(path).encode()).hexdigest()[:16]
+def _block_line(block: str, ts: str, result: dict) -> dict:
+    """A finished block's line: it names its tables' files, to copy."""
+    return {"ts": ts, "block": block, "level": "INFO", "message": finished_text(result)}
+
+
+def _flow_key(what: str, path) -> str:
+    """Where editor.ini remembers `what` of a flow: "seen", the newest run of it you have seen; "run_now", the
+    Manual Start Run now started last ("": all of them)."""
+    return f"{what}/" + hashlib.sha1(str(path).encode()).hexdigest()[:16]
 
 
 def _started_line(run_id: int, ts: str, params: str = "") -> dict:
@@ -112,6 +123,40 @@ class HoverMenuButton(QToolButton):
     def leaveEvent(self, event):
         super().leaveEvent(event)
         self._hover.stop()
+
+
+class FlowTabBar(QTabBar):
+    """The open flows' tabs, in `tabs`, with a + button just right of the last one (a new flow). Room is kept for
+    the + right of the tabs' row: it sits there when the tabs do not all fit (they scroll), so never over a tab."""
+
+    GAP = 4
+
+    def __init__(self, tabs: QTabWidget):
+        super().__init__()
+        self.new_button = QToolButton(tabs, text="+", autoRaise=True, toolTip="New flow (File > New flow)")
+        room = QWidget()
+        QHBoxLayout(room, contentsMargins=QMargins()).addSpacing(self.GAP + self.new_button.sizeHint().width())
+        tabs.setCornerWidget(room)  # the tabs' row ends before it
+        tabs.setTabBar(self)
+        self.new_button.raise_()  # above the tabs' row
+
+    def sizeHint(self):  # tall enough for the +
+        hint = super().sizeHint()
+        return QSize(hint.width(), max(hint.height(), self.new_button.sizeHint().height()))
+
+    def tabLayoutChange(self):  # tabs added, closed, moved or renamed
+        super().tabLayoutChange()
+        self._place_new_button()
+
+    def resizeEvent(self, event):  # placed once the tabs are laid out and scrolled for the new width
+        super().resizeEvent(event)
+        self._place_new_button()
+
+    def _place_new_button(self):
+        last = self.tabRect(self.count() - 1)  # (no tabs: an empty rect at 0)
+        scrolls = self.tabRect(0).left() < 0 or last.right() >= self.width()
+        x = (self.width() if scrolls else last.right() + 1) + self.GAP
+        self.new_button.move(self.mapToParent(QPoint(x, (self.height() - self.new_button.height()) // 2)))
 
 
 class FlowTab(QWidget):
@@ -154,6 +199,12 @@ class FlowTab(QWidget):
         """The run the result a block shows comes from (None: it shows none)."""
         return (self.block_info.get(block) or {}).get("run_id")
 
+    def inputs_run(self, block: str) -> int | None:
+        """The run whose inputs "with the same inputs" gives a block: the run of the result it shows; showing none
+        (e.g. a block added since), the latest run among the results the blocks connected into it show."""
+        return self.result_run(block) or max(
+            filter(None, (self.result_run(src) for src, _, dst, _ in self.doc.edges() if dst == block)), default=None)
+
     def list_status(self) -> tuple[str | None, str]:
         if self.running:
             done = sum(1 for b in self.run_blocks if (self.block_info.get(b) or {}).get("status") not in (None, "running"))
@@ -184,7 +235,12 @@ class MainWindow(QMainWindow):
         self._quitting = False
         self.resize(1440, 900)
 
-        self.tabs = QTabWidget(tabsClosable=True, movable=True, documentMode=True)
+        self.tabs = QTabWidget()
+        FlowTabBar(self.tabs)  # first: the tab widget's settings below go to it
+        self.tabs.setTabsClosable(True)
+        self.tabs.setMovable(True)
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().new_button.clicked.connect(self.new_flow)
         self.setCentralWidget(self.tabs)
 
         self.palette_panel = Palette(self.registry)
@@ -541,12 +597,15 @@ class MainWindow(QMainWindow):
     # --- copy and paste -------------------------------------------------------------
 
     def copy_blocks(self):
+        """The selected blocks (with the connections between them) and texts, onto the clipboard."""
         tab = self.current
         ids = tab.scene.selected_block_ids() if tab else []
-        if not ids:
+        notes = tab.scene.selected_note_ids() if tab else []
+        if not ids and not notes:
             return
         edges = [t for t in tab.doc.data["edges"] if any(t.startswith(f"{i}.") for i in ids)]
-        data = {CLIPBOARD_KEY: {i: tab.doc.blocks[i] for i in ids}, "edges": edges}
+        data = {CLIPBOARD_KEY: {i: tab.doc.blocks[i] for i in ids}, "edges": edges,
+                "notes": {n: tab.doc.notes[n] for n in notes}}
         QApplication.clipboard().setText(yaml.safe_dump(data, sort_keys=False))
 
     def paste_blocks(self):
@@ -557,11 +616,16 @@ class MainWindow(QMainWindow):
             data = yaml.safe_load(QApplication.clipboard().text())
         except yaml.YAMLError:
             return
-        if isinstance(data, dict) and isinstance(data.get(CLIPBOARD_KEY), dict):
-            new_ids = tab.doc.paste_blocks(data[CLIPBOARD_KEY], data.get("edges") or [], 40, 40)
+        if not (isinstance(data, dict) and isinstance(data.get(CLIPBOARD_KEY), dict)):
+            return
+        notes = data.get("notes") if isinstance(data.get("notes"), dict) else {}
+        if data[CLIPBOARD_KEY] or notes:
+            new_ids, new_notes = tab.doc.paste_blocks(data[CLIPBOARD_KEY], data.get("edges") or [], notes, 40, 40)
             tab.scene.clearSelection()
             for block_id in new_ids:
                 tab.scene.nodes[block_id].setSelected(True)
+            for note_id in new_notes:
+                tab.scene.note_items[note_id].setSelected(True)
 
     # --- running --------------------------------------------------------------------
 
@@ -584,11 +648,12 @@ class MainWindow(QMainWindow):
         except (FlowError, ValueError) as e:
             errors, warnings, flow = getattr(e, "errors", [str(e)]), [], None
         now = dt.datetime.now().isoformat(timespec="milliseconds")
+        # About the whole flow, like a run's first and last lines: shown whichever block the Log shows.
         for message in warnings:
-            self._log(tab, {"ts": now, "level": "WARNING", "message": message})
+            self._log(tab, {"ts": now, "level": "WARNING", "message": message, "header": True})
         if errors:
             for message in errors:
-                self._log(tab, {"ts": now, "level": "ERROR", "message": message})
+                self._log(tab, {"ts": now, "level": "ERROR", "message": message, "header": True})
             self.bottom_tabs.setCurrentWidget(self.log)
             QMessageBox.warning(self, "The flow has problems", "\n".join(errors[:12]))
             return None
@@ -599,11 +664,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{tab.doc.title}: no problems found", 5000)
 
     def run_flow(self, tab: FlowTab | None, start: str | None = None):
-        """Run the flow: from its Manual Start blocks (all of its start blocks if it has none), or from the
-        start block `start` (e.g. right-click a Schedule block: as if its time had come)."""
+        """Run the flow: from its Manual Start (with several, the one you choose or all of them; all of its start
+        blocks if it has none), or from the start block `start` (e.g. right-click a Schedule block: as if its time
+        had come)."""
         if tab is None:
             return
-        extra = ["--trigger", start] if start else []
         if start is None and not upgrade.start_blocks(tab.doc.data, self.registry):
             # A flow starts from a start block: offer the one that runs it as before (every block).
             if not dialogs.offer_manual_start(self, tab.doc.title):
@@ -612,12 +677,20 @@ class MainWindow(QMainWindow):
         flow = self._ready_to_run(tab)
         if flow is None:
             return
-        if start is None and self.settings.value("ask_before_run_now", "yes") != "no":
-            go, never = dialogs.confirm_run_now(self, flow.name, self._run_now_says(flow))
+        manual = [b for b, spec in flow.blocks.items() if spec.type == "trigger.manual"]
+        if start is None and (len(manual) > 1 or self.settings.value("ask_before_run_now", "yes") != "no"):
+            # Several Manual Starts: which one to start, asked whatever "Don't ask me again" said, remembered per flow.
+            chosen_key = _flow_key("run_now", tab.doc.path)
+            which = {"starts": manual, "chosen": self.settings.value(chosen_key)} if len(manual) > 1 else {}
+            go, never = dialogs.confirm_run_now(self, flow.name, self._run_now_says(flow), **which)
             if never:
                 self.settings.setValue("ask_before_run_now", "no")
             if not go:
                 return
+            if which:
+                start = None if go is True else go  # (None: all of them)
+                self.settings.setValue(chosen_key, start or "")
+        extra = ["--trigger", start] if start else []
         overrides = {}
         if flow.params:
             _, funcs = run_clock(flow, self.home)
@@ -655,11 +728,12 @@ class MainWindow(QMainWindow):
         starts = [b for b, spec in flow.blocks.items()
                   if (cls := self.registry.get(spec.type)) is not None and cls.is_trigger]
         manual = [b for b in starts if flow.blocks[b].type == "trigger.manual"]
+        if len(manual) > 1:
+            return (f"It has several Manual Start blocks ({', '.join(manual)}): choose the one to run it from. The "
+                    "blocks connected after it run; the others do not. All of them runs from each.")
         if manual:
-            which = f"its Manual Start block {manual[0]}" if len(manual) == 1 else \
-                f"its Manual Start blocks ({', '.join(manual)})"
-            return (f"It runs from {which}: the blocks connected after it run; blocks connected to no start "
-                    "block do not. To run from one start block only, right-click it.")
+            return (f"It runs from its Manual Start block {manual[0]}: the blocks connected after it run; blocks "
+                    "connected to no start block do not. To run from one start block only, right-click it.")
         if len(starts) == 1:
             return (f"It has no Manual Start block, so it starts from its Schedule block {starts[0]}, as if its "
                     "time had come.")
@@ -673,7 +747,7 @@ class MainWindow(QMainWindow):
         runs one block again (or a block and what follows it)."""
         run = RunProcess(str(tab.doc.path), overrides, self.home, self, extra_args)
         run.event.connect(lambda e, t=tab, r=run: self._on_event(t, r, e))
-        run.output.connect(lambda line, t=tab, r=run: self._on_output(t, r, line))
+        run.output.connect(lambda level, line, t=tab, r=run: self._on_output(t, r, level, line))
         run.finished.connect(lambda status, t=tab, r=run: self._on_finished(t, r, status))
         tab.runs.append(run)
         if not tab.following_latest:  # an older run was on the canvas: each block's latest result again
@@ -730,7 +804,7 @@ class MainWindow(QMainWindow):
                      else "Run the flow from here")
             menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
             return menu
-        run_id = tab.result_run(block_id)
+        run_id = tab.inputs_run(block_id)
         shown = f" ({self._run_label(run_id)})" if run_id else ""
         rerun = menu.addAction(f"Run only this block, with the same inputs{shown}")
         rerun.setEnabled(run_id is not None and not tab.running)
@@ -764,10 +838,11 @@ class MainWindow(QMainWindow):
 
     def rerun_block(self, tab: FlowTab, block_id: str, on: bool = False):
         """Run one block again (`on`: and every block after it), with the inputs it got in the run of the result
-        it shows (e.g. after fixing it); the blocks before it are not run again."""
-        run_id = tab.result_run(block_id)
+        it shows (e.g. after fixing it; showing none: see FlowTab.inputs_run); the blocks before it do not run."""
+        run_id = tab.inputs_run(block_id)
         if run_id is None:
-            QMessageBox.information(self, "Run the flow first", "This block shows no result to take the inputs from.")
+            QMessageBox.information(self, "Run the flow first", "Neither this block nor the blocks connected into it "
+                                    "show a result to take the inputs from.")
             return
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
@@ -788,8 +863,7 @@ class MainWindow(QMainWindow):
         if flow is None:
             return
         names = [name for name in input_ports(flow, self.registry, block_id) if name != AFTER]
-        run_id = tab.result_run(block_id) or max(
-            filter(None, (tab.result_run(src) for src, _, dst, _ in tab.doc.edges() if dst == block_id)), default=None)
+        run_id = tab.inputs_run(block_id)
         values, missing, typed = {}, {}, {}
         if run_id is not None:
             try:
@@ -823,9 +897,9 @@ class MainWindow(QMainWindow):
         if tab is self.current:
             self.log.append(entry)
 
-    def _on_output(self, tab, run, line):
+    def _on_output(self, tab, run, level, line):
         if run is tab.shown_run and line.strip():
-            self._log(tab, {"ts": dt.datetime.now().isoformat(), "level": "ERROR", "message": line})
+            self._log(tab, {"ts": dt.datetime.now().isoformat(), "level": level, "message": line})
 
     def _on_event(self, tab: FlowTab, run: RunProcess, e: dict):
         kind = e.get("event")
@@ -858,6 +932,8 @@ class MainWindow(QMainWindow):
             self._log(tab, e)
         elif kind == "block_finished":
             self._apply_block_result(tab, block, e)
+            if e.get("tables"):
+                self._log(tab, _block_line(block, e["ts"], e))
         elif kind == "run_finished":
             self._log(tab, _finished_line(e["run_id"], e["status"], e["ts"]))
         self.flow_status.update_tab(tab)
@@ -938,7 +1014,7 @@ class MainWindow(QMainWindow):
         if tab.seen_up_to is None:
             # Just opened: runs you saw before start nothing (a flow opens clean); none yet: every run to
             # come is new.
-            stored = self.settings.value(_seen_key(tab.doc.path))
+            stored = self.settings.value(_flow_key("seen", tab.doc.path))
             tab.seen_up_to = tab.since_run = int(stored) if stored is not None else runs[0]["id"] if runs else 0
             self._mark_seen(tab, tab.seen_up_to)
         if tab.following_latest and not tab.running:
@@ -957,7 +1033,7 @@ class MainWindow(QMainWindow):
     def _mark_seen(self, tab: FlowTab, run_id: int):
         tab.seen_up_to = max(tab.seen_up_to or 0, run_id)
         if tab.doc.path is not None:
-            key = _seen_key(tab.doc.path)
+            key = _flow_key("seen", tab.doc.path)
             self.settings.setValue(key, max(int(self.settings.value(key) or 0), run_id))
 
     def _refresh_statuses(self):
@@ -997,8 +1073,8 @@ class MainWindow(QMainWindow):
         for run in running:
             started = run["started"].replace("T", " ")[:19]
             since = started[11:] if started.startswith(today) else started
-            text = f"{run['flow']}  ·  running since {since} ({run_label(run['id'], None)})"
             path = Path(run["flow_path"]).resolve()
+            text = f"{path.stem}  ·  running since {since} ({run_label(run['id'], None)})"  # by its file's name
             upcoming = self._next_scheduled(path) if path in scheduled else None  # (the service runs only those)
             if upcoming is not None:  # its soonest schedule, which comes only while the service is on
                 text += (f"  ·  next run {upcoming:%Y-%m-%d %H:%M:%S}" if self.flow_status.scheduler_on else
@@ -1217,8 +1293,11 @@ class MainWindow(QMainWindow):
         """A past run's messages in the Log (after the earlier runs' messages with keep_log, else on their own)."""
         history = self._history()
         run, logs = history.run(run_id), history.logs(run_id)
+        tables = [_block_line(block, result["finished"], result)
+                  for block, result in history.finished_blocks(run_id) if result["tables"]]
         history.close()
         self._mark_seen(tab, run_id)
+        logs = list(heapq.merge(logs, tables, key=lambda e: e["ts"]))  # each where the run had it
         if run:
             logs = [_started_line(run_id, run["started"]),
                     *logs, _finished_line(run_id, run["status"], run["finished"] or run["started"])]

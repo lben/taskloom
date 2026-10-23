@@ -12,8 +12,9 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from . import params as P
-from .block import IDENTIFIER, all_ports, fields
+from .block import IDENTIFIER, all_ports, fields, setting_label
 from .calendars import load_calendar
+from .config import keep_runs_for
 from .expr import functions
 from .schedule import Trigger
 
@@ -287,16 +288,16 @@ def block_config(cls, spec: BlockSpec) -> dict:
         raise ValueError(f"saved with version {spec.version} of {cls.type_id}, but this install has version {cls.version}")
     unknown = set(config) - set(cls.config)
     if unknown:
-        raise ValueError(f"unknown config key(s) {sorted(unknown)}")
+        raise ValueError(f"unknown setting(s) {sorted(unknown)}")
     result = {}
     for name, f in cls.config.items():
         if name in config and config[name] is not None:
             try:
                 result[name] = f.coerce(config[name])
             except ValueError as e:
-                raise ValueError(f"config.{name}: {e}") from None
+                raise ValueError(f"{setting_label(name, f)}: {e}") from None
         elif f.required:
-            raise ValueError(f"config.{name} is required")
+            raise ValueError(f"{setting_label(name, f)} is required")
         else:
             result[name] = f.default
     return result
@@ -330,27 +331,21 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
         if calendar_name:
             warnings += load_calendar(calendar_name, home.calendars_dir).warnings_for_year(now.year)
         P.resolve(flow.params, {}, funcs)
-        for key in ("keep_runs", "history_days"):  # used as a run ends: a mistake there is refused before it starts
-            value = home.settings()[key]
-            try:
-                int(value)
-            except (TypeError, ValueError):
-                raise ValueError(f"settings.yaml: {key} must be a whole number, got {value!r}") from None
+        keep_runs_for(home.settings())  # used as a run ends: a mistake there is refused before it starts
     except Exception as e:
         errors.append(str(e))
 
     ports = {}
     for block_id, spec in flow.blocks.items():
-        where = f"blocks.{block_id}"
         cls = registry.get(spec.type)
         if cls is None:
-            errors.append(f"{where}: unknown block type '{spec.type}'")
+            errors.append(f"{block_id}: unknown block type '{spec.type}'")
             continue
         try:
             config = block_config(cls, spec)
             inputs, outputs = all_ports(cls, config)
         except Exception as e:
-            errors.append(f"{where}: {e}")
+            errors.append(f"{block_id}: {e}")
             continue
         ports[block_id] = (inputs, outputs)
         has_params_input = any(e.dst == block_id and e.dst_port == "params" for e in flow.edges)
@@ -358,22 +353,23 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
             value = config.get(name)
             if not isinstance(value, str):
                 continue
+            setting = f"{block_id}: {setting_label(name, f)}"
             if f.template:
                 try:
                     missing = P.template_names(value) - set(flow.params)
                 except ValueError as e:
-                    errors.append(f"{where}.config.{name}: {e} (write {{{{ and }}}} for literal braces)")
+                    errors.append(f"{setting}: {e} (write {{{{ and }}}} for literal braces)")
                     continue
-                errors += [f"{where}.config.{name}: unknown parameter {{{m}}}" for m in sorted(missing)]
+                errors += [f"{setting}: unknown parameter {{{m}}}" for m in sorted(missing)]
             if isinstance(f, fields.Code) and f.language == "sql" and not has_params_input:
                 missing = set(P.to_qmark(value)[1]) - set(flow.params)
-                errors += [f"{where}.config.{name}: unknown bind parameter :{m}" for m in sorted(missing)]
+                errors += [f"{setting}: unknown bind parameter :{m}" for m in sorted(missing)]
             if isinstance(f, fields.Connection):
                 conn = connections.get(value)
                 if conn is None:
-                    errors.append(f"{where}.config.{name}: no connection named '{value}' in connections.yaml")
+                    errors.append(f"{setting}: no connection named '{value}' in connections.yaml")
                 elif conn["kind"] != f.kind:
-                    errors.append(f"{where}.config.{name}: connection '{value}' is {conn['kind']}, expected {f.kind}")
+                    errors.append(f"{setting}: connection '{value}' is {conn['kind']}, expected {f.kind}")
 
     connected = set()
     for edge in flow.edges:

@@ -249,11 +249,11 @@ def test_settings_dialog_keeps_settings_it_does_not_show(win):
     (win.home.root / "settings.yaml").write_text(
         "calendar: US\nkeeper:\n- {connection: appserver, command: ~/taskloom/taskloom, home: ~/.taskloom}\n")
     dialog = SettingsDialog(win.home, win)
-    dialog.keep_runs.setValue(50)
+    dialog.keep_runs_for.setValue(50)
     dialog._save()
 
     settings = win.home.settings()
-    assert settings["keep_runs"] == 50 and settings["calendar"] == "US"
+    assert settings["keep_runs_for"] == "50 years" and settings["calendar"] == "US"
     assert settings["keeper"] == [{"connection": "appserver", "command": "~/taskloom/taskloom", "home": "~/.taskloom"}]
 
 
@@ -904,7 +904,8 @@ def test_schedule_countdown():
     assert schedule_countdown(daily, now, True, True, False)[0] == "next run in 02:13:05"
     assert schedule_countdown({"cron": "0 7 * * MON"}, now, True, True, False)[0] == "next run in 4d 02:13:05"
     assert schedule_countdown(daily, now, True, False, False)[0] == "scheduler service off"  # no time: none comes
-    assert schedule_countdown(daily, now, True, True, True)[0] == "next Thu 07:00 · save to schedule"
+    assert schedule_countdown(daily, now, False, True, True)[0] == "next Thu 07:00 · save to schedule"
+    assert schedule_countdown(daily, now, True, True, True)[0] == "unsaved · the scheduler runs the saved version"
     assert schedule_countdown({**daily, "active": False}, now, True, True, False)[0] == "not active"
     assert schedule_countdown({}, now, True, True, False)[0] == "needs a time"
     assert schedule_countdown({"at": "2026-10-01 10:00"}, now, True, True, False)[0] == "no more runs"

@@ -410,8 +410,8 @@ def test_chart_kind_and_y_are_checked_before_the_run(env):
     result = env.taskloom("validate", flow)
 
     assert result.returncode == 2
-    assert "blocks.donut" in result.stderr and "donut" in result.stderr and "pie" in result.stderr
-    assert "blocks.no_y: config.y is required" in result.stderr
+    assert "donut: Kind:" in result.stderr and "pie" in result.stderr
+    assert "no_y: Y is required" in result.stderr
 
 
 def test_a_chart_of_a_table_with_a_missing_value_is_drawn(env, smtp):
@@ -668,7 +668,7 @@ def test_an_input_named_like_the_templates_own_table_image_or_params_is_refused(
     for result in (checked, ran):
         assert result.returncode == 2, result.stderr
         for block, name in (("by_table", "table"), ("by_image", "image"), ("by_params", "params")):
-            assert f"blocks.{block}: config.inputs: {name}: the template already has these; choose other names" \
+            assert f"{block}: Inputs: {name}: the template already has these; choose other names" \
                 in result.stderr, result.stderr
     assert smtp.messages == []
     assert not (env.home / "history.db").exists() or env.query("SELECT count(*) FROM runs") == [(0,)]
@@ -807,7 +807,7 @@ def test_to_excel_chart_settings_that_cannot_work_fail_with_a_clear_message(env)
     assert result.returncode == 1
     failed = errors(env)
     assert set(failed) == {"no_y", "unknown_y", "unknown_sheet"}
-    assert "chart_y" in failed["no_y"] and "total" in failed["no_y"]
+    assert "Chart y" in failed["no_y"] and "total" in failed["no_y"]
     assert "revenue" in failed["unknown_y"]
     assert "nope" in failed["unknown_sheet"] and "table" in failed["unknown_sheet"]
 
@@ -1006,9 +1006,9 @@ def test_a_bcc_or_a_misspelt_parameter_is_refused_before_anything_is_sent(env, s
     """)
 
     assert result.returncode == 2 and smtp.messages == []
-    assert "blocks.blind" in result.stderr and "bcc" in result.stderr
-    assert "blocks.subject_typo.config.subject: unknown parameter {dya}" in result.stderr
-    assert "blocks.message_typo.config.message: unknown parameter {regon}" in result.stderr
+    assert "blind: unknown setting(s) ['bcc']" in result.stderr
+    assert "subject_typo: Subject: unknown parameter {dya}" in result.stderr
+    assert "message_typo: Message: unknown parameter {regon}" in result.stderr
 
 
 def test_a_subject_from_data_cannot_add_recipients_or_headers(env):

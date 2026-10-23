@@ -16,7 +16,10 @@ from ..flow import _EDGE, FlowError, flow_from_data, read_flow_file
 UNDO_LIMIT = 200
 
 
-def new_flow_data(name: str = "untitled") -> dict:
+DEFAULT_NAME = "untitled"  # a new flow's, until it is saved as a file
+
+
+def new_flow_data(name: str = DEFAULT_NAME) -> dict:
     return {"taskloom": 1, "name": name, "params": {}, "blocks": {}, "edges": []}
 
 
@@ -75,8 +78,11 @@ class FlowDocument(QObject):
 
     def save(self, path: Path | None = None):
         path = Path(path or self.path)
-        path.write_text(yaml.safe_dump(self.data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-        self.path = path  # only once written: a file that cannot be written leaves the flow where it was
+        data = self.data
+        if path != self.path and data.get("name") == DEFAULT_NAME:  # saved as a file (first time, Save as): its name
+            data = {**data, "name": path.stem}
+        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        self.data, self.path = data, path  # only once written: a file that cannot be written leaves the flow as it was
         self.dirty = False
         self.changed.emit()
 
@@ -133,15 +139,19 @@ class FlowDocument(QObject):
         """Text on the canvas: note id -> {text, x, y, and optionally style, bold, italic, underline, font}."""
         return self.data.get("notes") or {}
 
+    def new_note_id(self) -> str:
+        n = 1
+        while f"note_{n}" in self.notes:
+            n += 1
+        return f"note_{n}"
+
     def add_note(self, x: float, y: float, text: str = "Text") -> str:
         self._change()
         notes = self.data["notes"] = self.data.get("notes") or {}  # (`notes:` with nothing after it is None)
-        n = 1
-        while f"note_{n}" in notes:
-            n += 1
-        notes[f"note_{n}"] = {"text": text, "x": round(x), "y": round(y)}
+        note_id = self.new_note_id()
+        notes[note_id] = {"text": text, "x": round(x), "y": round(y)}
         self._done()
-        return f"note_{n}"
+        return note_id
 
     def set_note_value(self, note_id: str, key: str, value):
         """None, "" or False removes the key (its default applies: normal style, the usual font)."""
@@ -190,8 +200,10 @@ class FlowDocument(QObject):
         self._done()
         return block_id
 
-    def paste_blocks(self, blocks: dict, edges: list[str], dx: float, dy: float) -> list[str]:
-        """Add copies of blocks (new ids) and the edges between them."""
+    def paste_blocks(self, blocks: dict, edges: list[str], notes: dict, dx: float,
+                     dy: float) -> tuple[list[str], list[str]]:
+        """Add copies of blocks (new ids) and the edges between them, and of texts (new ids), all moved by dx, dy,
+        in one step. Returns the new block ids and note ids."""
         self._change()
         renamed = {}
         for old_id, spec in blocks.items():
@@ -205,8 +217,17 @@ class FlowDocument(QObject):
             e = parse_edge(text)
             if e and e[0] in renamed and e[2] in renamed:
                 self.data["edges"].append(edge_text(renamed[e[0]], e[1], renamed[e[2]], e[3]))
+        if notes:
+            self.data["notes"] = self.notes  # (a flow without texts has no `notes:`)
+        new_notes = []
+        for note in notes.values():
+            note = copy.deepcopy(note)
+            note["x"], note["y"] = round(note.get("x", 0) + dx), round(note.get("y", 0) + dy)
+            note_id = self.new_note_id()
+            self.data["notes"][note_id] = note
+            new_notes.append(note_id)
         self._done()
-        return list(renamed.values())
+        return list(renamed.values()), new_notes
 
     def remove(self, block_ids=(), edges=(), notes=()):
         self._change()

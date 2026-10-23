@@ -6,6 +6,7 @@ import datetime as dt
 import decimal
 import os
 import threading
+import zipfile
 from pathlib import Path
 
 import pyarrow as pa
@@ -61,6 +62,20 @@ def _jars(conn: dict) -> list[str]:
 
 def all_jars(connections: dict) -> list[str]:
     return list(dict.fromkeys(j for conn in connections.values() if conn.get("kind") == "jdbc" for j in _jars(conn)))
+
+
+def driver_classes(jars: list[str]) -> list[str]:
+    """The driver classes the jars name: a JDBC 4 driver lists its class in META-INF/services/java.sql.Driver
+    (an older driver names none)."""
+    found = []
+    for jar in jars:
+        try:
+            with zipfile.ZipFile(Path(jar).expanduser()) as archive:
+                text = archive.read("META-INF/services/java.sql.Driver").decode("utf-8", "replace")
+        except (OSError, KeyError, zipfile.BadZipFile):  # not there, not a jar, or no such entry
+            continue
+        found += [line.split("#", 1)[0].strip() for line in text.splitlines()]  # '#' starts a comment
+    return list(dict.fromkeys(name for name in found if name))
 
 
 def connect(conn: dict, classpath: list[str], java_home: str | None = None):

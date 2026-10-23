@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import html
+import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem,
-                               QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QLabel, QSpinBox, QStyle,
-                               QToolButton)
+                               QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit,
+                               QSpinBox, QStyle, QStyleFactory, QToolButton)
 
 from ..block import AFTER, DONE, all_ports
 from ..flow import ERROR_PORT, BlockSpec, block_config
@@ -245,7 +246,7 @@ class EdgeItem(QGraphicsPathItem):
 
 def value_html(text: str) -> str:
     """A value as shown when hovering (cut when long): escaped, to go inside <pre>."""
-    return html.escape(text if len(text) <= 1500 else text[:1500] + "…", quote=False)
+    return html.escape(text if len(text) <= 4000 else text[:4000] + "…", quote=False)  # e.g. a wide table's rows
 
 
 NOTE_STYLES = {"title": 22, "heading": 16, "normal": 11, "small": 9}  # point sizes
@@ -741,8 +742,16 @@ class FlowScene(QGraphicsScene):
             painter.drawPoints(points)
 
 
+class ZoomField(QLineEdit):
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if not self.isModified():  # it shows the zoom (setText), nothing typed yet: what is typed replaces it,
+            self.selectAll()       # also on a click after an earlier Enter (the field still has the focus)
+
+
 class ZoomBar(QFrame):
-    """Floats over the top-right corner of a canvas: a magnifier, the zoom, + and − by the step between them."""
+    """Floats over the top-right corner of a canvas: a magnifier, the zoom (type one there), + and − by the step
+    between them."""
 
     def __init__(self, view: "FlowView"):
         super().__init__(view)
@@ -756,11 +765,23 @@ class ZoomBar(QFrame):
         p.drawEllipse(QRectF(1.5, 1.5, 8, 8))
         p.drawLine(QPointF(8.5, 8.5), QPointF(12.5, 12.5))
         p.end()
-        self.percent = QLabel(alignment=Qt.AlignCenter)
-        self.percent.setMinimumWidth(self.percent.fontMetrics().horizontalAdvance("300%") + 4)  # + and − stay put
+        self.percent = ZoomField(alignment=Qt.AlignCenter, toolTip="The zoom: click it, type one (20-300%), Enter")
+        self.percent.setFixedWidth(self.percent.fontMetrics().horizontalAdvance("300%") + 16)  # + and − stay put
+        self.percent.returnPressed.connect(lambda: self._typed(view))
+        self.percent.editingFinished.connect(view._show_zoom)  # Enter, or left without it: the zoom it is at
         self.plus = QToolButton(text="+", autoRaise=True)
         self.minus = QToolButton(text="\N{MINUS SIGN}", autoRaise=True)
+        for button in (self.plus, self.minus):  # easy to see
+            font = button.font()
+            font.setBold(True)
+            font.setPointSizeF(font.pointSizeF() * 1.5)
+            button.setFont(font)
         self.step = QSpinBox(minimum=1, maximum=100, value=5, suffix="%", toolTip="How much + and − zoom")
+        # Its arrows one above the other on its right, as in a number field, whatever the application's style
+        # (Windows 11's puts them side by side).
+        fusion = QStyleFactory.create("Fusion")
+        fusion.setParent(self)  # (it lasts as long as the bar)
+        self.step.setStyle(fusion)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 2, 2)
         layout.setSpacing(2)
@@ -769,6 +790,15 @@ class ZoomBar(QFrame):
         self.plus.clicked.connect(lambda: view.zoom_to(view.zoom_percent() + self.step.value()))
         self.minus.clicked.connect(lambda: view.zoom_to(view.zoom_percent() - self.step.value()))
         self.adjustSize()
+
+    def _typed(self, view: "FlowView"):
+        """A zoom typed into the percentage (150 or 150%): zoom there (text that is not a number changes nothing)."""
+        try:
+            percent = float(self.percent.text().strip().removesuffix("%"))
+        except ValueError:
+            return
+        if math.isfinite(percent):
+            view.zoom_to(percent)
 
 
 class FlowView(QGraphicsView):

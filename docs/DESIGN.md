@@ -363,7 +363,7 @@ PySide6 (Qt) application:
 | Reports | HTML Table, HTML Template, Chart, To Excel | M4 |
 | Email | Send Email | M4 |
 | Servers | SSH Command, Remote Extract, Start Remote Process, Stop Remote Process, Health Check (URL/PID/port) | M3 |
-| Files | Copy/Move/Delete Files between local folders, network shares and servers (SFTP); `server:path` locations make uploads and downloads plain copies | M3 |
+| Files | Copy/Move/Delete Files between local folders, network shares and servers (SFTP); each path is on this computer or on a server chosen from the SSH connections, so uploads and downloads are plain copies | M3 |
 
 Start blocks (Manual Start, Schedule) begin a run; a flow-level `triggers:` list in the file is also read.
 

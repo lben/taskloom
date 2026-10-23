@@ -712,7 +712,7 @@ def test_a_number_field_given_text_or_a_value_too_small_says_so(win):
     assert chunk.placeholderText() == str(default)  # its default, while empty
 
     type_in(chunk, "many")
-    assert "chunk_size" in error_shown(win) and "chunk_size" not in tab.doc.blocks["run_query"]["config"]
+    assert "Chunk size" in error_shown(win) and "chunk_size" not in tab.doc.blocks["run_query"]["config"]
     type_in(field(win, "Chunk size"), "0")
     assert "1 or more" in error_shown(win)
     type_in(field(win, "Chunk size"), "1000")
@@ -722,7 +722,7 @@ def test_a_number_field_given_text_or_a_value_too_small_says_so(win):
 
     select_only(tab, "wait")
     type_in(field(win, "Seconds"), "1,5")
-    assert "seconds" in error_shown(win) and "seconds" not in tab.doc.blocks["wait"]["config"]
+    assert "Seconds" in error_shown(win) and "seconds" not in tab.doc.blocks["wait"]["config"]
     type_in(field(win, "Seconds"), "1.5")
     assert tab.doc.blocks["wait"]["config"]["seconds"] == 1.5 and error_shown(win) == ""
     clean(win)
@@ -1762,16 +1762,17 @@ def test_settings_saved_in_the_dialog_are_the_settings_taskloom_uses_and_cancel_
     # log in": in a Startup folder of this test, never the real one of the person running the tests.
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
     win.home.root.mkdir(parents=True, exist_ok=True)
-    (win.home.root / "settings.yaml").write_text("history_days: 30\npython_env: envs/mine\n", encoding="utf-8")
+    (win.home.root / "settings.yaml").write_text("python_env: envs/mine\n", encoding="utf-8")
     seen = []
 
     def fill_in_and_save(dialog):
         seen.append(dialog)
         labelled(dialog, "Default calendar").setText("US")
-        for label, value in (("Keep files of last runs", 7), ("Scheduled runs at once", 2)):
-            spin = labelled(dialog, label)
-            assert isinstance(spin, QSpinBox)
-            spin.setValue(value)
+        dialog.keep_runs_for.setValue(7)
+        dialog.keep_runs_unit.setCurrentText("months")
+        spin = labelled(dialog, "Scheduled runs at once")
+        assert isinstance(spin, QSpinBox)
+        spin.setValue(2)
         labelled(dialog, "Java folder").setText(r"C:\Program Files\Java\jdk-21")
         labelled(dialog, "Email notifications to").setText("a@example.com; b@example.com")
         labelled(dialog, "Send them with").setCurrentText("mailer")
@@ -1787,13 +1788,14 @@ def test_settings_saved_in_the_dialog_are_the_settings_taskloom_uses_and_cancel_
 
     assert isinstance(seen[0], SettingsDialog)
     settings = win.home.settings()
-    assert {k: settings[k] for k in ("calendar", "keep_runs", "max_concurrent_runs", "java_home", "notify_email",
-                                     "smtp_connection", "notify_on", "keeper", "history_days", "python_env")} == {
-        "calendar": "US", "keep_runs": 7, "max_concurrent_runs": 2, "java_home": r"C:\Program Files\Java\jdk-21",
+    assert {k: settings[k] for k in ("calendar", "keep_runs_for", "max_concurrent_runs", "java_home", "notify_email",
+                                     "smtp_connection", "notify_on", "keeper", "python_env")} == {
+        "calendar": "US", "keep_runs_for": "7 months", "max_concurrent_runs": 2,
+        "java_home": r"C:\Program Files\Java\jdk-21",
         "notify_email": "a@example.com; b@example.com", "smtp_connection": "mailer",
         "notify_on": ["success", "skipped"],
         "keeper": [{"connection": "appserver", "command": "~/taskloom/taskloom", "home": "~/.taskloom"}],
-        "history_days": 30, "python_env": "envs/mine"}  # the last two are not in the dialog: kept
+        "python_env": "envs/mine"}  # not in the dialog: kept
 
     before = (win.home.root / "settings.yaml").read_bytes()
     seen.clear()
@@ -1821,14 +1823,14 @@ def test_settings_with_a_broken_settings_file_says_what_is_wrong(win):
 
 def test_settings_with_a_number_written_as_words_says_what_is_wrong(win):
     win.home.root.mkdir(parents=True, exist_ok=True)
-    (win.home.root / "settings.yaml").write_text("keep_runs: twenty\n", encoding="utf-8")  # written by hand
+    (win.home.root / "settings.yaml").write_text("keep_runs_for: twenty years\n", encoding="utf-8")  # by hand
     when_dialog_shows(win, lambda dialog: dialog.reject())  # (if one opens, it would wait for a click)
 
     menu(win, "Settings…").trigger()
 
     said = [text for _, (_, text) in win.message_boxes]
     win.message_boxes.clear()
-    assert any("keep_runs" in text and "twenty" in text for text in said), said
+    assert any("keep_runs_for" in text and "twenty" in text for text in said), said
 
 
 def test_connections_with_a_broken_connections_file_says_what_is_wrong(win):

@@ -102,16 +102,16 @@ class History:
         elif kind == "run_finished":
             self._exec("UPDATE runs SET status=?, finished=? WHERE id=?", (event["status"], ts, run_id))
 
-    def prune(self, days: int):
-        """Forget runs (with their block results, values and logs) started more than `days` ago."""
-        cutoff = (dt.datetime.now() - dt.timedelta(days=days)).isoformat()
-        old = "SELECT id FROM runs WHERE started < ? AND status != 'running'"
-        self._exec(f"DELETE FROM logs WHERE run_id IN ({old})", (cutoff,))
-        self._exec(f"DELETE FROM blocks WHERE run_id IN ({old})", (cutoff,))
-        self._exec("DELETE FROM runs WHERE started < ? AND status != 'running'", (cutoff,))
+    def old_runs(self, since: dt.datetime) -> list[int]:
+        """The runs that started before `since`, except the ones still going."""
+        rows = self._exec("SELECT id FROM runs WHERE started < ? AND status != 'running'", (since.isoformat(),))
+        return [row[0] for row in rows]
 
-    def running_ids(self) -> set[int]:
-        return {row[0] for row in self._exec("SELECT id FROM runs WHERE status='running'")}
+    def forget(self, run_id: int):
+        """Forget a run, with its block results, values and logs."""
+        self._exec("DELETE FROM logs WHERE run_id=?", (run_id,))
+        self._exec("DELETE FROM blocks WHERE run_id=?", (run_id,))
+        self._exec("DELETE FROM runs WHERE id=?", (run_id,))
 
     # --- reading, for the editor ---------------------------------------------
 
@@ -158,6 +158,10 @@ class History:
         latest_block_results gives them, plus when the block finished."""
         return [result for _, result in self._block_results("r.flow_path=? AND b.block=? ORDER BY r.id DESC LIMIT ?",
                                                              (flow_path, block, limit))]
+
+    def finished_blocks(self, run_id: int) -> list[tuple[str, dict]]:
+        """The blocks a run finished, in the order they finished: (block, result as block_results gives it)."""
+        return self._block_results("b.run_id=? ORDER BY b.finished", (run_id,))
 
     def _block_results(self, where: str, args) -> list[tuple[str, dict]]:
         rows = self._exec("SELECT b.block, b.run_id, r.started, r.started_by, b.status, b.attempts, b.error, b.summary, "

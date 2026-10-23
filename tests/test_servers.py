@@ -140,16 +140,17 @@ def test_copy_move_and_delete_between_this_machine_and_a_server(env, server):
         blocks:
           upload:
             type: files.copy
-            config: {source: "out/*.csv", destination: "appserver:~/incoming/"}
+            config: {source: "out/*.csv", destination_server: appserver, destination: "~/incoming/"}
           download:
             type: files.copy
-            config: {source: "appserver:~/incoming", destination: "back/"}
+            config: {source_server: appserver, source: "~/incoming", destination: "back/"}
           archive:
             type: files.move
-            config: {source: "appserver:~/incoming/a.csv", destination: "appserver:~/archive/a_old.csv"}
+            config: {source_server: appserver, source: "~/incoming/a.csv", destination_server: appserver,
+                     destination: "~/archive/a_old.csv"}
           clean:
             type: files.delete
-            config: {path: "appserver:~/incoming/*.csv"}
+            config: {server: appserver, path: "~/incoming/*.csv"}
         edges:
           - upload.files -> download.after
           - download.files -> archive.after

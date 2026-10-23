@@ -256,7 +256,6 @@ def test_date_parameters_bind_to_sql_as_date_and_integer_with_overrides(env):
 
 
 def test_cleaning_old_run_folders_never_touches_a_run_in_progress(env):
-    env.write("home/settings.yaml", "keep_runs: 1\n")
     long_flow = env.write("long.yaml", """
         blocks:
           src:
@@ -282,11 +281,12 @@ def test_cleaning_old_run_folders_never_touches_a_run_in_progress(env):
     for line in long_run.stdout:
         if '"pause"' in line:
             break
+    env.query("UPDATE runs SET started='2020-01-01T00:00:00' WHERE id=1")  # older than keep_runs_for (5 years)
     for _ in range(2):
         assert env.taskloom("run", short_flow).returncode == 0
 
+    # Its table was still there for total. (As it ends, it is deleted itself: it "started" in 2020.)
     assert long_run.wait(timeout=30) == 0, long_run.stderr.read()
-    assert env.query("SELECT status FROM runs WHERE id=1") == [("success",)]
 
 
 def test_computed_previous_business_day_uses_the_flow_calendar(env):
@@ -564,29 +564,6 @@ def test_a_failing_python_block_reports_its_name_inputs_code_and_variables(env):
     assert "Variables in share():" in report and "total = 120" in report
 
 
-def test_old_runs_are_forgotten_after_history_days(env):
-    from taskloom.history import History
-
-    env.write("home/settings.yaml", "history_days: 30\n")
-    flow = env.write("flow.yaml", """
-        blocks:
-          b:
-            type: logic.python
-            config: {inputs: [], code: "output = 1"}
-    """)
-    assert env.taskloom("run", flow).returncode == 0
-    env.query("UPDATE runs SET started='2020-01-01T00:00:00'")  # make it old
-    history = History(env.home / "history.db")
-    old_id = history.runs()[0]["id"]
-    history.close()
-
-    assert env.taskloom("run", flow).returncode == 0
-
-    assert [r for (r,) in env.query("SELECT id FROM runs")] == [old_id + 1]
-    assert env.query("SELECT count(*) FROM blocks WHERE run_id=?", old_id) == [(0,)]
-    assert env.query("SELECT count(*) FROM logs WHERE run_id=?", old_id) == [(0,)]
-
-
 def test_rerun_one_block_with_the_inputs_of_an_earlier_run(env):
     flow = env.write("flow.yaml", """
         params:
@@ -692,7 +669,6 @@ def test_rerun_refuses_inputs_that_held_a_password(env):
 
 
 def test_retries_of_different_blocks_chain_and_survive_cleanup(env):
-    env.write("home/settings.yaml", "keep_runs: 2\n")
     flow = env.write("flow.yaml", """
         blocks:
           load:
@@ -730,15 +706,19 @@ def test_retries_of_different_blocks_chain_and_survive_cleanup(env):
     assert env.taskloom("run", flow, "--only", "a", "--inputs-from", run_id).returncode == 0
     run_id, _ = env.last_run()
     (env.root / "fix_b.txt").write_text("")
+    # The runs before the retry of a: older than keep_runs_for (5 years), deleted as the next retry ends.
+    env.query("UPDATE runs SET started='2020-01-01T00:00:00' WHERE id < ?", run_id)
     result = env.taskloom("run", flow, "--only", "b", "--inputs-from", run_id)  # from the retry of a
 
     assert result.returncode == 0, result.stderr
     assert (env.root / "b.txt").read_text() == "x"
-    for _ in range(3):  # more retries than keep_runs: older run folders get deleted meanwhile
+    for _ in range(3):  # each retry deletes the runs before the one it is from
         run_id, _ = env.last_run()
+        env.query("UPDATE runs SET started='2020-01-01T00:00:00' WHERE id < ?", run_id)
         result = env.taskloom("run", flow, "--only", "a", "--inputs-from", run_id)
         assert result.returncode == 0, result.stderr
     assert (env.root / "a.txt").read_text() == "5"
+    assert sorted(int(p.name) for p in (env.home / "runs").iterdir()) == [run_id, run_id + 1]
 
 
 def test_retrying_a_block_that_got_nothing_is_refused(env):
@@ -928,7 +908,6 @@ def test_retrying_after_fixing_an_earlier_block_uses_its_new_output(env):
 
 
 def test_retries_of_a_block_that_takes_several_tables_survive_cleanup(env):
-    env.write("home/settings.yaml", "keep_runs: 2\n")
     flow = env.write("flow.yaml", """
         blocks:
           l1:
@@ -945,12 +924,14 @@ def test_retries_of_a_block_that_takes_several_tables_survive_cleanup(env):
           - l2.result -> u.tables
     """)
     assert env.taskloom("run", flow).returncode == 0
-    for _ in range(4):  # more retries than keep_runs: older run folders get deleted meanwhile
+    for _ in range(4):  # each retry deletes the runs before the one it is from: older than keep_runs_for
         run_id, _ = env.last_run()
+        env.query("UPDATE runs SET started='2020-01-01T00:00:00' WHERE id < ?", run_id)
         result = env.taskloom("run", flow, "--only", "u", "--inputs-from", run_id)
         assert result.returncode == 0, result.stderr
 
     assert (env.root / "got.txt").read_text() == "22222"
+    assert sorted(int(p.name) for p in (env.home / "runs").iterdir()) == [run_id, run_id + 1]
 
 
 def test_giving_one_input_does_not_drop_one_that_held_a_password(env):

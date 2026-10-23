@@ -183,7 +183,7 @@ class HealthCheck(Block):
                 problems.append(f"{c.url} returned {status}, expected {c.expect_status}")
         if c.pid_file or c.port:
             if not c.connection:
-                raise ValueError("pid_file and port checks need a connection")
+                raise ValueError("the PID file and Port checks need a Connection")
             conn = ctx.connection(c.connection)
         if c.pid_file:
             checks.append("pid")
@@ -198,7 +198,7 @@ class HealthCheck(Block):
             except OSError as e:
                 problems.append(f"port {c.port} on {conn['host']}: {e}")
         if not checks:
-            raise ValueError("configure at least one check: url, pid_file or port")
+            raise ValueError("set at least one check: URL, PID file or Port")
         details = {"healthy": not problems, "checks": checks, "problems": problems}
         if problems:
             ctx.warn("unhealthy: " + "; ".join(problems))

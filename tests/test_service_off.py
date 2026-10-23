@@ -118,8 +118,8 @@ def test_off_no_schedule_runs_and_on_shows_the_countdown(win, qtbot, tmp_path, m
             assert "scheduler service off" in tab_tip() and not re.search(r"next \d{4}-", tab_tip()), tab_tip()
         qtbot.waitUntil(tab_says_off, timeout=10_000)
 
-        tab.doc.move_blocks({"work": (10, 10)})  # changed, not saved yet: as before
-        qtbot.waitUntil(lambda: under().endswith("save to schedule"), timeout=5_000)
+        tab.doc.move_blocks({"work": (10, 10)})  # changed, not saved yet: the scheduler runs the saved version
+        qtbot.waitUntil(lambda: under() == "unsaved · the scheduler runs the saved version", timeout=5_000)
         win.save(tab)  # saved again while off: it stays off
         read.append(win.statusBar().currentMessage())
         qtbot.waitUntil(lambda: under() == "scheduler service off", timeout=5_000)
