@@ -41,7 +41,13 @@ def connect(path: Path) -> sqlite3.Connection:
     (up to 30 s) instead of failing with "database is locked"."""
     db = sqlite3.connect(path, timeout=30, check_same_thread=False, isolation_level=None)
     if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-        db.execute("PRAGMA journal_mode=WAL")  # needs the file to itself, so only once
+        try:
+            db.execute("PRAGMA journal_mode=WAL")  # needs the file to itself, so only once
+        except sqlite3.OperationalError as e:
+            # Another connection is using the file, and the busy timeout does not wait for that: a later open
+            # switches it (and this connection follows then).
+            if e.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+                raise
     return db
 
 

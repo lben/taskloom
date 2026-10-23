@@ -8,7 +8,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
-from PySide6.QtGui import QFontInfo, QFontMetrics, QKeySequence  # noqa: E402
+from PySide6.QtGui import QFontMetrics, QKeySequence  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QDockWidget, QProxyStyle, QStyle, QStyleFactory,  # noqa: E402
                                QStyleOptionSpinBox)
@@ -408,7 +408,7 @@ def test_plus_and_minus_are_larger_and_bold(win, qtbot):
     for button in (bar.plus, bar.minus):
         font = button.font()
         assert font.bold(), button.text()
-        assert QFontInfo(font).pixelSize() > QFontInfo(QApplication.font(button)).pixelSize(), button.text()
+        assert font.pointSizeF() > QApplication.font(button).pointSizeF(), button.text()
         metrics = QFontMetrics(font)
         assert metrics.horizontalAdvance(button.text()) <= button.width() and metrics.height() <= button.height(), (
             button.text(), button.size())
