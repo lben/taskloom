@@ -556,6 +556,8 @@ class MainWindow(QMainWindow):
         self._save_session()
 
     def _on_tab_changed(self, index):
+        if self.statusBar().currentMessage().startswith("Showing run"):  # what the tab you left showed
+            self.statusBar().clearMessage()
         tab = self.current
         if tab is None:
             self.properties.show_block(None, self.registry, None)

@@ -141,13 +141,13 @@ def test_runs_are_kept_for_a_time_you_choose(proof, win, qtbot, tmp_path, monkey
     rows = history_rows(win)
     last = table.rowCount() - 1
     p.shot(win, f"① Run {RUNS}, the newest, is at the top of Run history, and the older runs follow below it.",
-           highlight=[(table, 0)], badges=True, zoom=[table.item(0, 0), table.item(4, 4)])
+           highlight=[[table.item(0, 0), table.item(0, 4)]], badges=True, zoom=[table.item(0, 0), table.item(4, 4)])
 
     p.step("Scroll to the bottom of Run history.")
     table.scrollToBottom()
     p.shot(win, "At the bottom, the two oldest runs: ① run 2 started 20 days ago, and run 1 45 days ago. With Keep "
                 "runs for at its default, 5 years, both stay, with their files.",
-           highlight=[[(table, last - 1), (table, last)]], badges=True,
+           highlight=[[table.item(last - 1, 0), table.item(last, 4)]], badges=True,
            zoom=[table.item(last - 4, 0), table.item(last, 4)])
     p.check(f"Run history lists all {RUNS} runs, from {RUNS} down to 1",
             [r[0] for r in rows] == [str(i) for i in range(RUNS, 0, -1)])
@@ -181,18 +181,19 @@ def test_runs_are_kept_for_a_time_you_choose(proof, win, qtbot, tmp_path, monkey
     p.step("Choose Settings… in the Tools menu.")
     settings = next(a for a in next(a.menu() for a in win.menuBar().actions() if a.text() == "&Tools").actions()
                     if a.text() == "Settings…")
-    seen = {}
     space = disk_space(home)
 
     def look_set_and_save(dialog):
         row = keep_runs_row(dialog)
         number, unit = row.findChild(QSpinBox), row.findChild(QComboBox)
         said = " ".join(w.text() for w in row.findChildren(QLabel))
-        seen["opened"] = (number.value(), unit.currentText(), said)
         p.note("Keep runs for, here, is for all of Taskloom. Choosing it for each start block comes in the next "
                "batch.")
         p.shot(dialog, f"① Keep runs for: 5 years, the default. Next to it, the disk space the {RUNS} runs take "
                        f"now: {space}.", highlight=[row], badges=True)
+        p.check("① Settings showed Keep runs for 5 years", (number.value(), unit.currentText()) == (5, "years"))
+        p.check(f"① And the disk space the runs take: {space}, what their files add up to",
+                said == f"the runs take {space} now")
         number.setValue(30)
         unit.setCurrentText("days")
         p.step("Set Keep runs for to 30 days, and press Save.")
@@ -200,9 +201,6 @@ def test_runs_are_kept_for_a_time_you_choose(proof, win, qtbot, tmp_path, monkey
         next(b for b in dialog.findChildren(QPushButton) if b.text().replace("&", "") == "Save").click()
 
     p.while_open(settings.trigger, look_set_and_save)
-    p.check("① Settings showed Keep runs for 5 years", seen["opened"][:2] == (5, "years"))
-    p.check(f"① And the disk space the runs take: {space}, what their files add up to",
-            seen["opened"][2] == f"the runs take {space} now")
     p.check("Saved: Taskloom now keeps runs for 30 days", home.settings()["keep_runs_for"] == "30 days")
 
     p.step("Press ▶ Run now once more, for run 22. Then click the Run history tab, and scroll to its bottom.")
@@ -216,7 +214,8 @@ def test_runs_are_kept_for_a_time_you_choose(proof, win, qtbot, tmp_path, monkey
     last = table.rowCount() - 1
     p.shot(win, "As run 22 ended, Taskloom deleted run 1, which started 45 days ago: ① run 2, from 20 days ago, is "
                 "now the oldest, and is kept with every run after it.",
-           highlight=[(table, last)], badges=True, zoom=[table.item(last - 4, 0), table.item(last, 4)])
+           highlight=[[table.item(last, 0), table.item(last, 4)]], badges=True,
+           zoom=[table.item(last - 4, 0), table.item(last, 4)])
     p.check("Run history lists runs 22 down to 2: run 1 is gone, every newer run stays",
             [r[0] for r in rows] == [str(i) for i in range(RUNS + 1, 1, -1)])
     p.check("Run 1's files are deleted with it; runs 2 to 22 keep theirs",

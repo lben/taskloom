@@ -162,7 +162,8 @@ class Proof:
 
         painter = QPainter(image)
         painter.setRenderHint(QPainter.Antialiasing)
-        inside = QRectF(image.rect()).adjusted(2, 2, -2, -2)  # an outline at the edge stays whole
+        # An outline at the edge stays whole, clear of the frame the PDF draws around each picture.
+        inside = QRectF(image.rect()).adjusted(5, 5, -5, -5)
         glow = QColor(MARK.red(), MARK.green(), MARK.blue(), 70)
         places = []  # of the badges
         for target in highlight:
