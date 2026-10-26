@@ -123,8 +123,8 @@ def test_the_editor_carries_on_while_a_run_writes_a_new_history_file(proof, win,
     finally:
         finishing.join()
         run.close()
-    p.shot(win, "Once the run is done writing, the editor carries on: no “Something went wrong” box. ① No flows "
-                "running: the run has not recorded itself yet.",
+    p.shot(win, "① No flows running: the run has not recorded itself yet. And once the run is done writing, the "
+                "editor carries on: no “Something went wrong” box.",
            highlight=[win.running_flows], badges=True, zoom=[win.running_flows])
     p.check("No “Something went wrong” box came up, nor any other", win.message_boxes == [])
     p.check("The editor looked at the history file while the run was writing it, and got to it once the run was "

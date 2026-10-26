@@ -12,7 +12,7 @@ import polars as pl
 import yaml
 from PySide6.QtCore import (QAbstractTableModel, QObject, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTime,
                             QTimer, Signal)
-from PySide6.QtGui import QColor, QDrag, QFontDatabase, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QDrag, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
@@ -28,7 +28,10 @@ from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
 from ..scheduler import counted_from
 from .canvas import BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR
 
-MONO = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+# A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
+# <pre> (e.g. a table's rows in a tooltip) asks for on Qt's offscreen platform (as in the proofs): name real ones.
+QFont.insertSubstitutions("monospace", ["Consolas", "Menlo", "DejaVu Sans Mono", "Courier New"])
+MONO = QFont("monospace")  # not the system's fixed font: this module is loaded before the application has one
 
 
 def _square_icon(color: str, size: int = 14) -> QIcon:

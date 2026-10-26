@@ -35,6 +35,7 @@ SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Apple Symbols'"
 MONO = "font-family: Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New'; font-size: 8pt; white-space: pre-wrap"
 FOOTER = 28  # under each page's text: the footer line
 MAX_ZOOM = 1.5  # a close-up is shown at most this much bigger than on the screen
+MIN_SCALE = 0.5  # a page is shrunk at most this much to fit on fewer pages
 GAP = 16
 
 
@@ -311,7 +312,8 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
     font.setPointSize(10)
     resources = {f"badge{n}": badge(n) for n in range(1, 21)}
 
-    def document(text: str, paged: bool = True) -> QTextDocument:
+    def document(text: str, paged: bool = True, scale: float = 1.0) -> QTextDocument:
+        """`scale`: how much its pages are shrunk on paper (they are laid out that much bigger)."""
         doc = QTextDocument()
         doc.setDefaultFont(font)
         doc.setDocumentMargin(8)
@@ -319,7 +321,7 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
         for name, image in resources.items():
             doc.addResource(QTextDocument.ImageResource, QUrl(name), image)
         if paged:
-            doc.setPageSize(body)
+            doc.setPageSize(body / scale)
         else:
             doc.setTextWidth(body.width())
         doc.setHtml(f"<html><body>{text}</body></html>")
@@ -327,6 +329,19 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
 
     def measure(text: str) -> float:
         return document(text, paged=False).size().height()
+
+    def fitted(text: str) -> QTextDocument:
+        """The page, shrunk as much as it takes to fit on fewer pages, when that is not too much: what runs on to a
+        next page by a little would leave a few lines alone there, and cut a tinted box in two (Qt draws the cut
+        with stray bits of the tint)."""
+        doc = document(text)
+        for pages in range(max(1, doc.pageCount() - 1), doc.pageCount()):  # one page fewer, not more shrinking
+            scale = 0.98
+            while scale >= MIN_SCALE:
+                if (smaller := document(text, scale=scale)).pageCount() <= pages:
+                    return smaller
+                scale *= 0.98
+        return doc
 
     pages = []  # (html, footer)
     starts = []  # the page each change starts on
@@ -348,12 +363,12 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
             pages.append((text, footer))
         pages.append((checked(over, record), footer))
 
-    docs = [document(text) for text, _ in pages]
+    docs = [fitted(text) for text, _ in pages]
     counts = [doc.pageCount() for doc in docs]
     first = [sum(counts[:i]) for i in range(len(counts))]
-    cover_doc = document(cover(title, records, session, ci_url, [0] * len(records)))  # how many pages it takes
+    cover_doc = fitted(cover(title, records, session, ci_url, [0] * len(records)))  # how many pages it takes
     shift = cover_doc.pageCount()
-    cover_doc = document(cover(title, records, session, ci_url, [shift + first[i] + 1 for i in starts]))
+    cover_doc = fitted(cover(title, records, session, ci_url, [shift + first[i] + 1 for i in starts]))
     docs, footers = [cover_doc, *docs], ["", *(footer for _, footer in pages)]
     total = sum(doc.pageCount() for doc in docs)
 
@@ -368,9 +383,11 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
             if number:
                 writer.newPage()
             number += 1
+            page = doc.pageSize()
             painter.save()
-            painter.translate(0, -i * body.height())
-            doc.drawContents(painter, QRectF(0, i * body.height(), body.width(), body.height()))
+            painter.scale(body.width() / page.width(), body.height() / page.height())
+            painter.translate(0, -i * page.height())
+            doc.drawContents(painter, QRectF(0, i * page.height(), page.width(), page.height()))
             painter.restore()
             if not footer:  # the cover
                 continue

@@ -21,6 +21,7 @@ from ..block import IDENTIFIER
 from ..config import SETTINGS_DEFAULTS, keep_runs_for
 from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
+from .panels import MONO
 
 
 def open_dialog(parent, cls, home, **kw) -> QDialog | None:
@@ -785,6 +786,7 @@ class BlockResultsDialog(QDialog):
         self.table.resizeColumnsToContents()
         layout.addWidget(self.table, 2)
         self.values = QPlainTextEdit(readOnly=True)  # what the selected run's outputs held
+        self.values.setFont(MONO)  # e.g. a table's rows, in columns
         self.values.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self.values, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
