@@ -166,13 +166,13 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
                                                                                           "on_the_clock")),
                         timeout=10_000)
         whole_minute = dt.datetime.now().replace(second=0, microsecond=0) + MINUTE
-        clock_left = countdown(tab, "on_the_clock")
+        clock_left, clock_read = countdown(tab, "on_the_clock"), dt.datetime.now()
         p.shot(win, f"Both lines are scheduled, and each counts to its next run: ① minute_test to 07:00; ② "
                     f"on_the_clock, “{clock_left}”, to {whole_minute:%H:%M:%S}, the next whole minute.",
                highlight=[TEST_LINE, CLOCK_LINE], badges=True, zoom=[TEST_LINE, CLOCK_LINE])
         p.check("The flow is scheduled", tab.scheduled and path.resolve() in win.home.scheduled_flows())
         p.check(f"② on_the_clock counts to the next whole minute, {whole_minute:%H:%M:%S}",
-                abs(reaches_zero(clock_left) - whole_minute) <= ONE)
+                abs(reaches_zero(clock_left, clock_read) - whole_minute) <= ONE)
 
         p.step("Select on_the_clock: it is on the clock.")
         click_block(tab, "on_the_clock")
@@ -253,14 +253,14 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
         next_run = switched_on + MINUTE
         p.step("Hover the countdown under minute_test.")
         qtbot.waitUntil(lambda: countdown(tab, "minute_test").startswith("next run in"), timeout=5_000)
-        left = countdown(tab, "minute_test")
+        left, read = countdown(tab, "minute_test"), dt.datetime.now()
         tip = hover_line_under(tab, "minute_test")
         try:
             tip_text = QToolTip.text()
             p.shot(tip, f"The countdown under minute_test, “{left}”, counts to {next_run:%H:%M:%S}, one minute "
                         f"after it was switched on, across the minute. Its tooltip lists the next runs, each at "
                         f"second {switched_on:%S}.", over=win, highlight=[tip], zoom=[tip, "minute_test"])
-            p.check(f"The countdown counts to {next_run:%H:%M:%S}", abs(reaches_zero(left) - next_run) <= ONE)
+            p.check(f"The countdown counts to {next_run:%H:%M:%S}", abs(reaches_zero(left, read) - next_run) <= ONE)
             p.check(f"Its tooltip lists the next five runs, {next_run:%H:%M:%S} to "
                     f"{switched_on + 5 * MINUTE:%H:%M:%S}, each at second {switched_on:%S}",
                     tip is not None and all(f"{switched_on + k * MINUTE:%H:%M:%S}" in tip_text for k in range(1, 6)))
@@ -276,7 +276,7 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
         qtbot.waitUntil(lambda: any(shown_in_log(win, r) for r in clock_run()),
                         timeout=int(((on_clock - dt.datetime.now()).total_seconds() + 30) * 1000))
         (by_clock,) = clock_run()
-        test_left = countdown(tab, "minute_test")
+        test_left, test_read = countdown(tab, "minute_test"), dt.datetime.now()
         p.shot(win, f"② on_the_clock's run began at {by_clock['started']:%H:%M:%S}, on the clock: clock_note "
                     f"{tab.scene.values['clock_note']['output']}. ① minute_test goes on counting across the minute: "
                     f"“{test_left}”, to {next_run:%H:%M:%S}.",
@@ -284,7 +284,8 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
         p.check(f"② on_the_clock's run began at {on_clock:%H:%M:%S}, within half a second",
                 started_by(env, by_clock) == "on_the_clock" and by_clock["status"] == "success"
                 and -0.02 <= (by_clock["started"] - on_clock).total_seconds() <= 0.5)
-        p.check(f"① minute_test still counts to {next_run:%H:%M:%S}", abs(reaches_zero(test_left) - next_run) <= ONE)
+        p.check(f"① minute_test still counts to {next_run:%H:%M:%S}",
+                abs(reaches_zero(test_left, test_read) - next_run) <= ONE)
 
         p.step(f"Wait until {next_run:%H:%M:%S}, one minute after the schedule was switched on.")
 

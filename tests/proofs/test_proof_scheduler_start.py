@@ -88,10 +88,11 @@ def countdown(tab, block: str) -> str:
     return tab.scene.nodes[block].countdown
 
 
-def reaches_zero(text: str) -> dt.datetime:
-    """When a countdown such as "next run in 00:01:05" reaches 0, from now."""
+def reaches_zero(text: str, read_at: dt.datetime | None = None) -> dt.datetime:
+    """When a countdown such as "next run in 00:01:05", read at `read_at` (default: now), reaches 0. Pass when it
+    was read if a screenshot came between: a slow computer can take over a second to take one."""
     hours, minutes, seconds = map(int, text.removeprefix("next run in ").split(":"))
-    return dt.datetime.now() + dt.timedelta(hours=hours, minutes=minutes, seconds=seconds)
+    return (read_at or dt.datetime.now()) + dt.timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
 
 def clock(moment: dt.datetime) -> str:

@@ -258,13 +258,13 @@ def test_a_check_just_before_a_runs_time_keeps_the_on_time_run(proof, env, win, 
             not service.scheduler.runs and runs(env) == [])
     wait_till(qtbot, wake - dt.timedelta(seconds=3))
     click_tab(win.bottom_tabs, win.history_panel)
-    just_before = tabs["run_once"].scene.nodes["every_minute"].countdown
+    just_before, read = tabs["run_once"].scene.nodes["every_minute"].countdown, dt.datetime.now()
     p.shot(win, f"Just before waking: {missed:%H:%M} has passed, and ② Run history is empty: nothing ran while the "
                 f"computer slept. ① every_minute counts down to {on_time:%H:%M}: “{just_before}”.",
            highlight=["every_minute", win.history_panel.table], badges=True, zoom=["every_minute"])
     p.check(f"Nothing ran for {missed:%H:%M} while the computer slept",
             runs(env) == [] and win.history_panel.table.rowCount() == 0)
-    p.check(f"The countdown aims at {on_time:%H:%M}:00", abs(reaches_zero(just_before) - on_time) <= ONE)
+    p.check(f"The countdown aims at {on_time:%H:%M}:00", abs(reaches_zero(just_before, read) - on_time) <= ONE)
     wait_till(qtbot, wake)
 
     service.check()
