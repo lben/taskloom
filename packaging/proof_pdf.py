@@ -13,6 +13,7 @@ import argparse
 import datetime as dt
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -24,7 +25,7 @@ if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unle
 
 from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QImage, QPageLayout, QPageSize, QPainter,  # noqa: E402
-                           QPdfWriter, QPen, QTextDocument)
+                           QPdfWriter, QPen, QTextDocument, QTextTable)
 
 TITLE = "Proof that it works"
 DPI = 96  # pages are laid out in screen pixels, what the screenshots are in
@@ -198,7 +199,7 @@ def step_page(over: str, page: list, step: int, steps: int, images: dict, body: 
             top.append(f"<p style=\"color: {MUTED}; font-style: italic; margin-left: 46px\">{esc(entry['text'])}</p>")
         elif entry["kind"] == "text":
             top.append(f"<p style=\"margin-left: 46px\">{esc(entry['caption'])}</p>"
-                       f"<p style=\"{MONO}; background-color: {CARD_TINT}; margin-left: 46px\">"
+                       f"<p style=\"{MONO}; background-color: {CARD_TINT}; margin-left: 46px; margin-bottom: 12px\">"
                        f"{html.escape(entry['text'])}</p>")
     if not any(e["kind"] == "step" for e in page):  # a second screenshot of a step
         top.insert(0, label(f"{over} · See it working · Step {step}, continued"))
@@ -269,6 +270,24 @@ def checked(over: str, record: dict) -> str:
                  box(f"<p style=\"{MONO}\">{html.escape(record['error'])}</p>", "#fdecea", FAILED))
     return (heading(over, "What was checked") + f"<p style=\"margin-top: 10px; margin-bottom: 18px\">{verdict}</p>"
             + listed + wrong)
+
+
+def cuts_a_box(doc: QTextDocument) -> bool:
+    """Whether a page's end cuts a tinted box: a table with a coloured cell, or a paragraph with a background."""
+    layout, height = doc.documentLayout(), doc.pageSize().height()
+    boxes, frames = [], [doc.rootFrame()]
+    while frames:
+        frame = frames.pop()
+        frames += frame.childFrames()
+        if isinstance(frame, QTextTable) and any(frame.cellAt(row, column).format().background().style() != Qt.NoBrush
+                                                 for row in range(frame.rows()) for column in range(frame.columns())):
+            boxes.append(layout.frameBoundingRect(frame))
+    block = doc.begin()
+    while block.isValid():
+        if block.blockFormat().background().style() != Qt.NoBrush:
+            boxes.append(layout.blockBoundingRect(block))
+        block = block.next()
+    return any(box.top() // height != (box.bottom() - 1) // height for box in boxes)
 
 
 def framed(image: QImage) -> QImage:
@@ -348,16 +367,19 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
         return document(text, paged=False).size().height()
 
     def fitted(text: str) -> QTextDocument:
-        """The page, shrunk as much as it takes to fit on fewer pages, when that is not too much: what runs on to a
-        next page by a little would leave a few lines alone there, and cut a tinted box in two (Qt draws the cut
-        with stray bits of the tint)."""
+        """The page, shrunk as little as it takes to fit on one page fewer than its content fills, else on as many,
+        with no tinted box cut by a page's end, when that is not too much: what runs on to a next page by a little
+        would leave a few lines alone there, and a cut box is drawn with stray bits of its tint. (Its content is
+        measured unpaged: where a page's end cuts a box, Qt adds space, so it can take a page more.)"""
         doc = document(text)
-        for pages in range(max(1, doc.pageCount() - 1), doc.pageCount()):  # one page fewer, not more shrinking
-            scale = 0.98
+        fills = math.ceil(measure(text) / body.height())
+        for pages in range(max(1, fills - 1), doc.pageCount() + 1):
+            scale, smaller = 1.0, doc
             while scale >= MIN_SCALE:
-                if (smaller := document(text, scale=scale)).pageCount() <= pages:
+                if smaller.pageCount() <= pages and not cuts_a_box(smaller):
                     return smaller
                 scale *= 0.98
+                smaller = document(text, scale=scale)
         return doc
 
     pages = []  # (html, footer)

@@ -115,8 +115,8 @@ def lock_is_held(remote: Path) -> bool:
 
 
 def the_server(server_home: Path, remote: Path, who: dict[int, str]) -> str:
-    """What the server shows: its processes (those in `who`, {pid: what it is}), as ps lists them; then the
-    scheduler's files in its Taskloom folder."""
+    """What the server shows: what ps shows of its processes (those in `who`, {pid: what it is}), summarised; then
+    the scheduler's files in its Taskloom folder."""
     listed = ps(list(who))
     rows = [f"{'PID':<8}{'State':<10}Command line"]
     for pid in who:
@@ -265,7 +265,7 @@ def test_the_keeper_replaces_a_hung_server_scheduler_and_stops_no_other_process(
                "counts more than 2 minutes as hung), and writes report-scheduler's number in scheduler.pid, as when "
                "a number left there by a failed start, or from before a reboot, goes to another program.")
         who = {hung.pid: "the hung scheduler", mail_digest.pid: "mail-digest", report_scheduler.pid: "report-scheduler"}
-        p.text("On the server: its processes, as ps lists them, and the scheduler's files in ~/.taskloom",
+        p.text("On the server: what ps shows of its processes, summarised, and the scheduler's files in ~/.taskloom",
                the_server(server_home, remote, who))
         p.check("Now it is frozen, its last check was 10 minutes ago, and it still holds the lock: no new scheduler "
                 "could start there",
@@ -274,6 +274,12 @@ def test_the_keeper_replaces_a_hung_server_scheduler_and_stops_no_other_process(
         p.check("mail-digest and report-scheduler run, and scheduler.pid holds report-scheduler's number",
                 [state(s) for s, _ in ps([mail_digest.pid, report_scheduler.pid]).values()] == ["running"] * 2
                 and (remote / "scheduler.pid").read_text(encoding="utf-8") == str(report_scheduler.pid))
+        button = win.findChild(QToolBar, "run-toolbar").widgetForAction(win.scheduler_action)
+        off = while_the_editor_runs(lambda: win.scheduler_action.text() == "Scheduler service off", timeout=10)
+        p.shot(button, "The editor, top right: Scheduler service off. This computer's scheduler service, and its "
+                       "keeper, are not started yet: nothing looks after appserver, so its scheduler stays hung, as "
+                       "listed above.")
+        p.check("The editor shows the scheduler service off", off)
 
         p.step("Start the scheduler service on this computer (taskloom scheduler --headless, as from a terminal). Its "
                "keeper checks appserver at once, as it does each time the service starts, then every 5 minutes.")
@@ -290,9 +296,8 @@ def test_the_keeper_replaces_a_hung_server_scheduler_and_stops_no_other_process(
 
         told = while_the_editor_runs(lambda: any("appserver" in line for line in said()), timeout=90)
         on = while_the_editor_runs(lambda: win.scheduler_action.text() == "Scheduler service on", timeout=10)
-        p.shot(win.findChild(QToolBar, "run-toolbar").widgetForAction(win.scheduler_action),
-               "The editor, top right: Scheduler service on. The service runs on this computer, and its keeper "
-               "with it.")
+        p.shot(button, "The editor, top right: Scheduler service on. The service runs on this computer, and its "
+                       "keeper with it.")
         stop_service(env.home, service)
         p.check("The editor shows the scheduler service on", on)
 
@@ -303,7 +308,7 @@ def test_the_keeper_replaces_a_hung_server_scheduler_and_stops_no_other_process(
                 "a new one was started”", told and [line for line in said() if "appserver" in line] == [RESTARTED])
         new = int((remote / "scheduler.pid").read_text(encoding="utf-8"))
         who[new] = "the new scheduler"
-        p.text("On the server: its processes, as ps lists them, and the scheduler's files in ~/.taskloom",
+        p.text("On the server: what ps shows of its processes, summarised, and the scheduler's files in ~/.taskloom",
                the_server(server_home, remote, who))
         p.check("The hung scheduler is gone: frozen, it could not answer the request to stop, so it was forced",
                 wait_for(lambda: hung.returncode is not None, timeout=10) and hung.returncode == -signal.SIGKILL)
@@ -316,6 +321,12 @@ def test_the_keeper_replaces_a_hung_server_scheduler_and_stops_no_other_process(
         p.check("report-scheduler, whose number is in scheduler.pid, still runs, and was never asked to stop",
                 report_scheduler.returncode is None and pid_alive(report_scheduler.pid)
                 and not report_scheduler_asked.exists())
+        off = while_the_editor_runs(lambda: win.scheduler_action.text() == "Scheduler service off", timeout=10)
+        p.shot(button, "The editor, top right: Scheduler service off again. The proof stopped the service once its "
+                       "keeper had replaced the hung scheduler: that is the last line it printed, “Scheduler "
+                       "stopped”. On your PC it keeps running, and its keeper checks appserver every 5 minutes.")
+        p.check("The service was stopped at the end: the editor shows it off, and its last line says “Scheduler "
+                "stopped”", off and said()[-1].startswith("Scheduler stopped:"))
         p.note(("Here the keeper found the hung scheduler through /proc." if Path("/proc/self/fd").is_dir() else
                 "Here the keeper found the hung scheduler with lsof, as this computer has no /proc.")
                + " Not shown: a server with neither /proc nor lsof. There the keeper cannot tell which process holds "

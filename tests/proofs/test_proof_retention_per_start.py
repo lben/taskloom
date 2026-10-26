@@ -1,5 +1,7 @@
 """Proof: each start block chooses how long its runs are kept (v0.21): see README.md here."""
 
+import datetime as dt
+
 import yaml
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtTest import QTest
@@ -7,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QStyle, QStyleOptionButton, QToolBar)
 
 from proofs.conftest import choose, right_click
+from proofs.test_proof_retention import set_back
 from tests.test_editor import write_flow
 
 FLOW = """
@@ -43,6 +46,9 @@ FAILED = "Always keep failed runs"
 # The runs, in the order they are started: M by_hand's line (Run now), S every_minute's (its menu); run 3 fails.
 ORDER = "SMSSMSSM"
 FAILS = 3
+# Set back this many days, for the part on age: every_minute's run 7, and by_hand's run 2 by 6 years (and the 1 or 2
+# leap days in them).
+OLD = {7: 45, 2: 6 * 365 + 2}
 
 
 def file_menu(win, item: str):
@@ -77,6 +83,13 @@ def keep_list(win) -> QComboBox:
 
 def failed_box(win) -> QCheckBox:
     return next(c for c in keep_box(win).findChildren(QCheckBox) if c.text() == FAILED)
+
+
+def kept_for(win) -> tuple[int, str]:
+    """For a time's number and unit, in the Keep runs box shown."""
+    box = keep_box(win)
+    return box.findChild(QSpinBox).value(), next(c for c in box.findChildren(QComboBox)
+                                                 if c is not keep_list(win)).currentText()
 
 
 def items(combo: QComboBox) -> list[str]:
@@ -145,6 +158,19 @@ def start_schedule_line(p, tab):
 
 def run_folders(home) -> list[int]:
     return sorted(int(p.name) for p in home.runs_dir.iterdir() if p.is_dir() and p.name.isdigit())
+
+
+def block_lines(text: str, block: str) -> list[str]:
+    """A block's lines in a flow file, as they are written there."""
+    lines = text.splitlines()
+    first = lines.index(f"  {block}:")
+    return lines[first:next(i for i in range(first + 1, len(lines)) if not lines[i].startswith("    "))]
+
+
+def started(table) -> dict[int, dt.datetime]:
+    """When each run in Run history started, as it says."""
+    return {int(table.item(r, 0).text()): dt.datetime.fromisoformat(table.item(r, 1).text())
+            for r in range(table.rowCount())}
 
 
 def test_each_start_block_chooses_how_long_its_runs_are_kept(proof, win, qtbot, tmp_path, monkeypatch):
@@ -245,8 +271,6 @@ def test_each_start_block_chooses_how_long_its_runs_are_kept(proof, win, qtbot, 
             count.value() == 90 and unit.currentText() == "days" and units == ["days", "months", "years"])
 
     p.step("Choose All of them in the Keep runs list instead.")
-    p.note("A proof that lasts a minute has no old runs: it cannot show a time letting runs go, nor All of them "
-           "keeping a run older than Settings' time. Taskloom's own tests check both, with runs made to look older.")
     p.while_open(lambda: open_list(keep_list(win)), lambda popup: pick(popup, "All of them"))
     box = keep_box(win)
     p.shot(win, "① by_hand keeps all of its runs: none is ever deleted, however old, whatever Settings says.",
@@ -273,7 +297,19 @@ def test_each_start_block_chooses_how_long_its_runs_are_kept(proof, win, qtbot, 
 
     p.step("Save the flow (File > Save).")
     file_menu(win, "Save")
-    saved = yaml.safe_load(flow.read_text(encoding="utf-8"))["blocks"]
+    text = flow.read_text(encoding="utf-8")
+    saved = yaml.safe_load(text)["blocks"]
+    p.text("Its two start blocks, as the file orders.yaml now has them",
+           "\n".join(block_lines(text, "by_hand") + block_lines(text, "every_minute")))
+    bar = win.tabs.tabBar()
+    name = bar.tabRect(win.tabs.indexOf(tab))
+    name = QRect(bar.mapTo(win, name.topLeft()), name.size())
+    p.shot(win, "① The flow's tab says orders.yaml, no longer orders.yaml *: the flow is saved. Above, its start "
+                "blocks as saved: by_hand keeps all of its runs (keep: all), every_minute its last 2 (keep: last 2) "
+                "and its failed ones (keep_failed: true).",
+           highlight=[name], badges=True, zoom=[name])
+    p.check("① The tab says orders.yaml, without *: the flow is saved",
+            win.tabs.tabText(win.tabs.indexOf(tab)) == "orders.yaml" and not tab.doc.dirty)
     p.check("Saved: by_hand keeps all of its runs, every_minute its last 2 and its failed ones",
             (saved["by_hand"].get("config") or {}).get("keep") == "all"
             and saved["every_minute"]["config"].get("keep") == "last 2"
@@ -358,3 +394,63 @@ def test_each_start_block_chooses_how_long_its_runs_are_kept(proof, win, qtbot, 
             [(r[0], r[1]) for r in rows] == [(str(len(ORDER) + 1), "every_minute"), ("8", "by_hand"),
                                              ("7", "every_minute"), ("5", "by_hand"), ("2", "by_hand")]
             and run_folders(home) == [2, 5, 7, 8, len(ORDER) + 1])
+
+    p.step("Click every_minute's Keep runs list, and choose For a time.")
+    p.while_open(lambda: open_list(keep_list(win)), lambda popup: pick(popup, "For a time"))
+    box = keep_box(win)
+    p.shot(win, "② every_minute now keeps its runs for a time: 90 days, to begin with. Its runs are no longer counted: "
+                "they go by how long ago they started.",
+           highlight=[box], badges=[2], zoom=[box])
+    p.check("② every_minute's Keep runs says For a time: 90 days",
+            (keep_list(win).currentText(), *kept_for(win)) == ("For a time", 90, "days"))
+
+    p.step("Start line ② once more, from every_minute's menu: run 10. Then click Run history again.")
+    p.note("Taskloom keeps runs by when they started, and a proof cannot wait 45 days, let alone 6 years. So before "
+           "run 10, run 7 was made to have started 45 days earlier, and run 2 6 years earlier, by changing their start "
+           "time in the run history (how long they took stays the same). Nothing else in the run history is changed.")
+    for run_id, days in OLD.items():
+        set_back(home, run_id, days)
+    start_schedule_line(p, tab)
+    qtbot.waitUntil(lambda: len(tab.runs) == 10 and not tab.running and tab.runs[-1].status is not None,
+                    timeout=60_000)
+    click_tab(win.bottom_tabs, win.history_panel)
+    rows = history_rows(win)
+    assert all_shown(table), "Run history does not show all its runs"
+    ago = {run: (dt.datetime.now() - when).days for run, when in started(table).items()}
+    p.shot(win, "② every_minute's run 7 now started 45 days ago: within its 90 days, so it stays, with its runs 10 and "
+                "9 from today. ① by_hand's run 2 now started 6 years ago, longer than Settings' 5 years: it stays, as "
+                "by_hand keeps all of its runs.",
+           highlight=history_lines(table), badges=[1 if by == "by_hand" else 2 for _, by, _ in rows],
+           zoom=[table.item(0, 0), table.item(table.rowCount() - 1, 4)])
+    p.check("Run history lists runs 10, 9, 8, 7, 5 and 2: none is deleted",
+            [r[0] for r in rows] == ["10", "9", "8", "7", "5", "2"] and run_folders(home) == [2, 5, 7, 8, 9, 10])
+    p.check("② Run 7 started 45 days ago, and ① run 2 6 years ago", (ago[7], ago[2] // 365) == (45, 6))
+    p.check("① Run 2 is older than Settings' Keep runs for, 5 years: by_hand's All of them keeps it",
+            home.settings()["keep_runs_for"] == "5 years" and ago[2] > 5 * 366)
+
+    p.step("Type 30 in every_minute's For, and press Enter.")
+    count = keep_box(win).findChild(QSpinBox)
+    count.selectAll()
+    QTest.keyClicks(count, "30")
+    QTest.keyClick(count, Qt.Key_Return)
+    box = keep_box(win)
+    p.shot(win, "② every_minute now keeps its runs for 30 days.", highlight=[box], badges=[2], zoom=[box])
+    p.check("② every_minute keeps its runs for 30 days",
+            (keep_list(win).currentText(), *kept_for(win)) == ("For a time", 30, "days"))
+
+    p.step("Start line ② once more, from every_minute's menu: run 11. Then click Run history again.")
+    start_schedule_line(p, tab)
+    qtbot.waitUntil(lambda: len(tab.runs) == 11 and not tab.running and tab.runs[-1].status is not None,
+                    timeout=60_000)
+    click_tab(win.bottom_tabs, win.history_panel)
+    rows = history_rows(win)
+    assert all_shown(table), "Run history does not show all its runs"
+    p.shot(win, "As run 11 ended, Taskloom deleted run 7, which started 45 days ago: longer than every_minute's 30 "
+                "days. ② Its runs 11, 10 and 9, from today, stay. ① by_hand's run 2, from 6 years ago, is still "
+                "there: by_hand keeps all of its runs, whatever Settings says.",
+           highlight=history_lines(table), badges=[1 if by == "by_hand" else 2 for _, by, _ in rows],
+           zoom=[table.item(0, 0), table.item(table.rowCount() - 1, 4)])
+    p.check("② every_minute's run 7, from 45 days ago, is deleted, with its files; its runs 11, 10 and 9 stay",
+            [r[0] for r in rows if r[1] == "every_minute"] == ["11", "10", "9"] and 7 not in run_folders(home))
+    p.check("① by_hand's run 2, from 6 years ago, is still there, with its runs 8 and 5 and their files",
+            [r[0] for r in rows if r[1] == "by_hand"] == ["8", "5", "2"] and run_folders(home) == [2, 5, 8, 9, 10, 11])
