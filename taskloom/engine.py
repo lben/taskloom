@@ -19,7 +19,7 @@ import polars as pl
 from . import params as P
 from .block import AFTER, DONE, all_ports
 from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
-from .config import REVEALED, runs_kept_since
+from .config import REVEALED, before_now, kept_runs, runs_kept_since
 from .history import History
 from .table import Table
 
@@ -88,6 +88,7 @@ class Context:
         self._attempt_cancel = attempt_cancel
         self._answers = answers
         self.registry = registry  # for blocks that run other flows
+        self._saw_stop = False  # it found out it was told to stop (so what it returns may be part of its work)
 
     def log(self, message: str, level: str = "INFO"):
         self._emit({"event": "log", "block": self.block_id, "level": level, "message": str(message)})
@@ -127,7 +128,10 @@ class Context:
 
     @property
     def cancelled(self) -> bool:
-        return self._run_cancel.is_set() or self._attempt_cancel.is_set()
+        if self._run_cancel.is_set() or self._attempt_cancel.is_set():
+            self._saw_stop = True
+            return True
+        return False
 
     def check_cancelled(self):
         if self.cancelled:
@@ -238,12 +242,18 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
             _from_before(flow, registry, home, part, inputs_from, run_from)
     started_by = (f"only {only}" if only else f"from {run_from}" if run_from
                   else ", ".join(b for b in flow.blocks if b in fired))
+    # The start blocks it counts for (a re-run: those whose lines hold its block), and how the flow's start blocks
+    # keep their runs.
+    counts_for = ([b for b, line in lines(flow, registry).items() if start in line] if start is not None
+                  else [b for b in flow.blocks if b in fired])
+    keeps = {b: (flow.blocks[b].config.get("keep"), bool(flow.blocks[b].config.get("keep_failed")))
+             for b in flow.blocks if b in _start_blocks(flow, registry)}
     cancel = cancel or threading.Event()
     if before_start is not None:
         before_start()
 
     history = History(home.history_db)
-    run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by)
+    run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
 
@@ -516,7 +526,10 @@ class _Runner:
                 raise Cancelled()
             if deadline is not None and time.monotonic() > deadline:
                 attempt_cancel.set()
-                done.wait(STOP_GRACE_SECONDS)
+                # Finished in the grace without having seen the stop: its work is done, so keep it (a retry would
+                # redo it, e.g. send an email twice). One that saw the stop may have returned part of its work.
+                if done.wait(STOP_GRACE_SECONDS) and "error" not in result and not ctx._saw_stop:
+                    return result["value"]
                 raise TimeoutError(f"timed out after {timeout:g} s")
         if "error" in result:
             raise result["error"]
@@ -581,7 +594,7 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
     a full run would give it now, from what the blocks before it hold (e.g. after fixing one of them).
     Raises ValueError when that run's files are gone."""
     input_ports(flow, registry, only)  # a block that exists
-    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs_for)"
+    cleaned = f"the files of run #{run_id} were cleaned up (Keep runs, keep_runs_for)"
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
         raise ValueError(cleaned)
@@ -718,7 +731,7 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
         if before:
             raise ValueError(f"{before[0].dst} needs what {before[0].src} holds: say which run's to use (--inputs-from)")
         return {}, set(), set(), set()
-    cleaned = f"the files of run #{run_id} were cleaned up (keep_runs_for)"
+    cleaned = f"the files of run #{run_id} were cleaned up (Keep runs, keep_runs_for)"
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
         raise ValueError(f"{cleaned}: run the whole flow instead")
@@ -952,13 +965,51 @@ def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:
 
 
 def _apply_retention(home, history: History):
-    """Delete the runs that started longer ago than keep_runs_for: their folders, then their history.
+    """Delete the runs that every start block they count for lets go, as its Keep runs says (each flow file's
+    start blocks apart), and the runs that count for none and started longer ago than keep_runs_for: their
+    folders, then their history.
 
-    Runs still in progress (possibly in other processes) are never touched. A run whose folder cannot be
-    deleted yet (e.g. a file in it is open on Windows) stays in the history, to be deleted as a later run ends.
+    A start block keeps its runs as its flow's newest run had it: a change applies to earlier runs too. Runs still
+    in progress (possibly in other processes) are never touched, nor counted in the last N. A run whose folder
+    cannot be deleted yet (e.g. a file in it is open on Windows) stays in the history, to be deleted as a later
+    run ends.
     """
-    for run_id in history.old_runs(runs_kept_since(home.settings())):
+    settings_since = runs_kept_since(home.settings()).isoformat()
+    rules = {start: _rule(*keep, settings_since) for start, keep in history.keeps().items()}
+    # Only these can go (there can be millions of runs): the runs that started before the latest time a start
+    # block (or Settings) lets runs go, and the runs of a flow with a start block that keeps the last N.
+    before = max([settings_since, *(since for _, _, since in rules.values() if since)])
+    counted = sorted({flow_path for (flow_path, _), (_, last, _) in rules.items() if last is not None})
+    newer, gone = {}, []  # (flow file, start block) -> how many of its finished runs are newer than the one at hand
+    for run_id, flow_path, status, started, counts_for in history.finished_runs(before, counted):
+        starts = [(flow_path, block) for block in counts_for]
+        if (all(_lets_go(rules[s], newer.get(s, 0), status, started) for s in starts) if starts
+                else started < settings_since):
+            gone.append(run_id)
+        for s in starts:
+            newer[s] = newer.get(s, 0) + 1
+    for run_id in gone:
         folder = home.runs_dir / str(run_id)
         shutil.rmtree(folder, ignore_errors=True)
         if not folder.exists():
             history.forget(run_id)
+
+
+def _rule(keep: str | None, keep_failed: bool, settings_since: str) -> tuple[bool, int | None, str | None]:
+    """A start block's Keep runs and Always keep failed runs as (failed runs are kept, the last N runs are kept,
+    the runs that started before this go); None: not by number, or not by time."""
+    if keep is None:  # as in Settings
+        return keep_failed, None, settings_since
+    kind, number = kept_runs(keep)
+    return keep_failed, number if kind == "last" else None, None if kind in ("all", "last") else (
+        before_now(number, kind).isoformat())
+
+
+def _lets_go(rule: tuple, newer: int, status: str, started: str) -> bool:
+    """Whether a start block's _rule lets one of its finished runs go, `newer` of its finished runs being newer."""
+    failed, last, since = rule
+    if failed and status == "failed":
+        return False
+    if last is not None:
+        return newer >= last
+    return since is not None and started < since

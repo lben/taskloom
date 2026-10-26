@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 import os
 import sqlite3
@@ -25,6 +24,10 @@ CREATE TABLE IF NOT EXISTS logs (
     level TEXT NOT NULL, message TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS logs_run ON logs (run_id, block);
+CREATE TABLE IF NOT EXISTS keeps (
+    flow_path TEXT NOT NULL, block TEXT NOT NULL, keep TEXT, keep_failed INTEGER NOT NULL,
+    PRIMARY KEY (flow_path, block)
+);
 """
 
 
@@ -59,8 +62,10 @@ class History:
         self._db = connect(path)
         self._db.executescript(SCHEMA)
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
-        # A history file from before runs recorded their process, or what started them: it gets the column.
-        for name, kind in (("pid", "INTEGER"), ("started_by", "TEXT NOT NULL DEFAULT ''")):
+        # A history file from before runs recorded their process, what started them, or the start blocks they
+        # count for: it gets the column.
+        for name, kind in (("pid", "INTEGER"), ("started_by", "TEXT NOT NULL DEFAULT ''"),
+                           ("counts_for", "TEXT NOT NULL DEFAULT ''")):
             if name not in columns:
                 try:
                     self._db.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
@@ -72,12 +77,20 @@ class History:
         with self._lock:
             return self._db.execute(sql, args)
 
-    def start_run(self, flow: str, flow_path: str, params: dict, ts: str, started_by: str = "") -> int:
-        """`started_by`: the start blocks that started it ("manual, manual_2"), or "only load" / "from load"."""
+    def start_run(self, flow: str, flow_path: str, params: dict, ts: str, started_by: str = "",
+                  counts_for=(), keeps: dict | None = None) -> int:
+        """`started_by`: the start blocks that started it ("manual, manual_2"), or "only load" / "from load".
+        `counts_for`: the start blocks it counts for. `keeps`: the flow's start blocks, with their Keep runs and
+        Always keep failed runs ({block: (keep, keep_failed)}); from now on these decide for all their runs."""
+        for block, (kept, failed) in (keeps or {}).items():  # first: a run is never without its start blocks' keeps
+            self._exec("INSERT INTO keeps (flow_path, block, keep, keep_failed) VALUES (?, ?, ?, ?) ON CONFLICT "
+                       "(flow_path, block) DO UPDATE SET keep=excluded.keep, keep_failed=excluded.keep_failed",
+                       (flow_path, block, kept, failed))
         cur = self._exec(
-            "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by) "
-            "VALUES (?, ?, ?, 'running', ?, ?, ?)",
-            (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by),
+            "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by, counts_for) "
+            "VALUES (?, ?, ?, 'running', ?, ?, ?, ?)",
+            (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by,
+             ", ".join(counts_for)),
         )
         return cur.lastrowid
 
@@ -108,10 +121,20 @@ class History:
         elif kind == "run_finished":
             self._exec("UPDATE runs SET status=?, finished=? WHERE id=?", (event["status"], ts, run_id))
 
-    def old_runs(self, since: dt.datetime) -> list[int]:
-        """The runs that started before `since`, except the ones still going."""
-        rows = self._exec("SELECT id FROM runs WHERE started < ? AND status != 'running'", (since.isoformat(),))
-        return [row[0] for row in rows]
+    def keeps(self) -> dict:
+        """How each flow file's start blocks keep their runs, as the flow's newest run had it:
+        {(flow_path, block): (keep, keep_failed)}."""
+        rows = self._exec("SELECT flow_path, block, keep, keep_failed FROM keeps")
+        return {(flow_path, block): (keep, bool(failed)) for flow_path, block, keep, failed in rows}
+
+    def finished_runs(self, before: str, flow_paths: list[str]):
+        """The finished runs, newest first, that started before `before` or are runs of one of `flow_paths`:
+        (id, flow_path, status, started, the start blocks it counts for). One at a time: they can be millions."""
+        rows = self._exec("SELECT id, flow_path, status, started, counts_for FROM runs WHERE status != 'running' "
+                          f"AND (started < ? OR flow_path IN ({', '.join('?' * len(flow_paths))})) ORDER BY id DESC",
+                          (before, *flow_paths))
+        for run_id, flow_path, status, started, counts_for in rows:
+            yield run_id, flow_path, status, started, counts_for.split(", ") if counts_for else []
 
     def forget(self, run_id: int):
         """Forget a run, with its block results, values and logs."""

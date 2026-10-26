@@ -911,7 +911,8 @@ def choose(win, item: str):
     settle()
 
 
-def test_every_few_minutes_every_hour_and_every_month_write_their_cron_lines(win, tmp_path, monkeypatch):
+def test_every_few_minutes_writes_every_and_every_hour_and_every_month_write_their_cron_lines(win, tmp_path,
+                                                                                               monkeypatch):
     from PySide6.QtCore import QTime
     from PySide6.QtWidgets import QSpinBox, QTimeEdit
 
@@ -919,19 +920,22 @@ def test_every_few_minutes_every_hour_and_every_month_write_their_cron_lines(win
     tab.doc.add_block("trigger.schedule", 0, 200)
     select_only(tab, "schedule")
 
-    def cron():
-        return tab.doc.blocks["schedule"].get("config", {}).get("cron")
+    def config():
+        return tab.doc.blocks["schedule"].get("config", {})
 
-    choose(win, "Every few minutes")
-    assert cron() == "*/15 * * * *" and "Every 15 minutes" in when_text(win)
+    def cron():
+        return config().get("cron")
+
+    choose(win, "Every few minutes or hours")  # from when the scheduler service picks it up, not on the clock
+    assert config().get("every") == "15 minutes" and cron() is None and "Every 15 minutes" in when_text(win)
     choose(win, "5 minutes")
-    assert cron() == "*/5 * * * *" and "Every 5 minutes" in when_text(win)
+    assert config().get("every") == "5 minutes" and cron() is None and "Every 5 minutes" in when_text(win)
     choose(win, "Every hour")
     minute = field(win, "At minute")
     assert isinstance(minute, QSpinBox)
     minute.setValue(30)
     minute.editingFinished.emit()
-    assert cron() == "30 * * * *" and "Every hour at :30" in when_text(win)
+    assert cron() == "30 * * * *" and "every" not in config() and "Every hour at :30" in when_text(win)
     choose(win, "Every month")
     day = field(win, "On day")
     day.setValue(15)

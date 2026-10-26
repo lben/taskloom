@@ -267,10 +267,10 @@ def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
         config = spec.get("config") or {}
         if not isinstance(config, dict) or config.get("active", True) is False:
             continue
-        timing = {k: config[k] for k in ("cron", "at", "misfire") if config.get(k) not in (None, "")}
-        if ("cron" in timing) == ("at" in timing):
-            errors.append(f"blocks.{block_id}: a Schedule block needs either cron (e.g. 0 7 * * MON-FRI) "
-                          "or at (e.g. 2026-10-08 15:30)")
+        timing = {k: config[k] for k in ("cron", "every", "at", "misfire") if config.get(k) not in (None, "")}
+        if len({"cron", "every", "at"} & set(timing)) != 1:
+            errors.append(f"blocks.{block_id}: a Schedule block needs either cron (e.g. 0 7 * * MON-FRI), "
+                          "every (e.g. 5 minutes) or at (e.g. 2026-10-08 15:30)")
             continue
         try:
             triggers.append(Trigger({"schedule": timing}, block=block_id))

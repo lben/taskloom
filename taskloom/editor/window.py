@@ -29,8 +29,8 @@ from ..flow import FlowError, load_flow, read_flow_file, run_clock, schedules_of
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
-from ..scheduler import (acquire_lock, paused, running_scheduler_version, set_paused, set_start_at_login,
-                         startup_file, startup_script_outdated, version_tuple)
+from ..scheduler import (acquire_lock, counted_from, paused, running_scheduler_version, set_paused,
+                         set_start_at_login, startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView, value_html
 from . import dialogs
@@ -59,30 +59,36 @@ def _finished_line(run_id: int, status: str, ts: str) -> dict:
 
 
 def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, scheduler_on: bool,
-                       unsaved: bool) -> tuple[str, str]:
-    """(Text under a Schedule block, its tooltip): when it starts the flow next."""
+                       unsaved: bool, start: dt.datetime | None = None) -> tuple[str, str]:
+    """(Text under a Schedule block, its tooltip): when it starts the flow next. `start`: where the scheduler
+    service counts it from, if it repeats every N minutes or hours (see scheduler.counted_from)."""
     if scheduled and unsaved:
         return "unsaved · the scheduler runs the saved version", (
             "This flow has unsaved changes: the scheduler service runs the saved version of it. Save the flow to "
             "apply your changes.")
     if config.get("active", True) is False:
         return "not active", "This schedule is not active: it does not start the flow. Tick Active to use it."
-    timing = {k: config[k] for k in ("cron", "at") if config.get(k) not in (None, "")}
+    timing = {k: config[k] for k in ("cron", "every", "at") if config.get(k) not in (None, "")}
     try:
         trigger = Trigger({"schedule": timing})
     except ValueError:
-        return "needs a time", "Set its cron (repeating times) or at (one time)."
+        return "needs a time", "Set its cron (repeating times on the clock), every (e.g. 5 minutes) or at (one time)."
     upcoming, t = [], now
-    while len(upcoming) < 5 and (t := trigger.next_after(t)) is not None:
+    while len(upcoming) < 5 and (t := trigger.next_after(t, start)) is not None:
         upcoming.append(t)
-    if not upcoming:
+    if not upcoming and not trigger.every:
         return "no more runs", "Its time has passed."
-    tip = "Next runs:<br>" + "<br>".join(f"{t:%a %d %b %Y %H:%M}" for t in upcoming)
+    tip = ("Next runs:<br>" + "<br>".join(f"{t:%a %d %b %Y %H:%M:%S}" for t in upcoming) if upcoming else
+           f"Every {trigger.timing.text}, from when the scheduler service picks it up: its first run is then, and "
+           f"the next ones every {trigger.timing.text} after it.")
     if not scheduled:
-        return f"next {upcoming[0]:%a %H:%M} · save to schedule", tip + "<br><br>Save the flow to schedule this."
+        return (f"next {upcoming[0]:%a %H:%M}" if upcoming else f"every {trigger.timing.text}") + " · save to schedule", (
+            tip + "<br><br>Save the flow to schedule this.")
     if not scheduler_on:  # no time: none comes while it is off
         return "scheduler service off", ("The scheduler service is off, so this schedule does not start the flow. "
                                          "The Scheduler service button (top right) turns it on.")
+    if not upcoming:  # every N: the service has not seen it as it is now (it does within a second)
+        return "starts when the service picks it up", tip
     left = int((upcoming[0] - now).total_seconds())
     days, rest = divmod(left, 86400)
     clock = f"{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
@@ -1092,7 +1098,8 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError):  # e.g. not UTF-8, or not YAML
             return None
         now = dt.datetime.now()
-        return min((t for t in (trigger.next_after(now) for trigger in cached[1]) if t), default=None)
+        return min((t for t in (trigger.next_after(now, start) for trigger, start in
+                                zip(cached[1], counted_from(self.home, path, cached[1]))) if t), default=None)
 
     # --- scheduling -----------------------------------------------------------------
 
@@ -1102,7 +1109,8 @@ class MainWindow(QMainWindow):
         except ValueError:
             tab.scheduled = False
         now = dt.datetime.now()
-        times = [t.next_after(now) for t in schedules_of(tab.doc.data)[0]] if tab.scheduled else []
+        triggers = schedules_of(tab.doc.data)[0] if tab.scheduled else []
+        times = [t.next_after(now, start) for t, start in zip(triggers, counted_from(self.home, tab.doc.path, triggers))]
         tab.next_run = min((t for t in times if t), default=None)
         self.flow_status.update_tab(tab)
 
@@ -1148,10 +1156,13 @@ class MainWindow(QMainWindow):
         if tab is None:
             return
         now = dt.datetime.now().replace(microsecond=0)
+        triggers = schedules_of(tab.doc.data)[0] if tab.scheduled else []
+        starts = dict(zip((t.block for t in triggers), counted_from(self.home, tab.doc.path, triggers)))
         for block_id, spec in tab.doc.blocks.items():
             if spec.get("type") == "trigger.schedule":
                 tab.scene.set_countdown(block_id, *schedule_countdown(spec.get("config") or {}, now, tab.scheduled,
-                                                                      self.flow_status.scheduler_on, tab.doc.dirty))
+                                                                      self.flow_status.scheduler_on, tab.doc.dirty,
+                                                                      starts.get(block_id)))
 
     def _show_scheduler_state(self, running: bool):
         if running != self.flow_status.scheduler_on:  # the tabs say when their flows run next only while it is on

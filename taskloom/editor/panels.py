@@ -22,8 +22,10 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields, setting_label
 from ..calendars import load_calendar
+from ..config import kept_runs
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
+from ..scheduler import counted_from
 from .canvas import BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR
 
 MONO = QFontDatabase.systemFont(QFontDatabase.FixedFont)
@@ -369,11 +371,12 @@ class PropertiesPanel(QScrollArea):
             return
         config = spec.get("config") or {}
         when = cls.type_id == "trigger.schedule"
+        keeps = cls.type_id in ("trigger.manual", "trigger.schedule")
         if when:
             layout.addWidget(self._when_box(config))
         for key, f in cls.config.items():
-            if when and key in ("cron", "at"):
-                continue  # in the When box
+            if when and key in ("cron", "every", "at") or keeps and key in ("keep", "keep_failed"):
+                continue  # in the When box, or the Keep runs box
             widget = self._field_widget(key, f, config.get(key))
             label = QLabel(setting_label(key, f))
             if f.help:
@@ -387,50 +390,115 @@ class PropertiesPanel(QScrollArea):
                 row.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
                 row.addRow(label, widget)
                 layout.addLayout(row)
+        if keeps:
+            layout.addWidget(self._keep_box(config, cls.config))
         layout.addWidget(self._retry_box(spec))
         self._show_problems()
 
+    # --- how a start block's runs are kept ---------------------------------------------------
+
+    # Each choice, and what it writes in the flow file when you choose it (None: nothing, as in Settings).
+    KEEP_CHOICES = {"As in Settings": None, "All of them": "all", "The last N": "last 100", "For a time": "90 days"}
+
+    def _keep_box(self, config: dict, keep_fields: dict) -> QGroupBox:
+        """Keep runs: as in Settings, all of them, the last N, or for a time (a number and days, months or
+        years); and Always keep failed runs."""
+        box = QGroupBox("Keep runs")
+        form = QFormLayout(box)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        try:
+            kind, number = kept_runs(config["keep"]) if config.get("keep") is not None else ("settings", 0)
+        except ValueError:  # written in the file by hand: the message above says so
+            kind, number = "", 0
+        choice = QComboBox()
+        choice.addItems(list(self.KEEP_CHOICES))
+        choice.setCurrentIndex({"settings": 0, "all": 1, "last": 2, "": -1}.get(kind, 3))
+        choice.setToolTip(keep_fields["keep"].help)
+        choice.currentTextChanged.connect(lambda text: (self._set("keep", self.KEEP_CHOICES.get(text)), self.refresh()))
+        form.addRow(choice)
+        if kind == "last":
+            count = QSpinBox(minimum=1, maximum=1_000_000, value=number, keyboardTracking=False)
+            count.valueChanged.connect(lambda n: self._set("keep", f"last {n}"))
+            form.addRow("Runs", count)
+        elif kind in ("days", "months", "years"):
+            count = QSpinBox(minimum=1, maximum=100_000, value=number, keyboardTracking=False)
+            unit = QComboBox()
+            unit.addItems(["days", "months", "years"])
+            unit.setCurrentText(kind)
+
+            def commit():
+                n, u = count.value(), unit.currentText()
+                self._set("keep", f"{n} {u.removesuffix('s') if n == 1 else u}")
+
+            count.valueChanged.connect(lambda _: commit())
+            unit.currentTextChanged.connect(lambda _: commit())
+            row = QWidget()
+            parts = QHBoxLayout(row)
+            parts.setContentsMargins(0, 0, 0, 0)
+            parts.addWidget(count)
+            parts.addWidget(unit)
+            parts.addStretch()
+            form.addRow("For", row)
+        failed = QCheckBox(keep_fields["keep_failed"].label)
+        failed.setChecked(bool(config.get("keep_failed")))
+        failed.setToolTip(keep_fields["keep_failed"].help)
+        failed.toggled.connect(lambda checked: self._set("keep_failed", checked or None))
+        form.addRow(failed)
+        return box
+
     # --- when a Schedule block runs ----------------------------------------------------------
 
-    WHEN_KINDS = [("Every few minutes", "minutes"), ("Every hour", "hourly"), ("Every day", "daily"),
+    # Every few minutes or hours counts from when the scheduler service picks the schedule up (`every`); the
+    # others are on the clock (cron lines).
+    WHEN_KINDS = [("Every few minutes or hours", "every"), ("Every hour", "hourly"), ("Every day", "daily"),
                   ("Every weekday (Mon–Fri)", "weekdays"), ("Some days of the week", "weekly"),
                   ("Every month", "monthly"), ("Custom (a cron line)", "custom")]
-    DEFAULT_PLANS = {"minutes": {"kind": "minutes", "every": 15}, "hourly": {"kind": "hourly", "minute": 0},
+    EVERY_CHOICES = ("1 minute", "2 minutes", "3 minutes", "4 minutes", "5 minutes", "6 minutes", "10 minutes",
+                     "12 minutes", "15 minutes", "20 minutes", "30 minutes", "1 hour", "2 hours", "3 hours", "4 hours",
+                     "6 hours", "8 hours", "12 hours")
+    DEFAULT_PLANS = {"hourly": {"kind": "hourly", "minute": 0},
                      "daily": {"kind": "daily", "hour": 7, "minute": 0},
                      "weekdays": {"kind": "weekdays", "hour": 7, "minute": 0},
                      "weekly": {"kind": "weekly", "days": [1], "hour": 7, "minute": 0},
                      "monthly": {"kind": "monthly", "day": 1, "hour": 7, "minute": 0}}
 
-    def _set_when(self, cron=None, at=None):
-        """Repeating (cron) or one time (at): setting one clears the other, in one step."""
+    def _set_when(self, cron=None, every=None, at=None):
+        """Repeating (cron or every) or one time (at): setting one clears the others, in one step."""
         if self.doc is None or self.block_id not in self.doc.blocks:
             return
-        self._commit(lambda: self.doc.set_block_values(self.block_id, {"cron": cron, "at": at}))
+        self._commit(lambda: self.doc.set_block_values(self.block_id, {"cron": cron, "every": every, "at": at}))
 
     def _when_box(self, config: dict) -> QGroupBox:
         """Repeating or one time; for repeating, how often (or a cron line); and the next runs."""
         box = QGroupBox("When")
         form = QFormLayout(box)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        cron, at = config.get("cron") or "", config.get("at") or ""
+        cron, every, at = (str(config.get(k) or "") for k in ("cron", "every", "at"))
         mode = QComboBox()
         mode.addItem("Repeating", "cron")
         mode.addItem("One time", "at")
-        mode.setCurrentIndex(1 if at and not cron else 0)
+        mode.setCurrentIndex(1 if at and not (cron or every) else 0)
         form.addRow("Runs", mode)
         preview = QLabel()
         preview.setWordWrap(True)
         preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        def show_preview(cron_text, at_text):
+        def show_preview(timing: dict):
             from ..schedule import Trigger, describe_cron
-            timing = {"cron": cron_text} if cron_text else {"at": at_text} if at_text else {}
+            timing = {k: v for k, v in timing.items() if v}
             try:
                 trigger = Trigger({"schedule": timing})
             except ValueError as e:
                 preview.setText("<span style='color: gray'>Not set yet: choose when it runs.</span>" if not timing
                                 else f"<span style='color: {STATUS_COLORS['failed']}'>{html.escape(str(e))}</span>")
                 return
+            if trigger.every:  # not on the clock: its times are known once the scheduler service has seen it
+                n = trigger.timing.text
+                preview.setText(f"<b>Every {html.escape(n.removeprefix('1 '))}</b><br>From when the scheduler "
+                                f"service picks it up (when you save the flow): its first run is then, and the next "
+                                f"ones every {html.escape(n)} after it.")
+                return
+            cron_text = timing.get("cron")
             upcoming, t = [], dt.datetime.now()
             while len(upcoming) < 3 and (t := trigger.next_after(t)) is not None:
                 upcoming.append(t)
@@ -442,17 +510,17 @@ class PropertiesPanel(QScrollArea):
             if mode.currentData() == "at" and not at:
                 soon = (dt.datetime.now() + dt.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
                 self._set_when(at=f"{soon:%Y-%m-%d %H:%M}")
-            elif mode.currentData() == "cron" and not cron:
-                self._set_when(cron=None)  # repeating, not chosen yet
+            elif mode.currentData() == "cron" and not (cron or every):
+                self._set_when()  # repeating, not chosen yet
             self.refresh()
 
         mode.activated.connect(switch)
         if mode.currentData() == "at":
             self._at_rows(form, at, show_preview)
         else:
-            self._cron_rows(form, cron, show_preview)
+            self._cron_rows(form, cron, every, show_preview)
         form.addRow(preview)
-        show_preview(cron if mode.currentData() == "cron" else "", at if mode.currentData() == "at" else "")
+        show_preview({"at": at} if mode.currentData() == "at" else {"cron": cron, "every": every})
         return box
 
     def _at_rows(self, form, at: str, show_preview):
@@ -467,23 +535,23 @@ class PropertiesPanel(QScrollArea):
         def commit():
             text = edit.dateTime().toPython().strftime("%Y-%m-%d %H:%M")
             self._set_when(at=text)
-            show_preview("", text)
+            show_preview({"at": text})
 
         edit.editingFinished.connect(commit)
         edit.calendarWidget().clicked.connect(lambda _: commit())
         form.addRow("On", edit)
 
-    def _cron_rows(self, form, cron: str, show_preview):
-        from ..schedule import DAY_WORDS, MINUTE_STEPS, cron_plan, plan_cron
+    def _cron_rows(self, form, cron: str, every: str, show_preview):
+        from ..schedule import DAY_WORDS, cron_plan, plan_cron
 
         plan = cron_plan(cron) if cron else None
         kind_box = QComboBox()
-        if not cron:
+        if not (cron or every):
             kind_box.addItem("Choose…", "")
         for label, kind in self.WHEN_KINDS:
             kind_box.addItem(label, kind)
         custom = self._custom_when == (id(self.doc), self.block_id)
-        current = "" if not cron else "custom" if custom or not plan else plan["kind"]
+        current = "every" if every else "" if not cron else "custom" if custom or not plan else plan["kind"]
         kind_box.setCurrentIndex(kind_box.findData(current))
         form.addRow("How often", kind_box)
 
@@ -492,6 +560,8 @@ class PropertiesPanel(QScrollArea):
             self._custom_when = (id(self.doc), self.block_id) if kind == "custom" else None
             if kind == "custom":
                 self._set_when(cron=cron or "0 7 * * MON-FRI")  # the line so far, to change as you like
+            elif kind == "every":
+                self._set_when(every="15 minutes")
             elif kind:
                 self._set_when(cron=plan_cron(self.DEFAULT_PLANS[kind]))
             self.refresh()
@@ -499,12 +569,22 @@ class PropertiesPanel(QScrollArea):
         kind_box.activated.connect(choose)
         if not current:
             return
+        if current == "every":
+            box = QComboBox()
+            box.addItems(self.EVERY_CHOICES)
+            if box.findText(every) < 0:  # written in the file by hand
+                box.addItem(every)
+            box.setCurrentText(every)
+            box.activated.connect(lambda _: (self._set_when(every=box.currentText()),
+                                             show_preview({"every": box.currentText()})))
+            form.addRow("Every", box)
+            return
         if current == "custom":
             line = QLineEdit(cron)
             line.setToolTip("minute hour day month weekday, e.g. 0 7-17/2 * * MON-FRI = every two hours from 7:00 "
                             "to 17:00 on weekdays; * means every, */N every N, a-b a range, a,b a list")
             line.editingFinished.connect(lambda: (self._set_when(cron=line.text().strip() or None),
-                                                  show_preview(line.text().strip(), "")))
+                                                  show_preview({"cron": line.text().strip()})))
             form.addRow("Cron line", line)
             hint = QLabel("minute · hour · day · month · weekday")
             hint.setStyleSheet("color: gray;")
@@ -515,16 +595,8 @@ class PropertiesPanel(QScrollArea):
         def commit():
             text = plan_cron(plan)
             self._set_when(cron=text)
-            show_preview(text, "")
+            show_preview({"cron": text})
 
-        if current == "minutes":
-            every = QComboBox()
-            for n in MINUTE_STEPS:
-                every.addItem("minute" if n == 1 else f"{n} minutes", n)
-            every.setCurrentIndex(max(every.findData(plan["every"]), 0))
-            every.activated.connect(lambda _: (plan.update(every=every.currentData()), commit()))
-            form.addRow("Every", every)
-            return
         if current == "hourly":
             minute = QSpinBox(minimum=0, maximum=59, value=plan["minute"])
             minute.editingFinished.connect(lambda: (plan.update(minute=minute.value()), commit()))
@@ -1009,12 +1081,16 @@ class FlowSettingsPanel(QWidget):
     def _show_schedule(self):
         triggers, problems = schedules_of(self.doc.data)
         now = dt.datetime.now()
-        upcoming = [t for t in (tr.next_after(now) for tr in triggers) if t]
+        upcoming = [t for t in (tr.next_after(now, start) for tr, start in
+                                zip(triggers, counted_from(self.home, self.doc.path, triggers))) if t]
         if problems:
             text = "<span style='color:%s'>%s</span>" % (STATUS_COLORS["failed"], html.escape("; ".join(problems)))
         elif upcoming:
-            text = (f"Next scheduled run: <b>{min(upcoming):%a %Y-%m-%d %H:%M}</b> (when the scheduler is on). "
+            text = (f"Next scheduled run: <b>{min(upcoming):%a %Y-%m-%d %H:%M:%S}</b> (when the scheduler is on). "
                     "Change it in the Schedule block.")
+        elif any(tr.every for tr in triggers):
+            text = ("Its schedule starts when the scheduler service picks it up (when you save the flow): its first "
+                    "run is then. Change it in the Schedule block.")
         else:
             text = ("This flow runs only when you press Run. To run it by itself at set times, add a "
                     "<b>Schedule</b> block (in Start) and connect it to the first block.")
@@ -1195,7 +1271,7 @@ class PreviewPanel(QWidget):
             df = lazy.head(self.PREVIEW_ROWS).collect()
         except Exception as e:
             self.view.setModel(None)
-            self.label.setText(f"Cannot preview: {e} (runs older than keep_runs_for are cleaned up)")
+            self.label.setText(f"Cannot preview: {e} (runs are cleaned up as Keep runs or keep_runs_for says)")
             return
         self.view.setModel(FrameModel(df))
         self.label.setText(f"{self.block_id}.{port}: {total:,} rows × {df.width} columns"

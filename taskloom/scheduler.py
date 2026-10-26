@@ -14,6 +14,7 @@ import math
 import os
 import queue
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -29,7 +30,7 @@ from .history import connect as history_connect
 from .launch import runner_command, windowed_command
 from .report import Html
 
-TICK_SECONDS = 15
+TICK_SECONDS = 1  # it checks at least this often: a schedule saved (or changed) applies within a second
 # A run's process starts this long before its time: loaded by then, it begins at its time.
 EARLY_START = dt.timedelta(seconds=5)
 NOT_DUE = 3  # the exit code of a run started early that did not begin (see why_not_due)
@@ -37,6 +38,7 @@ ON_TIME_GRACE = dt.timedelta(minutes=2)  # later than this, a run counts as miss
 HEARTBEAT_STALE_SECONDS = 120
 KEEPER_INTERVAL_SECONDS = 300
 KEEPER_START_SECONDS = 30  # how long the keeper waits for a server scheduler it started to check
+KEEPER_STOP_SECONDS = 5  # how long it waits for a hung one asked to stop, before it forces it
 CATCH_UP_LIMIT = 100
 
 
@@ -116,12 +118,13 @@ class Scheduler:
                 unreadable.append(f"{path}#")
                 continue
             for i, trigger in enumerate(flow.triggers):
-                key = f"{path}#{trigger.block or i}#{trigger.text}"
+                key = schedule_key(path, i, trigger)
                 on.add(key)
                 last = self._last(key)
                 if last is None:  # a new schedule starts from now; nothing is "missed"
-                    self._set_last(key, now)
-                    last = now
+                    # Every N minutes or hours: its first run is now (to the second), the next ones N after it.
+                    last = now.replace(microsecond=0) - trigger.every if trigger.every else now
+                    self._set_last(key, last)
                 due = trigger.due(last, now + EARLY_START)  # since the previous check, and the ones soon
                 if not due:
                     continue
@@ -149,7 +152,9 @@ class Scheduler:
                         self._tell(flow, "skipped", "Missed runs skipped",
                                    f"{flow.name}: {missed} run(s) were due while the scheduler was off")
                 planned = to_run + early
-                self._set_last(key, now + EARLY_START)
+                # The newest time handled: nothing comes between it and now + EARLY_START, and an every-N
+                # schedule counts on from it (one of its times).
+                self._set_last(key, due[-1])
                 # A catch-up of more than one time runs one after another, including behind a run that is
                 # already going. force_queue on every time but the first used to skip the oldest and, when
                 # the soon time was requested on its own, skip the on-time run too.
@@ -215,7 +220,7 @@ class Scheduler:
         as_of, block = when
         # Started early, it loads, then waits for its time (a time that has passed: it begins at once).
         command = runner_command() + ["run", path, "--json-events", "--notify",
-                                      "--as-of", as_of.isoformat(sep=" ", timespec="minutes"),
+                                      "--as-of", as_of.isoformat(sep=" ", timespec="seconds"),
                                       "--start-at", as_of.isoformat(timespec="seconds"), "--if-scheduled"]
         if block:
             command += ["--trigger", block]
@@ -306,14 +311,16 @@ class Scheduler:
         not started yet, so that run begins on time, and at most TICK_SECONDS (edited flows, finished and queued
         runs)."""
         times = [t for path in self._scheduled_flows() or [] if (flow := self._load(path))
-                 for t in (trigger.next_after(now + EARLY_START) for trigger in flow.triggers) if t]
+                 for i, trigger in enumerate(flow.triggers)
+                 if (t := trigger.next_after(now + EARLY_START,
+                                             self._last(schedule_key(path, i, trigger)) if trigger.every else None))]
         seconds = (min(times) - EARLY_START - now).total_seconds() if times else TICK_SECONDS
         return max(0.0, min(TICK_SECONDS, seconds))
 
     # --- keeping server schedulers alive ----------------------------------------------
 
     def check_servers(self):
-        """For each server in the keeper setting: start its scheduler if it is not running."""
+        """For each server in the keeper setting: start its scheduler if it is not running, replacing a hung one."""
         try:
             entries = self.home.settings()["keeper"] or []
         except (OSError, ValueError) as e:  # you are told, and the keeper goes on checking
@@ -333,6 +340,10 @@ class Scheduler:
                 try:
                     if self._remote_alive(session, remote_home):
                         continue
+                    # A hung scheduler still holds the folder's lock, so a new one could not start: it is stopped first.
+                    holders = self._lock_holders(session, remote_home)
+                    if holders:
+                        self._stop_lock_holders(session, remote_home, holders)
                     command = f"env TASKLOOM_HOME={ssh.remote_path(remote_home)} {entry['command']} scheduler --headless"
                     heartbeat = ssh.remote_path(f"{remote_home}/scheduler.heartbeat")
                     # (without the old heartbeat, a heartbeat says that the one started now checks)
@@ -342,11 +353,15 @@ class Scheduler:
                         raise RuntimeError(err.strip())
                     problem = self._start_problem(session, remote_home)
                     if problem:
+                        if holders is None:
+                            problem += (f"; the keeper cannot tell which process holds its lock (to stop a hung one): "
+                                        f"{name} has neither /proc nor lsof")
                         self.messages.put(("Server scheduler not started",
                                            f"{name}: the scheduler could not be started: {problem}"))
                     else:
-                        self.messages.put(("Server scheduler restarted",
-                                           f"{name}: the scheduler was not running and was started"))
+                        self.messages.put(("Server scheduler restarted", f"{name}: " + (
+                            "the scheduler was hung: it was stopped and a new one was started" if holders
+                            else "the scheduler was not running and was started")))
                 finally:
                     session.close()
             except Exception as e:
@@ -356,11 +371,48 @@ class Scheduler:
     def _remote_alive(session, remote_home: str) -> bool:
         """Its process is running and its heartbeat is recent (a hung scheduler counts as dead)."""
         pid_file, heartbeat = (ssh.remote_path(f"{remote_home}/{name}") for name in ("scheduler.pid", "scheduler.heartbeat"))
+        # A heartbeat read empty may be one being written this instant (every second): read again, as a scheduler
+        # taken for hung is stopped.
         _, out, _ = session.run(f'kill -0 "$(cat {pid_file} 2>/dev/null)" 2>/dev/null && echo up || echo down; '
-                                    f"cat {heartbeat} 2>/dev/null; echo; date +%s")
+                                f'beat="$(cat {heartbeat} 2>/dev/null)"; '
+                                f'[ -n "$beat" ] || {{ sleep 1; beat="$(cat {heartbeat} 2>/dev/null)"; }}; '
+                                f'echo "$beat"; date +%s')
         lines = out.split()
         numbers = [int(x) for x in lines[1:] if x.isdigit()]
         return lines[:1] == ["up"] and len(numbers) == 2 and numbers[1] - numbers[0] < HEARTBEAT_STALE_SECONDS
+
+    @staticmethod
+    def _lock_holders(session, remote_home: str) -> list[str] | None:
+        """The processes on the server that hold the folder's scheduler.lock (a scheduler keeps it open while it
+        holds the lock), told from the lock file itself through /proc/<pid>/fd or lsof, never from a process name or
+        scheduler.pid; None when the server has neither."""
+        lock = ssh.remote_path(f"{remote_home}/scheduler.lock")
+        _, out, _ = session.run(
+            f'{{ if [ -d /proc/self/fd ]; then for fd in /proc/[0-9]*/fd/*; do [ "$fd" -ef {lock} ] && '
+            f'p="${{fd#/proc/}}" && echo "${{p%%/*}}"; done; '
+            f"elif command -v lsof >/dev/null; then lsof -t {lock}; else echo unknown; fi; }} 2>/dev/null")
+        pids = out.split()
+        return None if "unknown" in pids else list(dict.fromkeys(p for p in pids if p.isdigit()))
+
+    @classmethod
+    def _stop_lock_holders(cls, session, remote_home: str, pids: list[str]):
+        """Asks the processes `pids` that hold the folder's lock to stop (SIGTERM), and forces (SIGKILL) only those
+        that still hold it KEEPER_STOP_SECONDS later. It waits for them to end (at most KEEPER_STOP_SECONDS after each
+        signal), not only to let go of the lock: a scheduler the keeper started writes its exit code as it ends, which
+        must not be read as the new one's."""
+        def wait_until_ended(of: list[str]):
+            alive = "; ".join(f"kill -0 {p} 2>/dev/null && echo {p}" for p in of)
+            deadline = time.monotonic() + KEEPER_STOP_SECONDS
+            while time.monotonic() < deadline:
+                time.sleep(0.5)
+                if not session.run(alive)[1].split():
+                    return
+
+        session.run(f"kill {' '.join(pids)}")
+        wait_until_ended(pids)
+        if still := [p for p in cls._lock_holders(session, remote_home) or [] if p in pids]:
+            session.run(f"kill -9 {' '.join(still)}")
+            wait_until_ended(still)
 
     @staticmethod
     def _start_problem(session, remote_home: str) -> str | None:
@@ -436,6 +488,30 @@ def acquire_lock(home: Home):
     return handle
 
 
+def schedule_key(path, i: int, trigger) -> str:
+    """The row of schedule_state that holds the state of the scheduled flow `path`'s schedule flow.triggers[i]:
+    changed, or turned off and on again, a schedule is a new one."""
+    return f"{path}#{trigger.block or i}#{trigger.text}"
+
+
+def counted_from(home: Home, path, triggers: list) -> list[dt.datetime | None]:
+    """For each of the scheduled flow `path`'s schedules, where the scheduler service counts it from if it repeats
+    every N minutes or hours: one of its times, the newest the service ran (or started early). None for the others,
+    and while the service has not seen that schedule as it is now."""
+    keys = [schedule_key(path, i, t) if t.every else None for i, t in enumerate(triggers)]
+    if not any(keys) or not home.history_db.exists():
+        return [None] * len(keys)
+    db = history_connect(home.history_db)
+    try:
+        rows = [db.execute("SELECT last FROM schedule_state WHERE trigger=?", (key,)).fetchone() if key else None
+                for key in keys]
+    except sqlite3.OperationalError:  # no service has made its table yet
+        rows = [None] * len(keys)
+    finally:
+        db.close()
+    return [dt.datetime.fromisoformat(row[0]) if row else None for row in rows]
+
+
 def why_not_due(home: Home, path: Path, block: str | None, when: dt.datetime) -> str | None:
     """Why a run the scheduler service started early, for the time `when` of the flow `path`'s Schedule block
     `block` (None: its flow-level schedule), does not begin at that time: the service was turned off, or that
@@ -446,11 +522,13 @@ def why_not_due(home: Home, path: Path, block: str | None, when: dt.datetime) ->
     except RuntimeError:
         pass
     try:
-        listed = path in [p.resolve() for p in home.scheduled_flows()]
+        listed = [p for p in home.scheduled_flows() if p.resolve() == path]
         triggers = load_flow(path).triggers if listed else []
     except (OSError, ValueError, FlowError) as e:
         return f"{path.name} cannot be read: {e}"
-    if any(t.block == block and t.next_after(when - dt.timedelta(seconds=1)) == when for t in triggers):
+    starts = counted_from(home, listed[0], triggers) if listed else []
+    if any(t.block == block and t.next_after(when - dt.timedelta(seconds=1), start) == when
+           for t, start in zip(triggers, starts)):
         return None
     return f"{path.name} is not scheduled at {when:%Y-%m-%d %H:%M} any more"
 

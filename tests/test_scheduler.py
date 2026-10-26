@@ -157,8 +157,6 @@ def test_cli_as_of_computes_parameters_for_that_time(env):
 
 
 @pytest.mark.parametrize("plan,cron,words", [
-    ({"kind": "minutes", "every": 5}, "*/5 * * * *", "Every 5 minutes"),
-    ({"kind": "minutes", "every": 1}, "* * * * *", "Every minute"),
     ({"kind": "hourly", "minute": 15}, "15 * * * *", "Every hour at :15"),
     ({"kind": "daily", "hour": 7, "minute": 0}, "0 7 * * *", "Every day at 07:00"),
     ({"kind": "weekdays", "hour": 7, "minute": 30}, "30 7 * * MON-FRI", "Monday to Friday at 07:30"),

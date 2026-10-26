@@ -1,8 +1,9 @@
-"""Schedules: cron expressions and one-off times, in the machine's local time."""
+"""Schedules: cron expressions, every N minutes or hours, and one-off times, in the machine's local time."""
 
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 MISFIRE_POLICIES = ("skip", "run_once", "catch_up")
 _NAMES = {
@@ -71,7 +72,6 @@ class Cron:
 
 DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]  # cron's weekdays: 0 (or 7) is Sunday
 DAY_WORDS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-MINUTE_STEPS = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)  # they divide an hour, so the gaps stay equal
 
 
 def _monday_first(days) -> list[int]:
@@ -81,8 +81,6 @@ def _monday_first(days) -> list[int]:
 def plan_cron(plan: dict) -> str:
     """The cron line of a plan, e.g. {"kind": "weekdays", "hour": 7, "minute": 0} -> "0 7 * * MON-FRI"."""
     kind = plan["kind"]
-    if kind == "minutes":
-        return "* * * * *" if plan["every"] == 1 else f"*/{plan['every']} * * * *"
     if kind == "hourly":
         return f"{plan['minute']} * * * *"
     at = f"{plan['minute']} {plan['hour']}"
@@ -108,10 +106,6 @@ def cron_plan(text: str) -> dict | None:
     if month != "*":
         return None
     if hour == "*" and day == "*" and dow == "*":
-        if minute == "*":
-            return {"kind": "minutes", "every": 1}
-        if minute.startswith("*/") and minute[2:].isdigit() and int(minute[2:]) in MINUTE_STEPS:
-            return {"kind": "minutes", "every": int(minute[2:])}
         return {"kind": "hourly", "minute": int(minute)} if minute.isdigit() else None
     if not (minute.isdigit() and hour.isdigit()):
         return None
@@ -133,8 +127,6 @@ def describe_cron(text: str) -> str:
     if plan is None:
         return f"Custom: {text}"
     kind = plan["kind"]
-    if kind == "minutes":
-        return "Every minute" if plan["every"] == 1 else f"Every {plan['every']} minutes"
     if kind == "hourly":
         return f"Every hour at :{plan['minute']:02d}"
     at = f"at {plan['hour']:02d}:{plan['minute']:02d}"
@@ -153,27 +145,57 @@ class At:
         return self.when if self.when > t else None
 
 
+class Every:
+    """Every N minutes or hours, e.g. "5 minutes", counted from a start: not on the clock, but from when the
+    scheduler service first saw the schedule as it is."""
+
+    def __init__(self, text):
+        found = re.fullmatch(r"([1-9][0-9]*) *(minute|hour)s?", str(text).strip())
+        if not found:
+            raise ValueError(f"every looks like 5 minutes or 2 hours, got {text!r}")
+        n, unit = int(found[1]), found[2]
+        self.interval = dt.timedelta(**{f"{unit}s": n})
+        self.text = f"{n} {unit}" + ("s" if n > 1 else "")
+
+    def next_after(self, t: dt.datetime, start: dt.datetime) -> dt.datetime:
+        """The first of ..., start - N, start, start + N, ... after t."""
+        return start + ((t - start) // self.interval + 1) * self.interval
+
+
 class Trigger:
     def __init__(self, data: dict, block: str | None = None):
         self.block = block  # the Schedule block it comes from, or None for a flow-level trigger
         spec = data.get("schedule") if isinstance(data, dict) else None
-        if not isinstance(spec, dict) or ("cron" in spec) == ("at" in spec):
-            raise ValueError("a trigger looks like {schedule: {cron: '0 7 * * MON-FRI'}} or {schedule: {at: '2026-10-08 15:30'}}")
-        unknown = set(spec) - {"cron", "at", "misfire"}
+        if not isinstance(spec, dict) or len({"cron", "every", "at"} & set(spec)) != 1:
+            raise ValueError("a trigger looks like {schedule: {cron: '0 7 * * MON-FRI'}}, {schedule: {every: 5 minutes}} "
+                             "or {schedule: {at: '2026-10-08 15:30'}}")
+        unknown = set(spec) - {"cron", "every", "at", "misfire"}
         if unknown:
             raise ValueError(f"unknown schedule setting(s): {sorted(unknown)}")
-        self.timing = Cron(str(spec["cron"])) if "cron" in spec else At(spec["at"])
-        self.text = f"cron {spec['cron']}" if "cron" in spec else f"at {self.timing.when:%Y-%m-%d %H:%M}"
+        if "cron" in spec:
+            self.timing = Cron(str(spec["cron"]))
+            self.text = f"cron {spec['cron']}"
+        elif "every" in spec:
+            self.timing = Every(spec["every"])
+            self.text = f"every {self.timing.text}"
+        else:
+            self.timing = At(spec["at"])
+            self.text = f"at {self.timing.when:%Y-%m-%d %H:%M}"
+        self.every = self.timing.interval if isinstance(self.timing, Every) else None
         self.misfire = spec.get("misfire", "run_once")
         if self.misfire not in MISFIRE_POLICIES:
             raise ValueError(f"misfire must be one of {', '.join(MISFIRE_POLICIES)}")
 
-    def next_after(self, t: dt.datetime) -> dt.datetime | None:
+    def next_after(self, t: dt.datetime, start: dt.datetime | None = None) -> dt.datetime | None:
+        """Its first time after t. An every-N schedule's times count from `start`, one of them (where the
+        scheduler service counts it from); without one it has none yet."""
+        if self.every:
+            return None if start is None else self.timing.next_after(t, start)
         return self.timing.next_after(t)
 
     def due(self, after: dt.datetime, until: dt.datetime) -> list[dt.datetime]:
-        """Fire times in (after, until], oldest first."""
+        """Fire times in (after, until], oldest first; an every-N schedule's count on from `after`, one of its times."""
         times, t = [], after
-        while (t := self.next_after(t)) is not None and t <= until:
+        while (t := self.next_after(t, after)) is not None and t <= until:
             times.append(t)
         return times

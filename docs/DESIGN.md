@@ -38,7 +38,7 @@ workstation or on a Linux server, without admin/root rights.
 | **Block** | A unit of work (Run Query, Send Email, …) with typed inputs, outputs and config. |
 | **Port** | A named, typed input or output on a block. |
 | **Edge** | Connects an output port to an input port; data travels along it. |
-| **Start block** | How a flow starts: Manual Start (Run now) or Schedule (cron or one time), on the canvas. Every block has a `run after` diamond input and a `done` diamond output (fires on success): `done → run after` sets the order without passing data. |
+| **Start block** | How a flow starts: Manual Start (Run now) or Schedule (cron, every N minutes or hours, or one time), on the canvas. Every block has a `run after` diamond input and a `done` diamond output (fires on success): `done → run after` sets the order without passing data. |
 | **Connection** | A named, reusable endpoint (JDBC database, SMTP, SSH host). Flows refer to it by name only. |
 | **Secret** | Password or token, stored outside flows and connections. |
 | **Run** | One execution of a flow: status, per-block logs, outputs, timings. |
@@ -71,8 +71,10 @@ workstation or on a Linux server, without admin/root rights.
 - **Retry policy** is a setting on every block:
   `none | fixed(delay) | exponential(initial, factor, max_delay, jitter)` plus
   `max_attempts` and optional per-attempt `timeout`. Retries are logged per attempt.
-  A timeout is cooperative: blocks that wait or loop check `ctx.cancelled`; a block
-  that does not is abandoned after a short grace period and the attempt fails.
+  A timeout is cooperative: the block is told to stop (blocks that wait or loop check
+  `ctx.cancelled`) and gets a short grace period. If it finishes in the grace without
+  having seen the stop, the attempt succeeds with its result, so finished work is not
+  redone; otherwise the attempt fails as a timeout (a block still running is abandoned).
 - **Cancellation**: a run can be stopped from the editor or CLI; blocks receive a
   cancel signal through their context and long waits (retry sleeps) are interruptible.
 - **Isolation**: the editor never runs a flow in its own process. It launches the

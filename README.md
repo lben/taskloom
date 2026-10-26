@@ -76,8 +76,9 @@ taskloom editor examples/daily-sales-report.yaml
     them**, offering first the one you chose last time in that flow.
   - **Schedule**: the flow runs by itself at the times you set (the scheduler service
     runs it, see Schedules); under the block, a countdown to its next run. Set the times in Properties →
-    **When**: repeating (every few minutes, hour, day, weekday, chosen days, month, or a
-    cron line) or one time (a date and time), with the next runs shown. Right-click it →
+    **When**: repeating (every few minutes or hours from when the scheduler service picks it
+    up, or on the clock: every hour, day, weekday, chosen days, month, or a cron line) or one
+    time (a date and time), with the next runs shown. Right-click it →
     **Run the flow now, as if its time had come** to try it. Saving a flow
     with a Schedule block schedules it. The scheduler service runs the saved file: while a
     scheduled flow has unsaved changes, its tab and Schedule blocks say so.
@@ -117,8 +118,8 @@ taskloom editor examples/daily-sales-report.yaml
   re-run. **Stop** cancels.
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it (a table over 10 rows: its first 5 rows, `…`, its last 5). Every run's
-  values are kept in **Run history** (double-click a run, then hover) for `keep_runs_for`
-  (5 years by default). Hover over the message under a block to read all of it. The canvas follows the runs of the flow, including scheduled ones: each block
+  values are kept in **Run history** (double-click a run, then hover) for as long as its start
+  block's **Keep runs** says (by default `keep_runs_for`: 5 years). Hover over the message under a block to read all of it. The canvas follows the runs of the flow, including scheduled ones: each block
   shows its result from the latest run it took part in, and a run that starts clears only
   its own blocks. Opening an older run from Run history shows only that run (the blocks not
   in it show nothing) until you start a run or open the newest one. A flow you open starts
@@ -245,6 +246,7 @@ notify: {when: [failure, success], to: [team@example.com]}
 ```yaml
 triggers:
   - schedule: {cron: "0 7 * * MON-FRI", misfire: run_once}   # 07:00 on weekdays
+  - schedule: {every: 5 minutes}                             # every 5 minutes, from when it is switched on
   - schedule: {at: "2026-10-08 15:30"}                       # once
 overlap: skip        # if the previous run is still going: skip | queue | allow
 ```
@@ -252,6 +254,20 @@ overlap: skip        # if the previous run is still going: skip | queue | allow
 Add a **Schedule** block to the flow, connect it to the first block, set **When** in
 Properties and save: saved flows with a Schedule block are listed in `scheduled.yaml`
 (removing the block takes the flow off).
+
+A schedule repeats in one of two ways:
+
+- **Every N minutes or hours** (`every: 5 minutes`, `every: 2 hours`; in When, **Every few
+  minutes or hours**) counts from when it is switched on: the moment the scheduler service
+  first sees it as it is now (you save the flow with the service on, change its timing, tick
+  Active again or schedule the flow again, or the service is turned on for the first time
+  with it). Its first run is then, and the next ones every N after it, to the second:
+  switched on at 10:00:14, every minute runs at 10:01:14, 10:02:14, ... Under the block, the
+  countdown goes to its next run (its tooltip lists the next times, with seconds); until the
+  service has seen it, it says it starts when the service picks it up. Turning the service
+  off and on again does not move it: the times while it was off were missed (see `misfire`).
+- **On the clock**: every hour at :MM, every day, weekday, chosen days or month at a time,
+  and a cron line (`*/5 * * * *` runs at :00, :05, :10, ...), plus one time (`at`).
 
 The **scheduler service** runs scheduled flows at their times. It is a program of its own
 that keeps running in the background (its icon is in the tray), also while the editor is
@@ -273,10 +289,10 @@ One scheduler service runs every scheduled flow. Each run begins at its time: th
 starts the run's process a few seconds early, to load the flow and wait, so the Log says the
 run started at its time (from a terminal: `taskloom run FLOW --start-at 2026-10-08T15:30:00`).
 A run whose schedule goes off before then (the service turned off, Active unticked, the flow
-taken off) does not begin. The service checks at least every 15 seconds and then rereads changed flow files,
-so a new cron line applies shortly after you save, without restarting it; a new or changed
-schedule, or one turned back on (Active ticked again, the flow scheduled again), counts from
-that moment (nothing before it counts as missed).
+taken off) does not begin. The service checks every second and then rereads changed flow files,
+so a schedule applies within a second of saving it, without restarting the service; a new or
+changed schedule, or one turned back on (Active ticked again, the flow scheduled again), counts
+from that moment (nothing before it counts as missed).
 
 At each check, of the times that came since the previous check only the most recent can be
 on time, and only if it is at most 2 minutes old; the others were missed (the scheduler
@@ -330,8 +346,10 @@ stops the app and everything it started, forcing whatever has not stopped after 
 
 On a server without root or crontab, run `taskloom scheduler --headless` there and
 list the server in the `keeper` setting (Tools → Settings) on your PC: your
-scheduler checks it every 5 minutes and starts it again after a server reboot (or tells
-you why it could not).
+scheduler checks it every 5 minutes and starts it again after a server reboot, or replaces
+it once it has hung (stopped checking): it stops the process that holds that Taskloom
+folder's `scheduler.lock`, found through `/proc` or `lsof` on the server, and no other. If
+it cannot, it tells you why.
 
 ## Checking flows after an update
 
@@ -379,10 +397,27 @@ Manager / macOS Keychain, or a private `secrets.yaml` on headless Linux). JDBC n
 Java; set `java_home` in `settings.yaml` (or `JAVA_HOME`) if it is not found.
 
 Runs are kept for `keep_runs_for` in `settings.yaml`: a number and `days`, `months` or
-`years`, e.g. `18 months` or `90 days` (5 years by default). As a run ends, every run that
-started longer ago is deleted: its history, block results and logs, and its folder in
-`runs/` with its files. A run still going is never deleted, and a re-run keeps the tables it
-reused from an older run. Tools → Settings shows it, with how much space the runs take now.
+`years`, e.g. `18 months` or `90 days` (5 years by default), unless their start blocks say
+otherwise (below). As a run ends, every run to let go is deleted: its history, block results
+and logs, and its folder in `runs/` with its files. A run still going is never deleted, and a
+re-run keeps the tables it reused from an older run. Tools → Settings shows it, with how much
+space the runs take now.
+
+Each start block (Manual Start, Schedule) says how its runs are kept, in Properties →
+**Keep runs**: **As in Settings** (the default: for `keep_runs_for`), **All of them**, **The
+last N** (e.g. the last 100 runs of an every-minute schedule), or **For a time** (a number of
+days, months or years, longer or shorter than `keep_runs_for`); and with **Always keep failed
+runs** ticked, a failed run is kept whatever the choice. In the flow file they are the block's
+`keep: all`, `keep: last 100` or `keep: 18 months` (none: as in Settings) and
+`keep_failed: true`. A run counts for the start blocks that started it (its Started by), and
+a re-run of a block (`only X`, `from X`) for the start blocks whose lines hold that block; it
+is deleted only when every one of them lets it go. Runs of a flow without start blocks, and a
+re-run of a block on no line, are kept for `keep_runs_for`; it never deletes a run that a
+start block keeps. Each flow file's start blocks count apart, so two flows' start blocks of the
+same name never delete each other's runs. Each run records the Keep runs of its flow's start
+blocks, and the flow's newest run decides for all their runs: a change applies to earlier runs
+too, from when the flow's next run ends (lowering The last N then deletes the older ones). The
+last N counts the finished runs: a run still going is neither deleted nor counted.
 
 ## Writing a block
 

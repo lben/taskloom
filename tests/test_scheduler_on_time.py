@@ -221,11 +221,11 @@ def test_an_edited_schedule_starts_from_now(env):
 # --- 1: how long the scheduler waits before its next check --------------------------------------
 
 
-def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_15_seconds(env):
+def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_a_second(env):
     """It wakes EARLY_START before a due time: that run's process starts then, to begin at its time."""
     home = Home(env.home)
     scheduler = Scheduler(home)
-    assert scheduler.seconds_to_next_check(at("10:00:00")) == pytest.approx(15)  # nothing is scheduled
+    assert scheduler.seconds_to_next_check(at("10:00:00")) == pytest.approx(1)  # nothing is scheduled
 
     blocks = env.write("blocks.yaml", """
         blocks:
@@ -262,18 +262,18 @@ def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_15_
     home.set_scheduled(flow_level, True)
 
     for clock, seconds in [
-        ("10:00:00", 15),  # the next due time is more than 15 s away
-        ("10:12:50", 15),  # 10:13 is the time of a flow that is not scheduled
-        ("10:13:50", 15),  # 10:14 is the time of a paused Schedule block
-        ("10:14:50.250", 9.75),  # the flow-level trigger at 10:15
-        ("10:15:00", 15),
-        ("10:29:57", 3),  # the Schedule block at 10:30
+        ("10:00:00", 1),  # the next due time is more than a second away
+        ("10:12:59.500", 1),  # 10:13 is the time of a flow that is not scheduled
+        ("10:13:59.500", 1),  # 10:14 is the time of a paused Schedule block
+        ("10:14:59.250", 0.75),  # the flow-level trigger at 10:15
+        ("10:15:00", 1),
+        ("10:29:59.400", 0.6),  # the Schedule block at 10:30
         ("10:29:59.999", 0.001),
     ]:
         now = at(clock) - EARLY_START  # each clock as long before as its runs' processes start early
         scheduler.tick(now)
         waited = scheduler.seconds_to_next_check(now)
-        assert seconds <= waited + 1e-6 and waited <= min(seconds + 0.01, 15), (clock, waited)  # never before
+        assert seconds <= waited + 1e-6 and waited <= min(seconds + 0.01, 1), (clock, waited)  # never before
     scheduler.wait_for_runs()
 
 

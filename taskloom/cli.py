@@ -166,7 +166,8 @@ def cmd_run(args, home: Home) -> int:
         finally:
             history.close()
         if earlier is None:
-            raise ValueError(f"there is no run #{args.inputs_from} (runs older than keep_runs_for are deleted)")
+            raise ValueError(f"there is no run #{args.inputs_from} "
+                             "(runs are deleted as Keep runs or keep_runs_for says)")
         if earlier["flow_path"] != str(flow.path):  # run numbers are shared by all flows
             raise ValueError(f"run #{args.inputs_from} is a run of {earlier['flow_path']}, not of this flow: "
                              "choose a run of this flow")

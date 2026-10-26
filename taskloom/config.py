@@ -27,19 +27,40 @@ REVEALED: set[str] = set()
 KEYRING_SERVICE = "taskloom"
 
 
+PERIOD = r"([1-9][0-9]*) *(day|month|year)s?"  # e.g. 18 months, 1 year, 90 days
+
+
 def keep_runs_for(settings: dict) -> tuple[int, str]:
     """keep_runs_for as (number, unit), e.g. '18 months' -> (18, 'months'); ValueError if it cannot be read."""
     value = settings["keep_runs_for"]
-    match = re.fullmatch(r"([1-9][0-9]*) *(day|month|year)s?", str(value).strip())
+    match = re.fullmatch(PERIOD, str(value).strip())
     if match is None:
         raise ValueError(f"settings.yaml: keep_runs_for must be a whole number (1 or more) of days, months or years, "
                          f"e.g. 5 years, 18 months or 90 days; got {value!r}")
     return int(match[1]), match[2] + "s"
 
 
+def kept_runs(value) -> tuple[str, int]:
+    """A start block's Keep runs as its flow file has it: 'all', 'last 100' or a time such as '18 months' (also
+    day, month, year) -> ('all', 0), ('last', 100), ('months', 18); ValueError if it cannot be read."""
+    match = re.fullmatch(rf"(all)|last *([1-9][0-9]*)|{PERIOD}", str(value).strip())
+    if match is None:
+        raise ValueError(f"cannot read {value!r}: write all, last N, or N days, months or years, with N a whole "
+                         "number (1 or more), e.g. last 100 or 18 months")
+    if match[1]:
+        return "all", 0
+    if match[2]:
+        return "last", int(match[2])
+    return match[4] + "s", int(match[3])
+
+
 def runs_kept_since(settings: dict) -> dt.datetime:
-    """Runs that started before this are deleted: keep_runs_for before now (months and years as on a calendar)."""
-    number, unit = keep_runs_for(settings)
+    """Runs kept as in Settings that started before this are deleted: keep_runs_for before now."""
+    return before_now(*keep_runs_for(settings))
+
+
+def before_now(number: int, unit: str) -> dt.datetime:
+    """`number` days, months or years before now (months and years as on a calendar)."""
     now = dt.datetime.now()
     try:
         if unit == "days":
