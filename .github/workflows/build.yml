@@ -29,10 +29,32 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - run: uv sync --python 3.12
       - run: uv run pyflakes taskloom tests packaging
-      - run: uv run pytest -q --ignore=tests/proofs  # the proofs run in the proof job
+      - run: uv run pytest -q --ignore=tests/proofs  # the proofs run in the proof jobs
 
-  # The proof: each feature and fix shown working in the app, on Windows, as a PDF of screenshots and checks.
+  # The proofs Windows cannot show (marked linux_proof, each saying why), on Linux: the proof job puts them in its PDF.
+  proof-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROOF_DIR: ${{ github.workspace }}/proofs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: astral-sh/setup-uv@v6
+      - name: Qt libraries, and fonts for the screenshots (DejaVu, found through fontconfig)
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 fonts-dejavu-core
+      - run: uv sync --python 3.12
+      - run: uv run pytest tests/proofs -q -m linux_proof
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}  # also when a proof failed: the PDF shows what failed
+        with: {name: proof-records-linux, path: "${{ env.PROOF_DIR }}"}
+
+  # The proof: each feature and fix shown working in the app, on Windows (or on Linux, by the proof-linux job, those
+  # Windows cannot show), as one PDF of screenshots and checks.
   proof:
+    needs: proof-linux
+    if: ${{ !cancelled() }}  # also when a Linux proof failed: the PDF shows what failed
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -44,11 +66,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --python 3.12
       - run: uv run pytest tests/proofs -q
+      - uses: actions/download-artifact@v4
+        if: ${{ !cancelled() }}
+        with: {name: proof-records-linux, path: proofs-linux}
       - name: Proof PDF
         if: ${{ !cancelled() }}  # also when a proof failed: the PDF shows what failed
         shell: bash
         run: |
-          uv run python packaging/proof_pdf.py "$PROOF_DIR" "Taskloom-proof-${GITHUB_REF_NAME//\//-}.pdf" \
+          uv run python packaging/proof_pdf.py "$PROOF_DIR" proofs-linux "Taskloom-proof-${GITHUB_REF_NAME//\//-}.pdf" \
             --ci-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
@@ -95,11 +120,11 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux-runner, proof]  # nothing is released without its proof
+    needs: [windows, linux-runner, proof, proof-linux]  # nothing is released without its proof
     runs-on: ubuntu-latest
     permissions: {contents: write}
     steps:
-      - uses: actions/download-artifact@v4
-        with: {path: artifacts, merge-multiple: true}
+      - uses: actions/download-artifact@v4  # the app, the runner and the proof PDF; not the Linux proof's records
+        with: {path: artifacts, pattern: "taskloom-*", merge-multiple: true}
       - uses: softprops/action-gh-release@v2
         with: {files: "artifacts/*"}

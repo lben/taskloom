@@ -1,7 +1,8 @@
 # Writing a proof
 
 Every feature or fix comes with a proof: a test that drives the real app the way you would, and records what it
-showed. CI runs the proofs on Windows and makes one PDF of them (`packaging/proof_pdf.py`), attached to each release.
+showed. CI runs the proofs on Windows, and those Windows cannot show on Linux, and makes one PDF of them
+(`packaging/proof_pdf.py`), attached to each release.
 `test_proof_lines.py` is the example every proof follows.
 
 ## The shape: a short story
@@ -77,11 +78,29 @@ A dialog shot on its own needs no close-up.
 - Make the idea and the reasons true: read the code they describe. Name the alternatives that were really possible.
 - Show the case the user worried about. For "when one line fails", make a line fail.
 
+## A proof Windows cannot show
+
+When a proof cannot run on Windows (it needs what only Linux has, as the keeper's does), mark it with why, and skip
+it on Windows once its story is told:
+
+```python
+@pytest.mark.linux_proof("The keeper looks after Linux servers: ...")
+def test_something(proof, win, qtbot):
+    p = proof(...)
+    ...                                 # the idea, why it is the simplest, the other ways, how it fits
+    if sys.platform == "win32":
+        pytest.skip("Not shown on Windows. ...")
+```
+
+CI's `proof-linux` job runs the marked proofs on Linux. The PDF has each change once, where it was shown, and says
+on its pages which system that was; for one shown on Linux, why.
+
 ## Running it
 
 ```sh
 PROOF_DIR=/tmp/proofs .venv/bin/python -m pytest tests/proofs -q     # without PROOF_DIR nothing is written
 .venv/bin/python packaging/proof_pdf.py /tmp/proofs /tmp/proof.pdf
+.venv/bin/python packaging/proof_pdf.py /tmp/proofs /tmp/proofs-linux /tmp/proof.pdf   # several runs: one PDF
 ```
 
 Then open the PDF and read it as the user would: every page.

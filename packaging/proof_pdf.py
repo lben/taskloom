@@ -1,10 +1,12 @@
 """Make one PDF of the proofs that tests/proofs recorded (run with PROOF_DIR set; see tests/proofs/README.md):
 
-    python packaging/proof_pdf.py <proof_dir> <out.pdf> [--ci-url URL] [--title TEXT]
+    python packaging/proof_pdf.py <proof_dir>... <out.pdf> [--ci-url URL] [--title TEXT]
 
 A cover (Taskloom version, date, platform, the CI run, and each change with its result and summary), then each
 change as a short story: what was asked and the idea; why this design; each step with its screenshot; what was
-checked.
+checked. Each change says which system it was shown on. Several proof folders (CI shows the proofs on Windows, and
+those Windows cannot show on Linux) make one PDF: each folder's changes in the order they ran, the folders in the
+order given; a change skipped in one folder and shown in another is in it once, as shown.
 """
 
 import argparse
@@ -95,12 +97,14 @@ def when(record: dict) -> str:
     return f"{started.day} {started:%B %Y}, {started:%H:%M}" + (f" ({zone})" if zone else "")
 
 
-def cover(title: str, records: list, session: dict | None, ci_url: str, pages: list) -> str:
+def cover(title: str, records: list, sessions: list, ci_url: str, pages: list) -> str:
     problems = []
-    if session is None:
-        problems.append("The proof run did not finish: proofs may be missing.")
-    elif session["exitstatus"] != 0:
-        problems.append(f"The proof run failed (pytest exit status {session['exitstatus']}): see the CI run.")
+    for proof_dir, session in sessions:
+        if session is None:
+            problems.append(f"The proof run of {proof_dir.name} did not finish: proofs may be missing.")
+        elif session["exitstatus"] != 0:
+            problems.append(f"The proof run on {session['system']} failed (pytest exit status "
+                            f"{session['exitstatus']}): see the CI run.")
     if not records:
         problems.append("No proof was recorded.")
     if failed := sum(r["status"] != "passed" for r in records):
@@ -122,7 +126,8 @@ def cover(title: str, records: list, session: dict | None, ci_url: str, pages: l
         f"<tr><td width=\"5%\" {cell}; font-size: 18pt; font-weight: 600; color: {ACCENT}\">{i}</td>"
         f"<td {cell}\"><span style=\"font-size: 13pt; font-weight: 600\">{esc(r['title'])}</span><br>"
         f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span></td>"
-        f"<td width=\"14%\" {cell}; padding-left: 14px\">{outcome(r)}</td>"
+        f"<td width=\"14%\" {cell}; padding-left: 14px\">{outcome(r)}<br>"
+        f"<span style=\"color: {MUTED}\">on {esc(r['system'])}</span></td>"
         f"<td width=\"8%\" align=\"right\" {cell}; color: {MUTED}\">page {page}</td></tr>"
         for i, (r, page) in enumerate(zip(records, pages), 1))
     return (label("Taskloom", ACCENT) +
@@ -149,7 +154,12 @@ def story(number: int, total: int, record: dict) -> list:
     roadmap = (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 28px; "
                f"font-size: 11pt\"><tr><td colspan=\"2\">{label('How it is shown, step by step')}</td></tr>"
                f"{shown}</table>") if steps else ""
-    first = (heading(over, record["title"]) + f"<p style=\"font-size: 11pt\">{outcome(record)}</p>"
+    result = (f"<p style=\"font-size: 11pt\">{outcome(record)} <span style=\"color: {MUTED}\">on "
+              f"{esc(record['system'])}</span></p>")
+    if record["why_not_windows"] and record["system"] != "Windows":
+        result += (f"<p style=\"color: {MUTED}; line-height: 135%\">Shown on {esc(record['system'])}, not Windows. "
+                   f"{esc(record['why_not_windows'])}</p>")
+    first = (heading(over, record["title"]) + result
              + columns(label("What you asked") + asked + roadmap, label("The idea") + idea, 44))
     cards = "".join(
         f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-bottom: 10px\"><tr>"
@@ -291,13 +301,20 @@ def badge(number: int) -> QImage:
     return image
 
 
-def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
+def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
     QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
-    proofs = sorted(((folder, json.loads((folder / "proof.json").read_text(encoding="utf-8")))
-                     for folder in (proof_dir.iterdir() if proof_dir.is_dir() else [])
-                     if (folder / "proof.json").is_file()), key=lambda p: p[1]["started"])
-    session_file = proof_dir / "session.json"
-    session = json.loads(session_file.read_text()) if session_file.is_file() else None
+    proofs, sessions = [], []
+    for proof_dir in proof_dirs:
+        proofs += sorted(((folder, json.loads((folder / "proof.json").read_text(encoding="utf-8")))
+                          for folder in (proof_dir.iterdir() if proof_dir.is_dir() else [])
+                          if (folder / "proof.json").is_file()), key=lambda p: p[1]["started"])
+        session_file = proof_dir / "session.json"
+        sessions.append((proof_dir, json.loads(session_file.read_text()) if session_file.is_file() else None))
+    # A change skipped on one system, where it cannot be shown, and shown on another: once, as shown. (A proof's
+    # folder is named after its scenario.)
+    shown = {folder.name for folder, record in proofs if record["status"] != "skipped"}
+    proofs = [(folder, record) for folder, record in proofs
+              if record["status"] != "skipped" or folder.name not in shown]
     records = [record for _, record in proofs]
 
     writer = QPdfWriter(str(out))
@@ -354,7 +371,7 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
                     resources[name] = framed(QImage(str(folder / file)))
                     images[file] = (name, resources[name].size())
         over = f"Change {number}"
-        footer = f"Change {number}: {record['title']}"
+        footer = f"Change {number}: {record['title']} · on {record['system']}"
         starts.append(len(pages))
         pages += [(text, footer) for text in story(number, len(proofs), record)]
         step, steps = 0, sum(e["kind"] == "step" for e in record["entries"])
@@ -366,9 +383,9 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
     docs = [fitted(text) for text, _ in pages]
     counts = [doc.pageCount() for doc in docs]
     first = [sum(counts[:i]) for i in range(len(counts))]
-    cover_doc = fitted(cover(title, records, session, ci_url, [0] * len(records)))  # how many pages it takes
+    cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records)))  # how many pages it takes
     shift = cover_doc.pageCount()
-    cover_doc = fitted(cover(title, records, session, ci_url, [shift + first[i] + 1 for i in starts]))
+    cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts]))
     docs, footers = [cover_doc, *docs], ["", *(footer for _, footer in pages)]
     total = sum(doc.pageCount() for doc in docs)
 
@@ -403,12 +420,12 @@ def build(proof_dir: Path, out: Path, ci_url: str = "", title: str = TITLE):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("proof_dir", type=Path)
+    parser.add_argument("proof_dirs", type=Path, nargs="+", metavar="proof_dir", help="where a run recorded its proofs")
     parser.add_argument("out", type=Path)
     parser.add_argument("--ci-url", default="", help="the CI run the proofs ran in")
     parser.add_argument("--title", default=TITLE)
     args = parser.parse_args()
-    build(args.proof_dir, args.out, args.ci_url, args.title)
+    build(args.proof_dirs, args.out, args.ci_url, args.title)
     print(args.out)
 
 

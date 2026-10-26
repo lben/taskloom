@@ -17,9 +17,10 @@ this design, the steps with their screenshots, and what was checked. A scenario 
     p.note("why something is not shown")
 
 The idea, why it is the simplest, at least one alternative and how it fits are required: a proof without them
-fails. With PROOF_DIR set, each scenario writes PROOF_DIR/<scenario>/proof.json and its screenshots, and the run
-writes PROOF_DIR/session.json; packaging/proof_pdf.py makes one PDF of them. Without PROOF_DIR nothing is written
-(the scenarios still run and check)."""
+fails. A proof that cannot be shown on Windows is marked @pytest.mark.linux_proof("why"): CI shows it on Linux, and
+the PDF gives the reason. With PROOF_DIR set, each scenario writes PROOF_DIR/<scenario>/proof.json and its
+screenshots, and the run writes PROOF_DIR/session.json; packaging/proof_pdf.py makes one PDF of them (of several
+runs' folders too). Without PROOF_DIR nothing is written (the scenarios still run and check)."""
 
 import datetime as dt
 import json
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QMenu, QPlainText
 from taskloom import __version__
 
 PROOF_DIR = Path(os.environ["PROOF_DIR"]).resolve() if os.environ.get("PROOF_DIR") else None
+SYSTEM = "macOS" if sys.platform == "darwin" else platform.system()  # what the PDF says each proof was shown on
 WINDOW = (1600, 1000)  # the editor in the screenshots: room for the canvas, the panels and the Log
 SCREEN = (1920, 1200)  # the offscreen screen it is on (Qt's default one is smaller than the window)
 MARK = QColor("#e8590c")  # highlights and their badges (packaging/proof_pdf.py draws the badges in the text too)
@@ -72,6 +74,8 @@ def qapp():
             shutil.rmtree(screen.parent, ignore_errors=True)  # read once, when the application starts
         if sys.platform == "win32" and "Segoe UI" in QFontDatabase.families():
             app.setFont(QFont("Segoe UI", 9))  # what the editor uses on Windows
+        elif sys.platform == "linux" and "DejaVu Sans" in QFontDatabase.families():
+            app.setFont(QFont("DejaVu Sans", 9))  # Linux's usual one: not whichever font fontconfig picks for "Sans"
     assert QFontDatabase.families(), "Qt found no fonts: the screenshots would show no text"
     yield app
 
@@ -97,7 +101,9 @@ def proof(request):
 
 class Proof:
     def __init__(self, item, title: str, asked: str):
-        self.record = {"title": title, "asked": asked, "status": "passed", "error": "",
+        linux = item.get_closest_marker("linux_proof")
+        self.record = {"title": title, "asked": asked, "status": "passed", "error": "", "system": SYSTEM,
+                       "why_not_windows": linux.args[0] if linux else "",
                        "started": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                        "version": __version__, "idea": [], "why_simplest": [], "alternatives": [], "fits": [],
                        "entries": [], "platform": f"{platform.platform()} · Python {platform.python_version()} · "
@@ -348,7 +354,12 @@ def pytest_runtest_makereport(item, call):
     return report
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "linux_proof(why): a proof that cannot be shown on Windows, and why; CI "
+                                       "shows it on Linux")
+
+
 def pytest_sessionfinish(session, exitstatus):
     if PROOF_DIR is not None:  # so the PDF can say the run failed, also when a scenario recorded nothing
         PROOF_DIR.mkdir(parents=True, exist_ok=True)
-        (PROOF_DIR / "session.json").write_text(json.dumps({"exitstatus": int(exitstatus)}))
+        (PROOF_DIR / "session.json").write_text(json.dumps({"exitstatus": int(exitstatus), "system": SYSTEM}))
