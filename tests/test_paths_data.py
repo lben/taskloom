@@ -691,7 +691,7 @@ def test_write_csv_quotes_values_with_the_separator_quotes_or_line_breaks(env):
           save_again: {type: data.write_file, config: {path: out/notes_again.parquet}}
         edges:
           - r.table -> save.table
-          - save.done -> reread.after
+          - save.file -> reread.after
           - reread.table -> save_again.table
     """)
 
@@ -1171,7 +1171,7 @@ def test_sql_input_names_must_be_names_and_be_connected(env):
     result = env.taskloom("validate", flow)
 
     assert result.returncode == 2
-    assert "a: Inputs: after: every block already has these" in result.stderr
+    assert "a: Inputs: after: this block already has these" in result.stderr
     assert "b: Inputs: expected a list of names" in result.stderr
     assert "c: Inputs: duplicate names" in result.stderr
     assert "blocks.d: required input 'orders' is not connected" in result.stderr

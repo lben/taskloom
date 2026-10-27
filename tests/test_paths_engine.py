@@ -1210,7 +1210,7 @@ INVALID_FLOWS = {
                               "input 'c.value' is already connected"),
     "required input not connected": ("blocks:\n  each: {type: logic.for_each, config: {flow: x.yaml, param: p}}\n",
                                      "required input 'items' is not connected"),
-    "cycle": (WAIT_AB + "edges:\n  - a.value -> b.value\n  - b.done -> a.after\n", "cycle through: a, b"),
+    "cycle": (WAIT_AB + "edges:\n  - a.value -> b.value\n  - b.value -> a.after\n", "cycle through: a, b"),
     "parameter name": ("params:\n  2day: {type: date, value: 2026-01-01}\nblocks: {}\n", "params.2day: not a valid name"),
     "parameter without a type": ("params:\n  day: {value: 2026-01-01}\nblocks: {}\n", "params.day: needs a type"),
     "parameter of an unknown type": ("params:\n  day: {type: string, value: x}\nblocks: {}\n", "params.day: needs a type"),
@@ -1348,7 +1348,7 @@ def test_a_block_that_returns_something_other_than_its_outputs_fails_saying_what
             type: logic.python
             config: {{inputs: [], outputs: [], code: "open('after.txt', 'w').write('x')"}}
         edges:
-          - odd.done -> after.after
+          - odd.value -> after.after
     """)
 
     result = env.taskloom("run", flow)

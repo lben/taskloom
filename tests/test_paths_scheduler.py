@@ -72,7 +72,7 @@ def flow(cron: str = "* * * * *", *, wait: float = 0, code: str = "pass", misfir
         "triggers": [{"schedule": {"cron": cron, "misfire": misfire}}],
         "blocks": {"pause": {"type": "logic.wait", "config": {"seconds": wait}},
                    "work": {"type": "logic.python", "config": {"inputs": [], "outputs": [], "code": code}}},
-        "edges": ["pause.done -> work.after"],
+        "edges": ["pause.value -> work.after"],
     }, sort_keys=False)
 
 

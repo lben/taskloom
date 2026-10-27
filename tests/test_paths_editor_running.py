@@ -1001,7 +1001,7 @@ def test_two_ask_user_questions_in_a_run_come_one_after_another_each_titled_by_i
             config: {inputs: [ok, who], outputs: [], code: "open('answers.txt', 'w').write(repr((ok, who)))"}
         edges:
           - manual.start -> go_on.after
-          - go_on.done -> name.after
+          - go_on.answer -> name.after
           - go_on.answer -> use.ok
           - name.answer -> use.who
     """)

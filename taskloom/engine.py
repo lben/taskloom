@@ -17,7 +17,7 @@ from pathlib import Path
 import polars as pl
 
 from . import params as P
-from .block import AFTER, DONE, all_ports
+from .block import AFTER, DONE, all_ports, has_done_output
 from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
 from .config import REVEALED, before_now, kept_runs, runs_kept_since
 from .history import History
@@ -478,7 +478,7 @@ class _Runner:
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
                        "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)},
                        "previews": {p: preview(v) for p, v in produced.items()}})
-            if not cls.is_trigger:
+            if has_done_output(cls, out_ports):
                 produced[DONE] = True  # for blocks connected done -> after
             return "success", produced
         raise AssertionError("unreachable")
@@ -623,11 +623,12 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
             continue
         delivered = []
         for edge, saved in got:
-            if edge.src_port in saved.get(WITHHELD, []):
+            withheld = edge.src_port in saved.get(WITHHELD, [])
+            if withheld and port != AFTER:  # into run after it arrived all the same: its value is not used
                 missing[port] = (f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
                                  "so it was not kept")
                 break
-            delivered.append((edge, _map_marks(saved[edge.src_port], table)))
+            delivered.append((edge, None if withheld else _map_marks(saved[edge.src_port], table)))
         else:  # as the runner hands them over
             edges = [e for e in flow.edges if e.dst == only and e.dst_port == port]
             values[port] = _arriving(input_ports(flow, registry, only).get(port), edges, delivered)
@@ -764,8 +765,10 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
             unhandled[edge.src] = _unhandled_failures(flow, now, edge.src)
         if kind in ("ran", "failed"):
             if edge.src_port in saved.get(WITHHELD, []):
-                raise ValueError(f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
-                                 "so it was not kept: run the whole flow instead")
+                if edge.dst_port != AFTER:
+                    raise ValueError(f"{edge.src}.{edge.src_port} held a password (or something that cannot be "
+                                     "saved), so it was not kept: run the whole flow instead")
+                outputs[(edge.src, edge.src_port)] = None  # it arrived all the same: run after does not use its value
             if edge.src_port in saved:
                 outputs[(edge.src, edge.src_port)] = _map_marks(saved[edge.src_port], table)
     return outputs, blocked, unhandled, absent

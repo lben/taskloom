@@ -542,11 +542,11 @@ class FlowScene(QGraphicsScene):
     def _port_tooltip(self, node, name, is_output) -> str:
         head = f"<b>{html.escape(node.block_id)}.{html.escape(name)}</b>"
         if name == AFTER and not is_output:
-            head += ("<br>Run after: connect another block's 'done' (or a start block) here to make this block "
-                     "wait for it. No data comes in through here.")
+            head += ("<br>Run after: connect an output of another block (or a start block's 'start') here to make "
+                     "this block wait for it. Its value is not used.")
         elif name == DONE and is_output:
-            head += ("<br>Done: fires when this block has finished successfully. Connect it to another block's "
-                     "'run after'. No data goes out through here.")
+            head += ("<br>Done: fires when this block has finished successfully, even if it produced none of its other "
+                     "outputs. Connect it to another block's 'run after'. No data goes out through here.")
         if is_output:
             value = self._value(node.block_id, name)
             return head + (f"<pre>{value}</pre>" if value is not None else "<br><i>No value in the run on screen.</i>")

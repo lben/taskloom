@@ -796,6 +796,52 @@ class ReusableBlockDialog(QDialog):
             self.accept()
 
 
+class CommitDialog(QDialog):
+    """File → Save & Commit…: where the flow file is committed (`target`, a git.Target; `folder`: the flow's), the
+    commit message, and the name and email to commit with. Its Save & Commit button needs all three; else the window
+    says what is missing."""
+
+    def __init__(self, file_name: str, target, folder: Path, name: str, email: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Save & Commit")
+        self.resize(560, 0)
+        layout = QVBoxLayout(self)
+        root = html.escape(str(target.root))
+        where = (f"a new Git repository in <b>{root}</b> (there is none yet)" if target.new else
+                 f"the Git repository in <b>{root}</b>")
+        intro = QLabel(f"Saves <b>{html.escape(file_name)}</b> and commits it, and only it, to {where}, on branch "
+                       f"<b>{html.escape(target.branch)}</b>."
+                       + (" The flow's folder is inside that repository." if target.root != folder else ""))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        self.name, self.email, self.message = QLineEdit(name), QLineEdit(email), QPlainTextEdit()
+        form.addRow("Name", self.name)
+        form.addRow("Email", self.email)
+        form.addRow("Message", self.message)
+        layout.addLayout(form)
+        self.why = QLabel()  # what is missing
+        self.why.setWordWrap(True)
+        self.why.setStyleSheet(f"color: {STATUS_COLORS['failed']};")
+        self.why.hide()
+        layout.addWidget(self.why)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.addButton("Save && Commit", QDialogButtonBox.AcceptRole)
+        buttons.accepted.connect(self._ok)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.message.setFocus()
+
+    def _ok(self):
+        named = self.name.text().strip() and self.email.text().strip()
+        why = ("Write what changed." if not self.message.toPlainText().strip() else
+               "" if named else "Give your name and email for the commit.")
+        self.why.setText(why)
+        self.why.setVisible(bool(why))
+        if not why:
+            self.accept()
+
+
 class BlockResultsDialog(QDialog):
     """A block's results in the runs it took part in, newest first: when each run started, what started it,
     how the block ended; the selected run's values below. Show this run (or a double-click) chooses run_id."""

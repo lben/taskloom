@@ -67,6 +67,7 @@ class PythonCode(Block):
     title = "Python Code"
     description = 'Runs a few lines of Python that you write. Use it when no other block does what you need.'
     category = "Logic"
+    has_done = True  # it may set none of its outputs
     config = {
         "inputs": fields.Names(default=["input"], help="Variables your code receives."),
         "outputs": fields.Names(default=["output"], outputs=True,
@@ -198,6 +199,7 @@ class If(Block):
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"true": ports.Any(), "false": ports.Any()}
+    has_done = True  # only one of its outputs arrives
     config = {"condition": fields.Code("expression", help="e.g. len(value) > 0 or is_business_day(today())")}
 
     def run(self, ctx, value=None):

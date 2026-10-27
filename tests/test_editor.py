@@ -446,15 +446,18 @@ def test_python_environment_output_has_no_blank_lines_between_windows_lines(win)
     assert dialog.output.toPlainText() == "Package Version\n------- -------\npip     24.0"
 
 
-def test_connecting_done_to_run_after_by_dragging(win):
+def test_connecting_done_or_an_output_to_run_after_by_dragging(win):
     tab = win.new_flow()
-    a = tab.doc.add_block("files.delete", 0, 0)
+    a = tab.doc.add_block("logic.python", 0, 0)
     b = tab.doc.add_block("logic.python", 300, 0)
+    c = tab.doc.add_block("files.delete", 0, 200)
     assert tab.scene.nodes[a].outputs[0] == "done" and tab.scene.nodes[b].inputs[0] == "after"
+    assert tab.scene.nodes[c].outputs[0] == "deleted"  # no done: its output always arrives
 
     drag_port_to_port(tab, a, "done", b, "after")
+    drag_port_to_port(tab, c, "deleted", b, "after")
 
-    assert tab.doc.edges() == [(a, "done", b, "after")]
+    assert tab.doc.edges() == [(a, "done", b, "after"), (c, "deleted", b, "after")]
     tab.doc.dirty = False
 
 

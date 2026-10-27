@@ -11,7 +11,7 @@ hidden = collect_submodules("holidays") + collect_submodules("taskloom")
 excludes = ["tkinter", "pytest", "IPython"]
 if headless:  # the Linux server runner: no editor, no Qt
     hidden = [m for m in hidden if not m.startswith("taskloom.editor")]
-    excludes += ["PySide6", "shiboken6", "taskloom.editor"]
+    excludes += ["PySide6", "shiboken6", "taskloom.editor", "dulwich"]  # (the editor's Git)
 
 a = Analysis(
     [os.path.join(SPECPATH, "entry.py")],

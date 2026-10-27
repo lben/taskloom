@@ -43,7 +43,7 @@ def every_minute(wait: float = 0, active: bool = True) -> str:
         "blocks": {"every_minute": {"type": "trigger.schedule", "config": {"cron": "* * * * *", "active": active}},
                    "pause": {"type": "logic.wait", "config": {"seconds": wait}},
                    "note": {"type": "logic.python", "config": {"inputs": [], "outputs": [], "code": "pass"}}},
-        "edges": ["every_minute.start -> pause.after", "pause.done -> note.after"],
+        "edges": ["every_minute.start -> pause.after", "pause.value -> note.after"],
     }, sort_keys=False)
 
 

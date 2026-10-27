@@ -27,6 +27,7 @@ dependencies = [
     "jinja2>=3.1",
     "css-inline>=0.14",
     "rich>=13",
+    "dulwich==1.2.20",
 ]
 
 [tool.hatch.version]

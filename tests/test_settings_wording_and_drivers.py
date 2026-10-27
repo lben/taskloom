@@ -316,8 +316,8 @@ blocks:
   clean: {type: files.delete}
 edges:
   - start.start -> fetch.after
-  - fetch.done -> send.after
-  - send.done -> clean.after
+  - fetch.files -> send.after
+  - send.files -> clean.after
 """)
     tab = win.open_flow(flow)
     try:

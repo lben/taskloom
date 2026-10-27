@@ -7,6 +7,7 @@ import hashlib
 import heapq
 import html
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -34,7 +35,7 @@ from ..scheduler import (acquire_lock, counted_from, paused, running_scheduler_v
                          set_start_at_login, startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView, value_html
-from . import dialogs
+from . import dialogs, git
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
@@ -370,6 +371,7 @@ class MainWindow(QMainWindow):
         act(m, "Open…", self.open_dialog, QKeySequence.Open)
         act(m, "Save", lambda: self.save(self.current), QKeySequence.Save)
         act(m, "Save as…", lambda: self.save(self.current, ask=True), QKeySequence.SaveAs)
+        act(m, "Save && Commit…", lambda: self.save_and_commit(self.current))
         act(m, "Close flow", lambda: self.close_tab(self.current), QKeySequence.Close)
         m.addSeparator()
         act(m, "Quit", self.close, QKeySequence.Quit)
@@ -512,17 +514,17 @@ class MainWindow(QMainWindow):
             return None
         return self.add_tab(doc)
 
-    def save(self, tab: FlowTab | None, ask: bool = False) -> bool:
+    def save(self, tab: FlowTab | None, ask: bool = False, path: Path | None = None) -> bool:
+        """Save the flow (`ask`: as the file you choose; `path`: as that file). After Save as, the copy gets the
+        original's Git history."""
         if tab is None:
             return False
         self._finish_editing(tab)
-        path = tab.doc.path
+        path = path or tab.doc.path
         if ask or path is None:
-            suggested = str(path or Path.cwd() / f"{tab.doc.data.get('name') or 'flow'}.yaml")
-            chosen, _ = QFileDialog.getSaveFileName(self, "Save flow", suggested, FLOW_FILTER)
-            if not chosen:
+            path = self._ask_path(tab)
+            if path is None:
                 return False
-            path = Path(chosen)
         before = tab.doc.path
         try:
             tab.doc.save(path.resolve())
@@ -535,7 +537,63 @@ class MainWindow(QMainWindow):
         self._load_last_run(tab)
         self._sync_schedule(tab)
         self._save_session()
+        if ask and before is not None and tab.doc.path != before:
+            self._carry_history(before, tab.doc.path)
         return True
+
+    def _ask_path(self, tab: FlowTab) -> Path | None:
+        """The file to save the flow as, chosen in the "Save flow" dialog (None: cancelled)."""
+        suggested = str(tab.doc.path or Path.cwd() / f"{tab.doc.data.get('name') or 'flow'}.yaml")
+        chosen, _ = QFileDialog.getSaveFileName(self, "Save flow", suggested, FLOW_FILTER)
+        return Path(chosen).resolve() if chosen else None
+
+    def _remembered_identity(self) -> tuple[str, str]:
+        """The name and email last typed in Save & Commit ("" each: none yet)."""
+        return self.settings.value("git/name", ""), self.settings.value("git/email", "")
+
+    def save_and_commit(self, tab: FlowTab | None):
+        """File → Save & Commit…: a window asks for the commit message (and the name and email to commit with); its
+        button saves the flow, then commits that file, and only it, to the Git repository of its folder (see
+        git.py). Also for a flow with no unsaved changes: saved does not mean committed."""
+        if tab is None:
+            return
+        self._finish_editing(tab)
+        path = tab.doc.path or self._ask_path(tab)
+        if path is None:
+            return
+        try:
+            target = git.commit_target(path)
+        except git.GitError as e:
+            QMessageBox.warning(self, "Cannot Save & Commit",
+                                f"{e}.\n\nNothing was saved. File → Save still saves it.")
+            return
+        name, email = git.identity(path.parent, *self._remembered_identity())
+        dialog = dialogs.CommitDialog(path.name, target, path.parent, name, email, self)
+        if not dialog.exec():
+            return
+        name, email = dialog.name.text().strip(), dialog.email.text().strip()
+        self.settings.setValue("git/name", name)
+        self.settings.setValue("git/email", email)
+        if not self.save(tab, path=path):
+            return
+        try:
+            said = git.commit_flow(path, name, email, dialog.message.toPlainText())
+        except Exception as e:  # e.g. another program holds index.lock, the branch moved, a disk error
+            QMessageBox.warning(self, "Saved, not committed", f"{path.name} is saved, but it was not committed: {e}."
+                                "\n\nFix that, then Save & Commit again.")
+            return
+        self.statusBar().showMessage(said, 15000)
+
+    def _carry_history(self, original: Path, copy: Path):
+        """After Save as: the copy gets the original's Git history (see git.carry_history), or you are told why not."""
+        try:
+            said = git.carry_history(original, copy, *self._remembered_identity())
+        except Exception as e:  # e.g. a merge going on there, or no name and email known yet
+            QMessageBox.warning(self, "Saved, history not copied",
+                                f"{copy.name} is saved, but without the Git history of {original.name}: {e}.")
+            return
+        if said:
+            self.statusBar().showMessage(said, 15000)
 
     def edit_connections(self):
         dialogs.open_dialog(self, ConnectionsDialog, self.home)
@@ -1397,13 +1455,28 @@ def main(paths=()) -> int:
     window.restore_session(paths)
     if not window.tabs_list():
         window.new_flow()
-    if os.environ.get("TASKLOOM_EDITOR_SMOKE") and paths:
-        _smoke_test(app, window, window.open_flow(Path(paths[0])))  # used by packaging/smoke.py
+    if os.environ.get("TASKLOOM_EDITOR_SMOKE") and paths:  # used by packaging/smoke.py
+        _smoke_test(app, window, window.open_flow(Path(paths[0])), Path(os.environ["TASKLOOM_EDITOR_SMOKE"]))
     return app.exec()
 
 
-def _smoke_test(app, window: MainWindow, tab: FlowTab):
-    """Run the flow from the editor (through the runner program) and quit with 0 if it succeeded."""
+def _smoke_test(app, window: MainWindow, tab: FlowTab, folder: Path):
+    """Run the flow from the editor (through the runner program); once it succeeded, commit a copy of it into
+    `folder` (new, outside any repository) with Taskloom's own Git. Quit with 0 if both worked."""
     run = window.start_run(tab, {})
-    run.finished.connect(lambda status: app.exit(0 if status == "success" else 1))
+
+    def finished(status):
+        if status != "success":
+            app.exit(1)
+            return
+        try:
+            folder.mkdir(parents=True)
+            shutil.copyfile(tab.doc.path, folder / tab.doc.path.name)
+            git.commit_flow(folder.resolve() / tab.doc.path.name, "Taskloom", "smoke@example.com", "Smoke test")
+        except Exception:
+            app.exit(3)
+            return
+        app.exit(0)
+
+    run.finished.connect(finished)
     QTimer.singleShot(120_000, window, lambda: app.exit(2))

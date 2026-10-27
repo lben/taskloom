@@ -64,10 +64,13 @@ taskloom editor examples/daily-sales-report.yaml
   same flow or into another one: the copies get new names and are selected, to move them;
   Undo takes the whole paste back.
 - Two kinds of connectors: **circles carry data** (an output into an input), **diamonds set
-  the order**. Every block has a **done** diamond output (it fires when the block succeeded)
-  and a **run after** diamond input: connect `done` → `run after` to run blocks one after
-  another, even when no data passes between them. A block with data inputs also waits for
-  its data. You can use both lines between two blocks; each has its own purpose.
+  the order**. Every block but a start block has a **run after** diamond input: connect any
+  output of another block (or a start block's `start`) to it and the block waits for that
+  output without using its value, to run blocks one after another even when no data passes
+  between them. Only If, Python Code and reusable blocks also have a **done** diamond output,
+  which fires when the block succeeded, even if it produced none of its other outputs. A
+  block with data inputs also waits for its data. You can use both lines between two blocks;
+  each has its own purpose.
 - **Start blocks** say how a flow starts. Connect their `start` output to the **run
   after** diamond of the first block:
   - **Manual Start**: the flow runs when you press **Run now** (F5), or right-click the
@@ -228,6 +231,41 @@ taskloom editor examples/daily-sales-report.yaml
   (JDBC 4 drivers name it in `META-INF/services/java.sql.Driver`): when the jar names several,
   you choose one; when it names none (an older driver), a note says so and you type it. A
   class you typed is replaced only if you say so.
+
+## Versions with Git: Save & Commit
+
+**File → Save & Commit…** keeps versions of a flow in Git. Its window says where the flow is
+committed, and asks for a message and the name and email to commit with; its **Save &
+Commit** button saves the flow, then commits that file, and only it, to the Git repository
+of the flow's folder (found in that folder or a folder above it, as Git finds it). With none,
+it creates one in the flow's folder, so normal Git tools see it. Nothing else is staged or
+committed: files you staged stay staged, and data, outputs, other flows and your Taskloom
+folder stay as they are. A flow that is the same as in its last commit makes no commit.
+
+- Saved does not mean committed: File → Save (and the saves of Run, Validate and closing)
+  never commit. The next Save & Commit commits whatever differs from the last commit.
+- It refuses, before saving anything, when the repository has no branch checked out
+  (detached HEAD), is in the middle of a merge, cherry-pick, revert or rebase, cannot be
+  read (e.g. a split index), or ignores the flow (not committed yet), and when it would have
+  to create a repository in your home folder or at a drive root. File → Save still saves.
+  When the commit fails after the save (e.g. another program is using the repository), it
+  says so: the flow is saved; Save & Commit again once that is fixed.
+- The name and email are the ones you typed last (kept in `editor.ini`), else `user.name`
+  and `user.email` of your Git config.
+- **Save as…** gives the copy the original's history up to its last commit. In the same
+  repository, one commit *Copy a.yaml to b.yaml (Save as)*: `git log --follow -- b.yaml`
+  lists it, then a.yaml's versions (and never a.yaml's later commits). In another folder's
+  repository (created there if there is none) each version is committed again, oldest
+  first, with its message, author and date (you are the committer). Saving as over a
+  committed file first commits its removal. Changes not committed yet are only in the
+  copy's file (it shows as modified). A flow never committed, or in no repository, gets
+  nothing in Git. When the history cannot be copied (e.g. no name and email known yet: give
+  them once in Save & Commit), the copy is saved and Taskloom says why.
+
+Taskloom carries its own Git (dulwich): no Git program is needed. Its commits run no hooks
+and are never signed, no `.gitattributes`, filter, LFS or line-end conversion is applied (the
+committed bytes are the file's), and it never writes any Git config. Flow files are written
+with LF line ends on every OS.
 
 ## Flows
 
@@ -416,7 +454,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks, listed under **User Created** in the blocks tree; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
-| `editor.ini` | Editor preferences and the flows you had open |
+| `editor.ini` | Editor preferences, the flows you had open, and the name and email you commit with |
 | `scheduled.yaml` | Flows the scheduler runs |
 | `known_hosts` | SSH server keys trusted on first connection |
 | `python-env/` | Your Python environment for Python Code blocks (unless `python_env` points elsewhere) |
@@ -480,6 +518,12 @@ class Greet(Block):
         return {"text": f"{self.config.greeting}, {name}!"}
 ```
 
+A block whose `run()` may succeed without returning all its outputs (as If gives `true` or
+`false`) sets `has_done = True`: it then also has a **done** output, which fires whenever it
+succeeds, for another block to run after it. A block without outputs has **done** anyway.
+Without it, an output that `run()` does not return skips a block waiting for it in its run
+after ("nothing reached its run-after").
+
 ## Development
 
 ```
@@ -493,4 +537,5 @@ the Windows zip and the Linux runner, and smoke-tests both; tagging `v*` publish
 
 ## License
 
-MIT
+MIT. The packaged editor includes dulwich (Apache-2.0 or GPL-2.0-or-later) and urllib3 (MIT);
+their licence texts are in its `licenses` folder.

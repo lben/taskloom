@@ -310,9 +310,9 @@ def test_unusual_characters_large_values_and_values_that_cannot_be_saved_pass_on
 
 
 @pytest.mark.parametrize("config, problem", [
-    ("{inputs: [after], code: 'pass'}", "after: every block already has these; choose other names"),
-    ("{outputs: [done], code: 'pass'}", "done: every block already has these; choose other names"),
-    ("{outputs: [error], code: 'pass'}", "error: every block already has these; choose other names"),
+    ("{inputs: [after], code: 'pass'}", "after: this block already has these; choose other names"),
+    ("{outputs: [done], code: 'pass'}", "done: this block already has these; choose other names"),
+    ("{outputs: [error], code: 'pass'}", "error: this block already has these; choose other names"),
     ("{inputs: ['my input'], code: 'pass'}", "expected a list of names (letters, digits, _)"),
     ("{inputs: [a, a], code: 'pass'}", "duplicate names"),
     ("{inputs: []}", "Code is required"),
@@ -1280,7 +1280,7 @@ def test_a_name_no_input_can_have_is_refused_in_the_properties(win):
                             tab.doc.blocks[block].get("config", {}).get("inputs"))
     tab.doc.dirty = False
 
-    assert shown and "every block already has these; choose other names" in error, error
+    assert shown and "this block already has these; choose other names" in error, error
     assert inputs in (None, ["input"])  # nothing changed
 
 

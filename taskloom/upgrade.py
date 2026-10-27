@@ -196,6 +196,6 @@ def fix(report: Report, home) -> Path:
         n += 1
     shutil.copy2(report.path, backup)
     tmp = report.path.with_suffix(report.path.suffix + ".tmp")
-    tmp.write_text(yaml.safe_dump(report.fixed, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    tmp.write_text(yaml.safe_dump(report.fixed, sort_keys=False, allow_unicode=True), encoding="utf-8", newline="\n")
     os.replace(tmp, report.path)  # never a half-written flow
     return backup

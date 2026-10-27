@@ -682,7 +682,7 @@ def test_a_flow_built_with_each_kind_of_field_saves_them_as_their_types_and_runs
     select_only(tab, "wait")
     type_in(field(win, "Seconds"), "0.1")  # a number
     for line in (("start", "start", "python", "after"), ("python", "sales", "write_file", "table"),
-                 ("python", "sales", "chart", "table"), ("write_file", "done", "wait", "after")):
+                 ("python", "sales", "chart", "table"), ("write_file", "file", "wait", "after")):
         drag_port_to_port(tab, *line)
     assert error_shown(win) == ""
     save_as(monkeypatch, tmp_path / "built.yaml")
@@ -754,8 +754,8 @@ def test_input_and_output_names_that_are_not_allowed_are_refused_and_keep_the_co
     data = yaml.safe_dump(tab.doc.data)
 
     for label, names, why in (("Outputs", "1st", "names"), ("Outputs", "a, a", "duplicate"),
-                              ("Outputs", "done", "every block already has"), ("Outputs", "error", "every block already has"),
-                              ("Outputs", "my value", "names"), ("Inputs", "after", "every block already has")):
+                              ("Outputs", "done", "this block already has"), ("Outputs", "error", "this block already has"),
+                              ("Outputs", "my value", "names"), ("Inputs", "after", "this block already has")):
         select_only(tab, "python" if label == "Outputs" else "python_2")
         type_in(field(win, label), names)
         assert why in error_shown(win), names

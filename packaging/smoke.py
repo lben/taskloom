@@ -110,10 +110,21 @@ def main():
     check("headless scheduler starts", heartbeat.exists())
 
     if gui.exists():
+        committed = work / "committed"  # the editor commits a copy of the flow there, with its own Git
         result = subprocess.run([str(gui), "editor", str(work / "examples" / "daily-sales-report.yaml")],
-                                env={**env, "TASKLOOM_EDITOR_SMOKE": "1", "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen")},
+                                env={**env, "TASKLOOM_EDITOR_SMOKE": str(committed), "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen")},
                                 cwd=work, timeout=180)
-        check("editor runs a flow through the runner program", result.returncode == 0, f"exit code {result.returncode}")
+        check("editor runs a flow through the runner program, then commits a copy of it", result.returncode == 0,
+              f"exit code {result.returncode}")
+        git = shutil.which("git")
+        if git:
+            log = subprocess.run([git, "-C", str(committed), "log", "-1", "--format=%s"], capture_output=True, text=True)
+            check("the copy's commit (git log)", log.stdout.strip() == "Smoke test", log.stdout + log.stderr)
+        else:
+            branch = (committed / ".git" / "HEAD").read_text().removeprefix("ref: ").strip()
+            check("the copy's commit (.git/HEAD and its branch)", (committed / ".git" / branch).is_file(), branch)
+    else:
+        check("the runner has no Git library (dulwich)", not list(folder.rglob("dulwich*")))
     shutil.rmtree(work, ignore_errors=True)
     print("all checks passed")
 

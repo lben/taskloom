@@ -81,7 +81,7 @@ class FlowDocument(QObject):
         data = self.data
         if path != self.path and data.get("name") == DEFAULT_NAME:  # saved as a file (first time, Save as): its name
             data = {**data, "name": path.stem}
-        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8", newline="\n")
         self.data, self.path = data, path  # only once written: a file that cannot be written leaves the flow as it was
         self.dirty = False
         self.changed.emit()

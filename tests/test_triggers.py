@@ -165,7 +165,7 @@ def test_done_and_after_are_reserved_names(env):
             config: {inputs: [after], outputs: [done], code: "done = 1"}
     """)
     result = env.taskloom("validate", flow)
-    assert result.returncode == 2 and "every block already has these" in result.stderr
+    assert result.returncode == 2 and "this block already has these" in result.stderr
 
 
 def test_a_block_connected_to_no_start_block_does_not_run(env):

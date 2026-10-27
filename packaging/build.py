@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from importlib import metadata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,12 @@ def main():
     shutil.copytree(ROOT / "examples", folder / "examples", ignore=shutil.ignore_patterns("out"))
     shutil.copy(ROOT / "README.md", folder / "README.md")
     shutil.copy(ROOT / "LICENSE", folder / "LICENSE")
+    if not args.headless:  # the editor's Git (dulwich, with urllib3): their licence texts
+        for name in ("dulwich", "urllib3"):
+            for file in metadata.distribution(name).files:
+                if file.parent.name == "licenses":
+                    (folder / "licenses" / name).mkdir(parents=True, exist_ok=True)
+                    shutil.copy(file.locate(), folder / "licenses" / name / file.name)
 
     system = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     # No version in the name, so flows that deploy it don't change with each release; it is in VERSION.

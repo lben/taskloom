@@ -104,7 +104,7 @@ CHECK_DUPLICATES = {  # each with a setting the block no longer has, so --fix wr
         edges:
           - start.start -> a.after
         edges:
-          - a.done -> b.after
+          - a.value -> b.after
     """, "edges", "start.start -> a.after"),
     "a block listed twice": ("""
         blocks:
@@ -200,7 +200,7 @@ CONNECTION_MISTAKES = {
                                     "'b' has no input 'error'"),
     "written as a mapping": (f"blocks:\n  a: {WAIT}}}\n  b: {WAIT}}}\nedges:\n  - {{a.value: b.value}}\n",
                              "expected 'block.port -> block.port'"),
-    "a block after itself": (f"blocks:\n  a: {WAIT}}}\nedges:\n  - a.done -> a.after\n", "cycle through: a"),
+    "a block after itself": (f"blocks:\n  a: {WAIT}}}\nedges:\n  - a.value -> a.after\n", "cycle through: a"),
 }
 
 
@@ -222,8 +222,8 @@ def test_a_cycle_is_reported_through_the_blocks_in_it_not_the_blocks_after_it(en
           report: {WAIT}}}
         edges:
           - start.start -> fetch.after
-          - fetch.done -> parse.after
-          - parse.done -> fetch.after
+          - fetch.value -> parse.after
+          - parse.value -> fetch.after
           - parse.value -> report.value
     """)
 
@@ -336,9 +336,9 @@ WRONG_KINDS = {
     "names: not a name": ("label: x, names: [my-input]", "names", "expected a list of names"),
     "names: one name, not a list": ("label: x, names: a", "names", "expected a list of names"),
     "names: twice the same": ("label: x, names: [a, a]", "names", "duplicate names"),
-    "names: after": ("label: x, names: [after]", "names", "every block already has these"),
-    "output names: done": ("label: x, outs: [done]", "outs", "every block already has these"),
-    "output names: error": ("label: x, outs: [error]", "outs", "every block already has these"),
+    "names: after": ("label: x, names: [after]", "names", "this block already has these"),
+    "output names: done": ("label: x, outs: [done]", "outs", "this block already has these"),
+    "output names: error": ("label: x, outs: [error]", "outs", "this block already has these"),
     "connection: not in connections.yaml": ("label: x, server: nowhere", "server",
                                             "no connection named 'nowhere' in connections.yaml"),
     "connection: of another kind": ("label: x, server: mailer", "server", "connection 'mailer' is smtp, expected ssh"),

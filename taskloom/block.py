@@ -6,8 +6,12 @@ import re
 from types import SimpleNamespace
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-AFTER = "after"  # input of every block: run after another block (its `done`) or a start block
-DONE = "done"  # output of every block: fires when it succeeded, to connect to another block's `after`
+# Input of every block but a start block: it waits for what is connected there (any output of another block, or a
+# start block's `start`) and does not use its value.
+AFTER = "after"
+# Output of a block that may succeed without delivering its other outputs (see Block.has_done): fires when it
+# succeeded, to connect to another block's `after`.
+DONE = "done"
 RESERVED_INPUTS, RESERVED_OUTPUTS = {AFTER}, {DONE, "error"}
 
 
@@ -144,7 +148,7 @@ class fields:
                 raise ValueError(f"duplicate names in {value!r}")
             taken = self.reserved & set(value)
             if taken:
-                raise ValueError(f"{', '.join(sorted(taken))}: every block already has these; choose other names")
+                raise ValueError(f"{', '.join(sorted(taken))}: this block already has these; choose other names")
             return list(value)
 
 
@@ -155,7 +159,12 @@ def setting_label(key: str, f: fields.Field) -> str:
 
 
 class Block:
-    """Base class for all blocks. Subclass it, set the class attributes, implement run()."""
+    """Base class for all blocks. Subclass it, set the class attributes, implement run().
+
+    Every block but a start block has a `run after` input. A block whose run() may succeed without returning all its
+    outputs (If, Python Code) sets has_done = True: it then also has a `done` output, which fires whenever it
+    succeeds, for another block to run after it. A block without outputs has `done` anyway; the others do not need
+    it, since an output that always arrives can go into another block's `run after`."""
 
     type_id: str = ""  # stable id stored in flow files, e.g. "db.run_query"
     version: int = 1
@@ -173,6 +182,7 @@ class Block:
 
     # Start blocks (Manual Start, Schedule) begin a run; see taskloom/blocks/triggers.py.
     is_trigger: bool = False
+    has_done: bool = False  # a `done` output too (see above)
 
     def __init__(self, config: dict):
         self.config = SimpleNamespace(**config)
@@ -191,11 +201,18 @@ class Block:
         raise NotImplementedError
 
 
+def has_done_output(cls, outputs: dict) -> bool:
+    """Whether a block with these outputs (its ports for its config) has the `done` output: not a start block, and it
+    sets has_done or has no outputs."""
+    return not cls.is_trigger and (cls.has_done or not outputs)
+
+
 def all_ports(cls, config: dict) -> tuple[dict, dict]:
-    """A block's ports plus the `after` input and `done` output every block has (they only set the order)."""
+    """A block's ports plus the `after` input every block but a start block has, and the `done` output of a block that
+    has it (has_done_output), first; these two only set the order."""
     inputs, outputs = cls.ports(config)
-    if not cls.is_trigger:
-        if AFTER not in inputs:
-            inputs = {**inputs, AFTER: ports.Any(required=False, any_of=True)}
+    if not cls.is_trigger and AFTER not in inputs:
+        inputs = {**inputs, AFTER: ports.Any(required=False, any_of=True)}
+    if has_done_output(cls, outputs):
         outputs = {DONE: ports.Any(), **outputs}
     return inputs, outputs

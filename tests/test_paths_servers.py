@@ -544,7 +544,7 @@ def test_a_server_that_allows_one_command_per_connection_still_starts_checks_and
         result, run_id, status = _run(env, {
             "check": _health(connection="appserver", pid_file="~/app/app.pid"), "r": _save("result.json"),
             "stop": _stop(), "s": _save("stopped.json"),
-        }, ["check.result -> r.input", "check.done -> stop.after", "stop.stopped -> s.input"])
+        }, ["check.result -> r.input", "check.result -> stop.after", "stop.stopped -> s.input"])
 
         assert status == {"check": "success", "r": "success", "stop": "success", "s": "success"}, result.stderr
         assert _saved(env, "result.json")["healthy"] is True
@@ -1186,7 +1186,7 @@ def test_deploy_flow_stops_the_old_version_unpacks_starts_and_checks_the_new_one
         "stopped": _save("stopped.json"),
         "report": _save("report.json"),
     }
-    edges = ["stop_old.done -> extract.after", "extract.done -> start.after", "start.done -> running.after",
+    edges = ["stop_old.stopped -> extract.after", "extract.folder -> start.after", "start.pid -> running.after",
              "stop_old.stopped -> stopped.input", "running.result -> report.input"]
     try:
         for version, was_running in (("v1", False), ("v2", True)):

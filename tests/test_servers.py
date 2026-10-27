@@ -218,7 +218,7 @@ def test_servers_that_allow_one_command_per_connection(env, server, monkeypatch)
             "check": {"type": "servers.health_check", "config": {"connection": "appserver", "pid_file": "~/app/app.pid"}},
             "stop": {"type": "servers.stop_process", "config": {"connection": "appserver", "pid_file": "~/app/app.pid"}},
         },
-        "edges": ["start.done -> check.after", "check.healthy -> stop.after"],
+        "edges": ["start.pid -> check.after", "check.healthy -> stop.after"],
     }))
     try:
         home = Home(env.home)
