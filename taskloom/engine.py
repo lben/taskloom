@@ -314,6 +314,10 @@ class _Runner:
         self.emit, self.cancel, self.workspace = emit, cancel, workspace
         self.outputs: dict = {}
         self.blocked: set[str] = set()  # failed, or skipped because something before them failed
+        self.ran: set[str] = set()  # the blocks that ran (not skipped)
+        # The failures this run answers for: its blocks that failed, and the failures before them that stopped
+        # one of its blocks (see before_unhandled).
+        self.failures: set[str] = set()
 
     only: str | None = None  # run just this block, with only_inputs
     only_inputs: dict = {}
@@ -321,11 +325,9 @@ class _Runner:
     taking_part: set = set()  # the blocks this run takes part in: the only ones it runs and reports
     run_from: str | None = None  # run from this block on (with only_inputs): taking_part is it and the blocks after it
     outside: set = set()  # blocks taking no part in it (nor in the run it carries on from): see _gather
-    before_unhandled: set = set()  # blocks before them whose failure nothing handles
-    _stopped_by_before = False  # one of those stopped a block of this run: the run has failed
+    before_unhandled: dict = {}  # blocks before them: {block: the failures behind it no block that ran handled}
 
     def run(self) -> str:
-        unhandled_failure = False
         for block_id in [b for b in order(self.flow) if b in self.taking_part]:
             if self.cancel.is_set():
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
@@ -334,22 +336,22 @@ class _Runner:
             inputs = self.only_inputs if alone else self._gather(block_id)
             if inputs is None:
                 continue
+            self.ran.add(block_id)
             if alone:  # what it gets (maybe values you chose), saved before it can change them
                 self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed)
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
             self._keep_outputs(block_id, produced, status=status)
             if status == "failed":
                 self.blocked.add(block_id)
+                self.failures.add(block_id)
             for port, value in produced.items():
                 self.outputs[(block_id, port)] = value
-            # Handled: an error handler of it runs next (not in a run of just this block).
-            handled = self.only is None and any(
-                e.src == block_id and e.src_port == ERROR_PORT and e.dst in self.taking_part for e in self.flow.edges)
-            if status == "failed" and not handled:
-                unhandled_failure = True
         if self.cancel.is_set():
             return "cancelled"
-        return "failed" if unhandled_failure or self._stopped_by_before else "success"
+        # A failure is handled when its error reached a block that ran: an error handler that was skipped
+        # (e.g. it also needs the failed block's data) handles nothing.
+        handled = {e.src for e in self.flow.edges if e.src_port == ERROR_PORT and e.dst in self.ran}
+        return "failed" if self.failures - handled else "success"
 
     def _gather(self, block_id: str) -> dict | None:
         """The block's inputs from the blocks before it; None (and it is skipped) when it cannot run."""
@@ -359,8 +361,8 @@ class _Runner:
         # Nothing downstream of a failure runs: an edge from a normal output of a failed block (or of
         # a block skipped because of a failure) stops this block. Error outputs are the way out.
         if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
-            self._stopped_by_before |= any(e.src in self.before_unhandled and e.src_port != ERROR_PORT
-                                           for e in incoming)
+            self.failures.update(f for e in incoming if e.src_port != ERROR_PORT
+                                 for f in self.before_unhandled.get(e.src, ()))
             self.blocked.add(block_id)
             self._keep_outputs(block_id, {}, status=BLOCKED)
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped",
@@ -378,7 +380,7 @@ class _Runner:
             if not delivered or (missing and not getattr(port, "any_of", False)):
                 ready = False
                 after_failure |= any(e.src in self.blocked for e in missing)
-                self._stopped_by_before |= any(e.src in self.before_unhandled for e in missing)
+                self.failures.update(f for e in missing for f in self.before_unhandled.get(e.src, ()))
                 empty.append(name)
                 continue
             inputs[name] = _arriving(port, edges, delivered)
@@ -728,17 +730,17 @@ def blocks_from(flow: Flow, registry, block: str) -> set[str]:
     return {block} | {b for b in _after(flow, block) if on is None or b in on}
 
 
-def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, start: str) -> tuple[dict, set, set, set]:
+def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, start: str) -> tuple[dict, set, dict, set]:
     """For running the blocks in `part` (block `start` and the blocks after it): what the blocks before
     them, which do not run, hold in run `run_id` ({(block, output): value}); which of them failed (or did
-    not run because something before them failed); of those, the ones whose failure nothing handles; and
-    the ones that took no part in that run. Refuses (ValueError) when what one holds is not current.
-    (`start` has its inputs worked out already.)"""
+    not run because something before them failed); for each of those, the failures behind it whose error
+    reached no block that ran ({block: failures}); and the ones that took no part in that run. Refuses
+    (ValueError) when what one holds is not current. (`start` has its inputs worked out already.)"""
     before = [e for e in flow.edges if e.dst in part and e.src not in part and e.dst != start]
     if run_id is None:
         if before:
             raise ValueError(f"{before[0].dst} needs what {before[0].src} holds: say which run's to use (--inputs-from)")
-        return {}, set(), set(), set()
+        return {}, set(), {}, set()
     cleaned = f"the files of run #{run_id} were cleaned up (Keep runs, keep_runs_for)"
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
@@ -749,7 +751,7 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
             raise ValueError(f"{cleaned}: run the whole flow instead")
         return Table(path)
 
-    now, outputs, blocked, unhandled, absent = _Now(flow, registry, run_dir, run_id), {}, set(), set(), set()
+    now, outputs, blocked, unhandled, absent = _Now(flow, registry, run_dir, run_id), {}, set(), {}, set()
     for edge in before:
         kind, saved, why = now.state(edge.src)
         if kind == "absent":
@@ -758,8 +760,8 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
             raise ValueError(f"{why}, or run from it")
         if kind in ("failed", BLOCKED):
             blocked.add(edge.src)  # as in a full run: nothing after it runs (but its error handlers)
-            if _unhandled_failure(flow, now, edge.src):
-                unhandled.add(edge.src)  # a failure nothing handles: a run it stops has failed
+            # A run it stops answers for these: it has failed unless an error handler of them runs in it.
+            unhandled[edge.src] = _unhandled_failures(flow, now, edge.src)
         if kind in ("ran", "failed"):
             if edge.src_port in saved.get(WITHHELD, []):
                 raise ValueError(f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
@@ -769,16 +771,16 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
     return outputs, blocked, unhandled, absent
 
 
-def _unhandled_failure(flow: Flow, now: "_Now", block: str) -> bool:
-    """`block` failed, or did not run because a block before it failed: and nothing handles that failure
-    (none of the failed blocks behind it has an error handler that is on)."""
+def _unhandled_failures(flow: Flow, now: "_Now", block: str) -> set[str]:
+    """`block` failed, or did not run because blocks before it failed: the failed blocks among those whose
+    error reached no block that ran (an error handler that was skipped, or is off, handled nothing)."""
     def handled(failed: str) -> bool:
-        return any(e.src == failed and e.src_port == ERROR_PORT and (now.on is None or e.dst in now.on)
+        return any(e.src == failed and e.src_port == ERROR_PORT and now.state(e.dst)[0] in ("ran", "failed")
                    for e in flow.edges)
 
     if now.state(block)[0] == "failed":
-        return not handled(block)
-    seen, todo = {block}, [block]
+        return set() if handled(block) else {block}
+    found, seen, todo = set(), {block}, [block]
     while todo:  # back through what stopped it: the error output of a failed block is the way out, but
         current = todo.pop()  # a block that did not run gave no error either (as in the runner's rules)
         for edge in flow.edges:
@@ -787,10 +789,10 @@ def _unhandled_failure(flow: Flow, now: "_Now", block: str) -> bool:
                 seen.add(edge.src)
                 kind = now.state(edge.src)[0]
                 if kind == "failed" and not handled(edge.src):
-                    return True
+                    found.add(edge.src)
                 if kind == BLOCKED:
                     todo.append(edge.src)
-    return False
+    return found
 
 
 def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict,

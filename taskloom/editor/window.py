@@ -254,7 +254,7 @@ class MainWindow(QMainWindow):
         self._dock("Blocks", self.palette_panel, Qt.LeftDockWidgetArea)
         self.flow_status = FlowTabsStatus(self.tabs)  # each flow's last result and next run, on its tab
 
-        self.properties = PropertiesPanel(self.home)
+        self.properties = PropertiesPanel(self.home, self.settings)
         self.parameters = ParametersPanel(self.home)
         self.flow_settings = FlowSettingsPanel(self.home)
         self.right_tabs = QTabWidget()

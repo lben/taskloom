@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import keyword
 import math
 import re
 from pathlib import Path
@@ -12,7 +13,8 @@ import polars as pl
 import yaml
 from PySide6.QtCore import (QAbstractTableModel, QObject, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTime,
                             QTimer, Signal)
-from PySide6.QtGui import QColor, QDrag, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QSyntaxHighlighter,
+                           QTextCharFormat, QTextCursor)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
@@ -27,7 +29,8 @@ from ..config import kept_runs
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
 from ..scheduler import counted_from
-from .canvas import BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR
+from .canvas import (BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR,
+                     is_dark)
 
 # A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
 # <pre> (e.g. a table's rows in a tooltip) asks for on Qt's offscreen platform (as in the proofs): name real ones.
@@ -275,6 +278,167 @@ class CodeEdit(QPlainTextEdit):
         self.editing_finished.emit()
 
 
+def _tokens(comment: str, long: str, string: str, keywords, flags=0) -> re.Pattern:
+    """What a line of code is made of, read from left to right; `long` starts a string or comment that may end on a
+    later line. A word is read whole, so a name that starts like a keyword is not one."""
+    return re.compile("|".join([f"(?P<comment>{comment})", f"(?P<long>{long})", f"(?P<string>{string})",
+                                rf"(?P<keyword>\b(?:{'|'.join(keywords)})\b)",
+                                r"(?P<number>\b\d[\d_]*(?:\.\d*)?(?:[eE][+-]?\d+)?)", r"(?P<word>\w+)"]), flags)
+
+
+PYTHON_TOKENS = _tokens("#.*", "[rRbBfFuU]{0,2}(?:'''|\"\"\")",
+                        r"""[rRbBfFuU]{0,2}(?:'(?:\\.|[^'\\])*'?|"(?:\\.|[^"\\])*"?)""", keyword.kwlist)
+SQL_TOKENS = _tokens("--.*", r"/\*", "'(?:[^']|'')*'?", """select from where and or not in is null as on join left
+    right inner outer full cross using group by order having limit offset distinct union all except intersect case when
+    then else end between like ilike exists insert into values update set delete create replace table view drop alter
+    with asc desc true false cast over partition qualify""".split(), re.IGNORECASE)
+LONG_ENDS = ["'''", '"""', "*/"]  # how a string or comment over several lines ends (its index + 1: the line's state)
+# Keyword, string, comment and number colours (as in JetBrains' light and dark themes), on a light and a dark background.
+CODE_COLORS = {"keyword": ("#0033b3", "#cf8e6d"), "string": ("#067d17", "#6aab73"), "comment": ("#808080", "#7a7e85"),
+               "number": ("#1750eb", "#2aacb8")}
+
+
+class CodeHighlighter(QSyntaxHighlighter):
+    """Colours a Python or SQL code box's keywords, strings, comments and numbers: only on the screen."""
+
+    def __init__(self, document, language: str):
+        super().__init__(document)
+        self.tokens = PYTHON_TOKENS if language == "python" else SQL_TOKENS
+        self.long = "string" if language == "python" else "comment"
+        dark = is_dark()  # the theme now, as the box is made
+        self.formats = {}
+        for kind, (light, on_dark) in CODE_COLORS.items():
+            self.formats[kind] = QTextCharFormat()
+            self.formats[kind].setForeground(QColor(on_dark if dark else light))
+
+    def highlightBlock(self, text):
+        self.setCurrentBlockState(0)
+        position = 0
+        if self.previousBlockState() > 0:  # in a string or comment that started on an earlier line
+            position = self._long(text, 0, 0, LONG_ENDS[self.previousBlockState() - 1])
+        while (token := self.tokens.search(text, position)) is not None:
+            if token.lastgroup == "long":
+                start = token.group().lstrip("rRbBfFuU")
+                position = self._long(text, token.start(), token.end(), "*/" if start == "/*" else start)
+            else:
+                if token.lastgroup != "word":
+                    self.setFormat(token.start(), token.end() - token.start(), self.formats[token.lastgroup])
+                position = token.end()
+
+    def _long(self, text: str, start: int, after: int, end: str) -> int:
+        """Colour from `start` to `end` (looked for from `after`), or to the end of the line if it ends on a later one;
+        where to read on."""
+        found = text.find(end, after)
+        stop = len(text) if found < 0 else found + len(end)
+        self.setFormat(start, stop - start, self.formats[self.long])
+        if found < 0:
+            self.setCurrentBlockState(LONG_ENDS.index(end) + 1)
+        return stop
+
+
+class _LineNumbers(QWidget):
+    def __init__(self, editor: CodeEditor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def paintEvent(self, event):
+        self.editor.paint_line_numbers(self, event.rect())
+
+
+class CodeEditor(CodeEdit):
+    """A Python or SQL code box: coloured, with line numbers on the left, long lines not wrapped unless chosen, and
+    Enter, Tab, Shift+Tab and Backspace that keep and change the indentation as code editors do."""
+
+    def __init__(self, text: str, language: str, wrap: bool):
+        super().__init__(text)
+        self.language = language
+        self.set_wrap(wrap)
+        self.highlighter = CodeHighlighter(self.document(), language)
+        self.numbers = _LineNumbers(self)
+        self.blockCountChanged.connect(self._fit_numbers)
+        self.updateRequest.connect(lambda *_: self.numbers.update())  # (scrolled or changed: all of it)
+        self._fit_numbers()
+
+    def set_wrap(self, wrap: bool):
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth if wrap else QPlainTextEdit.NoWrap)
+
+    def _fit_numbers(self):
+        width = 8 + self.fontMetrics().horizontalAdvance("9") * len(str(self.blockCount()))
+        self.setViewportMargins(width, 0, 0, 0)
+        rect = self.contentsRect()
+        self.numbers.setGeometry(rect.left(), rect.top(), width, rect.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_numbers()
+
+    def paint_line_numbers(self, widget: QWidget, rect):
+        """Each shown line's number (from 1, as in error messages), on its row."""
+        painter = QPainter(widget)
+        painter.fillRect(rect, self.palette().base())
+        painter.setPen(self.palette().placeholderText().color())
+        block = self.firstVisibleBlock()
+        while block.isValid():
+            top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+            if top > rect.bottom():
+                break
+            painter.drawText(QRectF(0, top, widget.width() - 4, self.fontMetrics().height()), Qt.AlignRight,
+                             str(block.blockNumber() + 1))
+            block = block.next()
+
+    def keyPressEvent(self, event):
+        cursor = self.textCursor()
+        plain = not event.modifiers() & ~Qt.KeypadModifier
+        doc = self.document()
+        first, last = doc.findBlock(cursor.selectionStart()), doc.findBlock(cursor.selectionEnd())
+        before = first.text()[:cursor.selectionStart() - first.position()]  # the line up to what is typed over
+        if last != first and cursor.selectionEnd() == last.position():
+            last = last.previous()  # (a selection of whole lines ends at the start of the next one)
+        lines = [first]
+        while lines[-1] != last:
+            lines.append(lines[-1].next())
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and plain:
+            indent = before[:len(before) - len(before.lstrip())]
+            if self.language == "python" and _without_comment(before).rstrip().endswith(":"):
+                indent += "    "
+            cursor.insertText("\n" + indent)
+        elif event.key() == Qt.Key_Tab and plain and len(lines) == 1:
+            cursor.insertText(" " * (4 - len(before.expandtabs(4)) % 4))  # (a tab shows up to a multiple of 4)
+        elif event.key() == Qt.Key_Tab and plain:
+            self._indent(lines, 4)
+        elif event.key() == Qt.Key_Backtab:
+            self._indent(lines, -4)
+        elif event.key() == Qt.Key_Backspace and plain and not cursor.hasSelection() and before and not before.strip(" "):
+            cursor.setPosition(cursor.position() - (len(before) - 1) % 4 - 1, QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()  # back to the previous multiple of 4
+        else:
+            return super().keyPressEvent(event)
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def _indent(self, lines, by: int):
+        """Add `by` spaces at the start of each line, or (negative) remove up to that many."""
+        cursor = QTextCursor(self.document())
+        cursor.beginEditBlock()  # one step for Undo
+        for line in lines:
+            cursor.setPosition(line.position())
+            if by > 0:
+                cursor.insertText(" " * by)
+            else:
+                spaces = len(line.text()) - len(line.text().lstrip(" "))
+                cursor.setPosition(line.position() + min(-by, spaces), QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+        cursor.endEditBlock()
+
+
+def _without_comment(line: str) -> str:
+    """A line of Python without its # comment (a '#' in a string starts none)."""
+    for token in PYTHON_TOKENS.finditer(line):
+        if token.lastgroup == "comment":
+            return line[:token.start()]
+    return line
+
+
 def _to_text(value) -> str:
     if value is None:
         return ""
@@ -286,9 +450,10 @@ def _to_text(value) -> str:
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
-    def __init__(self, home):
+    def __init__(self, home, settings):
         super().__init__()
         self.home = home
+        self.settings = settings  # (the editor's preferences)
         self.setWidgetResizable(True)
         self.doc = self.registry = self.block_id = self.note_id = None
         self._committing = False
@@ -689,10 +854,22 @@ class PropertiesPanel(QScrollArea):
         if isinstance(f, fields.Connection):
             return self._connection_widget(key, f, value)
         if isinstance(f, fields.Code):
-            w = CodeEdit(_to_text(value))
+            code = f.language in ("python", "sql")
+            wrap = self.settings.value("wrap_code", False, type=bool)  # (as chosen in any code box)
+            w = CodeEditor(_to_text(value), f.language, wrap) if code else CodeEdit(_to_text(value))
             w.setPlaceholderText(_to_text(default))
             w.editing_finished.connect(lambda: self._set(key, w.toPlainText() or None))
-            return w
+            if not code:
+                return w
+            wrap_box = QCheckBox("Wrap lines", checked=wrap)
+            wrap_box.setToolTip("Wrap long lines in every Python and SQL code box (only on the screen)")
+            wrap_box.toggled.connect(lambda on: (self.settings.setValue("wrap_code", on), w.set_wrap(on)))
+            box = QWidget()
+            column = QVBoxLayout(box)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.addWidget(w)
+            column.addWidget(wrap_box)
+            return box
         w = QLineEdit(_to_text(value))
         w.setPlaceholderText(_to_text(default))
         if isinstance(f, (fields.Names, fields.List)):

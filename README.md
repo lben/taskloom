@@ -99,6 +99,14 @@ taskloom editor examples/daily-sales-report.yaml
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name (a new flow takes its file's
   name when you first save it) and calendar.
+- **Python and SQL code** (Python Code, Polars Transform, DuckDB SQL, Run Query and blocks
+  of your own) is written in a code box: keywords, strings, comments and numbers in their
+  own colours (only on the screen), each line's number on the left (as in error messages,
+  e.g. `(line 3)`), and long lines unwrapped, with scroll bars, unless you tick **Wrap
+  lines** under the box (for every code box; remembered in `editor.ini`). Enter starts the
+  new line as deep as the one before (one level deeper after a Python line ending with `:`),
+  Tab inserts spaces to the next multiple of 4, Tab and Shift+Tab indent and unindent the
+  selected lines by 4 spaces, and Backspace after indentation goes back a level.
 - The **+** just right of the last tab opens a new flow (as File → New flow).
 - Each open flow's tab shows its last result (a coloured dot; a red ✕ while any line's last
   run failed) and, when it is scheduled, a clock; hover the tab for how each start block's
@@ -175,6 +183,9 @@ taskloom editor examples/daily-sales-report.yaml
   want covered to one input of one block (e.g. a Python Code block); it runs once and gets
   the errors of the blocks that failed, each naming its `block` (a Python Code block gets
   them as a dict keyed by those blocks' names). Example: `examples/shared-error-handler.yaml`.
+  A failure is handled only when a block its error goes to runs: if every one of them is
+  skipped (e.g. it also needs the failed block's data, or has one input per covered block and
+  not all of them failed), the run fails, as if the error output were not connected.
 - **Python packages:** Tools → Python environment creates your own Python environment and
   installs packages with pip. Tick **Run in my Python environment** on a Python Code
   block to use them (`taskloom env create`, `taskloom env pip install NAME` from a terminal).
