@@ -278,7 +278,8 @@ class MainWindow(QMainWindow):
         self.palette_panel.add_requested.connect(lambda t: self.current and self.current.view.add_at_center(t))
         self.history_panel.open_run.connect(self.show_history_run)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
-        self._countdown = QTimer(self, interval=1000)
+        # Each just after a second of the clock (see _show_countdowns), so they move on as the clock does.
+        self._countdown = QTimer(self, singleShot=True, timerType=Qt.PreciseTimer)
         self._countdown.timeout.connect(self._show_countdowns)
         self._countdown.start()
         # Bottom left: the flows running now (from here, on schedule or from a terminal); open one from it.
@@ -1194,6 +1195,7 @@ class MainWindow(QMainWindow):
 
     def _show_countdowns(self):
         """Under each Schedule block of the flow on screen: when it starts the flow next."""
+        self._countdown.start(1020 - dt.datetime.now().microsecond // 1000)  # again just after the next second
         tab = self.current
         if tab is None:
             return

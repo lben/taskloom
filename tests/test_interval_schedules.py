@@ -352,6 +352,34 @@ def test_the_countdown_counts_to_the_next_run_as_the_service_runs_it(win, qtbot,
         service.wait_for_runs()
 
 
+def test_the_countdown_moves_on_with_the_clock(win, qtbot, tmp_path):
+    """Seen in the proof on a Windows runner: the countdown said 12 s when 10 were left. It moves on as the clock's
+    second does: at any moment it says the time left rounded up, never a second more, so 0 at the run's time."""
+    flow = write_flow(tmp_path / "clock.yaml", flow_with(on_the_clock={"cron": "* * * * *"}))
+    win.home.set_scheduled(flow.resolve(), True)
+    lock = acquire_lock(win.home)  # a scheduler service of this Taskloom is on
+    (win.home.root / "scheduler.pid").write_text(str(os.getpid()), encoding="utf-8")
+    (win.home.root / "scheduler.version").write_text(f"{__version__} {os.getpid()}", encoding="utf-8")
+    tab = win.open_flow(flow)
+    try:
+        qtbot.waitUntil(lambda: tab.scene.nodes["on_the_clock"].countdown.startswith("next run in"), timeout=10_000)
+        if dt.datetime.now().second >= 50:  # not across the minute: the next run would change while it looks
+            qtbot.wait((61 - dt.datetime.now().second) * 1000)
+        first = dt.datetime.now().replace(microsecond=0) + dt.timedelta(seconds=1)
+        late = []
+        for k in range(8):  # just after four whole seconds, and in the middle of each
+            moment = first + dt.timedelta(seconds=k // 2, milliseconds=(150, 650)[k % 2])
+            qtbot.wait(max(0, int((moment - dt.datetime.now()).total_seconds() * 1000)))
+            text, now = tab.scene.nodes["on_the_clock"].countdown, dt.datetime.now()
+            minutes, seconds = map(int, text.removeprefix("next run in ").split(":")[1:])
+            left = (now.replace(second=0, microsecond=0) + dt.timedelta(minutes=1) - now).total_seconds()
+            if not left <= minutes * 60 + seconds < left + 1:  # the time left, rounded up
+                late.append(f"at {now:%H:%M:%S.%f}: {text}, with {left:.2f} s left")
+        assert not late, late
+    finally:
+        lock.close()
+
+
 # --- 6: README ----------------------------------------------------------------------------------------------------
 
 def test_the_readme_schedules_section_explains_every_n_and_on_the_clock():
