@@ -636,7 +636,7 @@ def _arriving(port, edges: list, delivered: list) -> object:
     """What an input gets from the edges into it (`delivered`: [(edge, value)] of those that delivered, in edge
     order): one edge gives the value; several (or into a `many` port) a list in edge order, or, into a by_source
     port (Python Code), {source block: value} in edge order. A block connecting several of its outputs there
-    is keyed block.port (e.g. check.result, check.error), so none is lost; how the blocks are connected sets
+    is keyed block.port (e.g. check.result, check.details), so none is lost; how the blocks are connected sets
     the keys, not which edges delivered."""
     if getattr(port, "by_source", False) and len(edges) > 1:
         sources = [src for src, _ in {(e.src, e.src_port) for e in edges}]  # each output connected there, once

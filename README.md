@@ -168,7 +168,7 @@ taskloom editor examples/daily-sales-report.yaml
   keyed by each block's name (as on the canvas), with its output as the value, in the order
   of the connections, e.g. `input["load"]`; with one block connected it is that block's
   output. A block that connects two of its outputs there is keyed `block.output` (e.g.
-  `check.result`, `check.error`). Only the blocks that delivered are in it (after an If, the
+  `check.result`, `check.details`). Only the blocks that delivered are in it (after an If, the
   path that ran). Other blocks that take several connections into one input (e.g. Inspect)
   get a list, in the order of the connections.
 - **One error handler for many blocks:** connect the red `error` output of every block you
