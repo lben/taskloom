@@ -326,7 +326,7 @@ PySide6 (Qt) application:
   live status and logs; switching tabs never interrupts a run.
 - **Left**: block palette as a collapsible tree (category folders → blocks, each with
   an icon), with a search box that filters it; drag a block onto the canvas.
-  User blocks appear in their own folder.
+  Your own blocks (the blocks folder's) appear in their own folder, User Created.
 - **Center**: canvas — drag, connect, pan/zoom, multi-select, copy/paste, undo/redo.
 - **Right**: properties of the selected block (generated from its config).
 - **Bottom**: run log; selecting a block filters to **that block's live log**,

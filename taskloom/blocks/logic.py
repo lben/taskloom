@@ -6,8 +6,10 @@ import inspect
 import io
 import linecache
 import os
+import re
 import sys
 import types
+import unicodedata
 from pathlib import Path
 
 import polars as pl
@@ -74,11 +76,25 @@ class PythonCode(Block):
                                        help="Run in your own Python environment, with the packages "
                                             "you installed (Tools → Python environment)"),
     }
+    # Only comments: as it is, the code runs and sets no output, in your environment and in Taskloom's Python.
+    new_config = {"use_environment": True, "code": """\
+# Each input is a variable named as in Inputs (by default `input`).
+# One block connected: input is that block's output.
+# Several blocks connected: input is a dict keyed by each block's name, e.g.
+#   input = {"load_sales": <a table>, "ask_region": "North"}
+#   sales, region = input["load_sales"], input["ask_region"]
+# A table arrives as a pandas DataFrame (in your Python environment), e.g.
+#   north = sales[sales["region"] == region]
+# params holds the flow's parameters, e.g. params["day"]
+# print() writes to the Log, e.g. print(len(north), "rows")
+# Set output to pass a value on (a DataFrame comes out as a table), e.g.
+#   output = north"""}
 
     @classmethod
     def ports(cls, config):
-        # Inputs can take several edges (e.g. the errors of many blocks); then they receive a list.
-        return ({n: ports.Any(required=False, any_of=True) for n in config["inputs"]},
+        # Inputs can take several edges (e.g. the errors of many blocks); then they receive a dict keyed
+        # by the source blocks' names, so your code can tell the values apart.
+        return ({n: ports.Any(required=False, any_of=True, by_source=True) for n in config["inputs"]},
                 {n: ports.Any() for n in config["outputs"]})
 
     def run(self, ctx, **inputs):
@@ -105,6 +121,62 @@ class PythonCode(Block):
             raise CodeError(e, filename, namespace, set(helpers)) from None
         # Outputs your code does not assign are not produced, so blocks after them are skipped.
         return {name: namespace[name] for name in self.config.outputs if name in namespace}
+
+
+class ReusableBlock(PythonCode):
+    """A Python Code block saved as a block of its own (in the editor: right-click it → Create Reusable block…), as
+    a file in your blocks folder (write_reusable_block). It runs the code it was saved with and has no settings."""
+
+    type_id = ""  # (each saved one has its own)
+    config = {}
+    new_config = {}
+    # The Python Code block's settings it runs with: inputs, outputs, code and use_environment.
+    python_code: dict = {}
+
+    @classmethod
+    def ports(cls, config):
+        return super().ports(cls.python_code)
+
+    def __init__(self, config):
+        super().__init__(self.python_code)
+
+
+def reusable_name(title: str) -> str:
+    """The file name and block type (user.<name>) of a reusable block called `title`: its letters (é as e) and
+    digits, the rest as _."""
+    plain = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", plain.lower()).strip("_")
+
+
+def write_reusable_block(folder: Path, title: str, description: str, inputs_help: str, python_code: dict) -> Path:
+    """Save a ReusableBlock called `title` as a readable Python file in `folder` (made if missing): its code line
+    by line."""
+    name = reusable_name(title)
+    code = "".join(f"            {line!r},\n" for line in python_code["code"].split("\n"))
+    text = f'''\
+# A block of your own, made from a Python Code block (in the editor: right-click it → Create Reusable block…).
+# It runs the code below: to change what it does, edit this file.
+from taskloom.blocks.logic import ReusableBlock
+
+
+class Reusable(ReusableBlock):
+    type_id = {f"user.{name}"!r}
+    title = {title!r}
+    category = 'User Created'
+    description = {description!r}
+    inputs_help = {inputs_help!r}
+    python_code = {{
+        'inputs': {python_code["inputs"]!r},
+        'outputs': {python_code["outputs"]!r},
+        'use_environment': {python_code["use_environment"]!r},
+        'code': '\\n'.join([
+{code}        ]),
+    }}
+'''
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{name}.py"
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
 def _printer(ctx):

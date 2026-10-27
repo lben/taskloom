@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields, setting_label
+from ..blocks.logic import ReusableBlock
 from ..calendars import load_calendar
 from ..config import kept_runs
 from ..expr import functions
@@ -104,9 +105,11 @@ def scheduler_icon(running: bool, size: int = 20) -> QIcon:
 
 
 def block_tooltip(cls) -> str:
-    """The hover text for a block: what it does in plain words."""
+    """The hover text for a block: what it does in plain words (and what its inputs expect, if it says)."""
     text = cls.description or "No description yet: add description = \"...\" to this block's class."
-    return f"<p style='white-space:normal'><b>{html.escape(cls.title or cls.type_id)}</b><br>{html.escape(text)}</p>"
+    inputs = f"<br><br><b>Its inputs:</b> {html.escape(cls.inputs_help)}" if cls.inputs_help else ""
+    return (f"<p style='white-space:normal'><b>{html.escape(cls.title or cls.type_id)}</b><br>{html.escape(text)}"
+            f"{inputs}</p>")
 
 
 # --- Blocks tree ------------------------------------------------------------------
@@ -149,15 +152,18 @@ class Palette(QWidget):
         layout.addWidget(title)
         layout.addWidget(self.search)
         layout.addWidget(self.tree)
-        self._build(registry)
+        self.show_blocks(registry)
         self.search.textChanged.connect(self._filter)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
 
-    def _build(self, registry):
+    def show_blocks(self, registry):
+        """Fill the tree with the registry's blocks (again, e.g. after a reusable block was saved: the search
+        still applies)."""
+        self.tree.clear()
         groups: dict[str, list] = {}
         for type_id, cls in registry.blocks.items():
             source = registry.sources.get(type_id)
-            category = cls.category if source == "built-in" else "User blocks"
+            category = cls.category if source == "built-in" else "User Created"
             groups.setdefault(category, []).append(cls)
         order = list(CATEGORY_COLORS) + sorted(set(groups) - set(CATEGORY_COLORS))
         for category in [c for c in order if c in groups]:
@@ -193,6 +199,7 @@ class Palette(QWidget):
         item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
         folder.addChild(item)
         folder.setExpanded(True)
+        self._filter(self.search.text())
 
     def _filter(self, text: str):
         text = text.strip().lower()
@@ -372,6 +379,11 @@ class PropertiesPanel(QScrollArea):
         if cls is None:
             layout.addWidget(QLabel("This block type is not installed."))
             return
+        if issubclass(cls, ReusableBlock):  # it has no settings: what it does and what its inputs expect instead
+            for heading, text in (("What it does", cls.description), ("What its inputs expect", cls.inputs_help)):
+                if text:
+                    layout.addWidget(QLabel(f"<b>{heading}</b>"))
+                    layout.addWidget(QLabel(text, wordWrap=True, textFormat=Qt.PlainText))
         config = spec.get("config") or {}
         when = cls.type_id == "trigger.schedule"
         keeps = cls.type_id in ("trigger.manual", "trigger.schedule")

@@ -53,6 +53,12 @@ def set_code(w, text):
 
 
 def test_build_save_reopen_and_run_a_flow_from_the_ui(win, qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QCheckBox
+
+    def in_taskloom_python():  # a new Python Code block runs in your Python environment; there is none here
+        (box,) = [b for b in win.properties.findChildren(QCheckBox) if "own Python environment" in b.toolTip()]
+        box.setChecked(False)
+
     flow_path = tmp_path / "doubler.yaml"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(flow_path), ""))
     tab = win.new_flow()
@@ -63,9 +69,11 @@ def test_build_save_reopen_and_run_a_flow_from_the_ui(win, qtbot, tmp_path, monk
     first, second = [b for b in tab.doc.blocks if b != "start"]
     tab.scene.nodes[first].setSelected(True)
     set_code(win, "output = 21")
+    in_taskloom_python()
     tab.scene.clearSelection()
     tab.scene.nodes[second].setSelected(True)
     set_code(win, "open('result.txt', 'w').write(str(input * 2))")
+    in_taskloom_python()
     drag_port_to_port(tab, first, "output", second, "input")
     drag_port_to_port(tab, "start", "start", first, "after")
     assert tab.doc.edges() == [(first, "output", second, "input"), ("start", "start", first, "after")]
@@ -1430,7 +1438,7 @@ def test_run_from_a_block_on_from_the_canvas(win, qtbot, tmp_path):
                                                    "Run only this block, with inputs I choose…",
                                                    "Run from this block on, with the same inputs",
                                                    "Run from this block on, with inputs I choose…",
-                                                   "Results of this block…"]
+                                                   "Results of this block…", "Create Reusable block…"]
     next(a for a in win._block_menu_for(tab, "compute").actions() if a.text().startswith("Run from")).trigger()
     qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
 

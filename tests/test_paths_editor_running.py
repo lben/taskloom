@@ -1308,7 +1308,7 @@ def test_a_table_you_type_as_a_polars_dataframe_reaches_the_block_as_a_table(win
 
 BLOCK_MENU = ["Run only this block, with the same inputs", "Run only this block, with inputs I choose…",
               "Run from this block on, with the same inputs", "Run from this block on, with inputs I choose…",
-              "Results of this block…"]
+              "Results of this block…", "Create Reusable block…"]  # (the last: Python Code blocks only)
 
 
 def test_right_clicking_a_blocks_title_a_port_or_the_message_under_it_opens_its_menu(win, qtbot, tmp_path,

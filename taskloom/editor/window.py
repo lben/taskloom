@@ -23,9 +23,10 @@ from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayo
 from .. import __version__, upgrade
 from .. import params as P
 from ..block import AFTER
+from ..blocks.logic import reusable_name, write_reusable_block
 from ..config import Home
 from ..engine import block_inputs, finished_text, input_ports
-from ..flow import FlowError, load_flow, read_flow_file, run_clock, schedules_of, validate
+from ..flow import BlockSpec, FlowError, block_config, load_flow, read_flow_file, run_clock, schedules_of, validate
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -831,7 +832,46 @@ class MainWindow(QMainWindow):
         results.setToolTip("Its results in the earlier runs: when each run started, what started it, its values")
         results.setEnabled(tab.doc.path is not None)
         results.triggered.connect(lambda: self.show_block_results(tab, block_id))
+        if cls is not None and cls.type_id == "logic.python":
+            menu.addAction("Create Reusable block…", lambda: self.create_reusable_block(tab, block_id))
         return menu
+
+    def create_reusable_block(self, tab: FlowTab, block_id: str):
+        """Save a Python Code block as a block of your own: a file in your blocks folder that runs its code, listed
+        at once under User Created in the blocks tree, for every open flow. The block itself stays as it is."""
+        self._finish_editing(tab)
+        spec = tab.doc.blocks[block_id]
+        cls = self.registry.get(spec["type"])
+        config = dict(spec.get("config") or {})
+        try:  # its inputs, outputs, code and Run in my Python environment, the defaults for those it leaves out
+            python_code = block_config(cls, BlockSpec(id=block_id, type=cls.type_id, config=config))
+        except ValueError as e:
+            QMessageBox.warning(self, "Create Reusable block", f"{block_id} cannot be saved as a block yet: {e}")
+            return
+        dialog = dialogs.ReusableBlockDialog(self._reusable_name_problem, self)
+        if not dialog.exec():
+            return
+        title = dialog.name.text().strip()
+        path = write_reusable_block(self.home.blocks_dir, title, dialog.what.toPlainText().strip(),
+                                    dialog.expects.toPlainText().strip(), python_code)
+        self.registry.add_file(path)  # (the registry the open flows use)
+        self.palette_panel.show_blocks(self.registry)
+        self.statusBar().showMessage(f"{title} saved in {path}: it is under User Created in the blocks tree", 15000)
+
+    def _reusable_name_problem(self, title: str) -> str:
+        """Why a new reusable block cannot be called `title` ("": it can). Each block in the tree has its own title
+        and type, and no file in your blocks folder is written over."""
+        name = reusable_name(title)
+        if not name:
+            return "Give it a name, with letters or digits."
+        for type_id, cls in self.registry.blocks.items():
+            if title in (cls.title, type_id):
+                return f"There is already a block called {title}: choose another name."
+            if type_id == f"user.{name}":
+                return f"Its block type would be {type_id}, which {cls.title} already has: choose another name."
+        if (self.home.blocks_dir / f"{name}.py").exists():
+            return f"{name}.py is already in your blocks folder ({self.home.blocks_dir}): choose another name."
+        return ""
 
     def show_block_results(self, tab: FlowTab, block_id: str):
         """A block's results in the runs it took part in; one of those runs can be put on the canvas."""

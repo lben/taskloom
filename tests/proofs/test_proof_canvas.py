@@ -5,8 +5,8 @@ import copy
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import (QApplication, QFileDialog, QLineEdit, QStyle, QStyleFactory, QStyleOptionSpinBox,
-                               QToolBar)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QLineEdit, QStyle, QStyleFactory,
+                               QStyleOptionButton, QStyleOptionSpinBox, QToolBar)
 
 from proofs.conftest import choose, menu_item, right_click
 from taskloom.editor.canvas import HEADER_H, NODE_W
@@ -340,8 +340,9 @@ def test_a_block_added_after_a_run_runs_on_that_runs_results(proof, win, qtbot, 
             tab.runs[0].status == "success" and all(shows(tab, b)[:2] == ("success", first) for b in line))
 
     p.step("Add a new block, biggest_sale, fed by read_sales. Double-click Python Code in the Blocks list and drag "
-           "the new block under total_sales. In Properties, name it biggest_sale and write its code, "
-           "output = max(input). Then drag from read_sales's output to its input.")
+           "the new block under total_sales. In Properties, name it biggest_sale, write its code, "
+           "output = max(input), and untick Run in my Python environment (there is none here, so it runs in "
+           "Taskloom's own Python). Then drag from read_sales's output to its input.")
     tree = win.palette_panel.tree
     tree.itemDoubleClicked.emit(tree.findItems("Python Code", Qt.MatchExactly | Qt.MatchRecursive)[0], 0)
     QApplication.processEvents()
@@ -359,10 +360,17 @@ def test_a_block_added_after_a_run_runs_on_that_runs_results(proof, win, qtbot, 
     QTest.keyClicks(code, "output = max(input)")
     code.editing_finished.emit()  # as when you click elsewhere
     QApplication.processEvents()
+    box = next(c for c in win.properties.findChildren(QCheckBox) if "own Python environment" in c.toolTip())
+    option = QStyleOptionButton()
+    box.initStyleOption(option)
+    QTest.mouseClick(box, Qt.LeftButton, Qt.NoModifier,
+                     box.style().subElementRect(QStyle.SE_CheckBoxIndicator, option, box).center())
+    QApplication.processEvents()
     drag_port_to_port(tab, "read_sales", "output", "biggest_sale", "input")
-    p.check("biggest_sale is in the flow, connected from read_sales's output",
+    p.check("biggest_sale is in the flow, connected from read_sales's output, and runs in Taskloom's own Python",
             ("read_sales", "output", "biggest_sale", "input") in tab.doc.edges()
-            and tab.doc.blocks["biggest_sale"]["config"].get("code") == "output = max(input)")
+            and tab.doc.blocks["biggest_sale"]["config"].get("code") == "output = max(input)"
+            and not tab.doc.blocks["biggest_sale"]["config"].get("use_environment"))
     p.check("biggest_sale shows no result: it was added after the run", shows(tab, "biggest_sale") == (None, None, ""))
     p.shot(win, f"① biggest_sale, new, shows no result of its own. ② read_sales, connected into it, shows its result "
                 f"from run #{first}.",

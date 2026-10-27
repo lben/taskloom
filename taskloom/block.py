@@ -17,13 +17,17 @@ class ports:
     class Port:
         kind = "any"
 
-        def __init__(self, required: bool = True, many: bool = False, any_of: bool = False):
+        def __init__(self, required: bool = True, many: bool = False, any_of: bool = False,
+                     by_source: bool = False):
             self.required = required
             # many: takes several edges and always receives a list, in edge order.
             self.many = many
             # any_of: takes several edges and runs when any one of them delivers (two paths that meet,
             # or several blocks' errors going to one handler). With several edges it receives a list.
             self.any_of = any_of
+            # by_source: with several edges it receives a dict instead, {source block: value} (see
+            # engine._arriving).
+            self.by_source = by_source
 
     class Any(Port):
         kind = "any"
@@ -158,10 +162,14 @@ class Block:
     title: str = ""
     # What the block does, in plain words; shown when hovering over it in the editor.
     description: str = ""
+    inputs_help: str = ""  # what its inputs expect, in plain words; shown with the description
     category: str = "Other"
     inputs: dict = {}
     outputs: dict = {}
     config: dict = {}
+    # The config a block added in the editor starts with (written into the flow file). A flow file's
+    # block gets only what the file says, and the field defaults for the rest.
+    new_config: dict = {}
 
     # Start blocks (Manual Start, Schedule) begin a run; see taskloom/blocks/triggers.py.
     is_trigger: bool = False

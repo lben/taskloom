@@ -231,7 +231,7 @@ def test_a_block_of_your_own_is_in_the_tree_under_user_blocks_and_is_added_and_r
     mine.show()
     tree = mine.palette_panel.tree
     (folder,) = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
-                 if tree.topLevelItem(i).text(0).startswith("User blocks")]
+                 if tree.topLevelItem(i).text(0).startswith("User Created")]
     assert [folder.child(i).text(0) for i in range(folder.childCount())] == ["Greet"]
     item = folder.child(0)
     assert "Says hello to whoever you name." in item.toolTip(0)  # on hover
@@ -325,8 +325,7 @@ def test_the_errors_of_several_blocks_dragged_into_one_input_all_reach_that_one_
         "compute": {"type": "logic.python", "config": {"inputs": [], "code": "output = 1 / 0"}, "ui": {"x": 0, "y": 200}},
         "handler": {"type": "logic.python", "config": {
             "inputs": ["errors"], "outputs": [],
-            "code": "errors = errors if isinstance(errors, list) else [errors]\n"
-                    "open('handled.txt', 'w').write(','.join(sorted(e['block'] for e in errors)))"},
+            "code": "open('handled.txt', 'w').write(','.join(sorted(e['block'] for e in errors.values())))"},
             "ui": {"x": 300, "y": 100}},
     }, ["start.start -> load.after", "start.start -> compute.after"])
     tab = win.open_flow(flow)

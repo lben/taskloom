@@ -152,7 +152,7 @@ def test_a_repeated_connection_into_an_input_that_takes_several_is_left_alone(en
           - p.output -> use.items
     """)
     assert env.taskloom("run", flow).returncode == 0
-    assert (env.root / "got.txt").read_text() == "[1, 1]"  # the block gets both
+    assert (env.root / "got.txt").read_text() == "{'p': 1}"  # a Python Code block gets them by source block
 
     result = env.taskloom("check", flow)
 

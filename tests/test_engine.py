@@ -626,7 +626,7 @@ def test_rerun_accepts_inputs_that_had_nothing_in_that_run(env):
             config:
               inputs: [value, errors]
               outputs: []
-              code: "open('handled.txt', 'w').write(f'{value} {[e[\\"block\\"] for e in errors]}')"
+              code: "open('handled.txt', 'w').write(f'{value} {[e[\\"block\\"] for e in errors.values()]}')"
         edges:
           - check.true -> handler.value
           - check.false -> handler.value
@@ -635,13 +635,13 @@ def test_rerun_accepts_inputs_that_had_nothing_in_that_run(env):
     """)
     assert env.taskloom("run", flow).returncode == 0
     run_id, _ = env.last_run()
-    assert (env.root / "handled.txt").read_text() == "[None] ['boom']"
+    assert (env.root / "handled.txt").read_text() == "{'check.true': None} ['boom']"
     (env.root / "handled.txt").unlink()
 
     result = env.taskloom("run", flow, "--only", "handler", "--inputs-from", run_id)
 
     assert result.returncode == 0, result.stderr
-    assert (env.root / "handled.txt").read_text() == "[None] ['boom']"
+    assert (env.root / "handled.txt").read_text() == "{'check.true': None} ['boom']"
 
 
 def test_rerun_refuses_inputs_that_held_a_password(env):
@@ -918,7 +918,7 @@ def test_retries_of_a_block_that_takes_several_tables_survive_cleanup(env):
             config: {inputs: [], sql: "select 2 as n"}
           u:
             type: logic.python
-            config: {inputs: [tables], outputs: [], code: "open('got.txt', 'a').write(str(sum(len(t) for t in tables)))"}
+            config: {inputs: [tables], outputs: [], code: "open('got.txt', 'a').write(str(sum(len(t) for t in tables.values())))"}
         edges:
           - l1.result -> u.tables
           - l2.result -> u.tables
@@ -1154,7 +1154,7 @@ def test_a_block_is_not_retried_with_part_of_its_inputs_after_one_source_fails(e
     result = env.taskloom("run", flow, "--only", "c", "--inputs-from", run_id)
 
     assert result.returncode == 2 and "b, before it, failed" in result.stderr
-    assert (env.root / "got.txt").read_text() == "['B', 'X']"
+    assert (env.root / "got.txt").read_text() == "{'b': 'B', 'x': 'X'}"
 
 
 def test_after_an_if_takes_the_other_path_the_block_where_paths_meet_can_be_retried(env):
@@ -1183,14 +1183,14 @@ def test_after_an_if_takes_the_other_path_the_block_where_paths_meet_can_be_retr
           - y.output -> c.input
     """)
     assert env.taskloom("run", flow).returncode == 0
-    assert (env.root / "got.txt").read_text() == "['X']"
+    assert (env.root / "got.txt").read_text() == "{'x': 'X'}"
     (env.root / "flip.txt").write_text("")
     for block in ("p", "check", "y", "c"):  # x is not retried: a full run would now skip it
         run_id, _ = env.last_run()
         result = env.taskloom("run", flow, "--only", block, "--inputs-from", run_id)
         assert result.returncode == 0, result.stderr
 
-    assert (env.root / "got.txt").read_text() == "['Y']"
+    assert (env.root / "got.txt").read_text() == "{'y': 'Y'}"
 
 
 def test_a_block_that_was_never_attempted_is_not_taken_as_skipped(env):

@@ -897,7 +897,9 @@ class FlowView(QGraphicsView):
         if type_id == TEXT_ITEM:
             self.scene().add_note_at(at)
         else:
-            self.scene().doc.add_block(type_id, at.x() - NODE_W / 2, at.y() - HEADER_H / 2)
+            cls = self.scene().registry.get(type_id)
+            self.scene().doc.add_block(type_id, at.x() - NODE_W / 2, at.y() - HEADER_H / 2,
+                                       cls.new_config if cls else None)
 
     def add_at_center(self, type_id: str):
         center = self.mapToScene(self.viewport().rect().center())

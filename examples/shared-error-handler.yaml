@@ -23,11 +23,10 @@ blocks:
       inputs: [errors]
       outputs: [subject, body]
       code: |
-        # One error gives a dict; errors from several blocks give a list of dicts.
-        errors = errors if isinstance(errors, list) else [errors]
-        steps = ", ".join(e["block"] for e in errors)
+        # Several blocks connected: errors is a dict keyed by the name of each block that failed.
+        steps = ", ".join(errors)
         subject = f"[Taskloom] {params.get('flow', 'flow')}: {steps} failed"
-        body = "\n\n".join(f"{e['block']} failed after {e['attempts']} attempt(s):\n{e['error']}" for e in errors)
+        body = "\n\n".join(f"{step} failed after {e['attempts']} attempt(s):\n{e['error']}" for step, e in errors.items())
     ui: {x: 520, y: 80}
   email:
     type: email.send

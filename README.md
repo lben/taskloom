@@ -164,17 +164,48 @@ taskloom editor examples/daily-sales-report.yaml
   the data on and shows it in the Log and Data preview. Its **message** is written like a
   Python f-string, e.g. `Healthy: {value['healthy']}`. Example:
   `examples/check-app-health.yaml` (Health Check's `result` output says healthy or not).
+- **Several blocks connected into one input of a Python Code block:** that input is a dict
+  keyed by each block's name (as on the canvas), with its output as the value, in the order
+  of the connections, e.g. `input["load"]`; with one block connected it is that block's
+  output. A block that connects two of its outputs there is keyed `block.output` (e.g.
+  `check.result`, `check.error`). Only the blocks that delivered are in it (after an If, the
+  path that ran). Other blocks that take several connections into one input (e.g. Inspect)
+  get a list, in the order of the connections.
 - **One error handler for many blocks:** connect the red `error` output of every block you
   want covered to one input of one block (e.g. a Python Code block); it runs once and gets
-  the errors, each naming its `block`. Example: `examples/shared-error-handler.yaml`.
+  the errors of the blocks that failed, each naming its `block` (a Python Code block gets
+  them as a dict keyed by those blocks' names). Example: `examples/shared-error-handler.yaml`.
 - **Python packages:** Tools → Python environment creates your own Python environment and
   installs packages with pip. Tick **Run in my Python environment** on a Python Code
   block to use them (`taskloom env create`, `taskloom env pip install NAME` from a terminal).
+  A Python Code block you add in the editor starts with it ticked (the flow file says
+  `use_environment: true`; a block whose file leaves it out runs in Taskloom's own Python,
+  where your code also has `pl`, `Table` and `ctx`) and with a few lines of comments as its
+  code that show what your code receives and sets: each input as a variable named as in
+  Inputs, several connected blocks as a dict keyed by their names, tables as pandas
+  DataFrames, `params`, `print()` to the Log, and `output`. As it is, that code runs and
+  sets no output.
+  In your environment every table a block receives, also inside a dict or list, is a pandas
+  DataFrame, so a block with a table among its inputs needs pandas and pyarrow there
+  (`taskloom env pip install pandas pyarrow`); without them it fails before your code runs
+  and says so. A pandas or polars DataFrame (or pyarrow Table) your code sets comes out as
+  a table.
 - **`print()` in a Python Code block** goes to that block's Log (and run history), like
   `log("...")`. `sys.exit()` ends the code there and the block succeeds; given a value other
   than 0 (e.g. `sys.exit("no data")`) the block fails.
   The screen shows the environment in use; **Use an existing environment…** picks one you
   already have (the `python_env` setting).
+- **A Python Code block as a block of your own:** right-click it → **Create Reusable
+  block…**, give it a name (its title in the blocks tree), say what it does and what its
+  inputs expect, and press OK. It is saved as a Python file in your blocks folder (e.g.
+  *Tidy names* → `blocks/tidy_names.py`, block type `user.tidy_names`) and listed at once
+  under **User Created**, its hover text saying what it does and what its inputs expect.
+  Added to any flow, it runs that block's code on what is connected to its inputs, with the
+  same inputs, outputs and **Run in my Python environment** choice, in the editor, with
+  `taskloom run` and on schedule. It has no Code field (its Properties say what it does and
+  what its inputs expect): to change its code, edit its file or make a new one. A name
+  another block already has (as its title or block type) is refused. The block it was made
+  from stays as it is.
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
   the flows you had open come back with them after a crash or a restart. If the editor
   ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. The
@@ -372,7 +403,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 | `connections.yaml` | Database connections, e.g. a JDBC driver, URL, jar and properties |
 | `settings.yaml` | `calendar`, `keep_runs_for`, `java_home`, `max_concurrent_runs`, `keeper`, notifications |
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
-| `blocks/*.py` | Your own blocks; same `type_id` as a built-in replaces it |
+| `blocks/*.py` | Your own blocks, listed under **User Created** in the blocks tree; same `type_id` as a built-in replaces it |
 | `history.db` | Every run, block result and log line |
 | `editor.ini` | Editor preferences and the flows you had open |
 | `scheduled.yaml` | Flows the scheduler runs |

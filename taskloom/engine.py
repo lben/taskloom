@@ -371,7 +371,7 @@ class _Runner:
         for name in dict.fromkeys(e.dst_port for e in incoming):
             port = in_ports.get(name)
             edges = [e for e in incoming if e.dst_port == name]
-            delivered = [self.outputs[(e.src, e.src_port)] for e in edges if (e.src, e.src_port) in self.outputs]
+            delivered = [(e, self.outputs[(e.src, e.src_port)]) for e in edges if (e.src, e.src_port) in self.outputs]
             missing = [e for e in edges if (e.src, e.src_port) not in self.outputs]
             # Usually every connected edge must deliver; an any_of input needs just one (paths that
             # meet after an If, or the error outputs of several blocks going to one handler).
@@ -381,8 +381,7 @@ class _Runner:
                 self._stopped_by_before |= any(e.src in self.before_unhandled for e in missing)
                 empty.append(name)
                 continue
-            # Several edges into one input give a list (in edge order), one edge gives the value.
-            inputs[name] = delivered if getattr(port, "many", False) or len(edges) > 1 else delivered[0]
+            inputs[name] = _arriving(port, edges, delivered)
         if not ready:
             if after_failure:  # it did not get its input because something before it failed
                 self.blocked.add(block_id)
@@ -626,15 +625,24 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
                 missing[port] = (f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
                                  "so it was not kept")
                 break
-            delivered.append(_map_marks(saved[edge.src_port], table))
-        else:  # as the runner hands them over: a list from several edges, else the value
-            many = getattr(input_ports(flow, registry, only).get(port), "many", False)
-            values[port] = delivered if many or _edges_into(flow, only, port) > 1 else delivered[0]
+            delivered.append((edge, _map_marks(saved[edge.src_port], table)))
+        else:  # as the runner hands them over
+            edges = [e for e in flow.edges if e.dst == only and e.dst_port == port]
+            values[port] = _arriving(input_ports(flow, registry, only).get(port), edges, delivered)
     return values, missing, {}
 
 
-def _edges_into(flow: Flow, block: str, port: str) -> int:
-    return sum(1 for e in flow.edges if e.dst == block and e.dst_port == port)
+def _arriving(port, edges: list, delivered: list) -> object:
+    """What an input gets from the edges into it (`delivered`: [(edge, value)] of those that delivered, in edge
+    order): one edge gives the value; several (or into a `many` port) a list in edge order, or, into a by_source
+    port (Python Code), {source block: value} in edge order. A block connecting several of its outputs there
+    is keyed block.port (e.g. check.result, check.error), so none is lost; how the blocks are connected sets
+    the keys, not which edges delivered."""
+    if getattr(port, "by_source", False) and len(edges) > 1:
+        sources = [src for src, _ in {(e.src, e.src_port) for e in edges}]  # each output connected there, once
+        return {(f"{e.src}.{e.src_port}" if sources.count(e.src) > 1 else e.src): value for e, value in delivered}
+    values = [value for _, value in delivered]
+    return values if getattr(port, "many", False) or len(edges) > 1 else values[0]
 
 
 class _Now:

@@ -239,7 +239,7 @@ def test_the_errors_of_several_blocks_reach_one_handler_that_runs_once(env):
               code: |
                 import json
                 with open("errors.json", "a") as f:
-                    f.write(json.dumps([[e["block"], e["error"]] for e in errors]) + "\\n")
+                    f.write(json.dumps([[e["block"], e["error"]] for e in errors.values()]) + "\\n")
         edges:
           - first.error -> handler.errors
           - second.error -> handler.errors
@@ -695,39 +695,6 @@ def test_code_in_your_environment_is_stopped_by_the_blocks_timeout(env, python_e
     run_id, _ = env.last_run()
     assert row(env, run_id, "slow")["error"] == "TimeoutError: timed out after 1 s"
     assert gone(int((env.root / "pid.txt").read_text()))  # its Python was stopped, not left running
-
-
-def test_in_an_environment_with_a_dataframe_library_tables_arrive_and_leave_as_dataframes(env):
-    # The Python running these tests has Taskloom's own polars and pyarrow: use it as "an existing environment".
-    use(env, Path(sys.prefix))
-    flow = env.write("flow.yaml", """
-        blocks:
-          sales:
-            type: data.duckdb_sql
-            config: {inputs: [], sql: "select 'EU' as region, 10 as total union all select 'US', 20"}
-          outside:
-            type: logic.python
-            config:
-              inputs: [table]
-              outputs: [doubled]
-              use_environment: true
-              code: |
-                print("library:", type(table).__module__.split(".")[0], len(table))
-                doubled = type(table)({"region": list(table["region"]), "total": [v * 2 for v in table["total"]]})
-          save:
-            type: data.write_file
-            config: {path: out.csv}
-        edges:
-          - sales.result -> outside.table
-          - outside.doubled -> save.table
-    """)
-    result = env.taskloom("run", flow)
-    run_id, status = env.last_run()
-
-    assert result.returncode == 0 and status == "success", (result.stderr, row(env, run_id, "outside")["error"])
-    said = logs(env, run_id, "outside")
-    assert "library: polars 2" in said or "library: pandas 2" in said, said  # a DataFrame, not a file path
-    assert sorted((env.root / "out.csv").read_text().splitlines()) == ["EU,20", "US,40", "region,total"]
 
 
 def test_a_pip_command_that_fails_exits_with_a_failure_and_shows_pips_message(env, python_env):

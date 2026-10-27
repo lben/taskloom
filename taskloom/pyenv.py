@@ -18,8 +18,11 @@ from pathlib import Path
 
 from .launch import frozen
 
-# Runs inside the environment's Python, so it may only use the standard library (and
-# pandas/polars/pyarrow when they happen to be installed there).
+# The helper's exit code (its sys.exit(3)) when a table among the inputs cannot be read as a pandas DataFrame.
+NO_PANDAS = 3
+
+# Runs inside the environment's Python, so it may only use the standard library (and pandas, to
+# read the tables among the inputs; pandas/polars/pyarrow for the DataFrames your code sets).
 HELPER = r'''
 import pickle, sys
 # The pipe to Taskloom is read as UTF-8 (on Windows it would otherwise get the ANSI code page, e.g. cp1252):
@@ -29,21 +32,23 @@ sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 result_file = sys.argv[1]
 job = pickle.load(sys.stdin.buffer)  # never written to disk: it can hold passwords
 
-def load_table(path):
-    try:
-        import pandas
-        return pandas.read_parquet(path)
-    except ImportError:
-        pass
-    try:
-        import polars
-        return polars.read_parquet(path)
-    except ImportError:
-        return path  # no DataFrame library here: you get the Parquet file's path
+def as_dataframes(value):
+    """Every table, at any depth, as a pandas DataFrame read from its Parquet file."""
+    if isinstance(value, dict):
+        if "__table__" in value:
+            import pandas
+            return pandas.read_parquet(value["__table__"])
+        return {k: as_dataframes(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [as_dataframes(v) for v in value]
+    return value
 
 namespace = {"params": job["params"], "log": lambda *a: print(*a, flush=True)}
-for name, value in job["inputs"].items():
-    namespace[name] = load_table(value["__table__"]) if isinstance(value, dict) and "__table__" in value else value
+try:
+    namespace.update((name, as_dataframes(value)) for name, value in job["inputs"].items())
+except ImportError as error:  # no pandas, or no pyarrow for it to read Parquet with: Taskloom says what to install
+    print(error, flush=True)
+    sys.exit(3)  # NO_PANDAS
 import linecache, types
 filename = job["name"] + ".py"
 linecache.cache[filename] = (len(job["code"]), None, job["code"].splitlines(True), filename)
@@ -224,6 +229,10 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> dict:
             raise Cancelled()
         ctx._attempt_cancel.wait(0.1)
     reader.join(5)
+    if proc.returncode == NO_PANDAS:
+        raise RuntimeError("a table among this block's inputs arrives as a pandas DataFrame, which needs pandas "
+                           "and pyarrow in your Python environment: install them under Tools → Python environment "
+                           "(or taskloom env pip install pandas pyarrow). Your code did not run.")
     if proc.returncode != 0:
         raise RuntimeError("the code failed in your Python environment:\n" + "\n".join(lines[-30:]))
     try:

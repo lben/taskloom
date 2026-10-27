@@ -31,37 +31,30 @@ def test_python_block_uses_packages_installed_in_your_environment(env):
 
     flow = env.write("flow.yaml", """
         blocks:
-          sales:
-            type: data.duckdb_sql
-            config: {inputs: [], sql: "select 'EU' as region, 10 as total"}
           greet:
             type: logic.python
             config:
-              inputs: [table, who]
-              outputs: [message, where]
+              inputs: [who]
+              outputs: [message]
               use_environment: true
               code: |
                 import sys, tinypkg
                 log("running in", sys.prefix)
                 message = tinypkg.greet(who) + f" ({len(params)} params)"
-                where = table  # this environment has no DataFrame library: tables arrive as a file path
           who:
             type: logic.python
             config: {inputs: [], code: "output = 'Ana'"}
           save:
             type: logic.python
-            config: {inputs: [message, where], outputs: [], code: "open('out.txt', 'w').write(message + '|' + where)"}
+            config: {inputs: [message], outputs: [], code: "open('out.txt', 'w').write(message)"}
         edges:
-          - sales.result -> greet.table
           - who.output -> greet.who
           - greet.message -> save.message
-          - greet.where -> save.where
     """)
     result = env.taskloom("run", flow)
 
     assert result.returncode == 0, result.stderr
-    message, where = (env.root / "out.txt").read_text().split("|")
-    assert message == "hello Ana from tinypkg (0 params)" and where.endswith("result.parquet")
+    assert (env.root / "out.txt").read_text() == "hello Ana from tinypkg (0 params)"
     run_id, _ = env.last_run()
     logs = " ".join(m for (m,) in env.query("SELECT message FROM logs WHERE run_id=? AND block='greet'", run_id))
     assert "python-env" in logs

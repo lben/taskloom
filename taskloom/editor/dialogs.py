@@ -21,6 +21,7 @@ from ..block import IDENTIFIER
 from ..config import SETTINGS_DEFAULTS, keep_runs_for
 from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
+from .canvas import STATUS_COLORS
 from .panels import MONO
 
 
@@ -755,6 +756,44 @@ class ChooseInputsDialog(QDialog):
             elif text != shown:
                 given[name] = text
         return given
+
+
+class ReusableBlockDialog(QDialog):
+    """Create Reusable block: the new block's name (its title in the blocks tree), what it does and what its inputs
+    expect. OK takes a name only when `problem(name)` has nothing against it; else the window says why."""
+
+    def __init__(self, problem, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Reusable block")
+        self.resize(520, 0)
+        self.problem = problem
+        layout = QVBoxLayout(self)
+        intro = QLabel("Saves this block as a block of your own, under <b>User Created</b> in the blocks tree, to use "
+                       "in any flow: it runs this block's code on what is connected to its inputs.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        self.name, self.what, self.expects = QLineEdit(), QPlainTextEdit(), QPlainTextEdit()
+        form.addRow("Name", self.name)
+        form.addRow("What it does", self.what)
+        form.addRow("What its inputs expect", self.expects)
+        layout.addLayout(form)
+        self.why = QLabel()  # why the name cannot be used
+        self.why.setWordWrap(True)
+        self.why.setStyleSheet(f"color: {STATUS_COLORS['failed']};")
+        self.why.hide()
+        layout.addWidget(self.why)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._ok)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _ok(self):
+        why = self.problem(self.name.text().strip())
+        self.why.setText(why)
+        self.why.setVisible(bool(why))
+        if not why:
+            self.accept()
 
 
 class BlockResultsDialog(QDialog):

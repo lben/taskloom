@@ -40,6 +40,20 @@ class Registry:
                 self.blocks[cls.type_id] = cls
                 self.sources[cls.type_id] = source
 
+    def add_file(self, path: Path):
+        """The blocks of a user block file (one that cannot be loaded is a warning)."""
+        module_name = f"taskloom_user_blocks.{path.stem}"
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+        except Exception as e:
+            sys.modules.pop(module_name, None)
+            self.warnings.append(f"could not load user block file {path}: {e}")
+            return
+        self._add_from(module, str(path))
+
 
 def discover(user_blocks_dir: Path | None) -> Registry:
     registry = Registry()
@@ -52,17 +66,6 @@ def discover(user_blocks_dir: Path | None) -> Registry:
             registry.warnings.append(f"could not load block plugin {ep.value}: {e}")
     if user_blocks_dir and user_blocks_dir.is_dir():
         for path in sorted(user_blocks_dir.glob("*.py")):
-            if path.name.startswith("_"):
-                continue
-            module_name = f"taskloom_user_blocks.{path.stem}"
-            try:
-                spec = importlib.util.spec_from_file_location(module_name, path)
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = module
-                spec.loader.exec_module(module)
-            except Exception as e:
-                sys.modules.pop(module_name, None)
-                registry.warnings.append(f"could not load user block file {path}: {e}")
-                continue
-            registry._add_from(module, str(path))
+            if not path.name.startswith("_"):
+                registry.add_file(path)
     return registry
