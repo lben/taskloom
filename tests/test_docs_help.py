@@ -23,6 +23,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag
 
+import pytest
 import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -1342,6 +1343,33 @@ def test_with_the_column_hidden_the_window_has_its_layout_and_open_it_sits_right
         settle()
         assert not column_shown(win)
         dock.setFloating(False)
+    finally:
+        clean_all()
+
+
+@pytest.mark.parametrize("width", [1000, 1100])
+def test_opened_with_no_room_beside_the_docks_and_closed_the_column_leaves_the_layout_as_it_was(win, width):
+    """Rules 13, 14: in a window too narrow to open the column beside Blocks, canvas and Inspector, Qt makes room
+    for it (from Blocks, or by widening the window); closed, the window and their widths are as before it opened."""
+    try:
+        win.resize(width, 800)
+        win.new_flow()
+        settle()
+        blocks = next(d for d in win.findChildren(QDockWidget) if d.windowTitle() == "Blocks")
+
+        def layout():
+            return win.width(), blocks.width(), win.centralWidget().width(), win.inspector.width()
+
+        before = layout()
+        action = documentation_action(win)
+        action.trigger()
+        settle()
+        assert column_shown(win) and x_of(docs_dock(win)) > x_of(win.inspector)
+        opened = layout()
+        assert opened[0] > before[0] or opened[1] < before[1], (opened, before)  # (no room: Qt made some)
+        action.trigger()
+        settle()
+        assert layout() == before, (layout(), before)
     finally:
         clean_all()
 

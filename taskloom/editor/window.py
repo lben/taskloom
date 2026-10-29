@@ -199,7 +199,8 @@ class DocsBrowser(QTextBrowser):
 
 class DocsColumn(QDockWidget):
     """Help > Documentation: a column right of the Inspector, 360 px wide when it opens, with Back, Forward and
-    Contents above the page. Hidden at launch; when it is closed, the Inspector gets its width back."""
+    Contents above the page. Hidden at launch; when it is closed, the window, Blocks and the Inspector get back the
+    widths they had before it opened."""
 
     WIDTH = 360
 
@@ -229,7 +230,7 @@ class DocsColumn(QDockWidget):
         layout.addLayout(buttons)
         layout.addWidget(self.browser)
         self.setWidget(column)
-        self._inspector_width = None  # the Inspector's width before the column opened next to it
+        self._before = None  # the widths of the window, Blocks and the Inspector before the column opened docked
 
     def open_at(self, href: str):
         """Show the page and entry `href` (e.g. blocks-files.html#files.copy.source), opening the column."""
@@ -246,21 +247,30 @@ class DocsColumn(QDockWidget):
         QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
         self.browser.scrollToAnchor(anchor)
 
+    def setVisible(self, visible: bool):
+        window = self.parentWidget()
+        if visible and self.isHidden() and not self.isFloating():  # opened next to the Inspector
+            # Measured now: showing it lays the window out with it, taking its room from the canvas, then Blocks,
+            # then widening the window.
+            self._before = window.width(), window.blocks_dock.width(), window.inspector.width()
+            super().setVisible(True)
+            window.resizeDocks([window.inspector, self], [self._before[2], self.WIDTH], Qt.Horizontal)
+        elif not visible and not self.isHidden() and self._before is not None:  # closed
+            (width, blocks, inspector), self._before = self._before, None
+            widened = width < window.width() <= window.minimumWidth()  # (by Qt for the column: not by you since)
+            super().setVisible(False)
+            # The column out of the layout now (Qt gives its width to the Inspector), so the window can narrow.
+            window.layout().activate()
+            if widened:
+                window.resize(width, window.height())
+            window.resizeDocks([window.blocks_dock, window.inspector], [blocks, inspector], Qt.Horizontal)
+        else:
+            super().setVisible(visible)
+
     def showEvent(self, event):
         super().showEvent(event)
-        window = self.parentWidget()
-        if self._inspector_width is None and not self.isFloating():
-            self._inspector_width = window.inspector.width()
-            window.resizeDocks([window.inspector, self], [self._inspector_width, self.WIDTH], Qt.Horizontal)
         if self.browser.source().isEmpty():
             self.browser.setSource(QUrl("index.html"))  # the first opening: Contents
-
-    def hideEvent(self, event):
-        super().hideEvent(event)
-        if self.isHidden() and self._inspector_width is not None:  # closed (not its window minimised)
-            window, width, self._inspector_width = self.parentWidget(), self._inspector_width, None
-            # Qt gives the column's width to the Inspector: back to the canvas, once the column is out.
-            QTimer.singleShot(0, window, lambda: window.resizeDocks([window.inspector], [width], Qt.Horizontal))
 
 
 class FlowTab(QWidget):
@@ -349,7 +359,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self.palette_panel = Palette(self.registry)
-        self._dock("Blocks", self.palette_panel, Qt.LeftDockWidgetArea)
+        self.blocks_dock = self._dock("Blocks", self.palette_panel, Qt.LeftDockWidgetArea)
         self.flow_status = FlowTabsStatus(self.tabs)  # each flow's last result and next run, on its tab
 
         self.properties = PropertiesPanel(self.home, self.settings)
