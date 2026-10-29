@@ -144,6 +144,15 @@ def squashed(text: str) -> str:
     return "".join(text.split()).lower()
 
 
+def loose(text: str) -> str:
+    """A pattern for `text` as the PDF's text reads back on every system: the headings' letters are spaced out,
+    and on Windows the reader puts stray spaces between them (e.g. "ne w s ince v0. 1. 0")."""
+    return r"\s*".join(map(re.escape, squashed(text)))
+
+
+NEW = r"\bn\s?e\s?w\b"  # the word "new", also read back as "ne w"
+
+
 class Pdf:
     """Each page's text (lower case; `flat`: its spaces and line breaks as one space), and the cover's links to
     pages of the PDF: (the text the link is on, squashed; the index of the page it goes to)."""
@@ -215,12 +224,12 @@ def assert_marked(pdf: Pdf, changes: list, mark: str, new: set):
         for page in pages:
             if title in new:
                 over = [" ".join(line.split()) for line in pdf.texts[page].splitlines()
-                        if re.search(rf"\bchange {number}\b(?!:)", line)]
+                        if re.search(rf"\b{loose('change')}\s+{number}\b(?!:)", line)]
                 assert over, f"page {page + 1} of change {number} has no over-heading: {pdf.flat[page]}"
-                assert all(mark in line for line in over), \
+                assert all(re.search(loose(mark), line) for line in over), \
                     f"page {page + 1} of change {number} ({title}) is not marked {mark!r}: {over}"
             else:
-                assert not re.search(r"\bnew\b", pdf.flat[page]), \
+                assert not re.search(NEW, pdf.flat[page]), \
                     f"page {page + 1} of change {number} ({title}, not new) says new: {pdf.flat[page]}"
 
 
@@ -241,11 +250,12 @@ def test_the_cover_lists_each_new_change_with_a_link_to_it_and_marks_it_new(tmp_
     changes = [LATE, OLD, ADDED]
     first = {title: pdf.first_page(number, title) for number, title in enumerate(changes, 1)}
     cover = pdf.cover_text()
-    assert heading in cover, f"no {heading!r} on the cover: {cover}"
-    assert cover.index(heading) < cover.index("in this proof"), "the list is not before 'In this proof'"
+    found, proof_at = re.search(loose(heading), cover), re.search(loose("in this proof"), cover).start()
+    assert found, f"no {heading!r} on the cover: {cover}"
+    assert found.start() < proof_at, "the list is not before 'In this proof'"
     if release:
-        assert "new since" not in cover
-    listed = cover[cover.index(heading) + len(heading):cover.index("in this proof")]
+        assert not re.search(loose("new since"), cover)
+    listed = cover[found.end():proof_at]
     late, old, added = (re.escape(title.lower()) for title in changes)
     assert re.search(rf"\b1\b.*?{late}.*?passed.*?windows.*?page {first[LATE] + 1}\b"
                      rf".*?\b3\b.*?{added}.*?failed.*?linux.*?page {first[ADDED] + 1}\b", listed), \
@@ -256,12 +266,12 @@ def test_the_cover_lists_each_new_change_with_a_link_to_it_and_marks_it_new(tmp_
     assert pdf.linked(LATE, ADDED) == {LATE: first[LATE], ADDED: first[ADDED]}, pdf.links
     assert len(pdf.links) == 2, f"one link per new change: {pdf.links}"
 
-    in_this_proof = cover[cover.index("in this proof"):]
+    in_this_proof = cover[proof_at:]
     assert re.search(rf"\b1\b.*?{late}.*?page {first[LATE] + 1}\b.*?\b2\b.*?{old}.*?page {first[OLD] + 1}\b"
                      rf".*?\b3\b.*?{added}.*?page {first[ADDED] + 1}\b", in_this_proof), in_this_proof
     assert re.search(rf"{late}\W*new\b", in_this_proof) and re.search(rf"{added}\W*new\b", in_this_proof), \
         f"no NEW after each new change's title: {in_this_proof}"
-    assert len(re.findall(r"\bnew\b", in_this_proof)) == 2, f"NEW only for the 2 new changes: {in_this_proof}"
+    assert len(re.findall(NEW, in_this_proof)) == 2, f"NEW only for the 2 new changes: {in_this_proof}"
     assert "1 of 3 changes did not pass their proof" in cover, cover
 
     assert_marked(pdf, changes, heading, {LATE, ADDED})
@@ -279,10 +289,11 @@ def test_nothing_new_since_the_base_tag(tmp_path, qapp):
     pdf = build(tmp_path, [windows], "--repo", repo)
 
     cover = pdf.cover_text()
-    assert "nothing new since v0.1.0" in cover, cover
-    assert cover.index("nothing new since v0.1.0") < cover.index("in this proof")
+    nothing = re.search(loose("nothing new since v0.1.0"), cover)
+    assert nothing, cover
+    assert nothing.start() < re.search(loose("in this proof"), cover).start()
     assert pdf.links == []
-    assert len(re.findall(r"\bnew\b", " ".join(pdf.flat))) == 1, "a NEW mark where nothing is new"
+    assert len(re.findall(NEW, " ".join(pdf.flat))) == 1, "a NEW mark where nothing is new"
 
 
 @pytest.mark.parametrize("case", ["not a repository", "no v tag", "shallow checkout", "no git program"])
@@ -310,7 +321,7 @@ def test_without_history_or_a_base_tag_no_list_and_no_mark(tmp_path, qapp, case)
         env = {**os.environ, "PATH": path}
     pdf = build(tmp_path, as_ci_records(tmp_path), "--repo", repo, env=env)
 
-    saying_new = [text for text in pdf.flat if re.search(r"\bnew\b", text)]
+    saying_new = [text for text in pdf.flat if re.search(NEW, text)]
     assert saying_new == [], f"'new' in the PDF ({case}): {saying_new}"
     assert pdf.links == []
 
@@ -326,7 +337,7 @@ def test_by_default_it_reads_the_repository_proof_pdf_lives_in(tmp_path, qapp):
     elsewhere.mkdir()
     pdf = build(tmp_path, as_ci_records(tmp_path), script=repo / "packaging" / "proof_pdf.py", cwd=elsewhere)
 
-    assert SINCE in pdf.cover_text(), pdf.cover_text()
+    assert re.search(loose(SINCE), pdf.cover_text()), pdf.cover_text()
     assert pdf.linked(LATE, ADDED) == {LATE: pdf.first_page(1, LATE), ADDED: pdf.first_page(3, ADDED)}, pdf.links
     assert_marked(pdf, [LATE, OLD, ADDED], SINCE, {LATE, ADDED})
 
