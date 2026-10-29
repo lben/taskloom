@@ -60,16 +60,21 @@ class Chart(Block):
     inputs = {"table": ports.Table()}
     outputs = {"image": ports.Any()}
     config = {
-        "kind": fields.Choice(CHART_KINDS, default="bar"),
-        "x": fields.Text(required=False, help="Column for categories / the x axis"),
+        "kind": fields.Choice(CHART_KINDS, default="bar", help="How the values are drawn: bars, horizontal bars "
+                                                                "(barh), lines, areas, dots (scatter), a pie, or a "
+                                                                "histogram (hist)"),
+        "x": fields.Text(required=False, help="Column for categories / the x axis", examples=["region", "day"]),
         "x_label": fields.Text(required=False, help="Name shown on the x axis, e.g. Store ID; "
-                                                    "default the x column's"),
-        "y": fields.List(help="One or more value columns (one per series)"),
-        "y_label": fields.Text(required=False, help="Name shown on the value axis; default the y column's"),
-        "title": fields.Text(required=False),
-        "width": fields.Int(default=640),
-        "height": fields.Int(default=360),
-        "max_points": fields.Int(default=5000, help="Rows used; summarise bigger tables first"),
+                                                    "default the x column's", examples=["Region", "Store ID"]),
+        "y": fields.List(help="One or more value columns (one per series)", examples=["total", "sales, returns"]),
+        "y_label": fields.Text(required=False, help="Name shown on the value axis; default the y column's",
+                               examples=["Sales (EUR)", "Orders"]),
+        "title": fields.Text(required=False, help="A title above the chart (none: no title)",
+                             examples=["Sales by region", "Orders per day"]),
+        "width": fields.Int(default=640, help="The picture's width, in pixels", examples=["640", "800", "1024"]),
+        "height": fields.Int(default=360, help="The picture's height, in pixels", examples=["360", "480", "600"]),
+        "max_points": fields.Int(default=5000, help="Rows used; summarise bigger tables first",
+                                 examples=["5000", "1000", "20000"]),
     }
 
     def run(self, ctx, table):
@@ -125,13 +130,16 @@ class HtmlTemplate(Block):
     inputs = {"data": ports.Any(required=False, many=True, by_source=True)}
     outputs = {"html": ports.Any()}
     config = {
-        "names": fields.SourceNames("data", label="Inputs"),
+        "names": fields.SourceNames("data", label="Inputs", examples=["chart", "my_table", "input1"]),
         "template": fields.Code("html", default="", help=(
             "The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
             "date, e.g. {total:,.2f} or {day:%d %B %Y}; write {{ and }} for literal braces. Enter makes no new "
-            "line in the email: use <br> (New line). Empty: every input in turn.")),
+            "line in the email: use <br> (New line). Empty: every input in turn."),
+                                examples=["Hi {input1}, please see below the chart<br>{chart}",
+                                          "<b>Sales on {day:%d %B %Y}</b><br>{my_table}", ""]),
         "max_rows": fields.Int(default=500, minimum=1, label="Max table rows",
-                               help="Emails get slow and get clipped with very long tables"),
+                               help="Emails get slow and get clipped with very long tables",
+                               examples=["500", "100", "50"]),
     }
 
     @classmethod
@@ -186,13 +194,19 @@ class ToExcel(Block):
     category = "Reports"
     outputs = {"file": ports.Any()}
     config = {
-        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.xlsx", files=["Excel workbook (*.xlsx)"]),
-        "sheets": fields.Names(default=["table"], help="One input and sheet per name"),
+        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.xlsx", files=["Excel workbook (*.xlsx)"],
+                            examples=["reports/sales_{day:%Y-%m-%d}.xlsx", "out/report.xlsx"]),
+        "sheets": fields.Names(default=["table"], help="One input and sheet per name",
+                               examples=["table", "sales, totals"]),
         "chart": fields.Choice(["none"] + list(_EXCEL_CHART_TYPES), default="none", help="A native Excel chart"),
-        "chart_sheet": fields.Text(required=False, help="Sheet with the chart data; default the first"),
-        "chart_x": fields.Text(required=False),
-        "chart_y": fields.List(default=[]),
-        "chart_title": fields.Text(required=False),
+        "chart_sheet": fields.Text(required=False, help="Sheet with the chart data; default the first",
+                                   examples=["totals", "sales"]),
+        "chart_x": fields.Text(required=False, help="The chart sheet's column for the categories (the x axis); "
+                                                    "none: the rows are numbered", examples=["region", "day"]),
+        "chart_y": fields.List(default=[], help="The chart sheet's columns with the values, one series each "
+                                                "(a chart needs at least one)", examples=["total", "sales, returns"]),
+        "chart_title": fields.Text(required=False, help="A title above the chart (none: no title)",
+                                   examples=["Sales by region", "Totals"]),
     }
 
     @classmethod
@@ -266,12 +280,18 @@ class SendEmail(Block):
               "subject": ports.Any(required=False)}
     outputs = {"sent": ports.Any()}
     config = {
-        "connection": fields.Connection(kind="smtp"),
-        "to": fields.List(default=[], help="Addresses; empty means notify_email from settings"),
-        "cc": fields.List(default=[]),
-        "subject": fields.Text(required=False, help="e.g. Daily sales {day:%Y-%m-%d}; a connected 'subject' input wins"),
-        "message": fields.Text(required=False, help="Text shown above the body"),
-        "save_copy": fields.Path(required=False, help="Also save the email as a .eml file"),
+        "connection": fields.Connection(kind="smtp", help="The mail server to send it through: one of your SMTP "
+                                                          "connections (Tools > Connections)"),
+        "to": fields.List(default=[], help="Addresses; empty means notify_email from settings",
+                          examples=["ana@example.com", "ana@example.com, ops@example.com"]),
+        "cc": fields.List(default=[], help="Addresses that get a copy",
+                          examples=["lead@example.com", "lead@example.com, audit@example.com"]),
+        "subject": fields.Text(required=False, help="e.g. Daily sales {day:%Y-%m-%d}; a connected 'subject' input wins",
+                               examples=["Daily sales {day:%Y-%m-%d}", "Nightly load finished"]),
+        "message": fields.Text(required=False, help="Text shown above the body",
+                               examples=["Good morning, here are yesterday's sales.", "The load finished."]),
+        "save_copy": fields.Path(required=False, help="Also save the email as a .eml file",
+                                 examples=["out/email_{day:%Y-%m-%d}.eml", "sent/report.eml"]),
     }
 
     def run(self, ctx, body=None, attachments=None, subject=None):

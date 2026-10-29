@@ -61,14 +61,15 @@ class History:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = connect(path)
         self._db.executescript(SCHEMA)
-        columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
+        columns = {table: {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+                   for table in ("runs", "logs")}
         # A history file from before runs recorded their process, what started them, or the start blocks they
-        # count for: it gets the column.
-        for name, kind in (("pid", "INTEGER"), ("started_by", "TEXT NOT NULL DEFAULT ''"),
-                           ("counts_for", "TEXT NOT NULL DEFAULT ''")):
-            if name not in columns:
+        # count for, or before log lines said how the Log shows them: it gets the column.
+        for table, name, kind in (("runs", "pid", "INTEGER"), ("runs", "started_by", "TEXT NOT NULL DEFAULT ''"),
+                                  ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("logs", "show", "TEXT")):
+            if name not in columns[table]:
                 try:
-                    self._db.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
                 except sqlite3.OperationalError:
                     pass  # another process added it just now
         self._lock = threading.Lock()
@@ -115,8 +116,8 @@ class History:
             )
         elif kind == "log":
             self._exec(
-                "INSERT INTO logs (run_id, block, ts, level, message) VALUES (?, ?, ?, ?, ?)",
-                (run_id, event.get("block"), ts, event["level"], event["message"]),
+                "INSERT INTO logs (run_id, block, ts, level, message, show) VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, event.get("block"), ts, event["level"], event["message"], event.get("show")),
             )
         elif kind == "run_finished":
             self._exec("UPDATE runs SET status=?, finished=? WHERE id=?", (event["status"], ts, run_id))
@@ -201,8 +202,10 @@ class History:
                         "previews": json.loads(r[9] or "{}"), "finished": r[10]}) for r in rows]
 
     def logs(self, run_id: int) -> list[dict]:
-        rows = self._exec("SELECT block, ts, level, message FROM logs WHERE run_id=? ORDER BY rowid", (run_id,))
-        return [dict(zip(("block", "ts", "level", "message"), r)) for r in rows]
+        """Each log line of a run: block, ts, level, message and show (how the Log draws it: None, "image" or
+        "markdown")."""
+        rows = self._exec("SELECT block, ts, level, message, show FROM logs WHERE run_id=? ORDER BY rowid", (run_id,))
+        return [dict(zip(("block", "ts", "level", "message", "show"), r)) for r in rows]
 
     def running(self) -> list[dict]:
         """Runs in progress, of any flow, with the process running each (None: from before runs said)."""

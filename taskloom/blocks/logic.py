@@ -69,10 +69,17 @@ class PythonCode(Block):
     category = "Logic"
     has_done = True  # it may set none of its outputs
     config = {
-        "inputs": fields.Names(default=["input"], help="Variables your code receives."),
+        "inputs": fields.Names(default=["input"], help="Variables your code receives.",
+                               examples=["input", "sales, regions", "load_sales, ask_region"]),
         "outputs": fields.Names(default=["output"], outputs=True,
-                                help="Variables your code sets; unset ones are not produced."),
-        "code": fields.Code("python"),
+                                help="Variables your code sets; unset ones are not produced.",
+                                examples=["output", "north, south", "result"]),
+        "code": fields.Code("python", help="The Python your block runs. Each input is a variable named as in "
+                                           "Inputs, params holds the flow's parameters and print() writes to the "
+                                           "Log; set the variables named in Outputs to pass values on.",
+                            examples=["output = len(input)",
+                                      'north = input[input["region"] == "North"]\noutput = north',
+                                      'print(params["day"])\noutput = input']),
         "use_environment": fields.Bool(default=False, label="Run in my Python environment",
                                        help="Run in your own Python environment, with the packages "
                                             "you installed (Tools → Python environment)"),
@@ -200,7 +207,9 @@ class If(Block):
     inputs = {"value": ports.Any(required=False)}
     outputs = {"true": ports.Any(), "false": ports.Any()}
     has_done = True  # only one of its outputs arrives
-    config = {"condition": fields.Code("expression", help="e.g. len(value) > 0 or is_business_day(today())")}
+    config = {"condition": fields.Code("expression", help="e.g. len(value) > 0 or is_business_day(today())",
+                                       examples=["len(value) > 0", "is_business_day(today())",
+                                                 "value['healthy']"])}
 
     def run(self, ctx, value=None):
         result = evaluate(self.config.condition, {**ctx.functions, **ctx.params, "value": value})
@@ -214,7 +223,8 @@ class Wait(Block):
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"value": ports.Any()}
-    config = {"seconds": fields.Float()}
+    config = {"seconds": fields.Float(help="How long to wait, in seconds: a number, 0.5 for half a second",
+                                      examples=["5", "0.5", "90"])}
 
     def run(self, ctx, value=None):
         ctx.wait(self.config.seconds)
@@ -229,11 +239,17 @@ class AskUser(Block):
     inputs = {"value": ports.Any(required=False)}
     outputs = {"answer": ports.Any()}
     config = {
-        "prompt": fields.Text(),
-        "kind": fields.Choice(["text", "password", "yes_no", "choice"], default="text"),
-        "options": fields.List(default=[], help="Choices for kind 'choice'"),
-        "default": fields.Text(required=False, help="Used when nobody can be asked (scheduled runs)"),
-        "secret": fields.Text(required=False, help="Secret to use when nobody can be asked"),
+        "prompt": fields.Text(help="The question you are asked when you run the flow from the editor",
+                              examples=["Which region?", "Send the report now?", "Password for the warehouse"]),
+        "kind": fields.Choice(["text", "password", "yes_no", "choice"], default="text",
+                              help="The answer it takes: text; a password (hidden in the Log); yes_no (true or "
+                                   "false); or choice (one of Options)"),
+        "options": fields.List(default=[], help="Choices for kind 'choice'",
+                               examples=["North, South", "small, medium, large"]),
+        "default": fields.Text(required=False, help="Used when nobody can be asked (scheduled runs)",
+                               examples=["North", "yes", "2026-10-01"]),
+        "secret": fields.Text(required=False, help="Secret to use when nobody can be asked",
+                              examples=["warehouse_password", "report_token"]),
     }
 
     def run(self, ctx, value=None):
@@ -267,9 +283,12 @@ class ForEach(Block):
     inputs = {"items": ports.Any()}
     outputs = {"results": ports.Any()}
     config = {
-        "flow": fields.Path(help="The flow to run once per item"),
-        "param": fields.Text(help="The parameter of that flow that receives the item"),
-        "stop_on_failure": fields.Bool(default=False),
+        "flow": fields.Path(help="The flow to run once per item",
+                            examples=["per-region.yaml", "flows/deploy-one.yaml"]),
+        "param": fields.Text(help="The parameter of that flow that receives the item", examples=["region", "server"]),
+        "stop_on_failure": fields.Bool(default=False, help="Ticked: the items after a run that did not succeed are "
+                                                           "not run. Either way the block fails if any run did not "
+                                                           "succeed."),
     }
 
     def run(self, ctx, items):
@@ -294,21 +313,51 @@ class ForEach(Block):
         return {"results": results}
 
 
+PICTURE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
+
+
+def _picture(value) -> Path | None:
+    """The absolute path of the picture file `value` names (a relative one is in the run's folder, the flow's), or
+    None if it names none: a text on one line or a path, with a picture's suffix, of a file that is there."""
+    if isinstance(value, SecretStr) or not isinstance(value, (str, os.PathLike)):
+        return None
+    text = os.fspath(value)
+    if not isinstance(text, str) or len(text.splitlines()) != 1 or Path(text).suffix.lower() not in PICTURE_SUFFIXES:
+        return None
+    try:
+        return Path(text).absolute() if Path(text).is_file() else None
+    except OSError:  # e.g. a name too long for the system
+        return None
+
+
 class Inspect(Block):
     type_id = "logic.inspect"
     title = "Inspect"
     description = ("For checking your flow: put it between two blocks to see the data passing through "
-                   "(in the Log and in Data preview). It passes the data on unchanged.")
+                   "(in the Log and in Data preview). Tables line up as in the hover tooltip, a path to a picture "
+                   "(.png, .jpg, .svg…) shows the picture, and the message can be shown as Markdown. "
+                   "It passes the data on unchanged.")
     category = "Debug"
     inputs = {"value": ports.Any(required=False, any_of=True)}
     outputs = {"value": ports.Any()}
     config = {
         "message": fields.Code("f-string", required=False,
                                help="Optional text written like a Python f-string, e.g. "
-                                    "Healthy: {value['healthy']} {value['problems']}. Empty shows the whole value."),
+                                    "Healthy: {value['healthy']} {value['problems']}. Empty shows the whole value.",
+                               examples=["Healthy: {value['healthy']}", "{len(value)} rows",
+                                         "Day {params['day']}: {value}"]),
+        "markdown": fields.Bool(default=False, label="Show as Markdown",
+                                help="Draw the message (or, with no message, a text value) as Markdown in the Log: "
+                                     "# headings, **bold**, *italic*, lists, | tables |, `code` and ``` code blocks "
+                                     "(spaces kept). As in Markdown, lines next to each other join into one "
+                                     "paragraph: leave a blank line between paragraphs. Off: the text is shown "
+                                     "exactly as it is, every space and line kept. Mermaid diagrams show as their "
+                                     "text."),
     }
 
     def run(self, ctx, value=None):
+        markdown = "markdown" if self.config.markdown else None
+        picture = _picture(value)
         if self.config.message:
             # Secrets show as *** here: this text goes to the log and the run history.
             namespace = {**ctx.functions, "value": _masked(value), "params": _masked(ctx.params)}
@@ -321,7 +370,10 @@ class Inspect(Block):
                 text = eval(compile(source, f"<block {ctx.block_id}>", "eval"), namespace)
             except Exception as e:
                 raise ValueError(f"the message could not be filled in: {type(e).__name__}: {e}") from None
-            ctx.log(text)
-        else:
-            ctx.log(preview(value))
+            ctx.log(text, show=markdown)
+        elif picture is None:
+            text = isinstance(value, str) and not isinstance(value, SecretStr)
+            ctx.log(preview(value), show=markdown if text else None)
+        if picture is not None:
+            ctx.log(str(picture), show="image")  # the Log shows the picture under its path
         return {"value": value}

@@ -15,6 +15,7 @@ from ..table import Table
 EXCEL_MAX_ROWS = 1_048_575  # one row is the header
 _FORMATS = ["auto", "csv", "parquet", "excel"]
 _EXTENSIONS = {".csv": "csv", ".txt": "csv", ".parquet": "parquet", ".xlsx": "excel", ".xlsm": "excel"}
+_FORMAT_HELP = "auto: from the file's extension (.csv and .txt are CSV, .xlsx and .xlsm Excel, .parquet Parquet)"
 
 
 def _format_of(path: str, fmt: str) -> str:
@@ -49,8 +50,12 @@ class DuckDBSQL(Block):
     description = 'Lets you write SQL over tables from earlier blocks (filter, join, group, sum...). Works even on data bigger than your memory.'
     category = "Data"
     config = {
-        "inputs": fields.Names(default=["input"], help="Each input table is available in SQL under this name."),
-        "sql": fields.Code("sql", help="Use :name for parameters, e.g. where day = :day"),
+        "inputs": fields.Names(default=["input"], help="Each input table is available in SQL under this name.",
+                               examples=["input", "sales, regions"]),
+        "sql": fields.Code("sql", help="Use :name for parameters, e.g. where day = :day",
+                           examples=["select region, sum(amount) as total from sales group by region",
+                                     "select * from sales where day = :day",
+                                     "select s.*, r.manager from sales s join regions r using (region)"]),
     }
     outputs = {"result": ports.Table()}
 
@@ -84,7 +89,10 @@ class PolarsTransform(Block):
     category = "Data"
     inputs = {"table": ports.Table()}
     outputs = {"table": ports.Table()}
-    config = {"code": fields.Code("python", help='An expression using df (a LazyFrame), pl and params, e.g. df.filter(pl.col("amount") > 0)')}
+    config = {"code": fields.Code("python", help='An expression using df (a LazyFrame), pl and params, e.g. df.filter(pl.col("amount") > 0)',
+                                  examples=['df.filter(pl.col("amount") > 0)',
+                                            'df.with_columns((pl.col("amount") * 1.2).alias("gross"))',
+                                            'df.group_by("region").agg(pl.col("amount").sum())'])}
 
     def run(self, ctx, table):
         result = eval(compile(f"({self.config.code}\n)", f"<block {ctx.block_id}>", "eval"),
@@ -101,10 +109,14 @@ class ReadFile(Block):
     category = "Data"
     outputs = {"table": ports.Table()}
     config = {
-        "path": fields.Path(),
-        "format": fields.Choice(_FORMATS, default="auto"),
-        "separator": fields.Text(default=",", help="CSV only"),
-        "sheet": fields.Text(required=False, help="Excel only; default is the first sheet"),
+        "path": fields.Path(help="The file to read: CSV, Excel or Parquet. A relative path is in the flow's "
+                                 "folder; {name} or {name:format} fills in a parameter",
+                            examples=["data/sales.csv", "C:/exports/sales_{day:%Y-%m-%d}.xlsx",
+                                      "data/orders.parquet"]),
+        "format": fields.Choice(_FORMATS, default="auto", help=f"{_FORMAT_HELP}; or the format it is in"),
+        "separator": fields.Text(default=",", help="CSV only", examples=[",", ";", "|"]),
+        "sheet": fields.Text(required=False, help="Excel only; default is the first sheet",
+                             examples=["Sheet1", "Sales"]),
     }
 
     def run(self, ctx):
@@ -138,8 +150,11 @@ class WriteFile(Block):
     outputs = {"file": ports.Any()}
     config = {
         "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.csv",
-                            files=["CSV file (*.csv)", "Excel workbook (*.xlsx)", "Parquet file (*.parquet)"]),
-        "format": fields.Choice(_FORMATS, default="auto"),
+                            files=["CSV file (*.csv)", "Excel workbook (*.xlsx)", "Parquet file (*.parquet)"],
+                            examples=["reports/sales_{day:%Y-%m-%d}.csv", "out/sales.xlsx",
+                                      "C:/exports/sales.parquet"]),
+        "format": fields.Choice(_FORMATS, default="auto", help=f"{_FORMAT_HELP}; or the format to write. A "
+                                                                   "macro-enabled workbook (.xlsm) cannot be written"),
     }
 
     def run(self, ctx, table):

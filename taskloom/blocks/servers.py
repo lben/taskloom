@@ -34,8 +34,9 @@ class SSHCommand(Block):
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"stdout": ports.Any(), "exit_code": ports.Any()}
     config = {
-        "connection": fields.Connection(kind="ssh"),
-        "command": fields.Text(help="Runs in your login shell on the server"),
+        "connection": fields.Connection(kind="ssh", help="The server to run the command on: one of your SSH connections (Tools > Connections)"),
+        "command": fields.Text(help="Runs in your login shell on the server",
+                               examples=["df -h", "systemctl --user restart report", "ls ~/incoming"]),
         "fail_on_error": fields.Bool(default=True, help="Fail the block when the command exits with a non-zero code"),
     }
 
@@ -59,12 +60,22 @@ class StartProcess(Block):
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"pid": ports.Any()}
     config = {
-        "connection": fields.Connection(kind="ssh"),
-        "command": fields.Text(help="e.g. ~/venv/bin/python app.py --port 8501"),
-        "workdir": fields.Text(default="~"),
-        "log_file": fields.Text(default="~/.taskloom/apps/app.log"),
-        "pid_file": fields.Text(default="~/.taskloom/apps/app.pid"),
-        "check_after": fields.Float(default=2.0, help="Seconds to wait before checking it is still running"),
+        "connection": fields.Connection(kind="ssh", help="The server to start it on: one of your SSH connections (Tools > Connections)"),
+        "command": fields.Text(help="e.g. ~/venv/bin/python app.py --port 8501",
+                               examples=["~/venv/bin/python app.py --port 8501", "./run-report.sh",
+                                         "java -jar report.jar"]),
+        "workdir": fields.Text(default="~", help="The folder on the server the command runs in (~: your home "
+                                                 "folder)", examples=["~", "~/app", "/opt/report"]),
+        "log_file": fields.Text(default="~/.taskloom/apps/app.log",
+                                help="The file on the server that gets what the command prints; if it stops right "
+                                     "away, its last 20 lines are in the error",
+                                examples=["~/.taskloom/apps/app.log", "~/app/app.log"]),
+        "pid_file": fields.Text(default="~/.taskloom/apps/app.pid",
+                                help="The file on the server that keeps its process number, for Stop Remote "
+                                     "Process and Health Check to find it",
+                                examples=["~/.taskloom/apps/app.pid", "~/app/app.pid"]),
+        "check_after": fields.Float(default=2.0, help="Seconds to wait before checking it is still running",
+                                    examples=["2", "5", "0.5"]),
         "must_keep_running": fields.Bool(default=True, help="Untick for a command that does its job and finishes "
                                                             "(e.g. a script that starts a service): exit code 0 is then fine"),
     }
@@ -114,9 +125,12 @@ class StopProcess(Block):
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"stopped": ports.Any()}
     config = {
-        "connection": fields.Connection(kind="ssh"),
-        "pid_file": fields.Text(default="~/.taskloom/apps/app.pid"),
-        "grace": fields.Float(default=10.0, help="Seconds to wait after asking it to stop before forcing it"),
+        "connection": fields.Connection(kind="ssh", help="The server it runs on: one of your SSH connections (Tools > Connections)"),
+        "pid_file": fields.Text(default="~/.taskloom/apps/app.pid",
+                                help="The PID file of the Start Remote Process that started it",
+                                examples=["~/.taskloom/apps/app.pid", "~/app/app.pid"]),
+        "grace": fields.Float(default=10.0, help="Seconds to wait after asking it to stop before forcing it",
+                              examples=["10", "30", "2"]),
     }
 
     def run(self, ctx, after=None):
@@ -153,12 +167,17 @@ class HealthCheck(Block):
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"healthy": ports.Any(), "unhealthy": ports.Any(), "result": ports.Any()}
     config = {
-        "url": fields.Text(required=False, help="Checked from this machine"),
-        "expect_status": fields.Int(default=200),
+        "url": fields.Text(required=False, help="Checked from this machine",
+                           examples=["http://appserver:8501/", "https://reports.example.com/health"]),
+        "expect_status": fields.Int(default=200, help="The HTTP status the URL must answer with",
+                                    examples=["200", "204", "302"]),
         "connection": fields.Connection(kind="ssh", required=False, help="Needed for the PID file check"),
-        "pid_file": fields.Text(required=False, help="On the server: the process in it must be running"),
-        "port": fields.Int(required=False, help="TCP port on the connection's host that must accept connections"),
-        "timeout": fields.Float(default=10.0),
+        "pid_file": fields.Text(required=False, help="On the server: the process in it must be running",
+                                examples=["~/.taskloom/apps/app.pid", "~/app/app.pid"]),
+        "port": fields.Int(required=False, help="TCP port on the connection's host that must accept connections",
+                           examples=["8501", "5432", "22"]),
+        "timeout": fields.Float(default=10.0, help="Seconds to wait for the URL to answer, and for the port to "
+                                                   "accept a connection", examples=["10", "30", "2.5"]),
     }
 
     def run(self, ctx, after=None):
@@ -215,9 +234,11 @@ class RemoteExtract(Block):
     inputs = {"after": ports.Any(required=False, any_of=True)}  # just sets the order
     outputs = {"folder": ports.Any()}
     config = {
-        "connection": fields.Connection(kind="ssh"),
-        "archive": fields.Text(help=".tar.gz, .tgz, .tar or .zip on the server"),
-        "destination": fields.Text(),
+        "connection": fields.Connection(kind="ssh", help="The server the archive is on: one of your SSH connections (Tools > Connections)"),
+        "archive": fields.Text(help=".tar.gz, .tgz, .tar or .zip on the server",
+                               examples=["~/incoming/app-1.4.tar.gz", "~/releases/report.zip"]),
+        "destination": fields.Text(help="The folder on the server to unpack it into (made if missing); files there "
+                                        "with the same names are replaced", examples=["~/app", "~/releases/1.4"]),
     }
 
     def run(self, ctx, after=None):

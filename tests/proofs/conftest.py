@@ -37,7 +37,8 @@ import pytest
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QFont, QFontDatabase, QPainter, QPen, QTextCursor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QMenu, QPlainTextEdit, QTableWidgetItem, QWidget
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QMenu, QPlainTextEdit, QTableWidgetItem, QTextEdit,
+                               QWidget)
 
 from taskloom import __version__
 
@@ -269,7 +270,7 @@ def _area(target, base: QWidget) -> tuple[QRect, bool]:
         rect = widget.actionGeometry(target)
     elif isinstance(target, QTableWidgetItem):
         widget, rect = target.tableWidget().viewport(), target.tableWidget().visualItemRect(target)
-    elif isinstance(target, tuple) and isinstance(target[0], QPlainTextEdit):
+    elif isinstance(target, tuple) and isinstance(target[0], (QPlainTextEdit, QTextEdit)):
         box, text = target
         widget, rect = box.viewport(), QRect()
         found = box.document().find(text)

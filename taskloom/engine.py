@@ -90,8 +90,12 @@ class Context:
         self.registry = registry  # for blocks that run other flows
         self._saw_stop = False  # it found out it was told to stop (so what it returns may be part of its work)
 
-    def log(self, message: str, level: str = "INFO"):
-        self._emit({"event": "log", "block": self.block_id, "level": level, "message": str(message)})
+    def log(self, message: str, level: str = "INFO", show: str | None = None):
+        """`show`: how the editor's Log draws the message, "image" (it is a picture's path) or "markdown"."""
+        event = {"event": "log", "block": self.block_id, "level": level, "message": str(message)}
+        if show is not None:
+            event["show"] = show
+        self._emit(event)
 
     def warn(self, message: str):
         self.log(message, "WARNING")

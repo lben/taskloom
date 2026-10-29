@@ -335,7 +335,9 @@ PySide6 (Qt) application:
 - **Center**: canvas — drag, connect, pan/zoom, multi-select, copy/paste, undo/redo.
 - **Right**: properties of the selected block (generated from its config).
 - **Bottom**: run log; selecting a block filters to **that block's live log**,
-  attempts, timings and errors.
+  attempts, timings and errors. A log line may carry `show` (`image`: its message is a
+  picture's path; `markdown`), stored with it in the run history; the editor draws the
+  picture or the Markdown when it shows the line, the terminal prints the message.
 - Live status on the canvas: idle / running / success / failed / skipped / retrying.
 - Click an edge or output to **preview data** (schema, row count, first rows).
 - **Run history** (SQLite): open any past run and inspect every block as it was.

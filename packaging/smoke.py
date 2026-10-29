@@ -64,6 +64,8 @@ def main():
           save:
             type: logic.python
             config: {inputs: [html], outputs: [], code: "open('out/body.html', 'w').write(html.html)"}
+          look:
+            type: logic.inspect
         edges:
           - sales.table -> totals.sales
           - totals.result -> chart.table
@@ -71,10 +73,15 @@ def main():
           - chart.image -> body.data
           - totals.result -> body.data
           - body.html -> save.html
+          - chart.image -> look.value
     """))
     result = run(cli, "run", report)
     check("report flow (chart, Excel, HTML template, Python)",
           result.returncode == 0 and (work / "out" / "report.xlsx").exists() and "cid:" in (work / "out" / "body.html").read_text(),
+          result.stderr)
+    shown = [Path(line.split("[look] INFO: ", 1)[1]) for line in result.stderr.splitlines() if "[look] INFO: " in line]
+    check("Inspect logs the chart as its picture's path",
+          len(shown) == 1 and shown[0].is_absolute() and shown[0].name == "chart.png" and shown[0].is_file(),
           result.stderr)
 
     if args.h2_jar:

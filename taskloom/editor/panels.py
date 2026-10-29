@@ -6,21 +6,26 @@ import datetime as dt
 import html
 import keyword
 import math
+import os
 import re
+from collections import OrderedDict
 from pathlib import Path
 
 import polars as pl
 import yaml
-from PySide6.QtCore import (QAbstractTableModel, QObject, QDate, QMimeData, QModelIndex, QPointF, QRectF, QSize, Qt, QTime,
-                            QTimer, Signal)
-from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QSyntaxHighlighter,
-                           QTextCharFormat, QTextCursor)
+from PySide6.QtCore import (QAbstractTableModel, QEvent, QObject, QDate, QMimeData, QModelIndex, QPoint, QPointF,
+                            QRectF, QSize, QSizeF, Qt, QTime, QTimer, Signal)
+from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QImageIOHandler,
+                           QImageReader, QPainter, QPalette, QPen, QPixmap, QSyntaxHighlighter, QTextBlockFormat,
+                           QTextCharFormat, QTextCursor, QTextDocument, QTextDocumentFragment, QTextFormat,
+                           QTextFrameFormat, QTextImageFormat)
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
-                               QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
-                               QTableView, QTableWidget, QTableWidgetItem, QTimeEdit, QToolButton, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QCheckBox,
+                               QComboBox, QDateEdit, QDateTimeEdit, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QPlainTextEdit,
+                               QPushButton, QScrollArea, QSpinBox, QTableView, QTableWidget, QTableWidgetItem,
+                               QTextBrowser, QTimeEdit, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields, setting_label
@@ -29,7 +34,9 @@ from ..calendars import load_calendar
 from ..config import kept_runs
 from ..expr import functions
 from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
+from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
+from . import docs
 from .canvas import (BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR,
                      is_dark)
 
@@ -542,6 +549,136 @@ def _to_text(value) -> str:
     return str(value)
 
 
+class HelpCard(QLabel):
+    """What resting the mouse on a row of Properties shows, in place of a tooltip: the row's label in bold, what it is
+    for, its examples (or its choices, or the connections it takes) and Learn more ›. One card for all the rows; it
+    stays while the mouse is on the row or on the card, so the link can be clicked, and never takes the focus."""
+
+    learn_more = Signal(str)  # the documentation page and anchor of the row
+
+    def __init__(self, parent):
+        super().__init__(parent, Qt.ToolTip)  # a window of its own that is never activated (as a tooltip)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setTextFormat(Qt.RichText)
+        self.setWordWrap(True)
+        self.setMargin(6)
+        self.setFrameStyle(QFrame.Box | QFrame.Plain)
+        self.setBackgroundRole(QPalette.ToolTipBase)
+        self.setForegroundRole(QPalette.ToolTipText)
+        self.setAutoFillBackground(True)
+        self.linkActivated.connect(self._learn_more)
+        self.row, self._on_card = None, False
+        self._leaving = QTimer(self, singleShot=True, interval=300)  # time to move the mouse onto the card
+        self._leaving.timeout.connect(self._left)
+        QGuiApplication.instance().applicationStateChanged.connect(self._application_state)
+
+    def show_for(self, row, widget: QWidget):
+        """Show `row`'s card just below `widget` (above it if there is no room), on its screen."""
+        if row is not self.row:
+            self.row = row
+            self.setText(row.text)
+            natural = QTextDocument()  # its lines unwrapped
+            natural.setDefaultFont(self.font())
+            natural.setHtml(row.text)
+            width = min(360, math.ceil(natural.idealWidth()) + 2 * (self.margin() + self.frameWidth()))
+            self.resize(width, self.heightForWidth(width))
+        self._leaving.stop()
+        self.setPalette(QToolTip.palette())  # a tooltip's colours, as they are now (light or dark mode)
+        screen = widget.screen().availableGeometry()
+        at = widget.mapToGlobal(QPoint(0, 0))
+        y = at.y() + widget.height() + 2
+        if y + self.height() > screen.bottom() + 1:
+            y = at.y() - self.height() - 2
+        self.move(max(screen.left(), min(at.x(), screen.right() + 1 - self.width())),
+                  max(screen.top(), min(y, screen.bottom() + 1 - self.height())))
+        self.show()
+        self.raise_()
+        QApplication.instance().installEventFilter(self)  # for Esc, wherever the focus is
+
+    def entered(self, row):
+        if row is self.row:
+            self._leaving.stop()
+
+    def left(self, row):
+        if row is self.row and self.isVisible():
+            self._leaving.start()
+
+    def dismiss(self):
+        QApplication.instance().removeEventFilter(self)
+        self._leaving.stop()
+        self.row, self._on_card = None, False
+        self.hide()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.dismiss()
+        return False
+
+    def enterEvent(self, event):
+        self._on_card = True
+        self._leaving.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._on_card = False
+        if self.isVisible():
+            self._leaving.start()
+        super().leaveEvent(event)
+
+    def _left(self):
+        if not self._on_card and not (self.row is not None and self.row.under_mouse()):
+            self.dismiss()
+
+    def _learn_more(self, href: str):
+        self.dismiss()
+        self.learn_more.emit(href)
+
+    def _application_state(self, state):
+        if state != Qt.ApplicationActive:  # e.g. Alt+Tab to another program
+            self.dismiss()
+
+
+class RowHelp(QObject):
+    """A row of Properties: resting the mouse on its label or one of its inputs shows its card, not a tooltip; their
+    tooltip is what the row is for. Pressing a key or a mouse button in them hides the card."""
+
+    def __init__(self, card: HelpCard, widgets: list, label: str, what: str, values: str, href: str):
+        super().__init__(widgets[0])  # it goes with the row
+        self.card, self.widgets = card, widgets
+        self.text = (f"<b>{html.escape(label)}</b><br>{html.escape(what)}<br>{values}<br>"
+                     f'<a href="{html.escape(href)}">Learn more ›</a>')
+        for widget in widgets:
+            widget.setToolTip(what)
+            # The mouse is on a code box's text area, or on a spin box's text.
+            inner = ([widget.viewport()] if isinstance(widget, QAbstractScrollArea) else
+                     widget.findChildren(QLineEdit) if isinstance(widget, QAbstractSpinBox) else [])
+            for part in (widget, *inner):
+                part.installEventFilter(self)
+
+    def under_mouse(self) -> bool:
+        return any(widget.underMouse() for widget in self.widgets)
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind == QEvent.ToolTip:
+            self.card.show_for(self, watched if watched in self.widgets else watched.parentWidget())
+            return True
+        if kind == QEvent.Enter:
+            self.card.entered(self)
+        elif kind == QEvent.Leave:
+            self.card.left(self)
+        elif kind in (QEvent.KeyPress, QEvent.MouseButtonPress):
+            self.card.dismiss()
+        return False
+
+
+def _inputs(widget: QWidget) -> list:
+    """The inputs of a setting's widget: itself, or the boxes in it (not its buttons, nor a code box's Wrap lines)."""
+    if isinstance(widget, (QLineEdit, QComboBox, QAbstractSpinBox, QCheckBox, QPlainTextEdit)):
+        return [widget]
+    return [w for w in widget.children() if isinstance(w, (QLineEdit, QComboBox, QPlainTextEdit))]
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -553,7 +690,24 @@ class PropertiesPanel(QScrollArea):
         self.doc = self.registry = self.block_id = self.note_id = None
         self._committing = False
         self._custom_when = None  # (flow, block) whose schedule you chose to write as a cron line
+        self.card = HelpCard(self)
         self.refresh()
+
+    def _help(self, label, inputs: list, title: str, what: str, values: str, href: str):
+        RowHelp(self.card, ([label] if label is not None else []) + inputs, title, what, values, href)
+
+    def _row_help(self, row: str, label, *inputs):
+        """The card of a row that is not a setting (docs.ROWS)."""
+        self._help(label, list(inputs), *docs.row_card(row), docs.row_href(row))
+
+    def _field_help(self, cls, key: str, label, *inputs):
+        f = cls.config[key]
+        self._help(label, list(inputs), setting_label(key, f), *docs.field_card(f), docs.field_href(cls, key))
+
+    def _add_row(self, form: QFormLayout, row: str, widget: QWidget, *inputs):
+        """Add the row `row` of docs.ROWS to `form`, with its label and card (on `inputs`, or `widget` itself)."""
+        form.addRow(docs.ROWS[row][0], widget)
+        self._row_help(row, form.labelForField(widget), *(inputs or [widget]))
 
     def _finish_editing(self):
         # A field being edited saves when it loses focus: let it, while this still shows what it belongs
@@ -597,6 +751,7 @@ class PropertiesPanel(QScrollArea):
         self._show_problems()
 
     def refresh(self):
+        self.card.dismiss()  # its row is going
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setAlignment(Qt.AlignTop)
@@ -634,7 +789,7 @@ class PropertiesPanel(QScrollArea):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         name = QLineEdit(self.block_id)
         name.editingFinished.connect(lambda: self._commit(lambda: self._rename(name.text().strip())))
-        form.addRow("Name", name)
+        self._add_row(form, "name", name)
         layout.addLayout(form)
         if cls is None:
             layout.addWidget(QLabel("This block type is not installed."))
@@ -657,9 +812,8 @@ class PropertiesPanel(QScrollArea):
                 continue
             widget = self._field_widget(key, f, config.get(key))
             label = QLabel(setting_label(key, f))
-            if f.help:
-                label.setToolTip(_as_written(f.help))
-                widget.setToolTip(_as_written(f.help))
+            widget.setToolTip(_as_written(docs.field_card(f)[0]))  # (also its buttons': …, Edit…, New…)
+            self._field_help(cls, key, label, *_inputs(widget))
             if isinstance(f, fields.Code):
                 layout.addWidget(label)
                 layout.addWidget(widget)
@@ -669,7 +823,7 @@ class PropertiesPanel(QScrollArea):
                 row.addRow(label, widget)
                 layout.addLayout(row)
         if keeps:
-            layout.addWidget(self._keep_box(config, cls.config))
+            layout.addWidget(self._keep_box(config, cls))
         layout.addWidget(self._retry_box(spec))
         self._show_problems()
 
@@ -678,7 +832,7 @@ class PropertiesPanel(QScrollArea):
     # Each choice, and what it writes in the flow file when you choose it (None: nothing, as in Settings).
     KEEP_CHOICES = {"As in Settings": None, "All of them": "all", "The last N": "last 100", "For a time": "90 days"}
 
-    def _keep_box(self, config: dict, keep_fields: dict) -> QGroupBox:
+    def _keep_box(self, config: dict, cls) -> QGroupBox:
         """Keep runs: as in Settings, all of them, the last N, or for a time (a number and days, months or
         years); and Always keep failed runs."""
         box = QGroupBox("Keep runs")
@@ -691,13 +845,13 @@ class PropertiesPanel(QScrollArea):
         choice = QComboBox()
         choice.addItems(list(self.KEEP_CHOICES))
         choice.setCurrentIndex({"settings": 0, "all": 1, "last": 2, "": -1}.get(kind, 3))
-        choice.setToolTip(keep_fields["keep"].help)
         choice.currentTextChanged.connect(lambda text: (self._set("keep", self.KEEP_CHOICES.get(text)), self.refresh()))
         form.addRow(choice)
+        self._field_help(cls, "keep", None, choice)
         if kind == "last":
             count = QSpinBox(minimum=1, maximum=1_000_000, value=number, keyboardTracking=False)
             count.valueChanged.connect(lambda n: self._set("keep", f"last {n}"))
-            form.addRow("Runs", count)
+            self._add_row(form, "keep.runs", count)
         elif kind in ("days", "months", "years"):
             count = QSpinBox(minimum=1, maximum=100_000, value=number, keyboardTracking=False)
             unit = QComboBox()
@@ -716,12 +870,12 @@ class PropertiesPanel(QScrollArea):
             parts.addWidget(count)
             parts.addWidget(unit)
             parts.addStretch()
-            form.addRow("For", row)
-        failed = QCheckBox(keep_fields["keep_failed"].label)
+            self._add_row(form, "keep.for", row, count, unit)
+        failed = QCheckBox(cls.config["keep_failed"].label)
         failed.setChecked(bool(config.get("keep_failed")))
-        failed.setToolTip(keep_fields["keep_failed"].help)
         failed.toggled.connect(lambda checked: self._set("keep_failed", checked or None))
         form.addRow(failed)
+        self._field_help(cls, "keep_failed", None, failed)
         return box
 
     # --- when a Schedule block runs ----------------------------------------------------------
@@ -756,7 +910,7 @@ class PropertiesPanel(QScrollArea):
         mode.addItem("Repeating", "cron")
         mode.addItem("One time", "at")
         mode.setCurrentIndex(1 if at and not (cron or every) else 0)
-        form.addRow("Runs", mode)
+        self._add_row(form, "when.runs", mode)
         preview = QLabel()
         preview.setWordWrap(True)
         preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -817,7 +971,7 @@ class PropertiesPanel(QScrollArea):
 
         edit.editingFinished.connect(commit)
         edit.calendarWidget().clicked.connect(lambda _: commit())
-        form.addRow("On", edit)
+        self._add_row(form, "when.at", edit)
 
     def _cron_rows(self, form, cron: str, every: str, show_preview):
         from ..schedule import DAY_WORDS, cron_plan, plan_cron
@@ -831,7 +985,7 @@ class PropertiesPanel(QScrollArea):
         custom = self._custom_when == (id(self.doc), self.block_id)
         current = "every" if every else "" if not cron else "custom" if custom or not plan else plan["kind"]
         kind_box.setCurrentIndex(kind_box.findData(current))
-        form.addRow("How often", kind_box)
+        self._add_row(form, "when.how_often", kind_box)
 
         def choose(_):
             kind = kind_box.currentData()
@@ -855,15 +1009,13 @@ class PropertiesPanel(QScrollArea):
             box.setCurrentText(every)
             box.activated.connect(lambda _: (self._set_when(every=box.currentText()),
                                              show_preview({"every": box.currentText()})))
-            form.addRow("Every", box)
+            self._add_row(form, "when.every", box)
             return
         if current == "custom":
             line = QLineEdit(cron)
-            line.setToolTip("minute hour day month weekday, e.g. 0 7-17/2 * * MON-FRI = every two hours from 7:00 "
-                            "to 17:00 on weekdays; * means every, */N every N, a-b a range, a,b a list")
             line.editingFinished.connect(lambda: (self._set_when(cron=line.text().strip() or None),
                                                   show_preview({"cron": line.text().strip()})))
-            form.addRow("Cron line", line)
+            self._add_row(form, "when.cron", line)
             hint = QLabel("minute · hour · day · month · weekday")
             hint.setStyleSheet("color: gray;")
             form.addRow("", hint)
@@ -878,7 +1030,7 @@ class PropertiesPanel(QScrollArea):
         if current == "hourly":
             minute = QSpinBox(minimum=0, maximum=59, value=plan["minute"])
             minute.editingFinished.connect(lambda: (plan.update(minute=minute.value()), commit()))
-            form.addRow("At minute", minute)
+            self._add_row(form, "when.minute", minute)
             return
         if current == "weekly":
             days = QWidget()
@@ -898,17 +1050,16 @@ class PropertiesPanel(QScrollArea):
 
                 box.toggled.connect(toggled)
                 row.addWidget(box)
-            form.addRow("On", days)
+            self._add_row(form, "when.days", days, *days.findChildren(QCheckBox))
         if current == "monthly":
             day = QSpinBox(minimum=1, maximum=31, value=plan["day"])
-            day.setToolTip("Days 29 to 31 are skipped in months that do not have them")
             day.editingFinished.connect(lambda: (plan.update(day=day.value()), commit()))
-            form.addRow("On day", day)
+            self._add_row(form, "when.day", day)
         time_edit = QTimeEdit(QTime(plan["hour"], plan["minute"]))
         time_edit.setDisplayFormat("HH:mm")
         time_edit.editingFinished.connect(lambda: (plan.update(hour=time_edit.time().hour(),
                                                                minute=time_edit.time().minute()), commit()))
-        form.addRow("At", time_edit)
+        self._add_row(form, "when.time", time_edit)
 
     def _rename(self, new):
         old = self.block_id
@@ -1017,7 +1168,7 @@ class PropertiesPanel(QScrollArea):
             if not code:
                 return w
             wrap_box = QCheckBox("Wrap lines", checked=wrap)
-            wrap_box.setToolTip("Wrap long lines in every Python and SQL code box (only on the screen)")
+            self._row_help("wrap", None, wrap_box)
             wrap_box.toggled.connect(lambda on: (self.settings.setValue("wrap_code", on), w.set_wrap(on)))
             box = QWidget()
             column = QVBoxLayout(box)
@@ -1117,7 +1268,7 @@ class PropertiesPanel(QScrollArea):
         policy = QComboBox()
         policy.addItems(["none", "fixed", "exponential"])
         policy.setCurrentText(retry.get("policy", "none"))
-        form.addRow("Policy", policy)
+        self._add_row(form, "retry.policy", policy)
         shown = {"fixed": ["max_attempts", "delay"],
                  "exponential": ["max_attempts", "initial", "factor", "max_delay", "jitter"]}.get(retry.get("policy", "none"), [])
         placeholders = {"max_attempts": "3", "delay": "e.g. 30s", "initial": "e.g. 30s", "factor": "2",
@@ -1125,9 +1276,9 @@ class PropertiesPanel(QScrollArea):
         edits = {}
         for key in shown:
             edits[key] = QLineEdit(_to_text(retry.get(key)), placeholderText=placeholders[key])
-            form.addRow(key.replace("_", " ").capitalize(), edits[key])
+            self._add_row(form, f"retry.{key}", edits[key])
         timeout = QLineEdit(_to_text(spec.get("timeout")), placeholderText="none, e.g. 20m")
-        form.addRow("Timeout", timeout)
+        self._add_row(form, "timeout", timeout)
 
         def commit_retry():
             data = {"policy": policy.currentText()}
@@ -1166,7 +1317,7 @@ class PropertiesPanel(QScrollArea):
         text = CodeEdit(str(note.get("text", "")))
         text.setFont(QApplication.font())
         text.editing_finished.connect(lambda: text.toPlainText().strip() and self._set_note("text", text.toPlainText()))
-        form.addRow("Text", text)
+        self._add_row(form, "text.text", text)
         style = QComboBox()
         for name in ("title", "heading", "normal", "small"):
             style.addItem(name.capitalize(), name)
@@ -1175,28 +1326,28 @@ class PropertiesPanel(QScrollArea):
         style.activated.connect(lambda _: (self._set_note_values(
             {"style": None if style.currentData() == "normal" else style.currentData(), "size": None}),
             self.refresh()))
-        form.addRow("Style", style)
+        self._add_row(form, "text.style", style)
         style_size = float(NOTE_STYLES.get(note.get("style") or "normal", 11))
         current = float(note.get("size") or style_size)
         size = QDoubleSpinBox(minimum=NOTE_SIZES[0], maximum=NOTE_SIZES[1], decimals=1, suffix=" pt")
         size.setValue(current)
-        size.setToolTip("Or drag the corner of the selected text on the canvas")
         # A change only (leaving the field is not one); the style's own size means no size of its own.
         size.editingFinished.connect(lambda: size.value() != current and self._set_note(
             "size", None if size.value() == style_size else size.value()))
-        form.addRow("Size", size)
+        self._add_row(form, "text.size", size)
         for key in ("bold", "italic", "underline"):
             box = QCheckBox(key.capitalize())
             box.setChecked(bool(note.get(key)))
             box.toggled.connect(lambda checked, k=key: self._set_note(k, checked))
             form.addRow("", box)
+            self._row_help(f"text.{key}", None, box)
         font = QComboBox()
         font.addItem("(the usual font)", "")
         for family in QFontDatabase.families():  # the fonts installed on this computer
             font.addItem(family, family)
         font.setCurrentIndex(max(font.findData(note.get("font") or ""), 0))
         font.activated.connect(lambda _: self._set_note("font", font.currentData() or None))
-        form.addRow("Font", font)
+        self._add_row(form, "text.font", font)
         layout.addLayout(form)
 
     def _set_note(self, key, value):
@@ -1465,6 +1616,98 @@ class FlowSettingsPanel(QWidget):
 
 LEVEL_COLORS = {"ERROR": STATUS_COLORS["failed"], "WARNING": STATUS_COLORS["running"],
                 "RETRY": STATUS_COLORS["running"], "DONE": STATUS_COLORS["success"]}
+GREY = "gray"  # the time and the notes: readable on a light and on a dark background
+MARKDOWN = QTextDocument.MarkdownFeature.MarkdownDialectGitHub | QTextDocument.MarkdownFeature.MarkdownNoHTML
+MERMAID_NOTE = "Mermaid diagrams are shown as text: Taskloom has no offline Mermaid engine to draw them."
+PICTURE = "taskloom-picture:"  # the Log's names for its pictures: never a file's or a web address
+
+
+def _picture_size(path: str) -> QSizeF | str:
+    """The size the Log shows the picture at `path` in (scaled down to fit report.MAX_IMAGE_WIDTH square, never up),
+    from the file's header only, or the note it shows instead."""
+    try:
+        there = Path(path).is_file()
+    except OSError:
+        there = False
+    if not there:
+        return "(the picture is no longer there)"
+    reader = QImageReader(path)
+    size = reader.size()
+    if size.isEmpty():
+        return f"(cannot show this picture: {reader.errorString()})"
+    limit = QImageReader.allocationLimit()  # MB; 0: none
+    if limit and size.width() * size.height() * 4 > limit * 1024 * 1024:
+        return f"(cannot show this picture: over Qt's {limit} MB picture limit)"
+    if _turned(reader):
+        size.transpose()
+    return QSizeF(size) * min(1, MAX_IMAGE_WIDTH / max(size.width(), size.height()))
+
+
+def _turned(reader: QImageReader) -> bool:
+    """The picture is stored turned a quarter (e.g. a photo taken upright): it is drawn the other way round."""
+    return bool(reader.transformation() & QImageIOHandler.Transformation.TransformationRotate90)
+
+
+class _LogDocument(QTextDocument):
+    """The Log's text. Its pictures are read from their files each time they are painted, so they show each file as
+    it is now and no file stays open (it can be deleted, also on Windows); the last 32 painted are kept, by file
+    time and size. It loads nothing else: no other file, nothing from the network."""
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.view = view
+        self.pictures = {}  # name -> (path, shown size)
+        self.thumbnails = OrderedDict()  # (path, mtime_ns, size, pixel ratio) -> QPixmap
+
+    def loadResource(self, kind, name):
+        # Not the base class's, which would keep each picture in the document for good.
+        picture = self.pictures.get(name.toString()) if kind == QTextDocument.ImageResource else None
+        if picture is None:
+            return None
+        path, shown = picture
+        ratio = self.view.devicePixelRatioF()
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None  # gone since: Qt's broken-picture mark, until the next redraw says so
+        key = (path, stat.st_mtime_ns, stat.st_size, ratio)
+        if key not in self.thumbnails:
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            scaled = (shown * ratio).toSize()
+            reader.setScaledSize(scaled.transposed() if _turned(reader) else scaled)
+            image = reader.read()
+            if image.isNull():  # e.g. damaged after its header: Qt's broken-picture mark
+                return None
+            image.setDevicePixelRatio(ratio)  # sharp on a high-DPI screen
+            self.thumbnails[key] = QPixmap.fromImage(image)
+            if len(self.thumbnails) > 32:
+                self.thumbnails.popitem(last=False)
+        self.thumbnails.move_to_end(key)
+        return self.thumbnails[key]
+
+
+class _LogView(QTextBrowser):
+    """The Log's text box: read only, in the fixed-width font, lines never wrapped, links shown but never opened."""
+
+    def __init__(self):
+        super().__init__()
+        self.setOpenLinks(False)
+        self.setOpenExternalLinks(False)
+        self.setLineWrapMode(QTextBrowser.NoWrap)
+        self.setDocument(_LogDocument(self))
+        self.document().setUndoRedoEnabled(False)
+        self.setFont(MONO)
+
+    def createMimeDataFromSelection(self):
+        # Plain text only; a picture adds nothing (its path is the line above it). The object must come from Qt: the
+        # clipboard keeps it, and one made in Python is freed twice when the program quits (a crash on exit). Qt
+        # fills it from the selection when it is first read, so read its text before replacing everything with it.
+        mime = super().createMimeDataFromSelection()
+        text = mime.text()
+        mime.clear()
+        mime.setText(re.sub("\ufffc\n?", "", text))
+        return mime
 
 
 class LogPanel(QWidget):
@@ -1482,11 +1725,14 @@ class LogPanel(QWidget):
         bar.addWidget(self.clear_filter)
         bar.addStretch()
         layout.addLayout(bar)
-        self.text = QPlainTextEdit(readOnly=True)
-        self.text.setFont(MONO)
-        self.text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.text = _LogView()
         layout.addWidget(self.text)
         self.entries, self.block = [], None
+        # New lines keep the view at the bottom when it is there, and leave it where you scrolled up to.
+        self._follow = True
+        scroll = self.text.verticalScrollBar()
+        scroll.valueChanged.connect(lambda value: setattr(self, "_follow", value >= scroll.maximum()))
+        scroll.rangeChanged.connect(lambda _, maximum: self._follow and scroll.setValue(maximum))
         self.clear_filter.clicked.connect(lambda: (self.set_filter(None), self.filter_cleared.emit()))
         self.clear_filter.hide()
 
@@ -1497,7 +1743,7 @@ class LogPanel(QWidget):
     def append(self, entry: dict):
         self.entries.append(entry)
         if self._shown(entry):
-            self.text.appendHtml(self._line(entry))
+            self._write([entry])
 
     def _shown(self, e: dict) -> bool:
         # A run's start and end lines stay visible with a block filter: they split the runs apart.
@@ -1509,19 +1755,110 @@ class LogPanel(QWidget):
         self.clear_filter.setVisible(block_id is not None)
         self._render()
 
-    def _line(self, e: dict) -> str:
-        level = e.get("level", "INFO")
-        color = LEVEL_COLORS.get(level)
-        block = f"[{html.escape(e['block'])}] " if e.get("block") else ""
-        # Keep spaces as they are: reports such as Python tracebacks are laid out in columns.
-        message = html.escape(e.get("message", "")).replace(" ", "&nbsp;").replace("\n", "<br>")
-        level_html = f"<span style='color:{color}'>{level}</span>" if color else level
-        line = f"<span style='color:gray'>{e.get('ts', '')[11:19]}</span> {block}{level_html} {message}"
-        return f"<b>{line}</b>" if e.get("header") else line
-
     def _render(self):
         self.text.clear()
-        self.text.appendHtml("<br>".join(self._line(e) for e in self.entries if self._shown(e)))
+        self.text.document().pictures.clear()
+        self._follow = True  # drawn again: it shows the last lines
+        self._write([e for e in self.entries if self._shown(e)])
+
+    def _write(self, entries: list[dict]):
+        cursor = QTextCursor(self.text.document())
+        cursor.beginEditBlock()
+        for e in entries:
+            self._entry(cursor, e)
+        cursor.endEditBlock()
+
+    def _entry(self, cursor: QTextCursor, e: dict):
+        """An entry's line, HH:MM:SS [block] LEVEL message, at the end of the Log; for a picture (show "image") the
+        picture under it, for Markdown (show "markdown") the message drawn under it instead."""
+        show, message, level = e.get("show"), e.get("message", ""), e.get("level", "INFO")
+        # One paragraph (its lines split by line separators), its spaces kept: reports such as Python tracebacks are
+        # laid out in columns.
+        said = "" if show == "markdown" or not message else " " + "\u2028".join(message.splitlines())
+        self._paragraph(cursor, QTextBlockFormat())
+        plain = QTextCharFormat()
+        if e.get("header"):
+            plain.setFontWeight(QFont.Bold)
+        for text, color in ((e.get("ts", "")[11:19], GREY), (f" [{e['block']}] " if e.get("block") else " ", None),
+                            (level, LEVEL_COLORS.get(level)), (said, None)):
+            fmt = QTextCharFormat(plain)
+            if color:
+                fmt.setForeground(QColor(color))
+            cursor.insertText(text, fmt)
+        if show == "image":
+            self._picture(cursor, message)
+        elif show == "markdown":
+            self._markdown(cursor, message)
+
+    def _paragraph(self, cursor: QTextCursor, fmt: QTextBlockFormat):
+        """Start a paragraph at the end of the Log: in the empty one there (the first, or the one after Markdown)."""
+        cursor.movePosition(QTextCursor.End)
+        if cursor.block().length() > 1:
+            cursor.insertBlock(fmt, QTextCharFormat())
+        else:
+            cursor.setBlockFormat(fmt)
+
+    def _indent(self) -> float:
+        """Under the [block] column: the width of "HH:MM:SS "."""
+        return QFontMetricsF(self.text.document().defaultFont()).horizontalAdvance("00:00:00 ")
+
+    def _under(self) -> QTextBlockFormat:
+        fmt = QTextBlockFormat()
+        fmt.setLeftMargin(self._indent())
+        return fmt
+
+    def _note(self, cursor: QTextCursor, text: str):
+        self._paragraph(cursor, self._under())
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(GREY))
+        fmt.setFontItalic(True)
+        cursor.insertText(text, fmt)
+
+    def _picture(self, cursor: QTextCursor, path: str):
+        shown = _picture_size(path)
+        if isinstance(shown, str):
+            self._note(cursor, shown)
+            return
+        self._paragraph(cursor, self._under())
+        pictures = self.text.document().pictures
+        fmt = QTextImageFormat()
+        fmt.setName(f"{PICTURE}{len(pictures)}")
+        fmt.setWidth(shown.width())
+        fmt.setHeight(shown.height())
+        pictures[fmt.name()] = (path, shown)
+        cursor.insertImage(fmt)
+
+    def _markdown(self, cursor: QTextCursor, text: str):
+        """`text` drawn as Markdown, in a frame under the [block] column: the next entry's line is outside it."""
+        source = QTextDocument()
+        source.setMarkdown(text, MARKDOWN)
+        frame_format = QTextFrameFormat()
+        frame_format.setLeftMargin(self._indent())
+        frame = cursor.insertFrame(frame_format)
+        # The paragraph it goes into keeps its own format: give it the first paragraph's (e.g. a heading's).
+        first = source.firstBlock().blockFormat()
+        first.clearProperty(QTextFormat.ObjectIndex)
+        cursor.setBlockFormat(first)
+        cursor.insertFragment(QTextDocumentFragment(source))
+        # Its text in the application's font, its code in the Log's fixed-width one.
+        parts, block = [], cursor.document().findBlock(frame.firstPosition())
+        while block.isValid() and block.position() <= frame.lastPosition():
+            code = block.blockFormat().hasProperty(QTextFormat.BlockCodeLanguage)
+            it = block.begin()
+            while not it.atEnd():
+                part = it.fragment()
+                parts.append((part.position(), part.length(), code or part.charFormat().fontFixedPitch()))
+                it += 1
+            block = block.next()
+        for start, length, code in parts:
+            fmt = QTextCharFormat()
+            fmt.setFontFamilies((MONO if code else QApplication.font()).families())
+            part = QTextCursor(cursor.document())
+            part.setPosition(start)
+            part.setPosition(start + length, QTextCursor.KeepAnchor)
+            part.mergeCharFormat(fmt)
+        if any(line.startswith("```mermaid") for line in text.splitlines()):
+            self._note(cursor, MERMAID_NOTE)
 
 
 # --- Data preview -------------------------------------------------------------------

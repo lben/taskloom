@@ -7,7 +7,7 @@ restart remote apps, build reports and email them.
 Runs on Windows and Linux without admin/root rights.
 
 **Status:** milestones 1–5 — the engine, the visual editor, scheduling, server blocks,
-reports and email, and packaged builds. See [docs/DESIGN.md](docs/DESIGN.md).
+reports and email, and packaged builds. See [docs/DESIGN.md](https://github.com/lben/taskloom/blob/main/docs/DESIGN.md).
 
 ## Install
 
@@ -56,6 +56,11 @@ taskloom editor examples/daily-sales-report.yaml
 - Drag blocks from the tree on the left onto the canvas (or double-click them); drag
   from an output port (right side of a block) to an input port (left side) to connect.
   Hover over a block to see what it does.
+- **Documentation in the editor:** rest the mouse on any row of the Properties tab for a card
+  with what it is for, examples of what it takes, and **Learn more ›**, which opens that row's
+  entry in **Help → Documentation** (F1): a column at the right of the window, next to the
+  canvas and Properties, with this guide and a reference of every block and setting (your own
+  blocks too), and Back, Forward and Contents. Drag its edge to resize it, or float it.
 - **Zoom** with the mouse wheel or the control at the top right of the canvas: it shows the
   zoom, and **+** and **−** zoom in and out by the step between them (5% by default, change
   it with its arrows), from 20% to 300%. Or click the zoom, type one (`150` or `150%`) and
@@ -172,9 +177,20 @@ taskloom editor examples/daily-sales-report.yaml
   block and with what value) and, for Python Code, the code around the failing line and
   the values of your variables.
 - To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
-  the data on and shows it in the Log and Data preview. Its **message** is written like a
-  Python f-string, e.g. `Healthy: {value['healthy']}`. Example:
-  `examples/check-app-health.yaml` (Health Check's `result` output says healthy or not).
+  the data on and shows it in the Log and Data preview. A table's columns line up as in
+  its hover tooltip. Its **message** is written like a Python f-string, e.g.
+  `Healthy: {value['healthy']}`. Example: `examples/check-app-health.yaml` (Health Check's
+  `result` output says healthy or not).
+  - A value that is a picture's path (.png, .jpg, .jpeg, .gif, .bmp, .svg or .webp, e.g. a
+    Chart's `image`; a relative path is in the flow's folder) shows in the Log as its full
+    path with the picture under it, scaled down to fit 640 × 640 (in a terminal, just the
+    path). If the file has gone since, the Log says so.
+  - Tick **Show as Markdown** to draw the message (or, with no message, a text value) as
+    Markdown: `#` headings, `**bold**`, `*italic*`, lists, `| tables |`, `` `code` `` and
+    code blocks. Lines next to each other join into one paragraph, so leave a blank line
+    between paragraphs. Mermaid diagrams show as their text (Taskloom has no offline
+    Mermaid engine to draw them). Links are shown but open nothing.
+  - Past and scheduled runs reopened from Run history show the same pictures and Markdown.
 - **Several blocks connected into one input of a Python Code block:** that input is a dict
   keyed by each block's name (as on the canvas), with its output as the value, in the order
   of the connections, e.g. `input["load"]`; with one block connected it is that block's
@@ -538,6 +554,10 @@ class Greet(Block):
         ctx.log(f"greeting {name}")
         return {"text": f"{self.config.greeting}, {name}!"}
 ```
+
+Give each setting `help=` (what it is for) and `examples=` (1 to 3 values, each as you would
+type it in Properties): its card and its entry in Help → Documentation show them, e.g.
+`fields.Text(default="Hello", help="The word before the name", examples=["Hello", "Good morning"])`.
 
 A block whose `run()` may succeed without returning all its outputs (as If gives `true` or
 `false`) sets `has_done = True`: it then also has a **done** output, which fires whenever it

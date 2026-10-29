@@ -48,11 +48,14 @@ class fields:
         # Templated fields get `{param}` / `{param:format}` substitution at run time.
         template = False
 
-        def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = ""):
+        def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = "",
+                     examples=()):
             self.default = default
             self.required = default is None if required is None else required
-            self.help = help
+            self.help = help  # what it is for, in plain words (the editor shows it when you hover over it)
             self.label = label  # the name the editor shows; empty: made from the config key
+            # 1 to 3 valid values, each as you type it in Properties (a list comma-separated, code as code).
+            self.examples = tuple(examples)
 
         def coerce(self, value):
             return value

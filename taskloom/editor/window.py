@@ -17,10 +17,10 @@ from copy import deepcopy
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QMargins, QPoint, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QEvent, QMargins, QPoint, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QImageReader, QKeySequence, QTextDocument
 from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayout, QMainWindow, QMenu, QMessageBox,
-                               QSizePolicy, QTabBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+                               QSizePolicy, QTabBar, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
 from .. import __version__, upgrade
 from .. import params as P
@@ -37,7 +37,7 @@ from ..scheduler import (acquire_lock, counted_from, paused, running_scheduler_v
                          set_start_at_login, startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView, value_html
-from . import dialogs, git
+from . import dialogs, docs, git
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
@@ -169,6 +169,98 @@ class FlowTabBar(QTabBar):
         self.new_button.move(self.mapToParent(QPoint(x, (self.height() - self.new_button.height()) // 2)))
 
 
+class DocsBrowser(QTextBrowser):
+    """The Documentation column's pages (docs.pages, made when first needed). Links between them open here, http(s)
+    links in the system's browser."""
+
+    def __init__(self, registry):
+        super().__init__()
+        self.registry, self._pages = registry, None
+        self.setOpenExternalLinks(True)
+        self.document().setDefaultStyleSheet("code, pre { font-family: monospace; }")  # the editor's (MONO)
+
+    def pages(self) -> dict:
+        if self._pages is None:
+            self._pages = docs.pages(self.registry)
+        return self._pages
+
+    def rebuild(self):
+        """Made again from the registry (e.g. a block was added): the page shown too, also while the column is closed
+        (it shows that page when it opens again)."""
+        self._pages = None
+        if not self.source().isEmpty():
+            self.reload()
+
+    def loadResource(self, kind, url):
+        if kind == QTextDocument.HtmlResource:
+            return self.pages().get(url.fileName(), "")
+        return super().loadResource(kind, url)
+
+
+class DocsColumn(QDockWidget):
+    """Help > Documentation: a column right of the Inspector, 360 px wide when it opens, with Back, Forward and
+    Contents above the page. Hidden at launch; when it is closed, the Inspector gets its width back."""
+
+    WIDTH = 360
+
+    def __init__(self, window: MainWindow):
+        super().__init__("Documentation", window)
+        self.setObjectName("Documentation")
+        self.browser = DocsBrowser(window.registry)
+        buttons = QHBoxLayout()
+        for text, tip, go, enabled in (("‹ Back", "Back to the page before", self.browser.backward,
+                                        self.browser.backwardAvailable),
+                                       ("Forward ›", "Forward again", self.browser.forward,
+                                        self.browser.forwardAvailable),
+                                       ("Contents", "The list of every page", lambda: self.open_at("index.html"),
+                                        None)):
+            button = QToolButton(text=text, toolTip=tip, autoRaise=True)
+            button.clicked.connect(go)
+            if enabled is not None:
+                button.setEnabled(False)
+                enabled.connect(button.setEnabled)
+            buttons.addWidget(button)
+        buttons.addStretch()
+        column = QWidget()
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(4, 0, 0, 0)
+        layout.addLayout(buttons)
+        layout.addWidget(self.browser)
+        self.setWidget(column)
+        self._inspector_width = None  # the Inspector's width before the column opened next to it
+
+    def open_at(self, href: str):
+        """Show the page and entry `href` (e.g. blocks-files.html#files.copy.source), opening the column."""
+        self.show()
+        self.raise_()  # (floating: in front)
+        self.browser.setSource(QUrl(href))
+        anchor = QUrl(href).fragment()
+        if anchor:
+            QTimer.singleShot(0, self.browser, lambda: self._scroll_to(anchor))
+
+    def _scroll_to(self, anchor: str):
+        """The entry's heading at the top, once the column is laid out: before, the page's lines are where its old
+        width put them."""
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        self.browser.scrollToAnchor(anchor)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        window = self.parentWidget()
+        if self._inspector_width is None and not self.isFloating():
+            self._inspector_width = window.inspector.width()
+            window.resizeDocks([window.inspector, self], [self._inspector_width, self.WIDTH], Qt.Horizontal)
+        if self.browser.source().isEmpty():
+            self.browser.setSource(QUrl("index.html"))  # the first opening: Contents
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self.isHidden() and self._inspector_width is not None:  # closed (not its window minimised)
+            window, width, self._inspector_width = self.parentWidget(), self._inspector_width, None
+            # Qt gives the column's width to the Inspector: back to the canvas, once the column is out.
+            QTimer.singleShot(0, window, lambda: window.resizeDocks([window.inspector], [width], Qt.Horizontal))
+
+
 class FlowTab(QWidget):
     """One open flow: its document, canvas, runs and what they reported."""
 
@@ -266,6 +358,11 @@ class MainWindow(QMainWindow):
         self.right_tabs.addTab(self.parameters, "Parameters")
         self.right_tabs.addTab(self.flow_settings, "Flow")
         self.inspector = self._dock("Inspector", self.right_tabs, Qt.RightDockWidgetArea)
+        self.docs = DocsColumn(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.docs)
+        self.splitDockWidget(self.inspector, self.docs, Qt.Horizontal)  # at the far right
+        self.docs.hide()
+        self.properties.card.learn_more.connect(self.docs.open_at)
 
         self.log = LogPanel()
         self.preview = PreviewPanel()
@@ -401,6 +498,11 @@ class MainWindow(QMainWindow):
         act(m, "Settings…", lambda: dialogs.open_dialog(self, SettingsDialog, self.home))
         act(m, "Python environment…", lambda: dialogs.open_dialog(self, PythonEnvDialog, self.home))
         act(m, "Check flows…", lambda: self.check_flows())
+        m = bar.addMenu("&Help")
+        documentation = self.docs.toggleViewAction()  # ticked while the column shows
+        documentation.setText("Documentation")
+        documentation.setShortcut(QKeySequence("F1"))
+        m.addAction(documentation)
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
@@ -920,6 +1022,7 @@ class MainWindow(QMainWindow):
                                     dialog.expects.toPlainText().strip(), python_code)
         self.registry.add_file(path)  # (the registry the open flows use)
         self.palette_panel.show_blocks(self.registry)
+        self.docs.browser.rebuild()  # in Contents and on the User Created page
         self.statusBar().showMessage(f"{title} saved in {path}: it is under User Created in the blocks tree", 15000)
 
     def _reusable_name_problem(self, title: str) -> str:
@@ -1467,12 +1570,18 @@ def main(paths=()) -> int:
 
 def _smoke_test(app, window: MainWindow, tab: FlowTab, folder: Path):
     """Run the flow from the editor (through the runner program); once it succeeded, commit a copy of it into
-    `folder` (new, outside any repository) with Taskloom's own Git. Quit with 0 if both worked."""
+    `folder` (new, outside any repository) with Taskloom's own Git. Quit with 0 if both worked and Help >
+    Documentation shows its pages, 4 if the documentation does not show (_documentation_shown), 5 if Qt cannot read a
+    kind of picture the Log shows."""
     run = window.start_run(tab, {})
 
     def finished(status):
         if status != "success":
             app.exit(1)
+            return
+        formats = {f.data().decode() for f in QImageReader.supportedImageFormats()}  # Qt's image plugins it carries
+        if not {"png", "jpg", "gif", "bmp", "svg", "webp"} <= formats:
+            app.exit(5)
             return
         try:
             folder.mkdir(parents=True)
@@ -1481,7 +1590,20 @@ def _smoke_test(app, window: MainWindow, tab: FlowTab, folder: Path):
         except Exception:
             app.exit(3)
             return
-        app.exit(0)
+        app.exit(0 if _documentation_shown(window) else 4)
 
     run.finished.connect(finished)
     QTimer.singleShot(120_000, window, lambda: app.exit(2))
+
+
+def _documentation_shown(window: MainWindow) -> bool:
+    """Whether Help > Documentation works in this build: a setting's Learn more shows its entry (its heading, then what
+    it is for), and the guide, from the README.md the build carries, its Schedules page."""
+    from ..blocks.files import CopyFiles
+
+    window.docs.open_at(docs.field_href(CopyFiles, "source"))
+    entry = window.docs.browser.toPlainText()
+    window.docs.open_at("schedules.html")
+    guide = window.docs.browser.toPlainText()
+    return (f"Source\n{CopyFiles.config['source'].help}" in entry
+            and "A schedule repeats in one of two ways:" in guide)

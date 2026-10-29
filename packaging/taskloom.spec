@@ -17,7 +17,7 @@ a = Analysis(
     [os.path.join(SPECPATH, "entry.py")],
     pathex=[root],
     hiddenimports=hidden,
-    datas=collect_data_files("holidays"),
+    datas=collect_data_files("holidays") + [(os.path.join(root, "README.md"), "taskloom")],  # Help > Documentation
     excludes=excludes,
 )
 pyz = PYZ(a.pure)

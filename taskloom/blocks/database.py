@@ -16,9 +16,14 @@ class RunQuery(Block):
     inputs = {"params": ports.Any(required=False)}
     outputs = {"result": ports.Table()}
     config = {
-        "connection": fields.Connection(kind="jdbc"),
-        "sql": fields.Code("sql", help="Use :name for parameters, e.g. where day_key = :day_key"),
-        "chunk_size": fields.Int(default=50_000, minimum=1, help="Rows fetched and written per chunk"),
+        "connection": fields.Connection(kind="jdbc", help="The database to query: one of your JDBC connections "
+                                                          "(Tools > Connections)"),
+        "sql": fields.Code("sql", help="Use :name for parameters, e.g. where day_key = :day_key",
+                           examples=["select * from sales where day_key = :day_key",
+                                     "select region, count(*) as orders from orders group by region",
+                                     "select * from customers where region in (:regions)"]),
+        "chunk_size": fields.Int(default=50_000, minimum=1, help="Rows fetched and written per chunk",
+                                 examples=["50000", "10000", "200000"]),
     }
 
     def run(self, ctx, params=None):
