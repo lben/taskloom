@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 from types import SimpleNamespace
 
@@ -30,7 +31,7 @@ class ports:
             # or several blocks' errors going to one handler). With several edges it receives a list.
             self.any_of = any_of
             # by_source: with several edges it receives a dict instead, {source block: value} (see
-            # engine._arriving).
+            # engine._arriving). With many too, always a dict, keyed block.port, even with one edge.
             self.by_source = by_source
 
     class Any(Port):
@@ -151,6 +152,43 @@ class fields:
                 raise ValueError(f"{', '.join(sorted(taken))}: this block already has these; choose other names")
             return list(value)
 
+    class SourceNames(Field):
+        """A name for each output connected into the block's input `port`, {"block.port": name}, e.g. for a template
+        to say where each one goes. An output with no name stored has the one in_effect gives it."""
+
+        def __init__(self, port: str, **kw):
+            super().__init__(default={}, **kw)
+            self.port = port
+
+        def coerce(self, value):
+            if not isinstance(value, dict):
+                raise ValueError(f"expected block.port: name for each output connected here, got {value!r}")
+            for source, name in value.items():
+                if not (isinstance(source, str) and len(parts := source.split(".")) == 2
+                        and all(IDENTIFIER.fullmatch(p) for p in parts)):
+                    raise ValueError(f"'{source}' should be block.port, the output it names, e.g. totals.result")
+                if not (isinstance(name, str) and IDENTIFIER.fullmatch(name)):
+                    raise ValueError(f"'{name}' is not a name (letters, digits and _, not starting with a digit)")
+            return dict(value)
+
+        @staticmethod
+        def in_effect(names: dict, sources: list, params) -> dict:
+            """The name of each source ("block.port", in edge order): its name in `names`, or else the first of its
+            block's name, block_port, block_port_2, block_port_3, ... not taken by the names of the other sources in
+            `names`, the names given to the sources before it, or a flow parameter (`params`: their names)."""
+            taken = {str(names[s]) for s in sources if s in names} | set(params)  # (str: one written wrong by hand)
+            result = {}
+            for source in sources:
+                if source in names:
+                    result[source] = names[source]
+                    continue
+                block, port = source.split(".")
+                candidates = itertools.chain([block, f"{block}_{port}"],
+                                             (f"{block}_{port}_{n}" for n in itertools.count(2)))
+                result[source] = next(c for c in candidates if c not in taken)
+                taken.add(result[source])
+            return result
+
 
 def setting_label(key: str, f: fields.Field) -> str:
     """The name the editor's Properties panel shows for the setting `key` (and messages about it use)."""
@@ -196,6 +234,13 @@ class Block:
     def migrate(cls, config: dict, old_version: int) -> dict:
         """Upgrade a config saved by an older version of this block."""
         return config
+
+    @classmethod
+    def problems(cls, config: dict, sources: dict, params: set) -> list[str]:
+        """What stops the block from running as it is set up and connected, beyond a setting it cannot take: shown in
+        Properties, and Validate and runs refuse the flow. `config`: its config as block_config gives it; `sources`:
+        {input port: ["block.port", ...] connected there, in edge order}; `params`: the flow parameters' names."""
+        return []
 
     def run(self, ctx, **inputs) -> dict:
         raise NotImplementedError

@@ -28,12 +28,10 @@ blocks:
   body:
     type: reports.html_template
     config:
-      inputs: [totals, chart]
       template: |
-        <h2 style="font-size:18px;color:#2c5d8f;">Sales for {{ params.day.strftime('%A %d %B %Y') }}</h2>
-        {{ image(chart) }}
-        <p>&nbsp;</p>
-        {{ table(totals) }}
+        <h2 style="font-size:18px;color:#2c5d8f;">Sales for {day:%A %d %B %Y}</h2>
+        {chart}<br>
+        {totals}
   mail:
     type: email.send
     config:
@@ -46,7 +44,7 @@ edges:
   - sales.table -> totals.sales
   - totals.result -> chart.table
   - totals.result -> excel.totals
-  - totals.result -> body.totals
-  - chart.image -> body.chart
+  - chart.image -> body.data
+  - totals.result -> body.data
   - body.html -> mail.body
   - excel.file -> mail.attachments

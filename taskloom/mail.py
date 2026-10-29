@@ -41,7 +41,7 @@ def build_message(sender: str, to, subject: str, body: Html, attachments=(), cc=
     msg["Date"], msg["Message-ID"] = formatdate(localtime=True), make_msgid()
     document = email_document(body.html)
     visible = re.sub(r"(?is)<(style|script|head)\b.*?</\1>", "", body.html)
-    text = re.sub(r"<[^>]+>", " ", re.sub(r"(?i)<br\s*/?>|</(p|tr|h\d|div)>", "\n", visible))
+    text = re.sub(r"<[^>]+>", " ", re.sub(r"(?i)<br\s*/?>|</(p|tr|h\d|div|li)>", "\n", visible))
     msg.set_content(html.unescape(re.sub(r"[ \t]+", " ", text)).strip() + "\n")
     msg.add_alternative(document, subtype="html")
     html_part = msg.get_payload()[1]

@@ -60,7 +60,7 @@ def main():
             config: {path: out/report.xlsx, sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
           body:
             type: reports.html_template
-            config: {inputs: [totals, chart], template: "<h2>Sales</h2>{{ image(chart) }}{{ table(totals) }}"}
+            config: {template: "<h2>Sales</h2>{chart}<br>{totals}"}
           save:
             type: logic.python
             config: {inputs: [html], outputs: [], code: "open('out/body.html', 'w').write(html.html)"}
@@ -68,8 +68,8 @@ def main():
           - sales.table -> totals.sales
           - totals.result -> chart.table
           - totals.result -> excel.totals
-          - totals.result -> body.totals
-          - chart.image -> body.chart
+          - chart.image -> body.data
+          - totals.result -> body.data
           - body.html -> save.html
     """))
     result = run(cli, "run", report)

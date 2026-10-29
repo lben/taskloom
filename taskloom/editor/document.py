@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
 from ..engine import lines as start_lines
-from ..flow import _EDGE, FlowError, flow_from_data, read_flow_file
+from ..flow import _EDGE, FlowError, flow_from_data, keep_source_names, read_flow_file
 
 UNDO_LIMIT = 200
 
@@ -44,6 +44,9 @@ class FlowDocument(QObject):
         self.path = path
         self.dirty = False
         self.renamed: dict[str, str] = {}  # old block name -> new, until the canvas has followed it
+        # The block types, once a tab shows the flow: then connecting, removing, renaming and pasting also keep the
+        # names a block gives what is connected into it (fields.SourceNames) in step, in the same step.
+        self.registry = None
         self._place_unpositioned()
         self._undo: list[dict] = []
         self._redo: list[dict] = []
@@ -101,6 +104,12 @@ class FlowDocument(QObject):
     def _done(self):
         self.dirty = True
         self.changed.emit()
+
+    def _keep_names(self, moved: dict | None = None, within: set | None = None):
+        """Also called before an edit that changes edges, block or output names or parameters: an output with no name
+        stored (a file written by hand) then keeps the one it had, as a default depends on all of them."""
+        if self.registry is not None:
+            keep_source_names(self.data, self.registry, moved, within)
 
     def undo(self):
         if self._undo:
@@ -213,10 +222,13 @@ class FlowDocument(QObject):
             ui["x"], ui["y"] = round(ui.get("x", 0) + dx), round(ui.get("y", 0) + dy)
             self.blocks[new_id] = spec
             renamed[old_id] = new_id
+        moved = {}  # the copies' names of what is connected into them follow the copied blocks
         for text in edges:
             e = parse_edge(text)
             if e and e[0] in renamed and e[2] in renamed:
                 self.data["edges"].append(edge_text(renamed[e[0]], e[1], renamed[e[2]], e[3]))
+                moved[f"{e[0]}.{e[1]}"] = f"{renamed[e[0]]}.{e[1]}"
+        self._keep_names(moved, set(renamed.values()))
         if notes:
             self.data["notes"] = self.notes  # (a flow without texts has no `notes:`)
         new_notes = []
@@ -231,6 +243,7 @@ class FlowDocument(QObject):
 
     def remove(self, block_ids=(), edges=(), notes=()):
         self._change()
+        self._keep_names()
         for block_id in block_ids:
             self.blocks.pop(block_id, None)
         for note_id in notes:
@@ -241,6 +254,7 @@ class FlowDocument(QObject):
         drop = {parse_edge(t) for t in edges}  # compare parsed, so spacing in the file doesn't matter
         self.data["edges"] = [t for t in self.data["edges"]
                               if not ((e := parse_edge(t)) and (e in drop or e[0] in gone or e[2] in gone))]
+        self._keep_names()
         self._done()
 
     def connect(self, src, src_port, dst, dst_port, many: bool = False):
@@ -253,6 +267,7 @@ class FlowDocument(QObject):
             self.data["edges"] = [t for t in self.data["edges"]
                                   if not ((e := parse_edge(t)) and e[2] == dst and e[3] == dst_port)]
         self.data["edges"].append(edge_text(src, src_port, dst, dst_port))
+        self._keep_names()
         self._done()
 
     def move_blocks(self, positions: dict):
@@ -269,6 +284,8 @@ class FlowDocument(QObject):
         if new in self.blocks:
             raise ValueError(f"a block named '{new}' already exists")
         self._change()
+        self._keep_names()
+        moved = {f"{old}.{port}": f"{new}.{port}" for src, port, _, _ in self.edges() if src == old}
         self.renamed[old] = new  # (the canvas keeps it selected under its new name)
         self.data["blocks"] = {(new if k == old else k): v for k, v in self.blocks.items()}
         edges = []
@@ -279,6 +296,7 @@ class FlowDocument(QObject):
                 text = edge_text(new if src == old else src, sp, new if dst == old else dst, dp)
             edges.append(text)
         self.data["edges"] = edges
+        self._keep_names(moved)
         self._done()
 
     def set_block_value(self, block_id: str, key: str, value, section: str | None = "config"):
@@ -305,6 +323,7 @@ class FlowDocument(QObject):
                    if len(old) == len(new) else {})
         removed = set(old) - set(new) - set(renamed)
         self._change()
+        self._keep_names()
         spec = self.blocks[block_id].setdefault("config", {})
         if value in (None, ""):
             spec.pop(key, None)
@@ -323,6 +342,7 @@ class FlowDocument(QObject):
                     text = edge_text(src, sp, dst, dp)
             edges.append(text)
         self.data["edges"] = edges
+        self._keep_names({f"{block_id}.{o}": f"{block_id}.{n}" for o, n in renamed.items()} if outputs else None)
         self._done()
 
     def add_manual_start(self, registry) -> str:
@@ -368,5 +388,6 @@ class FlowDocument(QObject):
         if params == self.data["params"]:
             return
         self._change()
+        self._keep_names()
         self.data["params"] = params
         self._done()

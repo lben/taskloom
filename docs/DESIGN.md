@@ -147,6 +147,11 @@ class RunQuery(Block):
 - **Versioning**: when a block's config changes shape, bump `version` and provide
   `migrate(old_config, old_version)`; old flow files keep loading.
 - **Python Code block**: inline editor; receives `inputs` and `ctx`, returns a dict of outputs.
+- **Ports that take several edges**: `many` (every edge must deliver; a list in edge order), `any_of` (runs when
+  one delivers), and `by_source` (a dict keyed by source block, or `block.port` when one block connects several
+  outputs). A port that is `many` and `by_source` (HTML Template's `data`) always gets `{block.port: value}`,
+  even from one edge; a `fields.SourceNames(port)` setting names each of those outputs, and the editor keeps
+  it in step with the edges.
 
 ---
 
@@ -342,7 +347,9 @@ PySide6 (Qt) application:
 
 ## 11. Reports and email (Outlook-safe)
 
-- HTML built from Jinja2 templates, then **CSS inlined** automatically.
+- HTML built by the HTML Template block: plain HTML with `{name}` / `{name:format}` placeholders for its inputs
+  and the flow parameters (as in Text fields), each value shown by its type (a table as an inline-styled
+  table, a chart as an inline image, text escaped), then **CSS inlined** automatically.
 - Table-based layout; no flexbox/grid, no external CSS, no SVG, no background images.
 - Charts rendered with matplotlib to PNG and embedded as **inline CID attachments**
   (desktop Outlook blocks `data:` URIs).
@@ -362,7 +369,7 @@ PySide6 (Qt) application:
 | Logic | Python Code, Expression, If, Wait, For Each (sub-flow), Ask User | M1 / M3 |
 | Data | DuckDB SQL, Polars Transform, Read File, Write File (CSV/Excel/Parquet) | M1 |
 | Database | Run Query (JDBC), Execute Statement (JDBC) | M1 |
-| Reports | HTML Table, HTML Template, Chart, To Excel | M4 |
+| Reports | HTML Template, Chart, To Excel | M4 |
 | Email | Send Email | M4 |
 | Servers | SSH Command, Remote Extract, Start Remote Process, Stop Remote Process, Health Check (URL/PID/port) | M3 |
 | Files | Copy/Move/Delete Files between local folders, network shares and servers (SFTP); each path is on this computer or on a server chosen from the SSH connections, so uploads and downloads are plain copies | M3 |

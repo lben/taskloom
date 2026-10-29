@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -27,7 +28,8 @@ from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
 from ..config import Home
 from ..engine import block_inputs, finished_text, input_ports
-from ..flow import BlockSpec, FlowError, block_config, load_flow, read_flow_file, run_clock, schedules_of, validate
+from ..flow import (BlockSpec, FlowError, block_config, keep_source_names, load_flow, read_flow_file, run_clock,
+                   schedules_of, validate)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -173,6 +175,7 @@ class FlowTab(QWidget):
     def __init__(self, doc: FlowDocument, registry):
         super().__init__()
         self.doc = doc
+        doc.registry = registry
         self.scene = FlowScene(doc, registry)
         self.view = FlowView(self.scene)
         layout = QVBoxLayout(self)
@@ -672,7 +675,9 @@ class MainWindow(QMainWindow):
         if not ids and not notes:
             return
         edges = [t for t in tab.doc.data["edges"] if any(t.startswith(f"{i}.") for i in ids)]
-        data = {CLIPBOARD_KEY: {i: tab.doc.blocks[i] for i in ids}, "edges": edges,
+        flow = deepcopy(tab.doc.data)
+        keep_source_names(flow, self.registry)  # each copy takes the names its inputs have, stored or not
+        data = {CLIPBOARD_KEY: {i: flow["blocks"][i] for i in ids}, "edges": edges,
                 "notes": {n: tab.doc.notes[n] for n in notes}}
         QApplication.clipboard().setText(yaml.safe_dump(data, sort_keys=False))
 

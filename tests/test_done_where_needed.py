@@ -25,7 +25,7 @@ from tests.test_paths_editor_editing import clean, error_shown, field, select_on
 KEEP = ["logic.if", "logic.python"]
 LOSE = ["data.duckdb_sql", "data.polars", "data.read_file", "data.write_file", "db.run_query", "files.copy",
         "files.move", "files.delete", "logic.wait", "logic.ask_user", "logic.for_each", "logic.inspect",
-        "reports.html_table", "reports.chart", "reports.html_template", "reports.excel", "email.send",
+        "reports.chart", "reports.html_template", "reports.excel", "email.send",
         "servers.ssh_command", "servers.start_process", "servers.stop_process", "servers.health_check",
         "servers.remote_extract"]
 START = ["trigger.manual", "trigger.schedule"]

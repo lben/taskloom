@@ -640,7 +640,10 @@ def _arriving(port, edges: list, delivered: list) -> object:
     order): one edge gives the value; several (or into a `many` port) a list in edge order, or, into a by_source
     port (Python Code), {source block: value} in edge order. A block connecting several of its outputs there
     is keyed block.port (e.g. check.result, check.details), so none is lost; how the blocks are connected sets
-    the keys, not which edges delivered."""
+    the keys, not which edges delivered. A port that is by_source and many (HTML Template's data) always gets
+    {block.port: value}, even from one edge."""
+    if getattr(port, "by_source", False) and getattr(port, "many", False):
+        return {f"{e.src}.{e.src_port}": value for e, value in delivered}
     if getattr(port, "by_source", False) and len(edges) > 1:
         sources = [src for src, _ in {(e.src, e.src_port) for e in edges}]  # each output connected there, once
         return {(f"{e.src}.{e.src_port}" if sources.count(e.src) > 1 else e.src): value for e, value in delivered}

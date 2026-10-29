@@ -27,12 +27,11 @@ REPORT_FLOW = """
       body:
         type: reports.html_template
         config:
-          inputs: [totals, chart]
           template: |
-            <style>h2 { color: #2c5d8f; font-size: 18px; }</style>
-            <h2>Sales for {{ params.day }}</h2>
-            {{ image(chart) }}
-            {{ table(totals) }}
+            <style>h2 {{ color: #2c5d8f; font-size: 18px; }}</style>
+            <h2>Sales for {day}</h2>
+            {chart}
+            {totals}
       mail:
         type: email.send
         config:
@@ -44,8 +43,8 @@ REPORT_FLOW = """
       - sales.table -> totals.sales
       - totals.result -> chart.table
       - totals.result -> excel.totals
-      - totals.result -> body.totals
-      - chart.image -> body.chart
+      - totals.result -> body.data
+      - chart.image -> body.data
       - body.html -> mail.body
       - excel.file -> mail.attachments
 """

@@ -1,17 +1,16 @@
-"""Report blocks: HTML tables and templates, charts, Excel files, and sending email."""
+"""Report blocks: HTML templates, charts, Excel files, and sending email."""
 
 from __future__ import annotations
 
 import html as html_lib
+import string
 import uuid
 from pathlib import Path
 
-import jinja2
 import polars as pl
-from markupsafe import Markup
 
 from .. import mail
-from ..block import Block, fields, ports
+from ..block import IDENTIFIER, Block, fields, ports
 from ..report import CHART_KINDS, SERIES, Html, html_table, image_tag, render_chart
 from ..table import Table
 from .data import EXCEL_MAX_ROWS
@@ -25,6 +24,11 @@ def _frame(value, max_rows: int) -> tuple[pl.DataFrame, int]:
     if isinstance(value, pl.DataFrame):
         return value.head(max_rows), value.height
     raise TypeError(f"expected a table, got {type(value).__name__}")
+
+
+def _is_picture(text: str) -> bool:
+    """Whether text is the path of a PNG file there is (as Chart gives)."""
+    return text.lower().endswith(".png") and Path(text).exists()
 
 
 def to_html(value, ctx=None) -> Html:
@@ -41,30 +45,11 @@ def to_html(value, ctx=None) -> Html:
         df, total = _frame(value, 500)
         return Html(html_table(df, total_rows=total))
     text = str(value)
-    if text.lower().endswith(".png") and Path(text).exists():
+    if _is_picture(text):
         cid = f"img-{uuid.uuid4().hex[:12]}"
         return Html(image_tag(cid, Path(text)), {cid: text})
     paragraphs = html_lib.escape(text).split("\n\n")
     return Html("".join(f'<p style="margin:0 0 10px;">{p.replace(chr(10), "<br>")}</p>' for p in paragraphs))
-
-
-class HtmlTable(Block):
-    type_id = "reports.html_table"
-    title = "HTML Table"
-    description = 'Turns a table into a nicely formatted table for an email.'
-    category = "Reports"
-    inputs = {"table": ports.Table()}
-    outputs = {"html": ports.Any()}
-    config = {
-        "title": fields.Text(required=False, help="A heading above the table"),
-        "max_rows": fields.Int(default=500, help="Emails get slow and get clipped with very long tables"),
-    }
-
-    def run(self, ctx, table):
-        df, total = _frame(table, self.config.max_rows)
-        heading = (f'<h3 style="font-size:15px;margin:0 0 8px;">{html_lib.escape(self.config.title)}</h3>'
-                   if self.config.title else "")
-        return {"html": Html(heading + html_table(df, self.config.max_rows, total))}
 
 
 class Chart(Block):
@@ -97,15 +82,39 @@ class Chart(Block):
         return {"image": str(path)}
 
 
-class _TemplateInputs(fields.Names):
-    """Input names of an HTML Template: not the names every template already has."""
+def _shown(value, max_rows: int) -> Html:
+    """A value where a template says {name}: HTML (e.g. from another template) as it is, with its pictures; a table
+    as an Outlook-safe table of at most max_rows rows; a picture inline; None as nothing; a list item by item, one
+    per line; anything else as its text, escaped (also its quotes, for an attribute), its line breaks as <br>."""
+    if isinstance(value, (list, tuple)):
+        parts = [_shown(v, max_rows) for v in value]
+        return Html("<br>".join(p.html for p in parts), {k: v for p in parts for k, v in p.images.items()})
+    if isinstance(value, (Table, pl.DataFrame)):
+        df, total = _frame(value, max_rows)
+        return Html(html_table(df, max_rows, total))
+    if value is None or isinstance(value, Html) or isinstance(value, str) and _is_picture(value):
+        return to_html(value)
+    return _text(str(value))
 
-    def coerce(self, value):
-        names = super().coerce(value)
-        taken = {"table", "image", "params"} & set(names)
-        if taken:
-            raise ValueError(f"{', '.join(sorted(taken))}: the template already has these; choose other names")
-        return names
+
+def _text(text: str) -> Html:
+    return Html(html_lib.escape(text).replace("\n", "<br>"))
+
+
+def _placed(value, name: str, spec: str, max_rows: int) -> Html:
+    """A value where a template says {name:spec} (spec empty: {name})."""
+    if not spec or value is None:
+        return _shown(value, max_rows)
+    where = f"Template: {{{name}:{spec}}}"
+    if isinstance(value, (Html, Table, pl.DataFrame, list, tuple)) or isinstance(value, str) and _is_picture(value):
+        raise ValueError(f"{where}: a format applies only to text, numbers and dates")
+    try:
+        return _text(format(value, spec))
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"{where}: {e}") from None
+
+
+BRACES = "write {{ and }} for literal braces"
 
 
 class HtmlTemplate(Block):
@@ -113,42 +122,61 @@ class HtmlTemplate(Block):
     title = "HTML Template"
     description = 'Builds an email body from your own text, mixing in tables, charts and parameters.'
     category = "Reports"
+    inputs = {"data": ports.Any(required=False, many=True, by_source=True)}
     outputs = {"html": ports.Any()}
     config = {
-        "inputs": _TemplateInputs(default=["data"], help="Available in the template under these names"),
-        "template": fields.Code("html", help="Jinja2: {{ table(sales) }}, {{ image(chart) }}, {{ params.day }}, "
-                                             "{{ part }} for HTML from another block"),
+        "names": fields.SourceNames("data", label="Inputs"),
+        "template": fields.Code("html", default="", help=(
+            "The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
+            "date, e.g. {total:,.2f} or {day:%d %B %Y}; write {{ and }} for literal braces. Enter makes no new "
+            "line in the email: use <br> (New line). Empty: every input in turn.")),
+        "max_rows": fields.Int(default=500, minimum=1, label="Max table rows",
+                               help="Emails get slow and get clipped with very long tables"),
     }
 
     @classmethod
-    def ports(cls, config):
-        return {n: ports.Any(required=False) for n in config["inputs"]}, cls.outputs
+    def problems(cls, config, sources, params):
+        names = fields.SourceNames.in_effect(config["names"], sources.get("data", []), params)
+        found = []
+        for name in dict.fromkeys(names.values()):
+            using = [source for source, n in names.items() if n == name]
+            if len(using) > 1:
+                found.append(f"Inputs: {name} is the name of more than one input ({', '.join(using)}); "
+                             "give each its own name")
+            if name in params:
+                found.append(f"Inputs: {name} (from {', '.join(using)}) is also a flow parameter; "
+                             "give the input another name")
+        try:
+            placeholders = [(name, conversion) for _, name, _, conversion
+                            in string.Formatter().parse(config["template"]) if name is not None]
+        except ValueError as e:  # an unmatched brace
+            return found + [f"Template: {e}; {BRACES}"]
+        listed = ", ".join(dict.fromkeys(names.values())) or "none"
+        for name, conversion in placeholders:
+            if conversion is not None or not IDENTIFIER.fullmatch(name):
+                written = "{" + name + (f"!{conversion}" if conversion is not None else "") + "}"
+                found.append(f"Template: '{written}' is not a name; {BRACES}")
+            elif name not in names.values() and name not in params:
+                found.append(f"Template: {{{name}}} is not an input or a flow parameter (inputs: {listed}; {BRACES})")
+        return list(dict.fromkeys(found))
 
-    def run(self, ctx, **inputs):
-        images: dict[str, str] = {}
-
-        def table(value, max_rows=500):
-            if isinstance(value, jinja2.Undefined):
-                value._fail_with_undefined_error()  # names the misspelt name
-            df, total = _frame(value, max_rows)
-            return Markup(html_table(df, max_rows, total))
-
-        def image(path, width=None):
-            cid = f"img-{uuid.uuid4().hex[:12]}"
-            images[cid] = str(path)
-            return Markup(image_tag(cid, Path(path), width))
-
-        values = {}
-        for name in self.config.inputs:
-            value = inputs.get(name)
-            if isinstance(value, Html):
-                images.update(value.images)
-                value = Markup(value.html)
-            values[name] = value
-        env = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
-        rendered = env.from_string(self.config.template).render(
-            **values, params=ctx.params, table=table, image=image)
-        return {"html": Html(rendered, images)}
+    def run(self, ctx, data=None):
+        c, data = self.config, {} if data is None else data
+        problems = self.problems(vars(c), {"data": list(data)}, set(ctx.params))
+        if problems:  # (run on its own, it may get inputs kept from an earlier run, connected otherwise then)
+            raise ValueError(problems[0])
+        if not c.template.strip():
+            return {"html": _shown(list(data.values()), c.max_rows)}
+        names = fields.SourceNames.in_effect(c.names, list(data), ctx.params)
+        values = {**ctx.params, **{name: data[source] for source, name in names.items()}}
+        shown, parts = {}, []
+        for text, name, spec, _ in string.Formatter().parse(c.template):
+            parts.append(text)
+            if name is not None:
+                if (name, spec) not in shown:  # each once: a chart shown twice is attached once
+                    shown[name, spec] = _placed(values[name], name, spec, c.max_rows)
+                parts.append(shown[name, spec].html)
+        return {"html": Html("".join(parts), {k: v for part in shown.values() for k, v in part.images.items()})}
 
 
 class ToExcel(Block):

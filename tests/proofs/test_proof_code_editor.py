@@ -196,7 +196,8 @@ def test_python_and_sql_code_boxes_edit_like_a_code_editor(proof, win, qtbot, tm
                   "editor's preferences, is what code editors do.")
     p.alternative("Make every code field a code editor, also If's condition, Inspect's message and HTML Template's "
                   "template",
-                  "Those are not Python or SQL: a one-line expression, a message with {placeholders}, an HTML page. "
+                  "Those are not Python or SQL: a one-line expression, a message with {placeholders}, an email body in "
+                  "HTML. "
                   "Each would need its own rules for colours and indentation, and you asked for Python and SQL.")
     p.fits("The margin counts lines as error messages do: a Python Code block that fails says “(line 3)”, and line "
            "3 is the one numbered 3 in the margin. This proof shows it.")

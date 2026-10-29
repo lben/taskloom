@@ -24,7 +24,6 @@ dependencies = [
     "pyside6>=6.7",
     "paramiko>=3.4",
     "matplotlib>=3.8",
-    "jinja2>=3.1",
     "css-inline>=0.14",
     "rich>=13",
     "dulwich==1.2.20",

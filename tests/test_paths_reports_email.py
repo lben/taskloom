@@ -1,4 +1,4 @@
-"""Reports (HTML Table, Chart, HTML Template, To Excel), Send Email and run notifications, through the
+"""Reports (HTML Template, Chart, To Excel), Send Email and run notifications, through the
 real CLI, real SMTP servers (plain, STARTTLS, SSL, with a login) and the editor."""
 
 import contextlib
@@ -184,11 +184,14 @@ def picky_mail_server(env, refuse=(), reject_data=None):
         controller.stop()
 
 
-# --- HTML Table ----------------------------------------------------------------------------
+# --- HTML Template: tables -------------------------------------------------------------------
 
-def test_html_table_shows_its_title_and_every_value_escaped_in_an_inline_styled_table(env, smtp):
-    result = run(env, f"""
-    {DAY}blocks:
+def test_a_table_in_a_template_shows_every_value_escaped_in_an_inline_styled_table_under_its_heading(env, smtp):
+    result = run(env, """
+    params:
+      day: {type: date, value: 2026-10-02}
+      regions: {type: text, value: "<all regions>"}
+    blocks:
       data:
         type: logic.python
         config:
@@ -196,17 +199,17 @@ def test_html_table_shows_its_title_and_every_value_escaped_in_an_inline_styled_
           outputs: [table]
           code: |
             import datetime as dt
-            table = pl.DataFrame({{"region": ["EU <north> & co", "Zürich 東京", None],
+            table = pl.DataFrame({"region": ["EU <north> & co", "Zürich 東京", None],
                                   "stores": [1234567, 2, None], "total": [1234.5, 0.25, None],
-                                  "opened": [dt.date(2026, 10, 2), None, None]}})
+                                  "opened": [dt.date(2026, 10, 2), None, None]})
       table:
-        type: reports.html_table
-        config: {{title: "Totals for {{day:%Y-%m-%d}} <all regions>"}}
+        type: reports.html_template
+        config: {template: "<h3>Totals for {day:%Y-%m-%d} {regions}</h3>{data}"}
       mail:
         type: email.send
-        config: {{connection: mailer, to: [team@example.com], subject: Totals}}
+        config: {connection: mailer, to: [team@example.com], subject: Totals}
     edges:
-      - data.table -> table.table
+      - data.table -> table.data
       - table.html -> mail.body
     """)
 
@@ -224,7 +227,7 @@ def test_html_table_shows_its_title_and_every_value_escaped_in_an_inline_styled_
     assert "EU <north> & co" in text and "Zürich 東京" in text
 
 
-def test_html_table_max_rows_shows_the_first_rows_and_says_how_many_there_are(env, smtp):
+def test_html_template_max_table_rows_shows_the_first_rows_and_says_how_many_there_are(env, smtp):
     result = run(env, """
     blocks:
       small:
@@ -237,16 +240,16 @@ def test_html_table_max_rows_shows_the_first_rows_and_says_how_many_there_are(en
         type: logic.python
         config: {inputs: [], outputs: [table], code: "table = pl.DataFrame({'n': range(100_000, 200_000)})"}
       ten:
-        type: reports.html_table
+        type: reports.html_template
         config: {max_rows: 10}
       default:
-        type: reports.html_table
+        type: reports.html_template
       mail:
         type: email.send
         config: {connection: mailer, to: [team@example.com], subject: Long}
     edges:
-      - small.table -> ten.table
-      - big.table -> default.table
+      - small.table -> ten.data
+      - big.table -> default.data
       - ten.html -> mail.body
       - default.html -> mail.body
       - huge.table -> mail.body
@@ -259,20 +262,20 @@ def test_html_table_max_rows_shows_the_first_rows_and_says_how_many_there_are(en
     assert "500 of 100,000 rows" in html  # a table straight into the body is cut too
 
 
-def test_html_table_of_an_empty_table_still_sends_its_header(env, smtp):
+def test_a_template_with_an_empty_table_still_sends_its_header(env, smtp):
     result = run(env, """
     blocks:
       data:
         type: data.duckdb_sql
         config: {inputs: [], sql: "select 'x' as region, 1.5 as total where false"}
       table:
-        type: reports.html_table
-        config: {title: No sales today}
+        type: reports.html_template
+        config: {template: "<h3>No sales today</h3>{data}"}
       mail:
         type: email.send
         config: {connection: mailer, to: [team@example.com], subject: Empty}
     edges:
-      - data.result -> table.table
+      - data.result -> table.data
       - table.html -> mail.body
     """)
 
@@ -499,39 +502,40 @@ def test_html_template_mixes_text_parameters_tables_charts_and_html_from_other_b
 {DATA}      note:
         type: logic.python
         config: {{inputs: [], outputs: [text], code: "text = 'Revenue < 5 & rising'"}}
+      logo:
+        type: logic.python
+        config: {{inputs: [], outputs: [path], code: "path = 'logo.png'"}}
       chart:
         type: reports.chart
         config: {{kind: bar, x: region, y: [total]}}
       detail:
-        type: reports.html_table
-        config: {{title: Detail by region}}
+        type: reports.html_template
+        config: {{template: "<h3>Detail by region</h3>{{data}}"}}
       inner:
         type: reports.html_template
-        config:
-          inputs: [chart]
-          template: "<p>Inner part</p>{{{{ image(chart) }}}}"
+        config: {{template: "<p>Inner part</p>{{chart}}"}}
       body:
         type: reports.html_template
         config:
-          inputs: [totals, inner, detail, note]
           template: |
-            {{{{ image('logo.png') }}}}
-            <h2>Ventas del {{{{ params.day }}}} — Zürich</h2>
-            {{{{ table(totals) }}}}
-            {{{{ inner }}}}
-            {{{{ detail }}}}
-            <p>{{{{ note }}}}</p>
+            {{logo}}
+            <h2>Ventas del {{day}} — Zürich</h2>
+            {{data}}
+            {{inner}}
+            {{detail}}
+            <p>{{note}}</p>
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Template}}
     edges:
       - data.table -> chart.table
-      - data.table -> detail.table
-      - data.table -> body.totals
-      - chart.image -> inner.chart
-      - inner.html -> body.inner
-      - detail.html -> body.detail
-      - note.text -> body.note
+      - data.table -> detail.data
+      - logo.path -> body.data
+      - data.table -> body.data
+      - chart.image -> inner.data
+      - inner.html -> body.data
+      - detail.html -> body.data
+      - note.text -> body.data
       - body.html -> mail.body
     """)
 
@@ -547,16 +551,16 @@ def test_html_template_mixes_text_parameters_tables_charts_and_html_from_other_b
     assert png_size(images[shown[0]]) == (240, 60)  # the logo comes first
 
 
-def test_an_html_template_with_its_default_input_renders_a_table(env, smtp):
-    """A new HTML Template block has one input (the one its properties show); a table into it renders."""
+def test_an_html_template_with_its_one_input_renders_a_table(env, smtp):
+    """A new HTML Template block has one input for what it shows; a table into it renders under its block's name."""
     from taskloom.blocks.reports import HtmlTemplate
 
-    [name] = HtmlTemplate.config["inputs"].default
+    [name] = HtmlTemplate.inputs
     result = run(env, f"""
     blocks:
 {DATA}      body:
         type: reports.html_template
-        config: {{template: "<p>Totals</p>{{{{ table({name}) }}}}"}}
+        config: {{template: "<p>Totals</p>{{data}}"}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Default}}
@@ -569,107 +573,28 @@ def test_an_html_template_with_its_default_input_renders_a_table(env, smtp):
     assert ">EU<" in html_of(smtp.messages[0])
 
 
-def test_html_template_mistakes_fail_the_block_clearly_and_send_nothing(env, smtp):
+def test_html_template_mistakes_are_refused_before_the_run_and_send_nothing(env, smtp):
     result = run(env, f"""
     blocks:
 {DATA}      typo:
         type: reports.html_template
-        config: {{inputs: [totals], template: "<p>{{{{ totls }}}}</p>"}}
+        config: {{template: "<p>{{totls}}</p>"}}
       broken:
         type: reports.html_template
-        config: {{inputs: [totals], template: "{{{{ table(totals }}}}"}}
-      no_logo:
-        type: reports.html_template
-        config: {{inputs: [], template: "{{{{ image('pictures/logo.png') }}}}"}}
+        config: {{template: "{{data"}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Template}}
     edges:
-      - data.table -> typo.totals
-      - data.table -> broken.totals
+      - data.table -> typo.data
+      - data.table -> broken.data
       - typo.html -> mail.body
       - broken.html -> mail.body
-      - no_logo.html -> mail.body
     """)
 
-    assert result.returncode == 1
-    failed = errors(env)
-    assert set(failed) == {"typo", "broken", "no_logo"}
-    assert "totls" in failed["typo"] and "undefined" in failed["typo"]
-    assert "Syntax" in failed["broken"]
-    assert re.search(r"pictures[\\/]+logo\.png", failed["no_logo"])  # on Windows: 'pictures\\logo.png'
-    assert smtp.messages == []
-    assert env.block_status(env.last_run()[0])["mail"] == "skipped"
-
-
-def test_css_in_a_template_moves_into_style_attributes_for_outlook(env, smtp):
-    result = run(env, """
-    blocks:
-      body:
-        type: reports.html_template
-        config:
-          inputs: []
-          template: |
-            <style>.big { font-size: 20px; color: #2c5d8f; }</style>
-            <p class="big">Totals</p>
-      mail:
-        type: email.send
-        config: {connection: mailer, to: [team@example.com], subject: Styled}
-    edges:
-      - body.html -> mail.body
-    """)
-
-    assert result.returncode == 0, result.stderr
-    html = html_of(smtp.messages[0])
-    assert "<style" not in html
-    assert re.search(r'<p class="big" style="[^"]*font-size: ?20px[^"]*color: ?#2c5d8f', html)
-
-
-def test_a_misspelt_table_in_a_template_is_named_in_the_error(env):
-    result = run(env, f"""
-    blocks:
-{DATA}      body:
-        type: reports.html_template
-        config: {{inputs: [totals], template: "{{{{ table(totls) }}}}"}}
-    edges:
-      - data.table -> body.totals
-    """)
-
-    assert result.returncode == 1
-    assert "totls" in errors(env)["body"]
-
-
-def test_an_input_named_like_the_templates_own_table_image_or_params_is_refused(env, smtp):
-    """Every template already has table(), image() and params; an input cannot take one of these names."""
-    flow = env.write("flow.yaml", f"""
-    blocks:
-{DATA}      by_table:
-        type: reports.html_template
-        config: {{inputs: [table, sales], template: "{{{{ table(table) }}}}"}}
-      by_image:
-        type: reports.html_template
-        config: {{inputs: [image], template: "<p>x</p>"}}
-      by_params:
-        type: reports.html_template
-        config: {{inputs: [params], template: "{{{{ params }}}}"}}
-      mail:
-        type: email.send
-        config: {{connection: mailer, to: [team@example.com], subject: Template}}
-    edges:
-      - data.table -> by_table.table
-      - by_table.html -> mail.body
-      - by_image.html -> mail.body
-      - by_params.html -> mail.body
-    """)
-
-    checked = env.taskloom("validate", flow)
-    ran = env.taskloom("run", flow)
-
-    for result in (checked, ran):
-        assert result.returncode == 2, result.stderr
-        for block, name in (("by_table", "table"), ("by_image", "image"), ("by_params", "params")):
-            assert f"{block}: Inputs: {name}: the template already has these; choose other names" \
-                in result.stderr, result.stderr
+    assert result.returncode == 2
+    assert "error: typo: Template: {totls} is not an input or a flow parameter (inputs: data;" in result.stderr
+    assert "error: broken: Template: expected '}' before end of string;" in result.stderr
     assert smtp.messages == []
     assert not (env.home / "history.db").exists() or env.query("SELECT count(*) FROM runs") == [(0,)]
 
@@ -859,13 +784,13 @@ def test_send_email_puts_the_message_first_then_each_body_part_in_order(env, smt
         type: logic.python
         config: {{inputs: [], outputs: [text], code: "text = 'First line\\\\nsecond line\\\\n\\\\nNew paragraph'"}}
       detail:
-        type: reports.html_table
-        config: {{title: Detail by region}}
+        type: reports.html_template
+        config: {{template: "<h3>Detail by region</h3>{{data}}"}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Report, message: "Hello team,"}}
     edges:
-      - data.table -> detail.table
+      - data.table -> detail.data
       - intro.text -> mail.body
       - data.table -> mail.body
       - detail.html -> mail.body
@@ -1138,16 +1063,16 @@ def test_a_missing_attachment_fails_clearly_and_sends_nothing(env, smtp):
 
 
 def test_an_html_part_connected_to_attachments_fails_and_sends_nothing(env, smtp):
-    """Attachments take files and tables (a table goes as CSV); an HTML Table's html is neither."""
+    """Attachments take files and tables (a table goes as CSV); an HTML Template's html is neither."""
     result = run(env, f"""
     blocks:
 {DATA}      table:
-        type: reports.html_table
+        type: reports.html_template
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Files}}
     edges:
-      - data.table -> table.table
+      - data.table -> table.data
       - table.html -> mail.attachments
     """)
 
@@ -1627,12 +1552,12 @@ def test_a_send_email_block_set_up_in_its_properties_emails_everyone_named(env, 
       manual:
         type: trigger.manual
 {DATA}      table:
-        type: reports.html_table
+        type: reports.html_template
       mail:
         type: email.send
     edges:
       - manual.start -> data.after
-      - data.table -> table.table
+      - data.table -> table.data
       - table.html -> mail.body
     """)
     monkeypatch.setattr(RunDialog, "exec", lambda dialog: True)  # the parameters as they are

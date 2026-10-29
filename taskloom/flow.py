@@ -303,6 +303,28 @@ def block_config(cls, spec: BlockSpec) -> dict:
     return result
 
 
+def keep_source_names(data: dict, registry, moved: dict | None = None, within: set | None = None):
+    """Keep each fields.SourceNames setting in a flow file's `data` in step with what is connected into its input,
+    after an edit of `data` (made in place): a name follows its output when the edit renamed it (`moved`:
+    {"block.port": its new "block.port"}, in the blocks `within`, or all), the names of outputs no longer connected
+    there go, and an output connected there without one gets its default (fields.SourceNames.in_effect)."""
+    edges = [m.groups() for text in data.get("edges") or [] if (m := _EDGE.match(str(text)))]
+    params = data.get("params") or {}
+    for block_id, spec in (data.get("blocks") or {}).items():
+        cls = registry.get(spec.get("type")) if isinstance(spec, dict) else None
+        for key, f in (cls.config.items() if cls else ()):
+            config = spec.get("config") or {}
+            stored = config.get(key) or {}
+            if not isinstance(f, fields.SourceNames) or not isinstance(stored, dict):
+                continue  # (not a dict: written wrong by hand, as Properties says)
+            if within is None or block_id in within:
+                stored = {(moved or {}).get(source, source): name for source, name in stored.items()}
+            sources = [f"{s}.{sp}" for s, sp, d, dp in edges if (d, dp) == (block_id, f.port)]
+            names = f.in_effect({s: stored[s] for s in sources if s in stored}, sources, params)
+            if names != (config.get(key) or {}):
+                spec["config"] = {**config, key: names} if names else {k: v for k, v in config.items() if k != key}
+
+
 def run_clock(flow: Flow, home, as_of: dt.datetime | None = None) -> tuple[dt.datetime, dict]:
     """The run's fixed 'now' (with the flow's time zone, if it has one) and the expression functions
     (calendar applied; their now() is that time without the zone).
@@ -348,6 +370,11 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
             errors.append(f"{block_id}: {e}")
             continue
         ports[block_id] = (inputs, outputs)
+        sources = {}
+        for edge in flow.edges:
+            if edge.dst == block_id:
+                sources.setdefault(edge.dst_port, []).append(f"{edge.src}.{edge.src_port}")
+        errors += [f"{block_id}: {problem}" for problem in cls.problems(config, sources, set(flow.params))]
         has_params_input = any(e.dst == block_id and e.dst_port == "params" for e in flow.edges)
         for name, f in cls.config.items():
             value = config.get(name)

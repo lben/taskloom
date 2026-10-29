@@ -80,12 +80,19 @@ def html_table(df: pl.DataFrame, max_rows: int = 500, total_rows: int | None = N
             f'font-family:{FONT};font-size:13px;color:{INK};"><tr>{head}</tr>{"".join(rows)}</table>{note}')
 
 
+# The look of what a template writes, in Outlook too: table cells get the font as well, because Outlook resets fonts in
+# nested tables. It comes first, so the body's own <style> rules and style attributes win.
+BASE_CSS = (f"p{{margin:0 0 10px}}p,h2,li,td,th{{font-family:{FONT}}}"
+            f"h2{{font-size:18px;font-weight:bold;color:{INK};margin:0 0 10px}}"
+            "ul,ol{margin:0 0 10px 24px;padding:0}li{margin:0 0 4px}li:last-child{margin-bottom:10px}")
+
+
 def email_document(body: str) -> str:
     """Wrap body HTML in a table-based layout and move all CSS into style attributes."""
     if "<html" not in body.lower():
         body = (
             '<!DOCTYPE html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1"></head>'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1"><style>{BASE_CSS}</style></head>'
             f'<body style="margin:0;padding:0;background:#ffffff;">'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff">'
             f'<tr><td align="left" style="padding:16px;font-family:{FONT};font-size:14px;line-height:1.45;color:{INK};">'

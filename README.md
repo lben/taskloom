@@ -181,7 +181,8 @@ taskloom editor examples/daily-sales-report.yaml
   output. A block that connects two of its outputs there is keyed `block.output` (e.g.
   `check.result`, `check.details`). Only the blocks that delivered are in it (after an If, the
   path that ran). Other blocks that take several connections into one input (e.g. Inspect)
-  get a list, in the order of the connections.
+  get a list, in the order of the connections; HTML Template's `data` names each one (see
+  Reports and email).
 - **One error handler for many blocks:** connect the red `error` output of every block you
   want covered to one input of one block (e.g. a Python Code block); it runs once and gets
   the errors of the blocks that failed, each naming its `block` (a Python Code block gets
@@ -296,22 +297,42 @@ Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
 `logic.for_each`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
 `data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
-`servers.health_check`, `servers.remote_extract`, `reports.html_table`,
-`reports.html_template`, `reports.chart`, `reports.excel`, `email.send`.
+`servers.health_check`, `servers.remote_extract`, `reports.html_template`,
+`reports.chart`, `reports.excel`, `email.send`.
 
 ## Reports and email
 
 `examples/sales-report-email.yaml` builds a chart, an Excel file with a native Excel
-chart and an HTML table, and emails them. Emails are built for desktop Outlook:
-table layout, CSS moved into `style=""` attributes, charts as inline images with
-explicit sizes (never `data:` URIs or SVG), plus a plain-text version.
+chart and an email body with the chart and the table, and emails them. Emails are built
+for desktop Outlook: table layout, CSS moved into `style=""` attributes, charts as inline images with
+explicit sizes (never `data:` URIs or SVG), plus a plain-text version (one line per
+list item). Headings, paragraphs, lists and table cells get their font and spacing inline;
+a style you write yourself wins.
 
 - **Chart**: `x_label` and `y_label` name its axes, e.g. column `store_id` shown as `Store ID`
   (empty: the column names; a pie chart has no axes).
-- **HTML Template** (Jinja2): `{{ table(totals) }}`, `{{ image(chart) }}`, `{{ params.day }}`.
+- **HTML Template** composes the email body. Connect any number of outputs to its `data`
+  input: Properties lists each one under Inputs with a name, at first its block's name (a
+  name already taken, e.g. by another input or a flow parameter, gets `block_output`, e.g.
+  `check_details`); change it there. The Template is HTML in which `{name}` shows an input
+  or a flow parameter and `{name:format}` formats a number or date, e.g. `{total:,.2f}` or
+  `{day:%d %B %Y}`; write `{{` and `}}` for literal braces (also in a `<style>` block), e.g.
+  `Hi {input1}, please see below the chart<br>{chart}<br>and below the table<br>{my_table}<br>thank you`.
+  Each value is shown by its type: a table as an Outlook-safe table (at most **Max table
+  rows**, 500 by default), a chart's picture inline, HTML from another template as it is, a
+  list item by item, nothing for an empty value, and anything else as its text, escaped,
+  where you put it. Enter makes no new line in the email: write `<br>`, and put a table or
+  a chart between `<br>`s rather than inside a `<p>`. An empty Template shows every input in
+  turn. A name the Template does not know, or a brace left alone, is shown in red and stops
+  Validate and runs; every connected block must deliver (after an If, the path not taken
+  skips the template, and the email).
+- **Formatting buttons** above the Template box (and every html code box): B, I, U, Heading,
+  • List, 1. List, Link… and New line write Outlook-safe tags around the selection (`<b>`,
+  `<i>`, `<u>`, `<h2>`, one `<li>` per selected line in a `<ul>` or `<ol>`, `<a href>`, `<br>`);
+  each click is one Ctrl+Z. Enter alone makes no new line in the email: use New line.
 - **Send Email** takes any number of body parts and attachments; `save_copy` also
   writes the email as an `.eml` file you can open in Outlook. Text is shown as written
-  (HTML comes from HTML Table and HTML Template).
+  (HTML comes from HTML Template).
 
 Notifications: set `notify_email`, `smtp_connection` and `notify_on` in Tools →
 Settings. Scheduled runs then email you on failure (or success / skipped runs). A flow

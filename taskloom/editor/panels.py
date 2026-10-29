@@ -15,11 +15,12 @@ from PySide6.QtCore import (QAbstractTableModel, QObject, QDate, QMimeData, QMod
                             QTimer, Signal)
 from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QSyntaxHighlighter,
                            QTextCharFormat, QTextCursor)
+from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit,
-                               QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTableView,
-                               QTableWidget, QTableWidgetItem, QTimeEdit, QToolButton, QTreeWidget, QTreeWidgetItem,
-                               QVBoxLayout, QWidget)
+                               QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
+                               QInputDialog, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+                               QTableView, QTableWidget, QTableWidgetItem, QTimeEdit, QToolButton, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields, setting_label
@@ -278,6 +279,95 @@ class CodeEdit(QPlainTextEdit):
         self.editing_finished.emit()
 
 
+def _write(box: QPlainTextEdit, before: str, inner: str, after: str):
+    """Replace the box's selection by before + inner + after as one undo step, then select inner (empty: the cursor
+    goes between)."""
+    cursor = box.textCursor()
+    cursor.beginEditBlock()
+    cursor.insertText(before)
+    start = cursor.position()
+    cursor.insertText(inner)
+    end = cursor.position()
+    cursor.insertText(after)
+    cursor.endEditBlock()
+    cursor.setPosition(start)
+    cursor.setPosition(end, QTextCursor.KeepAnchor)
+    box.setTextCursor(cursor)
+
+
+def _selected(box: QPlainTextEdit) -> str:
+    return box.textCursor().selectedText().replace("\u2029", "\n")  # (Qt separates the lines of a selection so)
+
+
+def _wrap(box: QPlainTextEdit, tag: str):
+    _write(box, f"<{tag}>", _selected(box), f"</{tag}>")
+
+
+def _list(box: QPlainTextEdit, tag: str):
+    """Each line the selection touches becomes an item of a <ul> or <ol>; nothing selected: one empty item."""
+    cursor = box.textCursor()
+    if not cursor.hasSelection():
+        return _write(box, f"<{tag}>\n<li>", "", f"</li>\n</{tag}>")
+    first, last = box.document().findBlock(cursor.selectionStart()), box.document().findBlock(cursor.selectionEnd())
+    cursor.setPosition(first.position())
+    cursor.setPosition(last.position() + last.length() - 1, QTextCursor.KeepAnchor)
+    box.setTextCursor(cursor)
+    _write(box, f"<{tag}>\n", "\n".join(f"<li>{line}</li>" for line in _selected(box).split("\n")), f"\n</{tag}>")
+
+
+def _link(box: QPlainTextEdit):
+    """Ask for the address; the selection (nothing selected: the address) becomes the link."""
+    box.blockSignals(True)  # the question takes the focus: no saving yet, it would rebuild Properties and this box
+    try:
+        address, ok = QInputDialog.getText(box, "Link", "Link address:", text="https://")
+    finally:
+        box.blockSignals(False)
+    if ok and address.strip():
+        href = html.escape(address.strip())
+        _write(box, f'<a href="{href}">', _selected(box) or href, "</a>")
+
+
+def _new_line(box: QPlainTextEdit):
+    cursor = box.textCursor()
+    cursor.clearSelection()
+    box.setTextCursor(cursor)
+    _write(box, "<br>\n", "", "")
+
+
+def _with_html_buttons(box: QPlainTextEdit) -> QWidget:
+    """The box under text-labelled buttons that write Outlook-safe tags around its selection. ("Cursive" is italics:
+    Outlook shows a font it does not have in Times New Roman.)"""
+    widget = QWidget()
+    # A click on a button keeps the focus in the box: leaving it would save, rebuilding Properties under the click.
+    widget.setFocusPolicy(Qt.ClickFocus)
+    widget.setFocusProxy(box)
+    row = QHBoxLayout()
+    for label, tip, act in (
+            ("B", "Bold <b>", lambda: _wrap(box, "b")),
+            ("I", "Italic (cursive) <i>", lambda: _wrap(box, "i")),
+            ("U", "Underline <u>", lambda: _wrap(box, "u")),
+            ("Heading", "Heading <h2>", lambda: _wrap(box, "h2")),
+            ("• List", "Bulleted list <ul>: each selected line an item <li>", lambda: _list(box, "ul")),
+            ("1. List", "Numbered list <ol>: each selected line an item <li>", lambda: _list(box, "ol")),
+            ("Link…", "Link <a href>", lambda: _link(box)),
+            ("New line", "New line <br> (Enter alone makes no new line in the email)", lambda: _new_line(box))):
+        button = QToolButton(text=label)
+        button.setToolTip(html.escape(tip))  # (shown as written, not read as HTML)
+        font = button.font()
+        font.setBold(label == "B")
+        font.setItalic(label == "I")
+        font.setUnderline(label == "U")
+        button.setFont(font)
+        button.clicked.connect(act)
+        row.addWidget(button)
+    row.addStretch()
+    column = QVBoxLayout(widget)
+    column.setContentsMargins(0, 0, 0, 0)
+    column.addLayout(row)
+    column.addWidget(box)
+    return widget
+
+
 def _tokens(comment: str, long: str, string: str, keywords, flags=0) -> re.Pattern:
     """What a line of code is made of, read from left to right; `long` starts a string or comment that may end on a
     later line. A word is read whole, so a name that starts like a keyword is not one."""
@@ -439,6 +529,11 @@ def _without_comment(line: str) -> str:
     return line
 
 
+def _as_written(tip: str) -> str:
+    """A tooltip that shows `tip` as written: Qt shows a text that looks like HTML (e.g. one saying <br>) as HTML."""
+    return html.escape(tip, quote=False) if GuiQt.mightBeRichText(tip) else tip
+
+
 def _to_text(value) -> str:
     if value is None:
         return ""
@@ -557,11 +652,14 @@ class PropertiesPanel(QScrollArea):
         for key, f in cls.config.items():
             if when and key in ("cron", "every", "at") or keeps and key in ("keep", "keep_failed"):
                 continue  # in the When box, or the Keep runs box
+            if isinstance(f, fields.SourceNames):
+                layout.addWidget(self._source_names_box(key, f, config.get(key)))
+                continue
             widget = self._field_widget(key, f, config.get(key))
             label = QLabel(setting_label(key, f))
             if f.help:
-                label.setToolTip(f.help)
-                widget.setToolTip(f.help)
+                label.setToolTip(_as_written(f.help))
+                widget.setToolTip(_as_written(f.help))
             if isinstance(f, fields.Code):
                 layout.addWidget(label)
                 layout.addWidget(widget)
@@ -833,6 +931,60 @@ class PropertiesPanel(QScrollArea):
         outputs = f.reserved == RESERVED_OUTPUTS
         self._commit(lambda: self.doc.set_port_names(self.block_id, key, value, list(old), list(new), outputs))
 
+    def _sources(self) -> dict[str, list[str]]:
+        """{input: ["block.port", ...] connected into it, in edge order} of the block shown."""
+        sources = {}
+        for src, src_port, dst, dst_port in self.doc.edges():
+            if dst == self.block_id:
+                sources.setdefault(dst_port, []).append(f"{src}.{src_port}")
+        return sources
+
+    def _source_names_box(self, key, f, value) -> QGroupBox:
+        """A row for each output connected into the input f.port: where it comes from and its name, to change (left
+        empty: its default again); while nothing is connected there, how to."""
+        box = QGroupBox(setting_label(key, f))
+        form = QFormLayout(box)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        sources = self._sources().get(f.port, [])
+        names = f.in_effect(value if isinstance(value, dict) else {}, sources, self.doc.data["params"])
+        for source in sources:
+            edit = QLineEdit(str(names[source]))  # (a name written wrong by hand: Properties says so)
+            edit.editingFinished.connect(lambda source=source, edit=edit: self._set_source_name(key, f, source, edit))
+            form.addRow(QLabel(f"from {source}"), edit)
+        note = QLabel("Write {name} in the Template where an input should go; flow parameters work the same way. An "
+                      "empty Template shows every input in turn." if sources else
+                      "Nothing is connected yet. Connect blocks (tables, charts, text…) to this block's data input; "
+                      "each one is listed here with a name, at first its block's name.", wordWrap=True,
+                      textFormat=Qt.PlainText)
+        note.setStyleSheet("color: palette(placeholder-text);")
+        form.addRow(note)
+        return box
+
+    def _set_source_name(self, key, f, source, edit):
+        """The name typed in the Inputs row of `source`; left empty: its default again (as if it had none)."""
+        if self.doc is None or self.block_id not in self.doc.blocks:
+            return
+        sources, params = self._sources().get(f.port, []), self.doc.data["params"]
+        if source not in sources:
+            return  # its line was removed while the row was being edited
+        stored = (self.doc.blocks[self.block_id].get("config") or {}).get(key)
+        # Every name shown is stored with it (a file written by hand may store none), so no other one changes.
+        names = f.in_effect(stored if isinstance(stored, dict) else {}, sources, params)
+        others = {s: n for s, n in names.items() if s != source}
+        name = edit.text().strip() or f.in_effect(others, sources, params)[source]
+        if name == names[source]:
+            edit.setText(name)
+            return  # (left as it was: nothing to save)
+        names = {**names, source: name}
+        try:
+            f.coerce(names)  # a name it cannot take is told before anything changes
+        except ValueError as e:
+            self.error.setText(f"{setting_label(key, f)}: {e}")
+            self.error.show()
+            return
+        edit.setText(name)
+        self._set(key, names)
+
     def _set(self, key, value, section="config"):
         if self.doc is None or self.block_id not in self.doc.blocks:
             return  # the block was deleted while its field was being edited
@@ -858,7 +1010,10 @@ class PropertiesPanel(QScrollArea):
             wrap = self.settings.value("wrap_code", False, type=bool)  # (as chosen in any code box)
             w = CodeEditor(_to_text(value), f.language, wrap) if code else CodeEdit(_to_text(value))
             w.setPlaceholderText(_to_text(default))
+            w.setToolTip(_as_written(f.help))  # (the box's own: it may be under buttons)
             w.editing_finished.connect(lambda: self._set(key, w.toPlainText() or None))
+            if f.language == "html":
+                return _with_html_buttons(w)
             if not code:
                 return w
             wrap_box = QCheckBox("Wrap lines", checked=wrap)
@@ -1058,11 +1213,15 @@ class PropertiesPanel(QScrollArea):
         if not cls:
             return
         try:
-            block_config(cls, BlockSpec(id=self.block_id, type=cls.type_id, config=dict(spec.get("config") or {})))
-            self.error.hide()
+            config = block_config(cls, BlockSpec(id=self.block_id, type=cls.type_id,
+                                                 config=dict(spec.get("config") or {})))
         except ValueError as e:
             self.error.setText(str(e))
             self.error.show()
+            return
+        problems = cls.problems(config, self._sources(), set(self.doc.data["params"]))
+        self.error.setText("\n".join(problems))
+        self.error.setVisible(bool(problems))
 
 
 # --- Parameters -------------------------------------------------------------------
