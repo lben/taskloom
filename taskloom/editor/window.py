@@ -207,6 +207,7 @@ class DocsColumn(QDockWidget):
         super().__init__("Documentation", window)
         self.setObjectName("Documentation")
         self.browser = DocsBrowser(window.registry)
+        column = QWidget()
         buttons = QHBoxLayout()
         for text, tip, go, enabled in (("‹ Back", "Back to the page before", self.browser.backward,
                                         self.browser.backwardAvailable),
@@ -214,14 +215,15 @@ class DocsColumn(QDockWidget):
                                         self.browser.forwardAvailable),
                                        ("Contents", "The list of every page", lambda: self.open_at("index.html"),
                                         None)):
-            button = QToolButton(text=text, toolTip=tip, autoRaise=True)
+            # The column's from the start. Added to a layout in no widget yet, it would stay owned by Python, and on
+            # Windows a process ending abruptly (as in a crash) would then delete it too late, in an access violation.
+            button = QToolButton(column, text=text, toolTip=tip, autoRaise=True)
             button.clicked.connect(go)
             if enabled is not None:
                 button.setEnabled(False)
                 enabled.connect(button.setEnabled)
             buttons.addWidget(button)
         buttons.addStretch()
-        column = QWidget()
         layout = QVBoxLayout(column)
         layout.setContentsMargins(4, 0, 0, 0)
         layout.addLayout(buttons)
