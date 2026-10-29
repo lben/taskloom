@@ -103,4 +103,10 @@ PROOF_DIR=/tmp/proofs .venv/bin/python -m pytest tests/proofs -q     # without P
 .venv/bin/python packaging/proof_pdf.py /tmp/proofs /tmp/proofs-linux /tmp/proof.pdf   # several runs: one PDF
 ```
 
+The cover opens with what is new: each change whose scenario (`module.function`) was not in `tests/proofs` at the
+last release (the nearest `v` tag before the commit built), each a link to its first page, and NEW on it and on its
+pages. Under "New in <version>" when the commit built is that version's tag, else "New since <tag>". It is read with
+git in the repository the script is in (`--repo` for another); without git, the history (a shallow checkout: CI
+checks out with `fetch-depth: 0`) or a `v` tag, nothing is said to be new.
+
 Then open the PDF and read it as the user would: every page.

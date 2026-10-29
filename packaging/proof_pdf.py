@@ -1,12 +1,18 @@
 """Make one PDF of the proofs that tests/proofs recorded (run with PROOF_DIR set; see tests/proofs/README.md):
 
-    python packaging/proof_pdf.py <proof_dir>... <out.pdf> [--ci-url URL] [--title TEXT]
+    python packaging/proof_pdf.py <proof_dir>... <out.pdf> [--ci-url URL] [--title TEXT] [--repo FOLDER]
 
-A cover (Taskloom version, date, platform, the CI run, and each change with its result and summary), then each
-change as a short story: what was asked and the idea; why this design; each step with its screenshot; what was
-checked. Each change says which system it was shown on. Several proof folders (CI shows the proofs on Windows, and
-those Windows cannot show on Linux) make one PDF: each folder's changes in the order they ran, the folders in the
-order given; a change skipped in one folder and shown in another is in it once, as shown.
+A cover (Taskloom version, date, platform, the CI run, the changes new in this version, each a link to its pages,
+and each change with its result and summary), then each change as a short story: what was asked and the idea; why
+this design; each step with its screenshot; what was checked. Each change says which system it was shown on.
+Several proof folders (CI shows the proofs on Windows, and those Windows cannot show on Linux) make one PDF: each
+folder's changes in the order they ran, the folders in the order given; a change skipped in one folder and shown in
+another is in it once, as shown.
+
+A change is new when its scenario (module.function in tests/proofs, the name of its proof folder) was not there at
+the base tag: the nearest v tag from the parent of the commit built (for a release's build, the previous release),
+read with the git program in --repo (by default the repository this script is in). Without git, the history (a
+shallow checkout) or a base tag, nothing is said to be new.
 """
 
 import argparse
@@ -16,6 +22,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,10 +67,11 @@ def outcome(record: dict) -> str:
     return mark(False, "not shown (skipped)" if record["status"] == "skipped" else record["status"])
 
 
-def label(text: str, color: str = MUTED, space: int = 0) -> str:
-    """A small capitals line over what it names (`space`: above it)."""
+def label(text: str, color: str = MUTED, space: int = 0, anchor: str = "") -> str:
+    """A small capitals line over what it names (`space`: above it; `anchor`: the name a link to it goes to)."""
     return (f"<p style=\"color: {color}; font-size: 8.5pt; font-weight: 600; text-transform: uppercase; "
-            f"letter-spacing: 1.5px; margin-top: {space}px; margin-bottom: 6px\">{esc(text)}</p>")
+            f"letter-spacing: 1.5px; margin-top: {space}px; margin-bottom: 6px\">"
+            + (f"<a name=\"{anchor}\"></a>" if anchor else "") + f"{esc(text)}</p>")
 
 
 def box(content: str, tint: str, bar: str) -> str:
@@ -86,8 +94,8 @@ def columns(left: str, right: str, split: int = 48) -> str:
             f"{left}</td><td width=\"4%\"></td><td valign=\"top\">{right}</td></tr></table>")
 
 
-def heading(over: str, title: str, over_color: str = ACCENT) -> str:
-    return (label(over, over_color) +
+def heading(over: str, title: str, over_color: str = ACCENT, anchor: str = "") -> str:
+    return (label(over, over_color, anchor=anchor) +
             f"<p style=\"font-size: 24pt; font-weight: 600; color: {INK}; margin-top: 0\">"
             f"{esc(title)}</p>")
 
@@ -98,7 +106,30 @@ def when(record: dict) -> str:
     return f"{started.day} {started:%B %Y}, {started:%H:%M}" + (f" ({zone})" if zone else "")
 
 
-def cover(title: str, records: list, sessions: list, ci_url: str, pages: list) -> str:
+def news(repo: Path, version: str) -> tuple[str, str, set] | None:
+    """What is new is told against the base tag, the nearest v tag from the parent of the commit built (for a
+    release's build, the previous release): the heading ("New in <version>" when that commit is tagged v<version>,
+    else "New since <base tag>"), the base tag, and the proof scenarios (module.function) there. None without the git
+    program, the history (a shallow checkout) or a base tag."""
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, encoding="utf-8",
+                              errors="replace", check=True).stdout
+
+    try:
+        base = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD^").strip()
+        modules = [path for path in git("ls-tree", "--full-tree", "--name-only", base, "tests/proofs/").splitlines()
+                   if re.fullmatch(r"tests/proofs/test_\w+\.py", path)]
+        before = {f"{Path(module).stem}.{function}" for module in modules
+                  for function in re.findall(r"^def (test_\w+)", git("show", f"{base}:{module}"), re.M)}
+        tagged = f"v{version}" in git("tag", "--points-at", "HEAD").split()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return f"New in {version}" if tagged else f"New since {base}", base, before
+
+
+def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, since: tuple | None,
+          new: list) -> str:
+    """`since`: what news() says; `new`: whether each change is new."""
     problems = []
     for proof_dir, session in sessions:
         if session is None:
@@ -123,14 +154,30 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list) -
                     f"<td style=\"padding: 3px 0\">{value if name == 'CI run' else esc(value)}</td></tr>"
                     for name, value in about)
     cell = f"valign=\"top\" style=\"padding: 12px 0; border-top: 1px solid {RULE}"
+
+    def row(i: int, about: str) -> str:
+        """Change i's line: its number, `about` it (its title...), its result, the system it was shown on, its page."""
+        r = records[i - 1]
+        return (f"<tr><td width=\"5%\" {cell}; font-size: 18pt; font-weight: 600; color: {ACCENT}\">{i}</td>"
+                f"<td {cell}\">{about}</td><td width=\"14%\" {cell}; padding-left: 14px\">{outcome(r)}<br>"
+                f"<span style=\"color: {MUTED}\">on {esc(r['system'])}</span></td>"
+                f"<td width=\"8%\" align=\"right\" {cell}; color: {MUTED}\">page {pages[i - 1]}</td></tr>")
+
+    big = "font-size: 13pt; font-weight: 600"
+    marked = (f"&nbsp;&nbsp;<span style=\"color: white; background-color: {ACCENT}; font-size: 8pt; "
+              "font-weight: 600\">&nbsp;NEW&nbsp;</span>")
     listed = "".join(
-        f"<tr><td width=\"5%\" {cell}; font-size: 18pt; font-weight: 600; color: {ACCENT}\">{i}</td>"
-        f"<td {cell}\"><span style=\"font-size: 13pt; font-weight: 600\">{esc(r['title'])}</span><br>"
-        f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span></td>"
-        f"<td width=\"14%\" {cell}; padding-left: 14px\">{outcome(r)}<br>"
-        f"<span style=\"color: {MUTED}\">on {esc(r['system'])}</span></td>"
-        f"<td width=\"8%\" align=\"right\" {cell}; color: {MUTED}\">page {page}</td></tr>"
-        for i, (r, page) in enumerate(zip(records, pages), 1))
+        row(i, f"<span style=\"{big}\">{esc(r['title'])}</span>{marked if new[i - 1] else ''}<br>"
+               f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span>")
+        for i, r in enumerate(records, 1))
+    news_list = ""
+    if since:
+        heading, base, _ = since
+        linked = "".join(row(i, f"<a href=\"#change-{i}\" style=\"{big}; color: {IDEA_BAR}\">{esc(r['title'])}</a>")
+                         for i, r in enumerate(records, 1) if new[i - 1])
+        news_list = (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 30px\"><tr>"
+                     f"<td colspan=\"4\">{label(heading if linked else f'Nothing new since {base}')}</td></tr>"
+                     f"{linked}</table>")
     return (label("Taskloom", ACCENT) +
             f"<p style=\"font-size: 34pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
             f"<p style=\"font-size: 13pt; color: {MUTED}; line-height: 140%; margin-bottom: 22px\">Each change in this "
@@ -138,13 +185,13 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list) -
             "way, then the app doing it, step by step, with what was checked.</p>"
             f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 18px\">{facts}</table>"
             f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 26px\"><tr><td>{verdict}</td></tr></table>"
-            f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 30px\"><tr>"
+            f"{news_list}<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 30px\"><tr>"
             f"<td colspan=\"4\">{label('In this proof')}</td></tr>{listed}</table>")
 
 
-def story(number: int, total: int, record: dict) -> list:
-    """The two pages that tell the change: what was asked and the idea; why this design."""
-    over = f"Change {number} of {total}"
+def story(number: int, over: str, record: dict) -> list:
+    """The two pages that tell the change: what was asked and the idea; why this design. The first is where the
+    cover's link to the change goes."""
     asked = box(f"<p style=\"font-size: 18pt; font-style: italic; line-height: 135%; color: {INK}\">"
                 f"“{esc(record['asked'])}”</p>", ASKED_TINT, ACCENT)
     idea = box(paragraphs(record["idea"], "13pt"), IDEA_TINT, IDEA_BAR)
@@ -160,7 +207,7 @@ def story(number: int, total: int, record: dict) -> list:
     if record["why_not_windows"] and record["system"] != "Windows":
         result += (f"<p style=\"color: {MUTED}; line-height: 135%\">Shown on {esc(record['system'])}, not Windows. "
                    f"{esc(record['why_not_windows'])}</p>")
-    first = (heading(over, record["title"]) + result
+    first = (heading(over, record["title"], anchor=f"change-{number}") + result
              + columns(label("What you asked") + asked + roadmap, label("The idea") + idea, 44))
     cards = "".join(
         f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-bottom: 10px\"><tr>"
@@ -320,7 +367,7 @@ def badge(number: int) -> QImage:
     return image
 
 
-def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
+def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, repo: Path = Path(__file__).parent):
     QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
     proofs, sessions = [], []
     for proof_dir in proof_dirs:
@@ -335,6 +382,9 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
     proofs = [(folder, record) for folder, record in proofs
               if record["status"] != "skipped" or folder.name not in shown]
     records = [record for _, record in proofs]
+    version = ", ".join(sorted({r["version"] for r in records}))
+    since = news(repo, version)
+    new = [since is not None and folder.name not in since[2] for folder, _ in proofs]
 
     writer = QPdfWriter(str(out))
     writer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Landscape, QMarginsF(12, 12, 12, 12),
@@ -392,10 +442,11 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
                     name = f"proof{number}/{file}"
                     resources[name] = framed(QImage(str(folder / file)))
                     images[file] = (name, resources[name].size())
-        over = f"Change {number}"
+        marked = f" · {since[0]}" if new[number - 1] else ""
+        over = f"Change {number}{marked}"
         footer = f"Change {number}: {record['title']} · on {record['system']}"
         starts.append(len(pages))
-        pages += [(text, footer) for text in story(number, len(proofs), record)]
+        pages += [(text, footer) for text in story(number, f"Change {number} of {len(proofs)}{marked}", record)]
         step, steps = 0, sum(e["kind"] == "step" for e in record["entries"])
         for page in groups(record["entries"]):
             text, step = step_page(over, page, step, steps, images, body, measure)
@@ -405,9 +456,9 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
     docs = [fitted(text) for text, _ in pages]
     counts = [doc.pageCount() for doc in docs]
     first = [sum(counts[:i]) for i in range(len(counts))]
-    cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records)))  # how many pages it takes
+    cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records), since, new))  # its page count
     shift = cover_doc.pageCount()
-    cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts]))
+    cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts], since, new))
     docs, footers = [cover_doc, *docs], ["", *(footer for _, footer in pages)]
     total = sum(doc.pageCount() for doc in docs)
 
@@ -433,8 +484,7 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE):
             painter.setFont(small)
             painter.setPen(QColor(FAINT))
             line = QRectF(8, body.height() + 6, body.width() - 16, FOOTER - 6)
-            painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter,
-                             f"Taskloom {', '.join(sorted({r['version'] for r in records}))} · {title}")
+            painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter, f"Taskloom {version} · {title}")
             painter.drawText(line, Qt.AlignHCenter | Qt.AlignVCenter, footer)
             painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, f"{number} / {total}")
     painter.end()
@@ -446,8 +496,10 @@ def main():
     parser.add_argument("out", type=Path)
     parser.add_argument("--ci-url", default="", help="the CI run the proofs ran in")
     parser.add_argument("--title", default=TITLE)
+    parser.add_argument("--repo", type=Path, default=Path(__file__).parent,
+                        help="the Git checkout that says which changes are new (default: the one this script is in)")
     args = parser.parse_args()
-    build(args.proof_dirs, args.out, args.ci_url, args.title)
+    build(args.proof_dirs, args.out, args.ci_url, args.title, args.repo)
     print(args.out)
 
 
