@@ -130,13 +130,17 @@ class HtmlTemplate(Block):
     inputs = {"data": ports.Any(required=False, many=True, by_source=True)}
     outputs = {"html": ports.Any()}
     config = {
-        "names": fields.SourceNames("data", label="Inputs", examples=["chart", "my_table", "input1"]),
+        "names": fields.SourceNames("data", label="Inputs", help=(
+            "The name of each output connected to data, for the Template, where {name} shows it: letters, digits "
+            "and _, not starting with a digit. At first its block's name (block_port if that is taken); left empty, "
+            "it gets that name again."), examples=["chart", "my_table", "input1"]),
         "template": fields.Code("html", default="", help=(
             "The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
             "date, e.g. {total:,.2f} or {day:%d %B %Y}; write {{ and }} for literal braces. Enter makes no new "
             "line in the email: use <br> (New line). Empty: every input in turn."),
-                                examples=["Hi {input1}, please see below the chart<br>{chart}",
-                                          "<b>Sales on {day:%d %B %Y}</b><br>{my_table}", ""]),
+                                examples=["<b>Daily sales</b><br>Good morning, the figures are below.",
+                                          "Hi team, please see below the chart<br>{chart}<br>thank you",
+                                          "<h2>Sales</h2>{chart}"]),
         "max_rows": fields.Int(default=500, minimum=1, label="Max table rows",
                                help="Emails get slow and get clipped with very long tables",
                                examples=["500", "100", "50"]),

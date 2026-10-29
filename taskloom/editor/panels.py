@@ -648,7 +648,7 @@ class RowHelp(QObject):
         self.text = (f"<b>{html.escape(label)}</b><br>{html.escape(what)}<br>{values}<br>"
                      f'<a href="{html.escape(href)}">Learn more ›</a>')
         for widget in widgets:
-            widget.setToolTip(what)
+            widget.setToolTip(_as_written(what))
             # The mouse is on a code box's text area, or on a spin box's text.
             inner = ([widget.viewport()] if isinstance(widget, QAbstractScrollArea) else
                      widget.findChildren(QLineEdit) if isinstance(widget, QAbstractSpinBox) else [])
@@ -808,7 +808,7 @@ class PropertiesPanel(QScrollArea):
             if when and key in ("cron", "every", "at") or keeps and key in ("keep", "keep_failed"):
                 continue  # in the When box, or the Keep runs box
             if isinstance(f, fields.SourceNames):
-                layout.addWidget(self._source_names_box(key, f, config.get(key)))
+                layout.addWidget(self._source_names_box(cls, key, f, config.get(key)))
                 continue
             widget = self._field_widget(key, f, config.get(key))
             label = QLabel(setting_label(key, f))
@@ -1090,9 +1090,9 @@ class PropertiesPanel(QScrollArea):
                 sources.setdefault(dst_port, []).append(f"{src}.{src_port}")
         return sources
 
-    def _source_names_box(self, key, f, value) -> QGroupBox:
+    def _source_names_box(self, cls, key, f, value) -> QGroupBox:
         """A row for each output connected into the input f.port: where it comes from and its name, to change (left
-        empty: its default again); while nothing is connected there, how to."""
+        empty: its default again), each with the setting's card; while nothing is connected there, how to."""
         box = QGroupBox(setting_label(key, f))
         form = QFormLayout(box)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -1101,7 +1101,9 @@ class PropertiesPanel(QScrollArea):
         for source in sources:
             edit = QLineEdit(str(names[source]))  # (a name written wrong by hand: Properties says so)
             edit.editingFinished.connect(lambda source=source, edit=edit: self._set_source_name(key, f, source, edit))
-            form.addRow(QLabel(f"from {source}"), edit)
+            label = QLabel(f"from {source}")
+            form.addRow(label, edit)
+            self._field_help(cls, key, label, edit)
         note = QLabel("Write {name} in the Template where an input should go; flow parameters work the same way. An "
                       "empty Template shows every input in turn." if sources else
                       "Nothing is connected yet. Connect blocks (tables, charts, text…) to this block's data input; "

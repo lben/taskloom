@@ -44,7 +44,7 @@ from taskloom.config import Home  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
 from taskloom.flow import FlowError, flow_from_data, validate  # noqa: E402
 from taskloom.registry import discover  # noqa: E402
-from tests.test_editor import add_from_palette  # noqa: E402
+from tests.test_editor import add_from_palette, drag_port_to_port  # noqa: E402
 from tests.test_paths_editor_editing import clean, error_shown, flow_file, press, select_only, settle  # noqa: E402
 from tests.test_paths_editor_running import right_click  # noqa: E402
 from tests.test_reusable_block import CREATE, fill_all, in_the_window, names_flow  # noqa: E402
@@ -355,6 +355,13 @@ def inputs_in(widget) -> list:
             and not any(isinstance(p, INPUTS) for p in parents_between(w, widget))]
 
 
+def source_names_box(cls, box: str) -> bool:
+    """Whether `box` is the box of a setting that lists the outputs connected into an input (fields.SourceNames, e.g.
+    HTML Template's Inputs): each of its rows ("from block.port" and a name) is that setting's."""
+    return cls is not None and any(isinstance(f, fields.SourceNames) and setting_label(k, f) == box
+                                   for k, f in cls.config.items())
+
+
 def field_for(cls, box: str, text: str):
     if cls is None or box in ("When", "Retry and timeout"):
         return None
@@ -386,7 +393,8 @@ def property_rows(win, title: str, cls=None) -> list[Row]:
                 continue
             label = label_item.widget() if label_item else None
             label = label if isinstance(label, QLabel) and label.text() else None
-            text = label.text() if label else widget.text() if isinstance(widget, QCheckBox) else box
+            text = (box if source_names_box(cls, box) else label.text() if label else
+                    widget.text() if isinstance(widget, QCheckBox) else box)
             rows.append(Row(f"{title} › {text}", text, label, inputs, top, field_for(cls, box, text)))
     layout = body.layout()
     for i in range(1, layout.count()):  # code boxes: a label, then the box under it
@@ -500,6 +508,15 @@ def dismiss(qtbot, win):
         pass
 
 
+def shown_tip(tip: str) -> str:
+    """A tooltip as it reads: Qt shows a text that looks like HTML (e.g. help saying <br>) as HTML."""
+    if not GuiQt.mightBeRichText(tip):
+        return tip
+    doc = QTextDocument()
+    doc.setHtml(tip)
+    return doc.toPlainText()
+
+
 def effective_tooltip(widget, top) -> str:
     """The tooltip Qt shows for `widget`: its own, else that of the nearest parent (up to `top`) that has one."""
     while widget is not None and widget is not top:
@@ -557,8 +574,8 @@ def card_problems(row: Row, card: QLabel, target, pages: Pages, drop=()) -> list
         out.append(f"{where}: no examples (shows {third!r})")
 
     tip = row.label_widget.toolTip() if target is row.label_widget else effective_tooltip(target, row.top)
-    if norm(tip) != norm(what):
-        out.append(f"{where}: its toolTip() is {tip!r}, the card says {what!r}")
+    if norm(shown_tip(tip)) != norm(what):
+        out.append(f"{where}: its toolTip() is {tip!r} and reads {shown_tip(tip)!r}, the card says {what!r}")
 
     connection = row.field is not None and isinstance(row.field[2], fields.Connection)
     if isinstance(target, QComboBox) and third.startswith("One of:") and not connection \
@@ -790,6 +807,22 @@ def add_block(win, tab, title: str) -> str:
     return block
 
 
+def connect_into(tab, block: str, cls):
+    """A setting that lists the outputs connected into an input (fields.SourceNames) has a row for each one connected
+    there: connect the new flow's start, as a user does, so it has one."""
+    for f in cls.config.values():
+        if isinstance(f, fields.SourceNames):
+            drag_port_to_port(tab, "start", "start", block, f.port)
+            settle()
+            select_only(tab, block)
+
+
+def setting_row(win, cls, key: str) -> Row:
+    """The row a setting's value is typed in: its own, or (fields.SourceNames) the first in its box."""
+    label = setting_label(key, cls.config[key])
+    return row_named(win, label, label if isinstance(cls.config[key], fields.SourceNames) else "", cls)
+
+
 def clean_all():
     """Leave no unsaved changes in any editor window: closing them after the test must not ask to save them (what
     is being typed is committed first)."""
@@ -832,7 +865,7 @@ def test_every_row_of_every_built_in_block_shows_a_card_with_what_it_is_for_exam
         settle()
         problems, hovered = [], 0
         for cls in list(win.registry.blocks.values()):
-            add_block(win, tab, cls.title)
+            connect_into(tab, add_block(win, tab, cls.title), cls)
             rows = property_rows(win, cls.title, cls)
             assert rows and rows[0].label == "Name", f"{cls.title}: {[r.label for r in rows]}"
             shown = {r.field[1] for r in rows if r.field}
@@ -1496,7 +1529,8 @@ def test_a_reusable_block_created_while_the_column_is_closed_is_in_contents_when
 def test_every_built_in_example_is_accepted_by_its_properties_input_and_by_validate(win, qtbot, tmp_path):
     """Spec T6, rules 1 and 2: each explicit example of a built-in setting, typed into its real Properties input and
     committed (with the context a user would build first: the parameters a templated example uses, a connection of
-    the right kind chosen, the names first), shows no error line, and validate reports nothing naming that setting."""
+    the right kind chosen, an output connected into an input whose sources are named, the names first), shows no error
+    line, and validate reports nothing naming that setting."""
     try:
         win.home.root.mkdir(parents=True, exist_ok=True)
         (win.home.root / "connections.yaml").write_text(CONNECTIONS, encoding="utf-8")
@@ -1521,20 +1555,21 @@ def test_every_built_in_example_is_accepted_by_its_properties_input_and_by_valid
             for key, f in cls.config.items():
                 if isinstance(f, fields.Connection) and not isinstance(f, fields.Server):
                     choose(row_named(win, setting_label(key, f), "", cls).inputs[0], data=CONNECTION_OF_KIND[f.kind])
-            keys = sorted(wanted, key=lambda k: not isinstance(cls.config[k], fields.Names))  # the names first
-            for key in keys:  # every setting filled, so the block's settings are read (and checked) as a whole
-                type_in_row(row_named(win, setting_label(key, cls.config[key]), "", cls), wanted[key][0])
+            connect_into(tab, block, cls)
+            keys = sorted(wanted, key=lambda k: not isinstance(cls.config[k], (fields.Names, fields.SourceNames)))
+            for key in keys:  # the names first; every setting filled, so the settings are read (and checked) whole
+                type_in_row(setting_row(win, cls, key), wanted[key][0])
             for key in keys:
                 label = setting_label(key, cls.config[key])
                 for example in wanted[key]:
-                    type_in_row(row_named(win, label, "", cls), example)
+                    type_in_row(setting_row(win, cls, key), example)
                     tried += 1
                     if error_shown(win):
                         problems.append(f"{cls.title} › {label}: {example!r} is refused: {error_shown(win)}")
                     said = [m for m in problems_in_flow(win, tab, tmp_path)
                             if f"{block}: {label}:" in m or f"{block}: {label} is required" in m]
                     problems += [f"{cls.title} › {label}: {example!r}: validate says {m}" for m in said]
-                type_in_row(row_named(win, label, "", cls), wanted[key][0])
+                type_in_row(setting_row(win, cls, key), wanted[key][0])
         assert problems == [], "\n".join(problems)
         assert tried >= 64, tried
     finally:
