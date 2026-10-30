@@ -429,14 +429,16 @@ def test_inspect_shows_tables_pictures_and_markdown_in_the_log(jdbc_env, proof, 
            "and code in the fixed-width font with its spaces kept. HTML shows as written, a link opens nothing, and "
            "nothing is fetched from the internet. Unticked, the text shows exactly as it is, every space and line "
            "kept, as before.")
-    p.idea("Mermaid diagrams are not drawn in this change: a Mermaid block (```mermaid) shows as its text, with a "
-           "grey line under it that says so. A later change draws them with mmdr, as you chose.")
+    p.idea("A Mermaid diagram (a ```mermaid block) in that Markdown is drawn as a picture where it is, offline, with "
+           "mmdr, as you chose. A later change added that (Inspect draws Mermaid diagrams in the Log): this proof "
+           "shows one drawn, briefly, and that change's own proof shows the details.")
     p.why_simplest("One small mark on a log line, drawn when the Log shows the line, does it all. The line itself "
                    "stays plain text (for a picture its path, for Markdown its text), so the terminal, the run "
                    "history and the headless Linux runner keep and print it as they print any line: only the "
                    "editor's Log draws it.")
-    p.why_simplest("Everything the Log draws with comes with Qt, which Taskloom already carries: its Markdown reader, "
-                   "its rich text view and its picture readers. Nothing was added to the download for the Log.")
+    p.why_simplest("Everything this change draws with comes with Qt, which Taskloom already carries: its Markdown "
+                   "reader, its rich text view and its picture readers. Nothing was added to the download for it; only "
+                   "the later Mermaid change added mmdr, to draw the diagrams.")
     p.why_simplest("The table needed no change of its own: it is the very text the hover tooltip shows, in the same "
                    "fixed-width font. So no character of it was swapped for another; instead this proof measures, "
                    "on Windows, that the Log's font has every character of the table and that every column lines "
@@ -673,30 +675,30 @@ def test_inspect_shows_tables_pictures_and_markdown_in_the_log(jdbc_env, proof, 
             and not fixed_pitch_at(edit, body))
     p.check("The HTML <b>…</b> shows as written, not in bold", "<b>not bold: written as it is</b>" in lines(win, run_2))
 
-    p.step("Scroll down the Log: the Mermaid block, then the picture's path and the picture.")
-    mermaid = find(win, "graph LR", run_2)
-    scroll_to(win, mermaid)
-    after = [(pos, fmt) for pos, fmt in images(edit) if pos > run_2]
+    p.step("Scroll down the Log: the Mermaid block, drawn as its diagram, then the picture's path and the picture.")
+    html_at = find(win, "not bold: written", run_2)
+    scroll_to(win, html_at)
     path_2_line = next(line for line in lines(win, run_2) if line.endswith(f"[summary] INFO {path_2}"))
+    path_2_at = find(win, path_2_line, run_2)
+    [diagram] = [(pos, fmt) for pos, fmt in images(edit) if run_2 < pos < path_2_at]
+    after = [(pos, fmt) for pos, fmt in images(edit) if pos > path_2_at]
     picture_2 = picture_area(win, *after[0])
-    view = log_part(win, area(win, mermaid, mermaid).top(), picture_2.top() + 140)
-    p.shot(win, "① The Mermaid diagram shows as its text, and ② a grey line under it says so; ③ then the picture's "
-                "path and the picture, as before.",
-           highlight=[hugged(area(win, mermaid, find(win, "    sales --> chart", run_2))).adjusted(0, 0, 80, 0),
-                      (edit, MERMAID_NOTE),
-                      cut(area(win, find(win, path_2_line), find(win, path_2_line)) | picture_2, view)],
+    view = log_part(win, area(win, html_at, html_at).top(), picture_2.top() + 140)
+    p.shot(win, "① The Mermaid block is drawn as its diagram, sales → chart, where it was in the Markdown; ② then "
+                "the picture's path and the picture, as before.",
+           highlight=[hugged(picture_area(win, *diagram)),
+                      cut(area(win, path_2_at, path_2_at) | picture_2, view)],
            badges=True, zoom=view)
-    later = lines(win, run_2)
-    p.check("① The Mermaid block shows as its text, spaces kept, in the fixed-width font",
-            "graph LR" in later and "    sales --> chart" in later
-            and fixed_pitch_at(edit, find(win, "    sales --> chart", run_2) + 4))
-    note = char_at(edit, find(win, MERMAID_NOTE))
-    p.check(f"② Under it, a grey line in italics: “{MERMAID_NOTE}”",
-            later.index("    sales --> chart") < later.index(MERMAID_NOTE) and note.fontItalic()
-            and note.foreground().color().hsvSaturation() < 40)
-    p.check("③ Then, after the Markdown, the picture's line and the picture, 640 × 360",
-            later.index(MERMAID_NOTE) < later.index(path_2_line) and [size_of(fmt) for _, fmt in after] == [(640, 360)]
-            and after[0][0] > find(win, path_2_line))
+    p.note("This proof shows the diagram only briefly: the proof of the Mermaid change (Inspect draws Mermaid "
+           "diagrams in the Log) shows in detail how diagrams are drawn.")
+    later = plain(win)[run_2:]
+    p.check("① The Mermaid block is drawn where it was, after the HTML line: a picture in place of its text, and no "
+            "note that it could not be drawn",
+            html_at < diagram[0] and "graph LR" not in later and "sales --> chart" not in later
+            and MERMAID_NOTE not in later)
+    p.check("① The diagram is painted: the Log shows it, not an empty box", painted(win, *diagram))
+    p.check("② Then, after the Markdown, the picture's line and the picture, 640 × 360",
+            [size_of(fmt) for _, fmt in after] == [(640, 360)] and after[0][0] > path_2_at)
 
     p.step("See the same Log in dark colours, as in dark mode.")
     p.note("The proof gives the editor the dark colours a dark mode gives it: the Log draws with the colours it is "
@@ -711,7 +713,8 @@ def test_inspect_shows_tables_pictures_and_markdown_in_the_log(jdbc_env, proof, 
         click(tab, "summary")
         scroll_to(win, find(win, markdown_line, find(win, f"run #{second.run_id} · ")))
         p.shot(win.output, "In dark colours the Markdown's text is drawn light, as the rest of the Log's text is, and "
-                           "the grey lines stay readable; the chart keeps its own white background.")
+                           "the grey times stay readable; the Mermaid diagram is drawn for the dark background, and "
+                           "the chart keeps its own white background.")
         p.check("In dark colours, every character in the Log stands out from what is behind it (a contrast of at "
                 "least 3 to 1)", unreadable(win) == [])
     finally:
@@ -769,12 +772,13 @@ def test_inspect_shows_tables_pictures_and_markdown_in_the_log(jdbc_env, proof, 
            highlight=[(edit, "Weekly sales check"),
                       hugged(area(win, reopened.firstPosition(), reopened.lastPosition()))],
            badges=True, zoom=log_part(win, area(win, find(win, markdown_line), find(win, markdown_line)).top(),
-                                      area(win, find(win, MERMAID_NOTE), find(win, MERMAID_NOTE)).bottom() + 4))
-    p.check("They are drawn the same: the heading, the 3 by 3 table, the code block, the Mermaid note and the "
+                                      picture_area(win, *images(edit)[0]).bottom() + 4))
+    p.check("They are drawn the same: the heading, the 3 by 3 table, the code block, the Mermaid diagram and the "
             "picture, 640 × 360",
             block_of(edit, "Weekly sales check").blockFormat().headingLevel() == 1 and reopened is not None
             and (reopened.rows(), reopened.columns()) == (3, 3) and "keep   these   spaces" in lines(win)
-            and MERMAID_NOTE in lines(win) and [size_of(fmt) for _, fmt in images(edit)] == [(640, 360)])
+            and [size_of(fmt) for _, fmt in images(edit)] == [size_of(diagram[1]), (640, 360)]
+            and "graph LR" not in plain(win))
 
     p.step("Double-click run 1, the run from version 0.24, and click look_at_sales.")
     double_click_run(win, 1)
@@ -810,7 +814,8 @@ def test_inspect_shows_tables_pictures_and_markdown_in_the_log(jdbc_env, proof, 
     p.check("The picture's file could be deleted although the Log had just drawn it: the Log keeps no file open",
             removed is True)
     p.check("With Show all, both of the run's lines with that path are followed by “(the picture is no longer "
-            "there)”, and no picture is drawn", images(edit) == [] and lines(win).count(GONE) == 2
+            "there)”, and the chart is drawn nowhere: the only picture left is summary's Mermaid diagram",
+            [size_of(fmt) for _, fmt in images(edit)] == [size_of(diagram[1])] and lines(win).count(GONE) == 2
             and all(lines(win)[i + 1] == GONE for i, line in enumerate(lines(win)) if line.endswith(path_2)))
 
     # --- how long it takes --------------------------------------------------------------------------------------
