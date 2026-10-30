@@ -129,3 +129,22 @@ jobs:
         with: {path: artifacts, pattern: "taskloom-*", merge-multiple: true}
       - uses: softprops/action-gh-release@v2
         with: {files: "artifacts/*"}
+
+  # The documentation website on GitHub Pages, from each release tag. No job needs it, so it never holds up or fails
+  # a release (it fails on its own until Settings > Pages > Source is GitHub Actions; see README, Development).
+  pages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    permissions: {pages: write, id-token: write}
+    environment: {name: github-pages, url: "${{ steps.deploy.outputs.page_url }}"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --python 3.12
+      - run: uv run python packaging/docs_site.py site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: {path: site}
+      - id: deploy
+        uses: actions/deploy-pages@v4

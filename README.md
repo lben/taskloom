@@ -576,6 +576,14 @@ The JDBC tests start an H2 database server and need Java; they download the H2 j
 GitHub Actions (`.github/workflows/build.yml`) runs the tests on Linux and Windows, builds
 the Windows zip and the Linux runner, and smoke-tests both; tagging `v*` publishes them.
 
+The documentation website, <https://lben.github.io/taskloom/>, has the pages of Help > Documentation
+with the built-in blocks; `uv run python packaging/docs_site.py site` builds it into `site`. After
+the release of each `v*` tag, the workflow's `pages` job publishes it on GitHub Pages. Nothing waits
+for that job, so it never holds up a release. It needs a one-time switch: in the repository's
+Settings > Pages, set Source to GitHub Actions (until then the job fails on its own). If GitHub
+then refuses to deploy from a tag, also add the tag rule `v*` once under Settings > Environments >
+github-pages > Deployment branches and tags.
+
 ## License
 
 MIT. The packaged editor includes dulwich (Apache-2.0 or GPL-2.0-or-later) and urllib3 (MIT);
