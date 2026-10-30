@@ -216,8 +216,9 @@ class DocsColumn(QDockWidget):
                                         self.browser.forwardAvailable),
                                        ("Contents", "The list of every page", lambda: self.open_at("index.html"),
                                         None)):
-            # The column's from the start. Added to a layout in no widget yet, it would stay owned by Python, and on
-            # Windows a process ending abruptly (as in a crash) would then delete it too late, in an access violation.
+            # The column's from the start. Added to a layout in no widget yet, it would keep a reference from Python,
+            # and on Windows a process ending abruptly (as in a crash) would delete it after PySide is gone: an access
+            # violation.
             button = QToolButton(column, text=text, toolTip=tip, autoRaise=True)
             button.clicked.connect(go)
             if enabled is not None:
