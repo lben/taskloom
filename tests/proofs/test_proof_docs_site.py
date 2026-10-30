@@ -583,7 +583,9 @@ def test_the_documentation_website(proof, win, qtbot, tmp_path, monkeypatch):
         shown.close()
         p.check("The address is blocks-reports.html#reports.chart.kind, under /taskloom/",
                 landed["location"] == "/taskloom/blocks-reports.html#reports.chart.kind")
-        p.check("Kind's heading is at the top of the page", 0 <= landed["target"]["heading"][1] <= 40)
+        # (a few pixels above 0: Chrome scrolls an anchor to the very top, on Windows a fraction of a pixel past it)
+        p.check(f"Kind's heading is at the top of the page (its top at {landed['target']['heading'][1]:.1f} px)",
+                -4 <= landed["target"]["heading"][1] <= 40)
         p.check("② Reports is the page highlighted", landed["current"]["text"] == "Reports")
     finally:
         served.close()
