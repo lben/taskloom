@@ -32,7 +32,7 @@ if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unle
 
 from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QImage, QPageLayout, QPageSize, QPainter,  # noqa: E402
-                           QPdfWriter, QPen, QTextDocument, QTextTable)
+                           QPdfWriter, QPen, QTextDocument, QTextFormat, QTextTable)
 
 TITLE = "Proof that it works"
 DPI = 96  # pages are laid out in screen pixels, what the screenshots are in
@@ -163,21 +163,26 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, s
                 f"<span style=\"color: {MUTED}\">on {esc(r['system'])}</span></td>"
                 f"<td width=\"8%\" align=\"right\" {cell}; color: {MUTED}\">page {pages[i - 1]}</td></tr>")
 
+    def listing(name: str, rows: list) -> str:
+        """The rows under their name, each row a table of its own, so that a page's end cuts none (see whole());
+        the name in the first row's table, on that row's page."""
+        tables = [f"<tr><td colspan=\"4\">{label(name)}</td></tr>{rows[0] if rows else ''}", *rows[1:]]
+        return "".join(f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: "
+                       f"{0 if i else 30}px\">{table}</table>" for i, table in enumerate(tables))
+
     big = "font-size: 13pt; font-weight: 600"
     marked = (f"&nbsp;&nbsp;<span style=\"color: white; background-color: {ACCENT}; font-size: 8pt; "
               "font-weight: 600\">&nbsp;NEW&nbsp;</span>")
-    listed = "".join(
+    listed = [
         row(i, f"<span style=\"{big}\">{esc(r['title'])}</span>{marked if new[i - 1] else ''}<br>"
                f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span>")
-        for i, r in enumerate(records, 1))
+        for i, r in enumerate(records, 1)]
     news_list = ""
     if since:
         heading, base, _ = since
-        linked = "".join(row(i, f"<a href=\"#change-{i}\" style=\"{big}; color: {IDEA_BAR}\">{esc(r['title'])}</a>")
-                         for i, r in enumerate(records, 1) if new[i - 1])
-        news_list = (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 30px\"><tr>"
-                     f"<td colspan=\"4\">{label(heading if linked else f'Nothing new since {base}')}</td></tr>"
-                     f"{linked}</table>")
+        linked = [row(i, f"<a href=\"#change-{i}\" style=\"{big}; color: {IDEA_BAR}\">{esc(r['title'])}</a>")
+                  for i, r in enumerate(records, 1) if new[i - 1]]
+        news_list = listing(heading if linked else f"Nothing new since {base}", linked)
     return (label("Taskloom", ACCENT) +
             f"<p style=\"font-size: 34pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
             f"<p style=\"font-size: 13pt; color: {MUTED}; line-height: 140%; margin-bottom: 22px\">Each change in this "
@@ -185,8 +190,7 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, s
             "way, then the app doing it, step by step, with what was checked.</p>"
             f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 18px\">{facts}</table>"
             f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 26px\"><tr><td>{verdict}</td></tr></table>"
-            f"{news_list}<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 30px\"><tr>"
-            f"<td colspan=\"4\">{label('In this proof')}</td></tr>{listed}</table>")
+            f"{news_list}{listing('In this proof', listed)}")
 
 
 def story(number: int, over: str, record: dict) -> list:
@@ -337,6 +341,18 @@ def cuts_a_box(doc: QTextDocument) -> bool:
     return any(box.top() // height != (box.bottom() - 1) // height for box in boxes)
 
 
+def whole(doc: QTextDocument):
+    """No table is cut by a page's end: one that does not fit at the bottom of a page starts the next (Qt would
+    split its rows between the pages, line by line)."""
+    layout, height = doc.documentLayout(), doc.pageSize().height()
+    for frame in doc.rootFrame().childFrames():
+        box = layout.frameBoundingRect(frame)  # where it is now that the tables before it have moved
+        if box.top() // height != (box.bottom() - 1) // height:
+            fmt = frame.frameFormat()
+            fmt.setPageBreakPolicy(QTextFormat.PageBreak_AlwaysBefore)
+            frame.setFrameFormat(fmt)
+
+
 def framed(image: QImage) -> QImage:
     """The screenshot with a thin grey frame, so it stands out from the white paper."""
     image = image.convertToFormat(QImage.Format_RGB32)
@@ -398,8 +414,9 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     font.setPointSize(10)
     resources = {f"badge{n}": badge(n) for n in range(1, 21)}
 
-    def document(text: str, paged: bool = True, scale: float = 1.0) -> QTextDocument:
-        """`scale`: how much its pages are shrunk on paper (they are laid out that much bigger)."""
+    def document(text: str, paged: bool = True, scale: float = 1.0, rows: bool = False) -> QTextDocument:
+        """`scale`: how much its pages are shrunk on paper (they are laid out that much bigger); `rows`: its tables
+        are rows, each kept whole on one page (the cover's)."""
         doc = QTextDocument()
         doc.setDefaultFont(font)
         doc.setDocumentMargin(8)
@@ -411,17 +428,20 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
         else:
             doc.setTextWidth(body.width())
         doc.setHtml(f"<html><body>{text}</body></html>")
+        if rows:
+            whole(doc)
         return doc
 
     def measure(text: str) -> float:
         return document(text, paged=False).size().height()
 
-    def fitted(text: str) -> QTextDocument:
+    def fitted(text: str, rows: bool = False) -> QTextDocument:
         """The page, shrunk as little as it takes to fit on one page fewer than its content fills, else on as many,
         with no tinted box cut by a page's end, when that is not too much: what runs on to a next page by a little
         would leave a few lines alone there, and a cut box is drawn with stray bits of its tint. (Its content is
-        measured unpaged: where a page's end cuts a box, Qt adds space, so it can take a page more.)"""
-        doc = document(text)
+        measured unpaged: where a page's end cuts a box, Qt adds space, so it can take a page more.) `rows`: as
+        document()'s."""
+        doc = document(text, rows=rows)
         fills = math.ceil(measure(text) / body.height())
         for pages in range(max(1, fills - 1), doc.pageCount() + 1):
             scale, smaller = 1.0, doc
@@ -429,7 +449,7 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
                 if smaller.pageCount() <= pages and not cuts_a_box(smaller):
                     return smaller
                 scale *= 0.98
-                smaller = document(text, scale=scale)
+                smaller = document(text, scale=scale, rows=rows)
         return doc
 
     pages = []  # (html, footer)
@@ -456,9 +476,11 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     docs = [fitted(text) for text, _ in pages]
     counts = [doc.pageCount() for doc in docs]
     first = [sum(counts[:i]) for i in range(len(counts))]
-    cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records), since, new))  # its page count
+    cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records), since, new),
+                       rows=True)  # its page count
     shift = cover_doc.pageCount()
-    cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts], since, new))
+    cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts], since, new),
+                       rows=True)
     docs, footers = [cover_doc, *docs], ["", *(footer for _, footer in pages)]
     total = sum(doc.pageCount() for doc in docs)
 
