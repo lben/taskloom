@@ -1784,6 +1784,20 @@ class LogPanel(QWidget):
         scroll.rangeChanged.connect(lambda _, maximum: self._follow and scroll.setValue(maximum))
         self.clear_filter.clicked.connect(lambda: (self.set_filter(None), self.filter_cleared.emit()))
         self.clear_filter.hide()
+        self.text.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        # The Log's own palette change (e.g. the system's dark mode turned on or off), not the panel's: Qt gives the
+        # panel its new palette before the Log. The diagrams it shows are drawn again on its new background, the Log
+        # staying where it is scrolled to (or following new lines, at the bottom).
+        if event.type() == QEvent.PaletteChange and any(map(callable, self.text.document().pictures.values())):
+            scroll, sideways, follow = self.text.verticalScrollBar(), self.text.horizontalScrollBar(), self._follow
+            value, across = scroll.value(), sideways.value()
+            self._render()
+            sideways.setValue(across)
+            if not follow:
+                scroll.setValue(value)
+        return False
 
     def set_entries(self, entries: list[dict]):
         self.entries = entries

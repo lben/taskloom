@@ -189,9 +189,10 @@ taskloom editor examples/daily-sales-report.yaml
     Markdown: `#` headings, `**bold**`, `*italic*`, lists, `| tables |`, `` `code` `` and
     code blocks. Lines next to each other join into one paragraph, so leave a blank line
     between paragraphs. Mermaid diagrams (```` ```mermaid ```` code blocks) are drawn as
-    pictures, offline, on the Log's background and scaled down to fit 640 × 640 (in a
-    terminal, the Markdown as written); one that cannot be drawn shows as written, with a
-    note saying why. Links are shown but open nothing.
+    pictures, offline, on the Log's background (drawn again at once when the editor turns
+    light or dark) and scaled down to fit 640 × 640 (in a terminal, the Markdown as
+    written); one that cannot be drawn shows as written, with a note saying why. Links are
+    shown but open nothing.
   - Past and scheduled runs reopened from Run history show the same pictures and Markdown.
 - **Several blocks connected into one input of a Python Code block:** that input is a dict
   keyed by each block's name (as on the canvas), with its output as the value, in the order
