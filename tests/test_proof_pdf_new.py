@@ -197,13 +197,15 @@ class Pdf:
         return " ".join(self.flat[page] for page in self.cover)
 
     def linked(self, *titles) -> dict:
-        """{title: the page its link goes to} of these titles; asserts each link is on one of them."""
+        """{title: the pages its links go to, in order} of these titles (a new change's title is a link in the New
+        list and in 'In this proof'); asserts each link is on one of them."""
         found = {}
         for on, page in self.links:
-            title = next((t for t in titles if squashed(t) in on), None)
-            assert title is not None, f"a link on {on!r} (to page index {page}), not on a new change's title"
-            found[title] = page
-        return found
+            # Its letters and digits: a comma at a line's end can fall outside the link's rectangles.
+            title = next((t for t in titles if re.sub(r"\W", "", squashed(t)) in re.sub(r"\W", "", on)), None)
+            assert title is not None, f"a link on {on!r} (to page index {page}), not on a change's title"
+            found.setdefault(title, []).append(page)
+        return {title: sorted(pages) for title, pages in found.items()}
 
 
 def build(tmp_path: Path, proof_dirs: list, *args, script: Path = PROOF_PDF, env=None, cwd=None) -> Pdf:
@@ -263,8 +265,8 @@ def test_the_cover_lists_each_new_change_with_a_link_to_it_and_marks_it_new(tmp_
         f"{first[ADDED] + 1}): {listed}"
     assert OLD.lower() not in listed, f"{OLD} is not new: {listed}"
 
-    assert pdf.linked(LATE, ADDED) == {LATE: first[LATE], ADDED: first[ADDED]}, pdf.links
-    assert len(pdf.links) == 2, f"one link per new change: {pdf.links}"
+    assert pdf.linked(*changes) == {LATE: [first[LATE]] * 2, OLD: [first[OLD]], ADDED: [first[ADDED]] * 2}, \
+        f"one link per new change in the New list, one per change in 'In this proof': {pdf.links}"
 
     in_this_proof = cover[proof_at:]
     assert re.search(rf"\b1\b.*?{late}.*?page {first[LATE] + 1}\b.*?\b2\b.*?{old}.*?page {first[OLD] + 1}\b"
@@ -292,7 +294,7 @@ def test_nothing_new_since_the_base_tag(tmp_path, qapp):
     nothing = re.search(loose("nothing new since v0.1.0"), cover)
     assert nothing, cover
     assert nothing.start() < re.search(loose("in this proof"), cover).start()
-    assert pdf.links == []
+    assert pdf.linked(OLD) == {OLD: [pdf.first_page(1, OLD)]}, f"only 'In this proof' links: {pdf.links}"
     assert len(re.findall(NEW, " ".join(pdf.flat))) == 1, "a NEW mark where nothing is new"
 
 
@@ -323,7 +325,9 @@ def test_without_history_or_a_base_tag_no_list_and_no_mark(tmp_path, qapp, case)
 
     saying_new = [text for text in pdf.flat if re.search(NEW, text)]
     assert saying_new == [], f"'new' in the PDF ({case}): {saying_new}"
-    assert pdf.links == []
+    assert pdf.linked(LATE, OLD, ADDED) == {title: [pdf.first_page(number, title)]
+                                            for number, title in enumerate([LATE, OLD, ADDED], 1)}, \
+        f"only 'In this proof' links: {pdf.links}"
 
 
 def test_by_default_it_reads_the_repository_proof_pdf_lives_in(tmp_path, qapp):
@@ -338,7 +342,8 @@ def test_by_default_it_reads_the_repository_proof_pdf_lives_in(tmp_path, qapp):
     pdf = build(tmp_path, as_ci_records(tmp_path), script=repo / "packaging" / "proof_pdf.py", cwd=elsewhere)
 
     assert re.search(loose(SINCE), pdf.cover_text()), pdf.cover_text()
-    assert pdf.linked(LATE, ADDED) == {LATE: pdf.first_page(1, LATE), ADDED: pdf.first_page(3, ADDED)}, pdf.links
+    assert pdf.linked(LATE, OLD, ADDED) == {LATE: [pdf.first_page(1, LATE)] * 2, OLD: [pdf.first_page(2, OLD)],
+                                            ADDED: [pdf.first_page(3, ADDED)] * 2}, pdf.links
     assert_marked(pdf, [LATE, OLD, ADDED], SINCE, {LATE, ADDED})
 
 
@@ -359,8 +364,8 @@ def test_the_links_reach_each_new_change_when_the_cover_takes_several_pages(tmp_
     pdf = build(tmp_path, [windows], "--repo", repo)
 
     assert len(pdf.cover) >= 2, "the cover should take several pages here"
-    assert pdf.linked(LATE, ADDED) == {LATE: pdf.first_page(13, LATE), ADDED: pdf.first_page(26, ADDED)}, pdf.links
-    assert len(pdf.links) == 2, pdf.links
+    assert pdf.linked(*titles) == {title: [pdf.first_page(number, title)] * (2 if title in (LATE, ADDED) else 1)
+                                   for number, title in enumerate(titles, 1)}, pdf.links
     assert_marked(pdf, titles, SINCE, {LATE, ADDED})
 
 

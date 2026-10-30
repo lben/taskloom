@@ -154,8 +154,8 @@ def where(cover: Cover, pattern: str) -> list:
 def check_rows(cover: Cover, changes: list) -> list:
     """What is wrong with the rows of the New list and of 'In this proof': a row not whole on one page (its number,
     title, NEW label, summary, result, system and page, as they follow each other in the row), a row showing a page
-    that is not its change's first page, rows out of order, a New list row whose link is not on its page or does not
-    go to its change's first page."""
+    that is not its change's first page, rows out of order, a row (of either list) whose link is not on its page or
+    does not go to its change's first page."""
     problems, places = [], {"new": [], "all": []}
     for listed, rows in (("new", [c for c in changes if c.new]), ("all", changes)):
         for c in rows:
@@ -186,10 +186,11 @@ def check_rows(cover: Cover, changes: list) -> list:
     if all(places["new"]) and all(places["all"]) and places["new"] and max(places["new"]) > min(places["all"]):
         problems.append("the New list is not before 'In this proof'")
     expected = [(place[0] if place else "its row's page", cover.first[c.number])
-                for place, c in zip(places["new"], [c for c in changes if c.new])]
+                for listed, rows in (("new", [c for c in changes if c.new]), ("all", changes))
+                for place, c in zip(places[listed], rows)]
     if cover.links != expected:
-        problems.append(f"the New list's links (the page each is on, the page index it goes to): {cover.links}; "
-                        f"expected {expected}")
+        problems.append(f"the links of the New list, then of 'In this proof' (the page each is on, the page index "
+                        f"it goes to): {cover.links}; expected {expected}")
     return problems
 
 
@@ -203,7 +204,7 @@ def test_each_row_of_the_cover_lists_is_whole_on_one_page(tmp_path, qapp, count,
     """Spec 1: the user's case. On a cover of several pages, every row of the New list ("New in <version>", or
     "New since v0.1.0") and of 'In this proof' has its number, title, NEW label (new changes only), summary
     ('In this proof'), result, system and page on the same page. Spec 2: the rows keep the changes' order, the New
-    list before 'In this proof'; each row's page is its change's first page, and each New list row is a link, on
+    list before 'In this proof'; each row's page is its change's first page, and each row (of either list) is a link, on
     the page the row is on, to that page (after all the cover's pages, however many it takes)."""
     changes = [Change(number, number in new_numbers) for number in range(1, count + 1)]
     cover = Cover(build(tmp_path, changes, release), changes)

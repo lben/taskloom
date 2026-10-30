@@ -6,6 +6,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import urllib.request
@@ -152,20 +153,30 @@ def h2_server():
     with socket.socket() as s:
         s.bind(("localhost", 0))
         port = s.getsockname()[1]
+    output = tempfile.TemporaryFile()  # (a file, not a pipe: the server never blocks writing to it)
     server = subprocess.Popen(
         [str(Path(java_home) / "bin" / "java"), "-cp", str(jar), "org.h2.tools.Server",
          "-tcp", "-tcpPort", str(port), "-ifNotExists"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=output, stderr=output,
     )
-    for _ in range(100):
+    deadline = time.monotonic() + 30
+    while True:
         try:
             socket.create_connection(("localhost", port), timeout=0.2).close()
             break
         except OSError:
+            if server.poll() is not None or time.monotonic() > deadline:
+                server.kill()
+                server.wait()
+                output.seek(0)
+                printed = output.read().decode("utf-8", "replace")
+                output.close()
+                pytest.fail(f"the H2 server did not start; it printed:\n{printed}")
             time.sleep(0.1)
     yield {"jar": jar, "port": port, "java_home": java_home}
     server.terminate()
     server.wait()
+    output.close()
 
 
 @pytest.fixture

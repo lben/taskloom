@@ -47,6 +47,7 @@ FOOTER = 28  # under each page's text: the footer line
 MAX_ZOOM = 1.5  # a close-up is shown at most this much bigger than on the screen
 MIN_SCALE = 0.5  # a page is shrunk at most this much to fit on fewer pages
 GAP = 16
+BLANK = 1000  # pixels left blank under each page as it is laid out (see build()): whole ones, or Qt breaks pages anew
 
 
 def esc(text: str) -> str:
@@ -155,10 +156,12 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, s
                     for name, value in about)
     cell = f"valign=\"top\" style=\"padding: 12px 0; border-top: 1px solid {RULE}"
 
-    def row(i: int, about: str) -> str:
-        """Change i's line: its number, `about` it (its title...), its result, the system it was shown on, its page."""
+    def row(i: int, about: str, anchor: str = "") -> str:
+        """Change i's line: its number, `about` it (its title...), its result, the system it was shown on, its page
+        (`anchor`: the name a link to it goes to)."""
         r = records[i - 1]
-        return (f"<tr><td width=\"5%\" {cell}; font-size: 18pt; font-weight: 600; color: {ACCENT}\">{i}</td>"
+        named = f"<a name=\"{anchor}\"></a>" if anchor else ""  # in the number's cell: next to a link, it is lost
+        return (f"<tr><td width=\"5%\" {cell}; font-size: 18pt; font-weight: 600; color: {ACCENT}\">{named}{i}</td>"
                 f"<td {cell}\">{about}</td><td width=\"14%\" {cell}; padding-left: 14px\">{outcome(r)}<br>"
                 f"<span style=\"color: {MUTED}\">on {esc(r['system'])}</span></td>"
                 f"<td width=\"8%\" align=\"right\" {cell}; color: {MUTED}\">page {pages[i - 1]}</td></tr>")
@@ -173,15 +176,20 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, s
     big = "font-size: 13pt; font-weight: 600"
     marked = (f"&nbsp;&nbsp;<span style=\"color: white; background-color: {ACCENT}; font-size: 8pt; "
               "font-weight: 600\">&nbsp;NEW&nbsp;</span>")
+
+    def title_link(i: int) -> str:
+        """Change i's title, a link to its first page."""
+        return f"<a href=\"#change-{i}\" style=\"{big}; color: {IDEA_BAR}\">{esc(records[i - 1]['title'])}</a>"
+
     listed = [
-        row(i, f"<span style=\"{big}\">{esc(r['title'])}</span>{marked if new[i - 1] else ''}<br>"
-               f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span>")
+        row(i, f"{title_link(i)}{marked if new[i - 1] else ''}<br>"
+               f"<span style=\"font-size: 11pt; color: {MUTED}\">{esc(r['idea'][0] if r['idea'] else '')}</span>",
+            anchor=f"row-{i}")  # where the go-back link on each of its pages goes
         for i, r in enumerate(records, 1)]
     news_list = ""
     if since:
         heading, base, _ = since
-        linked = [row(i, f"<a href=\"#change-{i}\" style=\"{big}; color: {IDEA_BAR}\">{esc(r['title'])}</a>")
-                  for i, r in enumerate(records, 1) if new[i - 1]]
+        linked = [row(i, title_link(i)) for i in range(1, len(records) + 1) if new[i - 1]]
         news_list = listing(heading if linked else f"Nothing new since {base}", linked)
     return (label("Taskloom", ACCENT) +
             f"<p style=\"font-size: 34pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
@@ -424,10 +432,14 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
         for name, image in resources.items():
             doc.addResource(QTextDocument.ImageResource, QUrl(name), image)
         if paged:
-            doc.setPageSize(body / scale)
+            doc.setPageSize(QSizeF(body.width() / scale, body.height() / scale + BLANK))
         else:
             doc.setTextWidth(body.width())
         doc.setHtml(f"<html><body>{text}</body></html>")
+        if paged:  # the blank under each page: its bottom margin, which Qt leaves on every page
+            frame = doc.rootFrame().frameFormat()
+            frame.setBottomMargin(frame.bottomMargin() + BLANK)
+            doc.rootFrame().setFrameFormat(frame)
         if rows:
             whole(doc)
         return doc
@@ -452,7 +464,7 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
                 smaller = document(text, scale=scale, rows=rows)
         return doc
 
-    pages = []  # (html, footer)
+    pages = []  # (html, footer, the change's number)
     starts = []  # the page each change starts on
     for number, (folder, record) in enumerate(proofs, 1):
         images = {}
@@ -466,14 +478,15 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
         over = f"Change {number}{marked}"
         footer = f"Change {number}: {record['title']} · on {record['system']}"
         starts.append(len(pages))
-        pages += [(text, footer) for text in story(number, f"Change {number} of {len(proofs)}{marked}", record)]
+        pages += [(text, footer, number)
+                  for text in story(number, f"Change {number} of {len(proofs)}{marked}", record)]
         step, steps = 0, sum(e["kind"] == "step" for e in record["entries"])
         for page in groups(record["entries"]):
             text, step = step_page(over, page, step, steps, images, body, measure)
-            pages.append((text, footer))
-        pages.append((checked(over, record), footer))
+            pages.append((text, footer, number))
+        pages.append((checked(over, record), footer, number))
 
-    docs = [fitted(text) for text, _ in pages]
+    docs = [fitted(text) for text, _, _ in pages]
     counts = [doc.pageCount() for doc in docs]
     first = [sum(counts[:i]) for i in range(len(counts))]
     cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records), since, new),
@@ -481,7 +494,8 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     shift = cover_doc.pageCount()
     cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts], since, new),
                        rows=True)
-    docs, footers = [cover_doc, *docs], ["", *(footer for _, footer in pages)]
+    docs, footers = [cover_doc, *docs], ["", *(footer for _, footer, _ in pages)]
+    numbers = [0, *(number for _, _, number in pages)]
     total = sum(doc.pageCount() for doc in docs)
 
     painter = QPainter(writer)
@@ -490,19 +504,30 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     small = QFont(font)
     small.setPixelSize(11)  # in the page's pixels (a point size would count the PDF's resolution too)
     number = 0
-    for doc, footer in zip(docs, footers):
+    for doc, footer, change in zip(docs, footers, numbers):
+        # On each page of a change, at its top: a link to the change's row on the cover.
+        back = document(f"<p align=\"right\" style=\"font-size: 8pt\"><a href=\"#row-{change}\" style=\"color: "
+                        f"{IDEA_BAR}\"><span style=\"{SYMBOLS}\">↑</span> Back to the list</a></p>",
+                        paged=False) if change else None
         for i in range(doc.pageCount()):
             if number:
                 writer.newPage()
             number += 1
-            page = doc.pageSize()
+            # Of a paragraph that a page starts in the middle of, Qt also draws the line before, clipped out of
+            # sight: with the blank under each page, above the paper, not in its top margin under the go-back link.
+            pitch = doc.pageSize().height()  # a page and the blank under it
+            page = QSizeF(doc.pageSize().width(), pitch - BLANK)
             painter.save()
             painter.scale(body.width() / page.width(), body.height() / page.height())
-            painter.translate(0, -i * page.height())
-            doc.drawContents(painter, QRectF(0, i * page.height(), page.width(), page.height()))
+            painter.translate(0, -i * pitch)
+            doc.drawContents(painter, QRectF(0, i * pitch, page.width(), page.height()))
             painter.restore()
             if not footer:  # the cover
                 continue
+            painter.save()
+            painter.translate(0, -back.size().height())  # its line just above the page's text, in the page's margin
+            back.drawContents(painter)
+            painter.restore()
             painter.setFont(small)
             painter.setPen(QColor(FAINT))
             line = QRectF(8, body.height() + 6, body.width() - 16, FOOTER - 6)

@@ -17,7 +17,7 @@ from PySide6.QtTest import QTest
 
 from taskloom import __version__
 from tests.test_proof_pdf_new import NEW as SAYS_NEW
-from tests.test_proof_pdf_new import Pdf, git, loose, squashed
+from tests.test_proof_pdf_new import Pdf, git, loose
 
 REPO = Path(__file__).resolve().parents[2]
 ASKED = ("On the proof pdf what are the new items for 0.24.0? — then, asked whether the PDF should open with a “New in "
@@ -285,7 +285,9 @@ def test_the_proof_pdf_opens_with_what_is_new(proof, qtbot, tmp_path, monkeypatc
                             "the cover as it was before this change.",
                highlight=[area], badges=True, zoom=area)
         p.check("No list, no NEW label, and no page that says new", says_nothing_new(reader, __version__))
-        p.check("No link to the PDF's pages", pdf.links == [])
+        p.check("Only “In this proof” links: each change's title, to the change's first page",
+                pdf.linked(old["title"], new["title"]) == {old["title"]: [pdf.first_page(1, old["title"])],
+                                                           new["title"]: [pdf.first_page(2, new["title"])]})
 
         p.step(f"Make a test Git repository with the release {BEFORE} and a later commit that adds a proof, and make "
                "the PDF again from it.")
@@ -325,8 +327,9 @@ def test_the_proof_pdf_opens_with_what_is_new(proof, qtbot, tmp_path, monkeypatc
         p.step("In the viewer, click change 2's title in the list.")
         reader.click(the_list[-1])
         followed = within(qtbot, lambda: reader.page == first_new)
-        p.check(f"The list has one link, on change 2's title, to page {first_new + 1}: the change's first page",
-                len(pdf.links) == 1 and squashed(new["title"]) in pdf.links[0][0] and pdf.links[0][1] == first_new)
+        p.check(f"The list has one link, on change 2's title, to page {first_new + 1}: the change's first page "
+                "(“In this proof” links each change's title to its first page too)",
+                pdf.linked(old["title"], new["title"]) == {old["title"]: [first_old], new["title"]: [first_new] * 2})
         p.check(f"Clicked, the viewer goes to page {first_new + 1}", followed)
         reader.wait_drawn(first_new)
         over = clear_of_badge(reader.over_heading(2))
@@ -371,7 +374,9 @@ def test_the_proof_pdf_opens_with_what_is_new(proof, qtbot, tmp_path, monkeypatc
                 news is not None and not re.search(loose("new since"), pdf.cover_text()))
         p.check(f"It lists change 2 and not change 1; change 2's title links to page {first_new + 1}",
                 re.search(re.escape(new["title"].lower()), news or "") and old["title"].lower() not in (news or "")
-                and len(pdf.links) == 1 and pdf.links[0][1] == pdf.first_page(2, new["title"]) == first_new)
+                and pdf.first_page(2, new["title"]) == first_new
+                and pdf.linked(old["title"], new["title"])
+                == {old["title"]: [pdf.first_page(1, old["title"])], new["title"]: [first_new] * 2})
         p.check(f"Each of change 2's pages says “New in {__version__}” in its small heading; none of change 1's says "
                 "new", all_marked(pdf, 2, new["title"], f"new in {__version__}") and none_marked(pdf, 1, old["title"]))
         the_list, label = listed_areas(reader, f"new in {__version__}", new["title"])
@@ -387,7 +392,9 @@ def test_the_proof_pdf_opens_with_what_is_new(proof, qtbot, tmp_path, monkeypatc
                             "before “In this proof”, and no NEW label.",
                highlight=[area], badges=True, zoom=area)
         p.check("No list, no NEW label, and no page that says new", says_nothing_new(reader, __version__))
-        p.check("No link to the PDF's pages", pdf.links == [])
+        p.check("Only “In this proof” links: each change's title, to the change's first page",
+                pdf.linked(old["title"], new["title"]) == {old["title"]: [pdf.first_page(1, old["title"])],
+                                                           new["title"]: [pdf.first_page(2, new["title"])]})
     finally:
         for reader in readers:
             reader.close()

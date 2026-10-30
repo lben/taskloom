@@ -35,6 +35,7 @@ QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (str(folder / "fuzz.y
 ConnectionsDialog.exec = lambda self: (self._save(), 1)[1]
 
 MainWindow.start_scheduler = lambda self, by_you=False: None  # a real scheduler service would outlive this
+MainWindow._check_after_update = lambda self: None  # (its Check flows dialog would wait for a click)
 window = MainWindow(Home(folder / "home"))
 window.resize(1400, 900)
 window.show()
