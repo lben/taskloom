@@ -132,6 +132,8 @@ def main():
             check("the copy's commit (.git/HEAD and its branch)", (committed / ".git" / branch).is_file(), branch)
     else:
         check("the runner has no Git library (dulwich)", not list(folder.rglob("dulwich*")))
+        check("the runner has no Mermaid engine (mmdr, novasvg)", not list(folder.rglob("mmdr*"))
+              and not list(folder.rglob("novasvg*")))
     shutil.rmtree(work, ignore_errors=True)
     print("all checks passed")
 

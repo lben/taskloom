@@ -5,8 +5,10 @@
 """
 
 import argparse
+import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -33,12 +35,13 @@ def main():
     shutil.copytree(ROOT / "examples", folder / "examples", ignore=shutil.ignore_patterns("out"))
     shutil.copy(ROOT / "README.md", folder / "README.md")
     shutil.copy(ROOT / "LICENSE", folder / "LICENSE")
-    if not args.headless:  # the editor's Git (dulwich, with urllib3): their licence texts
-        for name in ("dulwich", "urllib3"):
+    if not args.headless:  # the editor's Git (dulwich, with urllib3) and Mermaid engine (mmdr, with novasvg)
+        for name in ("dulwich", "urllib3", "mmdr", "novasvg"):  # their licence texts, and mmdr's component list
             for file in metadata.distribution(name).files:
-                if file.parent.name == "licenses":
+                if file.parent.name in ("licenses", "sboms"):
                     (folder / "licenses" / name).mkdir(parents=True, exist_ok=True)
                     shutil.copy(file.locate(), folder / "licenses" / name / file.name)
+        mermaid_notices(folder / "licenses" / "mmdr")
 
     system = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     # No version in the name, so flows that deploy it don't change with each release; it is in VERSION.
@@ -50,6 +53,25 @@ def main():
     else:
         archive = Path(shutil.make_archive(str(dist / name), "zip", dist, "taskloom"))
     print(f"built {folder}\npackaged {archive}")
+
+
+def mermaid_notices(folder: Path):
+    """mmdr's Rust components under the MPL-2.0 or the EPL-2.0 (shipped unmodified): those licences' texts and
+    SOURCES.txt, where each component's source is, from mmdr's component list (the SBOM in its wheel)."""
+    for text in ("MPL-2.0.txt", "EPL-2.0.txt"):
+        shutil.copy(ROOT / "packaging" / "licenses" / text, folder / text)
+    [sbom] = [f for f in metadata.distribution("mmdr").files if f.parent.name == "sboms"]
+    lines = []
+    for c in json.loads(sbom.read_text(encoding="utf-8"))["components"]:
+        licence = " AND ".join(entry.get("expression", "") for entry in c.get("licenses", []))
+        if re.search(r"\b(MPL|EPL)-2\.0\b", licence):
+            repository = "".join(f" ({r['url']})" for r in c.get("externalReferences", []) if r["type"] == "vcs")
+            lines.append(f"{c['name']} {c['version']} ({licence}): https://crates.io/crates/{c['name']}/{c['version']}"
+                         f"{repository}")
+    (folder / "SOURCES.txt").write_text(
+        "mmdr includes these Rust components unmodified, under the Mozilla Public License 2.0 (MPL-2.0.txt) or the "
+        "Eclipse Public License 2.0 (EPL-2.0.txt).\nTheir source code (each version's crate, and its repository):\n\n"
+        + "\n".join(lines) + f"\n\nAll of mmdr's components and their licences: {sbom.name}\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -1083,12 +1083,50 @@ wheels = [
 ]
 
 [[package]]
+name = "mmdr"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "novasvg" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/0d/cd82bcfb95ef13d7e1210d745f5d640cb1b4965bdb23977b23edb5c252cf/mmdr-0.4.0.tar.gz", hash = "sha256:523e49eb0ec7159316325257378b610ee8b42a076ba424cd6dbb9d2f9cbc93d5", size = 39954, upload-time = "2026-10-17T02:22:53.631Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/dc/1ff0a5480b4e39dcb57cca3b2066cdc40d7c802cc3a68d9fa8a501f9cb5a/mmdr-0.4.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:03845e515a1f9d6cbbe71c38da8b64cf88581d306fa5f0ac5dcdde6c134b91f5", size = 11372249, upload-time = "2026-10-17T02:22:42.64Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/7b/c0ea1a6c673234a7fa49aa6824d69631035b694bad46555e7f323107bd60/mmdr-0.4.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:1cf3ea22f70b2c7049b2af2ba5d2d83de9f74e48dfcd0a0614e6d2ab94d8f95b", size = 10617433, upload-time = "2026-10-17T02:22:44.701Z" },
+    { url = "https://files.pythonhosted.org/packages/da/70/6db9e18c9cb0dbc4788783b81d50f72b975246028fba110b980dae6e77c6/mmdr-0.4.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:143163d5ee053dbefc0360af6f4e557ee8156ff6af217d848c658f1f15a57ed3", size = 10900317, upload-time = "2026-10-17T02:22:46.827Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/aa/8925a7215110a23d5d8c5640b9603aa7cbd89f69fa037c69e623a7ab230d/mmdr-0.4.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2d5d00625b4ea7b183f0d9172b956e1db10970ad11980b792f6705c06951f828", size = 11933068, upload-time = "2026-10-17T02:22:49.323Z" },
+    { url = "https://files.pythonhosted.org/packages/65/b5/a79047870036bd688f44f7e7a13cc3fc2e80ba097c906cf51e39f6831ffa/mmdr-0.4.0-cp39-abi3-win_amd64.whl", hash = "sha256:0eda939bc46a74c1e2340dc22689e7c620816dad8eecb657356e0b7538d83123", size = 12269306, upload-time = "2026-10-17T02:22:51.912Z" },
+]
+
+[[package]]
 name = "more-itertools"
 version = "11.1.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/de/1d/f4da6f02cdffe04d6362210b807146a26044c88d839208aec273bb0d9184/more_itertools-11.1.0.tar.gz", hash = "sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d", size = 145772, upload-time = "2026-05-22T14:14:29.909Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/3d/1087453384dbde46a8c7f9356eead2c58be8a7bf156bca40243377c85715/more_itertools-11.1.0-py3-none-any.whl", hash = "sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192", size = 72226, upload-time = "2026-05-22T14:14:28.824Z" },
+]
+
+[[package]]
+name = "novasvg"
+version = "0.11.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/f5/d1d90cf8eeb86d9066008e961200463b8d2636c555b85abd5cb782c6f61f/novasvg-0.11.3.tar.gz", hash = "sha256:cc3303eefc53ec2ecb4303466e22c683148bbe2795cafe0b34b697e1a287a913", size = 8937862, upload-time = "2026-10-17T17:31:27.861Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/92/d606fa0c3fb2bf8c9cf7b66b9ffd7bfbe933bb8424129638c4c4636c99ff/novasvg-0.11.3-cp311-cp311-macosx_10_15_universal2.whl", hash = "sha256:586705425ff28c8c65d6c10fdedc322d3429d65f53ff394cf5db30498617f328", size = 1986653, upload-time = "2026-10-17T17:30:59.103Z" },
+    { url = "https://files.pythonhosted.org/packages/11/4a/f5924e54a636cd238e3566fad64e96c49d9b030b8da40aaf5ad18bb8dd75/novasvg-0.11.3-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5ab47fbe895a2e1f477f9c9c9cd3d8c7bf7b980f37eb09fc50b0292ae59924e0", size = 1167118, upload-time = "2026-10-17T17:31:00.487Z" },
+    { url = "https://files.pythonhosted.org/packages/53/74/6fff4656b8282fece8823228c2f137d0f9a7408a3c4316ed9219f5cf14ab/novasvg-0.11.3-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3063267b3b584604ce3d179448f91ae893901fa0f4777681442ea7be3f79a37b", size = 1285801, upload-time = "2026-10-17T17:31:02.057Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/0b/2b86e0d122692cc5b73190a89d065450160e3da216816f2b552738ac7473/novasvg-0.11.3-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:3496b11e26fc732eb5eeefc047173a16802290be2af2ef4d5a9a348bec37a134", size = 2579907, upload-time = "2026-10-17T17:31:03.288Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/8f/bfb78bc3c67e8eab89f2904a9194ad5a3af73879e0c1655b70a3867f9b1b/novasvg-0.11.3-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:9db3d48593dba6e077b0affb867a0787fcee3dec317457094bd15d0ea157ecd4", size = 2758681, upload-time = "2026-10-17T17:31:04.858Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/7c/b9ada9014d77bf206800f4ee63e68da5ff9dd54150b6398b0e8b5a3e5af9/novasvg-0.11.3-cp311-cp311-win32.whl", hash = "sha256:f41616701440493e0e0098ed470668c07f523de513f32deae3eeb886cc578dc8", size = 1010636, upload-time = "2026-10-17T17:31:06.072Z" },
+    { url = "https://files.pythonhosted.org/packages/48/e5/1d5c8f7322bca3aafae8c4a779e61f926c7e75f6d121193e478b16f33092/novasvg-0.11.3-cp311-cp311-win_amd64.whl", hash = "sha256:a7ae8b0810a01ec0838a7fa303e571284ce9e1c3dce3804dc70307aeb703b05f", size = 1110198, upload-time = "2026-10-17T17:31:07.642Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/a7/63d09b566fa2da91bb9d655146a1e9faac93ac822d21b8c4a7bc4bd83ebf/novasvg-0.11.3-cp312-abi3-macosx_10_15_universal2.whl", hash = "sha256:f6abc7c43d3e39e28062b4e21147b89e05637c9991418f7a2f4cb0b5286343c0", size = 1985662, upload-time = "2026-10-17T17:31:08.836Z" },
+    { url = "https://files.pythonhosted.org/packages/99/d3/146ca745c8eae395616bd2da5baa98b01de9a50913d10c8781501f8d9161/novasvg-0.11.3-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d32b47b3c54293da8ad1aaab06406844671fa5b1f36b11485a971b8134e34e1f", size = 1162316, upload-time = "2026-10-17T17:31:09.954Z" },
+    { url = "https://files.pythonhosted.org/packages/50/e7/34fea2039e9ad8bba0e772c0e25f1eea3491cc3fbae75db4532408c08dce/novasvg-0.11.3-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3c92c9c8e7705eda40b5d44b77e712fd5510104b9addeee7652f572ecc1b25ac", size = 1279126, upload-time = "2026-10-17T17:31:11.17Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/08/f6501d85bb7b589f1c120f4db366883a3efc9e3d1add91f6c741715ae996/novasvg-0.11.3-cp312-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:3605a8c418021659474a6fd939ccb1936fc5f6cd328e2f1e4edaceaccaa62d8f", size = 2575181, upload-time = "2026-10-17T17:31:12.845Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/a6/3edc6192b3ce1140ec33dfb6ed325c3c1817cc9a6d6941fe7c95165d1da8/novasvg-0.11.3-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:0a5db50cff7f5f720ce4130492657be72d707a60feb530487af5eb5d90f18abf", size = 2751914, upload-time = "2026-10-17T17:31:14.107Z" },
+    { url = "https://files.pythonhosted.org/packages/26/4f/1523afa7c09ef7319fb01b9ac652638e1f63d3b2dede81ef630aaf068e36/novasvg-0.11.3-cp312-abi3-win32.whl", hash = "sha256:e0351526f37555f0b17d438d4cf422d68a6f385a02f16f2a4284cd49748f7bf1", size = 1009768, upload-time = "2026-10-17T17:31:15.33Z" },
+    { url = "https://files.pythonhosted.org/packages/81/b5/81449d4fe3b3b1d089c9c487bebf744ccf1c713ea162c13c7213f109cbd2/novasvg-0.11.3-cp312-abi3-win_amd64.whl", hash = "sha256:45b9dbfa4563817968f689c0d36b9bd5b87123b89565dcf2448135a587e3dd23", size = 1109326, upload-time = "2026-10-17T17:31:16.49Z" },
 ]
 
 [[package]]
@@ -1811,6 +1849,7 @@ dependencies = [
     { name = "keyring" },
     { name = "markdown-it-py" },
     { name = "matplotlib" },
+    { name = "mmdr" },
     { name = "paramiko" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -1842,6 +1881,7 @@ requires-dist = [
     { name = "keyring", specifier = ">=24" },
     { name = "markdown-it-py", specifier = ">=3" },
     { name = "matplotlib", specifier = ">=3.8" },
+    { name = "mmdr", specifier = "==0.4.0" },
     { name = "paramiko", specifier = ">=3.4" },
     { name = "polars", specifier = ">=1.0" },
     { name = "pyarrow", specifier = ">=15" },

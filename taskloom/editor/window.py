@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 from PySide6.QtCore import QEvent, QMargins, QPoint, QSettings, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QImageReader, QKeySequence, QTextDocument
+from PySide6.QtGui import QAction, QColor, QImageReader, QKeySequence, QTextDocument
 from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayout, QMainWindow, QMenu, QMessageBox,
                                QSizePolicy, QTabBar, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
@@ -41,7 +41,7 @@ from . import dialogs, docs, git
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
-                     PreviewPanel, PropertiesPanel, scheduler_icon)
+                     PreviewPanel, PropertiesPanel, mermaid_picture, scheduler_icon)
 from .runs import RunProcess
 from .safety import CRASH_LOG, Safety, pid_alive
 
@@ -1572,7 +1572,7 @@ def _smoke_test(app, window: MainWindow, tab: FlowTab, folder: Path):
     """Run the flow from the editor (through the runner program); once it succeeded, commit a copy of it into
     `folder` (new, outside any repository) with Taskloom's own Git. Quit with 0 if both worked and Help >
     Documentation shows its pages, 4 if the documentation does not show (_documentation_shown), 5 if Qt cannot read a
-    kind of picture the Log shows."""
+    kind of picture the Log shows, 6 if the Log cannot draw a Mermaid diagram (e.g. mmdr is not in the build)."""
     run = window.start_run(tab, {})
 
     def finished(status):
@@ -1582,6 +1582,9 @@ def _smoke_test(app, window: MainWindow, tab: FlowTab, folder: Path):
         formats = {f.data().decode() for f in QImageReader.supportedImageFormats()}  # Qt's image plugins it carries
         if not {"png", "jpg", "gif", "bmp", "svg", "webp"} <= formats:
             app.exit(5)
+            return
+        if isinstance(mermaid_picture("graph LR\n    run --> check\n", QColor("white"), 1), str):
+            app.exit(6)
             return
         try:
             folder.mkdir(parents=True)

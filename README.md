@@ -188,8 +188,10 @@ taskloom editor examples/daily-sales-report.yaml
   - Tick **Show as Markdown** to draw the message (or, with no message, a text value) as
     Markdown: `#` headings, `**bold**`, `*italic*`, lists, `| tables |`, `` `code` `` and
     code blocks. Lines next to each other join into one paragraph, so leave a blank line
-    between paragraphs. Mermaid diagrams show as their text (Taskloom has no offline
-    Mermaid engine to draw them). Links are shown but open nothing.
+    between paragraphs. Mermaid diagrams (```` ```mermaid ```` code blocks) are drawn as
+    pictures, offline, on the Log's background and scaled down to fit 640 × 640 (in a
+    terminal, the Markdown as written); one that cannot be drawn shows as written, with a
+    note saying why. Links are shown but open nothing.
   - Past and scheduled runs reopened from Run history show the same pictures and Markdown.
 - **Several blocks connected into one input of a Python Code block:** that input is a dict
   keyed by each block's name (as on the canvas), with its output as the value, in the order
@@ -586,5 +588,8 @@ github-pages > Deployment branches and tags.
 
 ## License
 
-MIT. The packaged editor includes dulwich (Apache-2.0 or GPL-2.0-or-later) and urllib3 (MIT);
-their licence texts are in its `licenses` folder.
+MIT. The packaged editor includes dulwich (Apache-2.0 or GPL-2.0-or-later), urllib3 (MIT), and
+mmdr and novasvg (MIT), which draw Mermaid diagrams; their licence texts are in its `licenses`
+folder. mmdr is built from Rust components, some under the MPL-2.0 or the EPL-2.0 and included
+unmodified: `licenses/mmdr` has those licence texts, where each one's source is, and mmdr's
+full list of components.

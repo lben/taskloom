@@ -9,16 +9,18 @@ import math
 import os
 import re
 from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 
 import polars as pl
 import yaml
+from markdown_it import MarkdownIt
 from PySide6.QtCore import (QAbstractTableModel, QEvent, QObject, QDate, QMimeData, QModelIndex, QPoint, QPointF,
                             QRectF, QSize, QSizeF, Qt, QTime, QTimer, Signal)
-from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QImageIOHandler,
-                           QImageReader, QPainter, QPalette, QPen, QPixmap, QSyntaxHighlighter, QTextBlockFormat,
-                           QTextCharFormat, QTextCursor, QTextDocument, QTextDocumentFragment, QTextFormat,
-                           QTextFrameFormat, QTextImageFormat)
+from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QImage,
+                           QImageIOHandler, QImageReader, QPainter, QPalette, QPen, QPixmap, QSyntaxHighlighter,
+                           QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextDocumentFragment,
+                           QTextFormat, QTextFrameFormat, QTextImageFormat)
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QCheckBox,
                                QComboBox, QDateEdit, QDateTimeEdit, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
@@ -1620,8 +1622,49 @@ LEVEL_COLORS = {"ERROR": STATUS_COLORS["failed"], "WARNING": STATUS_COLORS["runn
                 "RETRY": STATUS_COLORS["running"], "DONE": STATUS_COLORS["success"]}
 GREY = "gray"  # the time and the notes: readable on a light and on a dark background
 MARKDOWN = QTextDocument.MarkdownFeature.MarkdownDialectGitHub | QTextDocument.MarkdownFeature.MarkdownNoHTML
-MERMAID_NOTE = "Mermaid diagrams are shown as text: Taskloom has no offline Mermaid engine to draw them."
+FENCES = MarkdownIt("commonmark", {"html": False})  # finds the ```mermaid code blocks Qt's Markdown would show
+DARK_DIAGRAM = '\n%%{init: {"theme": "dark"}}%%\n'  # at the end: Mermaid's front matter (---) must come first
 PICTURE = "taskloom-picture:"  # the Log's names for its pictures: never a file's or a web address
+_DIAGRAMS = OrderedDict()  # (source, background, pixel ratio) -> its picture, or why it could not be drawn
+
+
+def mermaid_picture(source: str, background: QColor, ratio: float) -> QPixmap | str:
+    """The Mermaid diagram `source` drawn by mmdr, offline, on `background` (in Mermaid's dark theme on a dark one), at
+    its own size scaled down to fit report.MAX_IMAGE_WIDTH square (never up), sharp at `ratio` pixels per point; or
+    the first line of why it could not be drawn. The last 32 are kept, so each is drawn once, not on each repaint."""
+    key = (source, background.name(), ratio)
+    if key not in _DIAGRAMS:
+        try:
+            import mmdr  # here, not at the top: only the editor draws diagrams (the runner has no mmdr)
+
+            diagram = mmdr.render(source + DARK_DIAGRAM if background.lightness() < 128 else source)
+            image = QImage.fromData(diagram.png(background=background.name()))  # at its own size
+            scale = min(1, MAX_IMAGE_WIDTH / max(image.width(), image.height())) * ratio
+            if scale != 1:
+                image = QImage.fromData(diagram.png(image.width() * scale, image.height() * scale, background.name()))
+            image.setDevicePixelRatio(ratio)
+            _DIAGRAMS[key] = QPixmap.fromImage(image)
+        except BaseException as e:  # mmdr's ValueError for a malformed diagram, anything else, even a panic of its
+            # Rust code (a BaseException): the diagram shows as text, the editor goes on
+            _DIAGRAMS[key] = (str(e).strip() or type(e).__name__).splitlines()[0]
+        if len(_DIAGRAMS) > 32:
+            _DIAGRAMS.popitem(last=False)
+    _DIAGRAMS.move_to_end(key)
+    return _DIAGRAMS[key]
+
+
+def _mermaid_pieces(text: str) -> list[tuple[str, str | None]]:
+    """Markdown `text` cut at its ```mermaid code blocks (those outside lists and quotes): (Markdown, None) and (the
+    code block as written, its diagram's source), in order. Cut from the text: Qt's Markdown runs two code blocks
+    one right after the other together."""
+    text = re.sub(r"\r\n?", "\n", text)  # as markdown-it counts lines
+    lines, pieces, start = text.split("\n"), [], 0
+    for token in FENCES.parse(text):
+        if token.type == "fence" and token.level == 0 and token.info.split()[:1] == ["mermaid"]:
+            first, end = token.map
+            pieces += [("\n".join(lines[start:first]), None), ("\n".join(lines[first:end]), token.content)]
+            start = end
+    return pieces + [("\n".join(lines[start:]), None)]
 
 
 def _picture_size(path: str) -> QSizeF | str:
@@ -1653,12 +1696,13 @@ def _turned(reader: QImageReader) -> bool:
 class _LogDocument(QTextDocument):
     """The Log's text. Its pictures are read from their files each time they are painted, so they show each file as
     it is now and no file stays open (it can be deleted, also on Windows); the last 32 painted are kept, by file
-    time and size. It loads nothing else: no other file, nothing from the network."""
+    time and size; its Mermaid diagrams are drawn again only once mermaid_picture no longer keeps them. It loads
+    nothing else: no other file, nothing from the network."""
 
     def __init__(self, view):
         super().__init__(view)
         self.view = view
-        self.pictures = {}  # name -> (path, shown size)
+        self.pictures = {}  # name -> (path, shown size), or what draws a Mermaid diagram at a pixel ratio
         self.thumbnails = OrderedDict()  # (path, mtime_ns, size, pixel ratio) -> QPixmap
 
     def loadResource(self, kind, name):
@@ -1666,8 +1710,11 @@ class _LogDocument(QTextDocument):
         picture = self.pictures.get(name.toString()) if kind == QTextDocument.ImageResource else None
         if picture is None:
             return None
-        path, shown = picture
         ratio = self.view.devicePixelRatioF()
+        if callable(picture):  # a Mermaid diagram
+            drawn = picture(ratio)
+            return drawn if isinstance(drawn, QPixmap) else None
+        path, shown = picture
         try:
             stat = os.stat(path)
         except OSError:
@@ -1795,10 +1842,7 @@ class LogPanel(QWidget):
     def _paragraph(self, cursor: QTextCursor, fmt: QTextBlockFormat):
         """Start a paragraph at the end of the Log: in the empty one there (the first, or the one after Markdown)."""
         cursor.movePosition(QTextCursor.End)
-        if cursor.block().length() > 1:
-            cursor.insertBlock(fmt, QTextCharFormat())
-        else:
-            cursor.setBlockFormat(fmt)
+        _start(cursor, fmt)
 
     def _indent(self) -> float:
         """Under the [block] column: the width of "HH:MM:SS "."""
@@ -1811,10 +1855,7 @@ class LogPanel(QWidget):
 
     def _note(self, cursor: QTextCursor, text: str):
         self._paragraph(cursor, self._under())
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(GREY))
-        fmt.setFontItalic(True)
-        cursor.insertText(text, fmt)
+        _grey(cursor, text)
 
     def _picture(self, cursor: QTextCursor, path: str):
         shown = _picture_size(path)
@@ -1822,26 +1863,43 @@ class LogPanel(QWidget):
             self._note(cursor, shown)
             return
         self._paragraph(cursor, self._under())
+        self._image(cursor, (path, shown), shown)
+
+    def _image(self, cursor: QTextCursor, picture, shown: QSizeF):
+        """A picture at the cursor, at the size `shown`: a file's (path, shown), or what draws a diagram."""
         pictures = self.text.document().pictures
         fmt = QTextImageFormat()
         fmt.setName(f"{PICTURE}{len(pictures)}")
         fmt.setWidth(shown.width())
         fmt.setHeight(shown.height())
-        pictures[fmt.name()] = (path, shown)
+        pictures[fmt.name()] = picture
         cursor.insertImage(fmt)
 
     def _markdown(self, cursor: QTextCursor, text: str):
-        """`text` drawn as Markdown, in a frame under the [block] column: the next entry's line is outside it."""
-        source = QTextDocument()
-        source.setMarkdown(text, MARKDOWN)
+        """`text` drawn as Markdown, in a frame under the [block] column (the next entry's line is outside it), each
+        ```mermaid code block drawn as its diagram where it is, or, if it cannot be, shown as written and followed by
+        a grey line saying why."""
         frame_format = QTextFrameFormat()
         frame_format.setLeftMargin(self._indent())
         frame = cursor.insertFrame(frame_format)
-        # The paragraph it goes into keeps its own format: give it the first paragraph's (e.g. a heading's).
-        first = source.firstBlock().blockFormat()
-        first.clearProperty(QTextFormat.ObjectIndex)
-        cursor.setBlockFormat(first)
-        cursor.insertFragment(QTextDocumentFragment(source))
+        background, ratio = self.text.palette().color(QPalette.Base), self.text.devicePixelRatioF()
+        for written, diagram in _mermaid_pieces(text):
+            drawn = None if diagram is None else mermaid_picture(diagram, background, ratio)
+            if isinstance(drawn, QPixmap):
+                _start(cursor, QTextBlockFormat())
+                self._image(cursor, partial(mermaid_picture, diagram, background), drawn.deviceIndependentSize())
+                continue
+            if written.strip():
+                source = QTextDocument()
+                source.setMarkdown(written, MARKDOWN)
+                # The paragraph it goes into keeps its own format: give it the first paragraph's (e.g. a heading's).
+                first = source.firstBlock().blockFormat()
+                first.clearProperty(QTextFormat.ObjectIndex)
+                _start(cursor, first)
+                cursor.insertFragment(QTextDocumentFragment(source))
+            if drawn:
+                _start(cursor, QTextBlockFormat())
+                _grey(cursor, f"(could not draw this diagram: {drawn})")
         # Its text in the application's font, its code in the Log's fixed-width one.
         parts, block = [], cursor.document().findBlock(frame.firstPosition())
         while block.isValid() and block.position() <= frame.lastPosition():
@@ -1859,8 +1917,22 @@ class LogPanel(QWidget):
             part.setPosition(start)
             part.setPosition(start + length, QTextCursor.KeepAnchor)
             part.mergeCharFormat(fmt)
-        if any(line.startswith("```mermaid") for line in text.splitlines()):
-            self._note(cursor, MERMAID_NOTE)
+
+
+def _start(cursor: QTextCursor, fmt: QTextBlockFormat):
+    """Start a paragraph at the cursor: in the empty one it is in, if it is."""
+    if cursor.block().length() > 1:
+        cursor.insertBlock(fmt, QTextCharFormat())
+    else:
+        cursor.setBlockFormat(fmt)
+
+
+def _grey(cursor: QTextCursor, text: str):
+    """A note's text: grey and italic."""
+    fmt = QTextCharFormat()
+    fmt.setForeground(QColor(GREY))
+    fmt.setFontItalic(True)
+    cursor.insertText(text, fmt)
 
 
 # --- Data preview -------------------------------------------------------------------

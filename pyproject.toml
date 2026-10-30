@@ -28,6 +28,7 @@ dependencies = [
     "css-inline>=0.14",
     "rich>=13",
     "dulwich==1.2.20",
+    "mmdr==0.4.0",
 ]
 
 [tool.hatch.version]

@@ -335,8 +335,8 @@ class Inspect(Block):
     title = "Inspect"
     description = ("For checking your flow: put it between two blocks to see the data passing through "
                    "(in the Log and in Data preview). Tables line up as in the hover tooltip, a path to a picture "
-                   "(.png, .jpg, .svg…) shows the picture, and the message can be shown as Markdown. "
-                   "It passes the data on unchanged.")
+                   "(.png, .jpg, .svg…) shows the picture, and the message can be shown as Markdown, with its "
+                   "Mermaid diagrams drawn. It passes the data on unchanged.")
     category = "Debug"
     inputs = {"value": ports.Any(required=False, any_of=True)}
     outputs = {"value": ports.Any()}
@@ -349,10 +349,10 @@ class Inspect(Block):
         "markdown": fields.Bool(default=False, label="Show as Markdown",
                                 help="Draw the message (or, with no message, a text value) as Markdown in the Log: "
                                      "# headings, **bold**, *italic*, lists, | tables |, `code` and ``` code blocks "
-                                     "(spaces kept). As in Markdown, lines next to each other join into one "
-                                     "paragraph: leave a blank line between paragraphs. Off: the text is shown "
-                                     "exactly as it is, every space and line kept. Mermaid diagrams show as their "
-                                     "text."),
+                                     "(spaces kept). Mermaid diagrams (```mermaid code blocks) are drawn as pictures. "
+                                     "As in Markdown, lines next to each other join into one paragraph: leave a blank "
+                                     "line between paragraphs. Off: the text is shown exactly as it is, every space "
+                                     "and line kept."),
     }
 
     def run(self, ctx, value=None):

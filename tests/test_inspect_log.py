@@ -1,7 +1,8 @@
 """Inspect is a good place to read data in the Log (specification inspect_log, phase 1): text tables line up, a value
 that is a picture's path shows the picture, the message or a text value can be shown as Markdown, a log line carries
-an optional stored `show` marker so runs reopened from history look the same, and Mermaid fences show as text with
-a note. Each test names the point of the specification it protects."""
+an optional stored `show` marker so runs reopened from history look the same, and a Mermaid fence that cannot be
+drawn shows as text with a note (phase 2 draws the others: test_inspect_mermaid.py). Each test names the point of the
+specification it protects."""
 
 import html
 import http.server
@@ -36,14 +37,16 @@ from taskloom.history import History  # noqa: E402
 
 NO_SHOW = "(History.logs gives no show)"
 GONE = "(the picture is no longer there)"
-MERMAID_NOTE = "Mermaid diagrams are shown as text: Taskloom has no offline Mermaid engine to draw them."
+MERMAID_NOTE = "(could not draw this diagram: "  # how the note starts (phase 2: only a diagram that cannot be drawn)
+UNDRAWABLE = "graph TD\n    start[Load --> report\n"  # a Mermaid diagram mmdr cannot draw (an unclosed label)
 HELP = ("Draw the message (or, with no message, a text value) as Markdown in the Log: # headings, **bold**, *italic*, "
-        "lists, | tables |, `code` and ``` code blocks (spaces kept). As in Markdown, lines next to each other join "
-        "into one paragraph: leave a blank line between paragraphs. Off: the text is shown exactly as it is, every "
-        "space and line kept. Mermaid diagrams show as their text.")
+        "lists, | tables |, `code` and ``` code blocks (spaces kept). Mermaid diagrams (```mermaid code blocks) are "
+        "drawn as pictures. As in Markdown, lines next to each other join into one paragraph: leave a blank line "
+        "between paragraphs. Off: the text is shown exactly as it is, every space and line kept.")
 DESCRIPTION = ("For checking your flow: put it between two blocks to see the data passing through (in the Log and in "
                "Data preview). Tables line up as in the hover tooltip, a path to a picture (.png, .jpg, .svg…) shows "
-               "the picture, and the message can be shown as Markdown. It passes the data on unchanged.")
+               "the picture, and the message can be shown as Markdown, with its Mermaid diagrams drawn. It passes the "
+               "data on unchanged.")
 SALES_CSV = "region,total\nNorth,120\nSouth,80\nEast,95\nWest,60\n"
 
 
@@ -925,22 +928,21 @@ def test_the_line_after_a_markdown_entry_is_an_ordinary_log_line(win, ending):
 
 
 def test_a_mermaid_fence_shows_as_text_with_a_note(win):
-    """Spec 15: a ```mermaid fence in a Markdown entry shows as a code block (its spaces kept), and after the entry a
-    grey italic line says Mermaid diagrams are shown as text."""
-    show_log(win, [entry("Steps:\n\n```mermaid\ngraph TD\n    load --> report\n```\n", "markdown"),
-                   entry("next", second=1)])
+    """Spec 15, as phase 2 changes it: a ```mermaid fence in a Markdown entry that cannot be drawn shows as a code
+    block (its spaces kept), and after it a grey italic line says why."""
+    show_log(win, [entry(f"Steps:\n\n```mermaid\n{UNDRAWABLE}```\n", "markdown"), entry("next", second=1)])
     edit = win.log.text
     lines = plain(win).split("\n")
 
-    assert "graph TD" in lines and "    load --> report" in lines, lines
-    assert MERMAID_NOTE in lines, lines
-    assert lines.index(MERMAID_NOTE) > lines.index("    load --> report")
-    assert lines.index(MERMAID_NOTE) < lines.index(header("next", second=1))
-    note = char_format(edit, MERMAID_NOTE)
+    assert "graph TD" in lines and "    start[Load --> report" in lines, lines
+    [note_line] = [line for line in lines if line.startswith(MERMAID_NOTE)]
+    assert lines.index(note_line) > lines.index("    start[Load --> report")
+    assert lines.index(note_line) < lines.index(header("next", second=1))
+    note = char_format(edit, note_line)
     assert note.fontItalic()
     assert note.hasProperty(QTextFormat.ForegroundBrush) and note.foreground().color().hsvSaturation() < 40
     if fonts_known():
-        assert fixed_pitch_at(edit, plain_index(edit, "    load --> report") + 4)
+        assert fixed_pitch_at(edit, plain_index(edit, "    start[Load --> report") + 4)
 
 
 class _Opened(QObject):
@@ -1028,7 +1030,8 @@ def test_markdown_and_notes_are_readable_in_the_light_and_the_dark_theme(win, tm
     QApplication.setPalette(palette)
     try:
         QApplication.processEvents()
-        show_log(win, [entry(MARKDOWN + "\n[a link](https://example.com)\n\n```mermaid\ngraph TD\n```\n", "markdown"),
+        text = MARKDOWN + f"\n[a link](https://example.com)\n\n```mermaid\n{UNDRAWABLE}```\n"
+        show_log(win, [entry(text, "markdown"),
                        entry(str(tmp_path / "gone.png"), "image", second=1)])
         edit = win.log.text
         assert block_of(edit, "Weekly sales").blockFormat().headingLevel() > 0  # drawn as Markdown
