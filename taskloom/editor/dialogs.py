@@ -147,6 +147,7 @@ class AskDialog(QDialog):
                 value = as_number(value)  # (an int when whole, else a float)
             except ValueError:
                 self.why.show()
+                self.adjustSize()  # (room for it: the note above stays whole)
                 return  # only a number is taken: the question stays
         self.value = value
         self.accept()

@@ -33,7 +33,7 @@ class RunQuery(Block):
 --
 -- Parameters: :name is the value of the flow parameter called name, or of
 -- the key name of the dict connected to the params input (that one wins):
---   select * from sales where day = :day
+--   select * from sales where sale_date = :day
 --
 -- A list gives one value per item:
 --   select * from customers where region in (:regions)
