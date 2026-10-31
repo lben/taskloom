@@ -679,7 +679,8 @@ class CheckFlowsDialog(QDialog):
         lines = []
         for r in reports:
             lines.append(f"{r.path}: " + ("OK" if r.ok else ""))
-            lines += [f"    can fix: {t}" for t in r.fixes] + [f"    needs you: {t}" for t in r.problems]
+            lines += ([f"    can fix: {t}" for t in r.fixes] + [f"    needs you: {t}" for t in r.problems]
+                      + [f"    warning: {t}" for t in r.warnings])
         self.details.setPlainText("\n".join(lines) or "No flows to check: open some, or schedule them.")
         layout.addWidget(self.details, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)

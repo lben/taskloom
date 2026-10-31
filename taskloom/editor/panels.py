@@ -2069,6 +2069,7 @@ class HistoryPanel(QWidget):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.runs: list[dict] = []  # as listed
         hint = QLabel("Double-click a run to show it on the canvas.")
         hint.setStyleSheet("color: palette(placeholder-text); padding: 2px 6px;")
         layout.addWidget(hint)
@@ -2076,6 +2077,9 @@ class HistoryPanel(QWidget):
         self.table.cellDoubleClicked.connect(lambda row, _: self.open_run.emit(int(self.table.item(row, 0).text())))
 
     def show_runs(self, runs: list[dict]):
+        if runs == self.runs:  # nothing new: the row you selected and where you scrolled to stay
+            return
+        self.runs = runs
         self.table.setRowCount(0)
         for run in runs:
             row = self.table.rowCount()

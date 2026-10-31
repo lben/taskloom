@@ -49,7 +49,8 @@ try:
 except ImportError as error:  # no pandas, or no pyarrow for it to read Parquet with: Taskloom says what to install
     print(error, flush=True)
     sys.exit(3)  # NO_PANDAS
-import linecache, types
+import inspect, linecache, types
+given = set(namespace)  # params, log and the inputs: not among the variables your code created
 filename = job["name"] + ".py"
 linecache.cache[filename] = (len(job["code"]), None, job["code"].splitlines(True), filename)
 
@@ -84,23 +85,41 @@ except SystemExit as error:  # sys.exit() ends your code there; 0 (or nothing) m
 except Exception as error:
     fail(error)
 
-result = {}
-for name in job["outputs"]:
-    if name not in namespace:
-        continue
-    value = namespace[name]
-    library = type(value).__module__.split(".")[0]
-    if library in ("pandas", "polars", "pyarrow"):
+def as_marks(value, name):
+    """value with each DataFrame in it (also inside dicts, lists and tuples, at any depth) written to a Parquet file
+    of its own (output.parquet; inside it by position, e.g. output.4.0.parquet), as {"__table__": its path}."""
+    kind = (type(value).__module__.split(".")[0], type(value).__name__)
+    if kind in (("pandas", "DataFrame"), ("polars", "DataFrame"), ("pyarrow", "Table")):
         path = f"{job['workspace']}/{name}.parquet"
-        if library == "pandas":
+        if kind[0] == "pandas":
             value.to_parquet(path, index=False)
-        elif library == "polars":
+        elif kind[0] == "polars":
             value.write_parquet(path)
         else:
             import pyarrow.parquet
             pyarrow.parquet.write_table(value, path)
-        value = {"__table__": path}
-    result[name] = value
+        return {"__table__": path}
+    if type(value) is dict:
+        return {k: as_marks(v, f"{name}.{i}") for i, (k, v) in enumerate(value.items())}
+    if type(value) in (list, tuple):
+        return type(value)(as_marks(v, f"{name}.{i}") for i, v in enumerate(value))
+    return value
+
+def packed(value, name):
+    """value pickled on its own (so Taskloom can tell apart one it cannot read), or why it cannot be passed on."""
+    try:
+        return pickle.dumps(as_marks(value, name), protocol=4)
+    except Exception as error:  # e.g. an open file or connection
+        return str(error) or type(error).__name__
+
+# Outputs your code does not assign are not produced; but output, unless it assigns it, is a dict of the variables it
+# created (not modules, functions, classes or names starting with _).
+result = {"outputs": {name: packed(namespace[name], name) for name in job["outputs"] if name in namespace},
+          "variables": None}
+if "output" in job["outputs"] and "output" not in namespace:
+    created = [(k, v) for k, v in namespace.items() if k not in given and not k.startswith("_")
+               and not (isinstance(v, types.ModuleType) or inspect.isroutine(v) or inspect.isclass(v))]
+    result["variables"] = {k: packed(v, f"output.{i}") for i, (k, v) in enumerate(created)}
 with open(result_file, "wb") as f:
     pickle.dump(result, f, protocol=4)
 '''
@@ -185,9 +204,9 @@ def _portable(value, table_type, secret_type):
     return str(value)
 
 
-def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> dict:
-    """Run a Python Code block's code in the environment; returns its outputs."""
-    from .engine import Cancelled, SecretStr, secret_forms
+def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, dict]:
+    """Run a Python Code block's code in the environment: (its outputs, {variable left out of output: why})."""
+    from .engine import Cancelled, Failed, SecretStr, _map_marks, secret_forms
     from .table import Table
 
     python = env_python(ctx.home)
@@ -250,8 +269,30 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> dict:
             return [restore(v) for v in value]
         return value
 
-    return {k: Table(Path(v["__table__"])) if isinstance(v, dict) and "__table__" in v else restore(v)
-            for k, v in result.items()}
+    def unpacked(data) -> tuple:
+        """(the value with its tables as Tables, None), or (None, why it cannot be passed on)."""
+        if isinstance(data, str):
+            return None, data
+        try:
+            return restore(_map_marks(pickle.loads(data), Table)), None
+        except Exception as error:  # e.g. a pandas Series: Taskloom's own Python has no pandas
+            return None, f"Taskloom's own Python cannot read it: {error}"
+
+    produced, left_out = {}, {}
+    for name, data in result["outputs"].items():
+        value, why = unpacked(data)
+        if why is not None:
+            raise Failed(f"{name} cannot be passed on to the next blocks: {why}")
+        produced[name] = value
+    if result["variables"] is not None:
+        produced["output"] = {}
+        for name, data in result["variables"].items():
+            value, why = unpacked(data)
+            if why is None:
+                produced["output"][name] = value
+            else:
+                left_out[name] = why
+    return produced, left_out
 
 
 def _secret_values(value) -> set[str]:

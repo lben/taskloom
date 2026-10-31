@@ -96,6 +96,14 @@ taskloom editor examples/daily-sales-report.yaml
   whose data those need, and the error handlers of all of them; **a block connected to no
   start block does not run**, which is how to switch one off: it says **off · not connected
   to a start block** under it. A skipped block says why.
+- **A run is checked for the blocks it takes part in.** A problem in a block that does not
+  take part in it (an off block, or a block only another start block's line reaches), e.g.
+  an If without its Condition or an input left unconnected, does not stop the run: its Log
+  shows a warning naming the block and the problem, and saying it does not take part in this
+  run. A run that block takes part in is refused, as are all runs for a problem with the
+  flow's connections, parameters or settings, or a loop through a block that takes part.
+  **Validate** (F7), `taskloom validate` and `taskloom check` list every problem: those of
+  an off block as warnings that say it is off.
 - **Lines:** the blocks a start block's runs take part in are its line. A flow can have
   several lines, each from its own start block, and they run independently: a run of one
   line reports only its own blocks, and never clears, overwrites, skips or stops another
@@ -128,8 +136,14 @@ taskloom editor examples/daily-sales-report.yaml
   status live, the **Log** shows the selected block's messages (when a block finishes, its line
   gives the full path of each table it produced, to copy; what a database driver or library
   prints shows as plain `OUTPUT`), **Data preview** shows
-  everything the selected block produced (tables as a grid, other values as text), and
-  **Run history** reopens any past run; its **Started by** column says what started each
+  everything the selected block produced (tables as a grid, other values as text; a table
+  inside a dict or list also on its own, by where it is, e.g. `output.combined`), and
+  **Run history** lists every run of the flow as its own row, newest first, whoever started
+  it (Run now, the scheduler service, a terminal): a run started while the flow is open
+  comes in as it goes, also while an older run is shown or one of yours is going. The runs
+  are those of the flow's file, however its path is spelled (through a link, with `..`, or
+  in other case where the file system ignores case). It reopens any past run; its
+  **Started by** column says what started each
   run: its start blocks (e.g. `manual`, `nightly`), or `only BLOCK` / `from BLOCK` for a
   re-run. **Stop** cancels.
 - **After a run, hover** over any input, output or connection line to see the value that
@@ -175,7 +189,14 @@ taskloom editor examples/daily-sales-report.yaml
   (`--input NAME=VALUE` with `--only` from a terminal.)
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
-  the values of your variables.
+  the values of your variables. A failure Ask User expects (you chose **Don't answer**;
+  nobody can be asked, e.g. in a scheduled run, and it has no default or secret; an answer
+  that is not one of its Options; kind choice without Options) says so in a short message,
+  without a Python traceback. It is a failure like any other: it goes out the block's
+  `error` output, and a retry setting on the block asks again. When you run a block again
+  (Retry after a fix, Test a block with values you choose), each connection into an input
+  shows what came by it in the earlier run (or what you typed), and "(nothing arrived)" only
+  when nothing came by it, e.g. the path an If did not take or an input you left empty.
 - To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
   the data on and shows it in the Log and Data preview. A table's columns line up as in
   its hover tooltip. Its **message** is written like a Python f-string, e.g.
@@ -217,13 +238,28 @@ taskloom editor examples/daily-sales-report.yaml
   where your code also has `pl`, `Table` and `ctx`) and with a few lines of comments as its
   code that show what your code receives and sets: each input as a variable named as in
   Inputs, several connected blocks as a dict keyed by their names, tables as pandas
-  DataFrames, `params`, `print()` to the Log, and `output`. As it is, that code runs and
-  sets no output.
+  DataFrames, `params`, `print()` to the Log, and what goes out. As it is, that code runs
+  and its output is `{}`.
   In your environment every table a block receives, also inside a dict or list, is a pandas
   DataFrame, so a block with a table among its inputs needs pandas and pyarrow there
   (`taskloom env pip install pandas pyarrow`); without them it fails before your code runs
-  and says so. A pandas or polars DataFrame (or pyarrow Table) your code sets comes out as
-  a table.
+  and says so.
+- **What a Python Code block passes on:** unless your code sets `output`, its `output` is a
+  dict of every variable your code creates, by name, e.g. `{"sales": ..., "region": ...,
+  "north": ...}` (`{}` when it creates none). Not in it: its inputs (e.g. `input`), `params`
+  and the helpers (`print`, `log`; in Taskloom's own Python also `pl`, `Table`, `ctx`), the
+  modules it imports, the functions and classes it defines, and names starting with `_`
+  (e.g. `_scratch`). To send something else, set it yourself, e.g. `output = north` (or
+  `output = None`): that is what goes out. Other Outputs you name are produced only when
+  your code sets them. A DataFrame (pandas or polars, or a pyarrow Table) comes out as a
+  table, also inside a dict or list at any depth, and the run keeps it with the rest, so
+  **Run only this block** or **Run from this block on** (with the same inputs) on a later
+  block gets the dict again, tables included. Hovering the block's result shows each
+  table's size, and Data preview shows each table on its own (e.g. `output.combined`).
+  A variable that cannot be passed on (an open file, a generator, a database connection;
+  in your environment also a value Taskloom's own Python cannot read, such as a pandas
+  Series) is left out, and one line in the Log names each one and why. In your
+  environment, an output you set to such a value fails the block, saying why.
 - **`print()` in a Python Code block** goes to that block's Log (and run history), like
   `log("...")`. `sys.exit()` ends the code there and the block succeeds; given a value other
   than 0 (e.g. `sys.exit("no data")`) the block fails.
@@ -481,7 +517,7 @@ connections to blocks, inputs or outputs that no longer exist (e.g. after renami
 output) and connections listed twice, and adds a Manual Start (connected to its first
 blocks) to a flow without a start block. **Back up and fix** (or `--fix`) first copies each
 flow into `backups/` in your Taskloom folder. Anything else it finds is listed for you to
-fix.
+fix; a problem of an off block is listed as a warning, which runs do not stop for.
 
 ## Your files
 

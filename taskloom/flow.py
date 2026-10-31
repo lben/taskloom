@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import random
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,7 +14,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from . import params as P
-from .block import IDENTIFIER, all_ports, fields, setting_label
+from .block import AFTER, DONE, IDENTIFIER, all_ports, fields, setting_label
 from .calendars import load_calendar
 from .config import keep_runs_for
 from .expr import functions
@@ -27,6 +29,10 @@ ERROR_PORT = "error"
 _EDGE = re.compile(r"^\s*(\w+)\.(\w+)\s*->\s*(\w+)\.(\w+)\s*$")
 _DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$")
 _UNITS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, None: 1}
+# Said after a problem only blocks that do not take part have: in a run, and in the flow as a whole (they take part in
+# no run).
+NOT_IN_RUN = "not taking part in this run"
+OFF = "off: not connected to a start block"
 
 
 class FlowError(Exception):
@@ -155,6 +161,29 @@ def read_flow_file(path: Path):
         raise ValueError(f"not UTF-8 text, save it as UTF-8 ({e})") from None
     except yaml.YAMLError as e:
         raise ValueError(str(e)) from None
+
+
+def real_path(path) -> Path:
+    """The one spelling of a file's path, the one its runs are recorded under, however it was given: absolute, without
+    links or "..", each name as on disk. Windows' resolve() gives that; macOS's keeps the case it was given, so a flow
+    opened as NIGHTLY.yaml would miss the runs of nightly.yaml. A file not there yet (about to be saved): its folder's
+    spelling. One that cannot be opened keeps the spelling given (reading it then fails, and says why)."""
+    path = Path(path).resolve()
+    if sys.platform != "darwin":
+        return path
+    import fcntl
+
+    for known in (path, path.parent):
+        try:
+            fd = os.open(known, os.O_RDONLY)
+        except OSError:
+            continue
+        try:
+            real = Path(os.fsdecode(fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0")))
+        finally:
+            os.close(fd)
+        return real / path.relative_to(known)
+    return path
 
 
 def load_flow(path) -> Flow:
@@ -343,9 +372,19 @@ def run_clock(flow: Flow, home, as_of: dt.datetime | None = None) -> tuple[dt.da
     return now, functions(now.replace(tzinfo=None), calendar, lambda name: load_calendar(name, home.calendars_dir))
 
 
-def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
-    """Return (errors, warnings). A flow with errors cannot run."""
-    errors, warnings = [], []
+def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[list[str], list[str]]:
+    """Return (errors, warnings). A flow with errors cannot run.
+
+    `part`: the blocks of the run it checks the flow for; None: the flow as a whole, whose blocks taking part in some
+    run are those a start block's line reaches (all of them, without start blocks). A problem only blocks that do not
+    take part have (in their settings, an input not connected, a loop among them) is a warning that says so; the
+    others (the flow's connections and parameters, the settings) are errors whatever block they are about."""
+    errors, warnings, apart = [], [], []  # apart: the problems of blocks that do not take part
+    if part is None:
+        on = _taking_part(flow, registry, _start_blocks(flow, registry))
+        part, why = (set(flow.blocks) if on is None else on), OFF
+    else:
+        why = NOT_IN_RUN
     connections = home.connections()
     try:
         now, funcs = run_clock(flow, home)
@@ -359,22 +398,23 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
 
     ports = {}
     for block_id, spec in flow.blocks.items():
+        found = errors if block_id in part else apart
         cls = registry.get(spec.type)
         if cls is None:
-            errors.append(f"{block_id}: unknown block type '{spec.type}'")
+            found.append(f"{block_id}: unknown block type '{spec.type}'")
             continue
         try:
             config = block_config(cls, spec)
             inputs, outputs = all_ports(cls, config)
         except Exception as e:
-            errors.append(f"{block_id}: {e}")
+            found.append(f"{block_id}: {e}")
             continue
         ports[block_id] = (inputs, outputs)
         sources = {}
         for edge in flow.edges:
             if edge.dst == block_id:
                 sources.setdefault(edge.dst_port, []).append(f"{edge.src}.{edge.src_port}")
-        errors += [f"{block_id}: {problem}" for problem in cls.problems(config, sources, set(flow.params))]
+        found += [f"{block_id}: {problem}" for problem in cls.problems(config, sources, set(flow.params))]
         has_params_input = any(e.dst == block_id and e.dst_port == "params" for e in flow.edges)
         for name, f in cls.config.items():
             value = config.get(name)
@@ -385,18 +425,18 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
                 try:
                     missing = P.template_names(value) - set(flow.params)
                 except ValueError as e:
-                    errors.append(f"{setting}: {e} (write {{{{ and }}}} for literal braces)")
+                    found.append(f"{setting}: {e} (write {{{{ and }}}} for literal braces)")
                     continue
-                errors += [f"{setting}: unknown parameter {{{m}}}" for m in sorted(missing)]
+                found += [f"{setting}: unknown parameter {{{m}}}" for m in sorted(missing)]
             if isinstance(f, fields.Code) and f.language == "sql" and not has_params_input:
                 missing = set(P.to_qmark(value)[1]) - set(flow.params)
-                errors += [f"{setting}: unknown bind parameter :{m}" for m in sorted(missing)]
+                found += [f"{setting}: unknown bind parameter :{m}" for m in sorted(missing)]
             if isinstance(f, fields.Connection):
                 conn = connections.get(value)
                 if conn is None:
-                    errors.append(f"{setting}: no connection named '{value}' in connections.yaml")
+                    found.append(f"{setting}: no connection named '{value}' in connections.yaml")
                 elif conn["kind"] != f.kind:
-                    errors.append(f"{setting}: connection '{value}' is {conn['kind']}, expected {f.kind}")
+                    found.append(f"{setting}: connection '{value}' is {conn['kind']}, expected {f.kind}")
 
     connected = set()
     for edge in flow.edges:
@@ -415,13 +455,18 @@ def validate(flow: Flow, registry, home) -> tuple[list[str], list[str]]:
     for block_id, (inputs, _) in ports.items():
         for name, port in inputs.items():
             if port.required and (block_id, name) not in connected:
-                errors.append(f"blocks.{block_id}: required input '{name}' is not connected")
+                (errors if block_id in part else apart).append(
+                    f"blocks.{block_id}: required input '{name}' is not connected")
+    warnings += [f"{problem} ({why})" for problem in apart]
     warnings += unconnected_starts(flow, registry)
     if not errors:
         try:
             order(flow)
         except FlowError as e:
-            errors += e.errors
+            if any(b in part and _leads_back(flow, b) for b in flow.blocks):  # a loop through a block taking part
+                errors += e.errors
+            else:
+                warnings += [f"{problem} ({why})" for problem in e.errors]
     return errors, warnings
 
 
@@ -433,24 +478,67 @@ def unconnected_starts(flow: Flow, registry) -> list[str]:
             and not any(e.src == block_id for e in flow.edges)]
 
 
-def order(flow: Flow) -> list[str]:
-    """Topological order; ties keep the order blocks appear in the file."""
-    indegree = {b: 0 for b in flow.blocks}
-    for e in flow.edges:
+def _taking_part(flow: Flow, registry, fired: set[str]) -> set[str] | None:
+    """The blocks a run takes part in. In a flow with start blocks: the blocks after the ones that started
+    it; the blocks whose data those need (e.g. a query feeding one of them; not through an error or a
+    run-after connection); and the error handlers of all of these, with what comes after them. A block
+    connected to no start block takes no part: that is how to switch it off.
+    None: a flow without start blocks runs all its blocks."""
+    if not any((cls := registry.get(spec.type)) is not None and cls.is_trigger for spec in flow.blocks.values()):
+        return None
+    part: set[str] = set()
+
+    def with_what_follows(blocks):
+        todo = [b for b in blocks if b not in part]
+        part.update(todo)
+        while todo:
+            block = todo.pop()
+            for edge in flow.edges:
+                if edge.src == block and edge.dst not in part:
+                    part.add(edge.dst)
+                    todo.append(edge.dst)
+
+    with_what_follows(fired)
+    grown = True
+    while grown:
+        grown = False
+        for edge in flow.edges:
+            data = edge.src_port not in (ERROR_PORT, DONE) and edge.dst_port != AFTER
+            if data and edge.dst in part and edge.src not in part:  # its data is needed
+                part.add(edge.src)
+                grown = True
+            elif edge.src_port == ERROR_PORT and edge.src in part and edge.dst not in part:  # its error handler
+                with_what_follows([edge.dst])
+                grown = True
+    return part
+
+
+def _start_blocks(flow: Flow, registry) -> set[str]:
+    return {b for b, s in flow.blocks.items() if (cls := registry.get(s.type)) is not None and cls.is_trigger}
+
+
+def order(flow: Flow, part: set[str] | None = None) -> list[str]:
+    """Topological order; ties keep the order blocks appear in the file. With `part` (the blocks a run takes part
+    in), a loop among the other blocks, which do not run, is left out of it (with its connections)."""
+    loops = {b for b in flow.blocks if b not in part and _leads_back(flow, b)} if part is not None else set()
+    blocks = [b for b in flow.blocks if b not in loops]
+    edges = [e for e in flow.edges if e.src not in loops and e.dst not in loops]
+    indegree = {b: 0 for b in blocks}
+    for e in edges:
         indegree[e.dst] += 1
-    ready = [b for b in flow.blocks if indegree[b] == 0]
+    ready = [b for b in blocks if indegree[b] == 0]
     result = []
     while ready:
         block_id = ready.pop(0)
         result.append(block_id)
-        for e in flow.edges:
+        for e in edges:
             if e.src == block_id:
                 indegree[e.dst] -= 1
                 if indegree[e.dst] == 0:
                     ready.append(e.dst)
         ready.sort(key=list(flow.blocks).index)
-    if len(result) != len(flow.blocks):  # left out: the blocks in a cycle and those after one
-        cyclic = sorted(b for b in flow.blocks if b not in result and _leads_back(flow, b))
+    if len(result) != len(blocks):  # left out: the blocks in a cycle and those after one
+        cyclic = sorted(b for b in blocks if b not in result and _leads_back(flow, b))
         raise FlowError([f"the flow has a cycle through: {', '.join(cyclic)}"])
     return result
 

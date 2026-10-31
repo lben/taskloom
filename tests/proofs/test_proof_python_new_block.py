@@ -156,8 +156,9 @@ def test_a_new_python_block_runs_in_your_environment_and_starts_with_an_example(
            "value on.")
     p.idea("The example shows each input as a variable named as in Inputs (input, unless you rename it); several "
            "blocks connected into it as a dictionary keyed by their names, e.g. input[\"load_sales\"]; a table as a "
-           "pandas DataFrame (in your environment); the flow's parameters; print() writing to the Log; and setting "
-           "output. It is only comments: as it is, the block runs, does nothing, and passes nothing on.")
+           "pandas DataFrame (in your environment); the flow's parameters; print() writing to the Log; and what goes "
+           "out: by default every variable your code creates, as a dict, unless you set output. It is only comments: "
+           "as it is, the block runs, creates nothing, and passes on an empty dict, {}.")
     p.idea("Both are saved in the flow file, like any setting you choose. A Python Code block that is not new keeps "
            "the settings it has: one in a flow file you open, or one you copy and paste. A flow file that does not "
            "say where its block runs keeps running it in Taskloom's own Python, as before, so no flow you already "
@@ -215,7 +216,7 @@ def test_a_new_python_block_runs_in_your_environment_and_starts_with_an_example(
     p.shot(win, "① The new block, python (dragged between start and show), selected. In Properties: ② Run in my "
                 "Python environment is ticked, and ③ the Code box holds the example, only comments: what each input "
                 "is, the dictionary that several connected blocks give, a table as a pandas DataFrame, params, print() "
-                "and output.",
+                "and what goes out.",
            highlight=["python", setting, code], badges=True, zoom=[setting, code])
     p.check("② Run in my Python environment is ticked", environment_box(win).isChecked())
     example = code.toPlainText()
@@ -223,7 +224,7 @@ def test_a_new_python_block_runs_in_your_environment_and_starts_with_an_example(
             example == PythonCode.new_config["code"]
             and all(line.lstrip().startswith("#") for line in example.splitlines()))
     p.check("The example shows a dictionary of several blocks keyed by their names, then input[\"load_sales\"]",
-            '{"load_sales": ' in example and 'input["load_sales"]' in example)
+            'input = {' in example and '"load_sales": <table>' in example and 'input["load_sales"]' in example)
 
     p.step("Connect it: drag from start's output to python's run-after input, then from python's output to show's "
            "input.")
@@ -298,12 +299,10 @@ def test_a_new_python_block_runs_in_your_environment_and_starts_with_an_example(
     p.step("Press ▶ Run now again, with the block's code as it is.")
     second = run_now(win, qtbot, tab, 2)
     p.shot(win, "① python ran in your environment, which it could not do in step 4, and succeeded: it is green. ② "
-                "show was skipped: nothing reached its input.",
+                "show ran too: python's output reached it, an empty dict ({}), as its code creates no variables.",
            highlight=["python", "show"], badges=True, zoom=["python", "show"])
     p.check("① python succeeded", status(tab, "python") == "success")
-    p.check("② show was skipped: “nothing reached its 'value' input”",
-            tab.scene.statuses.get("show", (None, ""))[:2]
-            == ("skipped", "skipped · nothing reached its 'value' input"))
+    p.check("② show ran: python's output, {}, reached it", status(tab, "show") == "success")
     ended = f"DONE run #{second.run_id} success"
     qtbot.waitUntil(lambda: ended in win.log.text.toPlainText(), timeout=30_000)
     ran_ok = (win.log.text, f"run #{second.run_id} ")
@@ -316,10 +315,11 @@ def test_a_new_python_block_runs_in_your_environment_and_starts_with_an_example(
     p.step("Click the Data preview tab, under the canvas. python is still selected.")
     bar = win.bottom_tabs.tabBar()
     QTest.mouseClick(bar, Qt.LeftButton, Qt.NoModifier, bar.tabRect(win.bottom_tabs.indexOf(win.preview)).center())
-    p.shot(win, "① Data preview says what python produced in the run: nothing. It succeeded, with no output.",
-           highlight=[win.preview.label], badges=True, zoom=[win.preview.label, bar])
-    p.check("① Data preview says “python: success, no output”",
-            win.preview.label.text() == "python: success, no output")
+    p.shot(win, "① Data preview shows what python produced in the run: its output, {}, an empty dict, as its code "
+                "creates no variables.",
+           highlight=[[win.preview.label, win.preview.text]], badges=True, zoom=[win.preview.label, bar])
+    p.check("① Data preview shows python's output: {}",
+            win.preview.label.text() == "python.output:" and win.preview.text.toPlainText() == "{}")
 
     # --- what is not new keeps its settings ----------------------------------------------------------------------
     p.step("Open older.yaml, a flow file that does not say where its Python Code block runs, and click that block, "

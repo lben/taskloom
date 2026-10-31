@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .config import Home
 from .engine import Cancelled, finished_text, run_flow
-from .flow import FlowError, load_flow, validate
+from .flow import FlowError, load_flow, real_path, validate
 from .launch import ARGS_VARIABLE
 from .registry import discover
 
@@ -128,7 +128,7 @@ def _parse_overrides(items) -> dict:
 def cmd_run(args, home: Home) -> int:
     start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None
     early = start_at is not None and start_at.timestamp() > time.time()  # started before its time
-    flow = load_flow(Path(args.flow).resolve())
+    flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
     os.chdir(flow.path.parent)
     registry = discover(home.blocks_dir)
@@ -243,14 +243,13 @@ def cmd_check(args, home: Home) -> int:
     left = False
     for path in paths:
         report = upgrade.check(path, registry, home)
-        if report.ok:
-            print(f"{path}: OK")
-            continue
-        print(f"{path}:")
+        print(f"{path}: OK" if report.ok else f"{path}:")
         for text in report.fixes:
             print(f"  can fix: {text}")
         for text in report.problems:
             print(f"  needs you: {text}")
+        for text in report.warnings:
+            print(f"  warning: {text}")
         if report.fixes and args.fix:
             print(f"  fixed (backup: {upgrade.fix(report, home)})")
         left |= bool(report.problems) or (bool(report.fixes) and not args.fix)

@@ -542,18 +542,19 @@ def test_check_removes_connections_to_blocks_and_inputs_that_are_gone_and_says_w
         "  can fix: remove the connection removed.output -> use.value: there is no block 'removed'",
         "  can fix: remove the connection load.rows -> use.amount: use has no input 'amount'",
         "  can fix: remove the connection load.table -> save.table: load has no output 'table'",
-        "  needs you: blocks.save: required input 'table' is not connected",  # what is left once it is fixed
+        # What is left once it is fixed: save, connected to nothing, is off, so its problem is a warning.
+        "  warning: blocks.save: required input 'table' is not connected (off: not connected to a start block)",
     ], checked.stdout
 
     fixed = env.taskloom("check", flow, "--fix")
 
-    assert fixed.returncode == 2  # something still needs you
+    assert fixed.returncode == 0  # nothing needs you: the warning stays listed
     [backup] = (env.home / "backups").iterdir()
     assert backup.read_bytes() == original and f"fixed (backup: {backup})" in fixed.stdout
     assert yaml.safe_load(flow.read_text(encoding="utf-8"))["edges"] == ["start.start -> load.after",
                                                                          "load.rows -> use.value"]
     again = env.taskloom("check", flow)
-    assert "can fix" not in again.stdout and "needs you: blocks.save: required input 'table'" in again.stdout
+    assert "can fix" not in again.stdout and "warning: blocks.save: required input 'table'" in again.stdout
 
 
 NO_START = """

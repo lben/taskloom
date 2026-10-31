@@ -161,7 +161,7 @@ def test_the_starter_code_shows_what_the_code_receives_and_sets_without_taskloom
     assert_starter_code(config)
     code = config["code"]
 
-    assert len(code.splitlines()) <= 30, code  # a short snippet
+    assert len(code.splitlines()) <= 38, code  # a short snippet (the starter the spec gives has 38 lines)
     assert re.search(r"""\{\s*["'][A-Za-z_]\w*["']\s*:""", code), code  # a dictionary keyed by a block's name
     assert re.search(r"""\binput\[\s*["'][A-Za-z_]\w*["']\s*\]""", code), code  # then input["load_sales"]
     assert "dict" in code.lower(), code
@@ -174,7 +174,8 @@ def test_the_starter_code_shows_what_the_code_receives_and_sets_without_taskloom
 
 
 def test_the_starter_code_runs_as_is_in_your_python_environment(env, win, tmp_path, monkeypatch):
-    """Spec: run as is, the starter snippet sets no output and does not fail, in your environment."""
+    """Spec: run as is, the starter snippet does not fail, in your environment; it creates no variables, so its
+    output is {} and the block after it runs."""
     tab = win.new_flow()
     try:
         python, show = new_python_block_flow(win, tab)
@@ -194,12 +195,13 @@ def test_the_starter_code_runs_as_is_in_your_python_environment(env, win, tmp_pa
     assert status == "success"
     statuses = env.block_status(run_id)
     assert statuses[python] == "success", statuses
-    assert statuses[show] == "skipped", statuses  # no output set: nothing reaches the block after it
+    assert statuses[show] == "success", statuses  # output not set: {} (no variables) reaches the block after it
 
 
 def test_the_starter_code_runs_as_is_in_taskloom_own_python_once_unticked(env, win, tmp_path, monkeypatch):
-    """Spec: run as is, the starter snippet sets no output and does not fail in Taskloom's own Python (the box
-    unticked: the flow file no longer says use_environment: true). No environment exists here."""
+    """Spec: run as is, the starter snippet does not fail in Taskloom's own Python (the box unticked: the flow
+    file no longer says use_environment: true); its output is {} and the block after it runs. No environment
+    exists here."""
     tab = win.new_flow()
     try:
         python, show = new_python_block_flow(win, tab)
@@ -222,7 +224,7 @@ def test_the_starter_code_runs_as_is_in_taskloom_own_python_once_unticked(env, w
     assert status == "success"
     statuses = env.block_status(run_id)
     assert statuses[python] == "success", statuses
-    assert statuses[show] == "skipped", statuses
+    assert statuses[show] == "success", statuses
 
 
 # --- what is not a new block keeps its config ------------------------------------------------------------

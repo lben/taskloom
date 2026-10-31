@@ -8,7 +8,8 @@ Fixed automatically:
 - no start block: a flow starts from a Manual Start or a Schedule, so a Manual Start is added, connected to
   its first blocks (it then runs as before: every block).
 
-Anything else the flow's checks find (e.g. a connection name missing from connections.yaml) needs you.
+Anything else the flow's checks find (e.g. a connection name missing from connections.yaml) needs you; a problem only
+an off block has (no run has it) is a warning.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from pathlib import Path
 import yaml
 
 from .block import all_ports
-from .flow import (_EDGE, ERROR_PORT, FORMAT_VERSION, BlockSpec, FlowError, block_config, flow_from_data,
+from .flow import (_EDGE, ERROR_PORT, FORMAT_VERSION, OFF, BlockSpec, FlowError, block_config, flow_from_data,
                    read_flow_file, unconnected_starts, validate)
 
 # Format version N -> a function that turns a flow of version N into one of version N + 1.
@@ -35,6 +36,7 @@ class Report:
     path: Path
     fixes: list[str] = field(default_factory=list)  # what fixing changes
     problems: list[str] = field(default_factory=list)  # what needs you
+    warnings: list[str] = field(default_factory=list)  # the problems of its off blocks, which no run has
     fixed: dict | None = None  # the flow after the fixes (None: nothing to fix)
 
     @property
@@ -141,8 +143,9 @@ def _check(path: Path, registry, home) -> Report:
 
     try:
         flow = flow_from_data(new, path)
-        errors, _ = validate(flow, registry, home)
+        errors, warnings = validate(flow, registry, home)
         errors += unconnected_starts(flow, registry)  # it runs, but does nothing: you meant something else
+        report.warnings += [w for w in warnings if w.endswith(f"({OFF})")]
     except FlowError as e:
         errors = e.errors
     report.problems += errors

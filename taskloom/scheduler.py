@@ -24,7 +24,7 @@ from pathlib import Path
 
 from . import __version__, mail, ssh
 from .config import Home
-from .flow import FlowError, load_flow
+from .flow import FlowError, load_flow, real_path
 from .history import History
 from .history import connect as history_connect
 from .launch import runner_command, windowed_command
@@ -522,7 +522,7 @@ def why_not_due(home: Home, path: Path, block: str | None, when: dt.datetime) ->
     except RuntimeError:
         pass
     try:
-        listed = [p for p in home.scheduled_flows() if p.resolve() == path]
+        listed = [p for p in home.scheduled_flows() if real_path(p) == path]
         triggers = load_flow(path).triggers if listed else []
     except (OSError, ValueError, FlowError) as e:
         return f"{path.name} cannot be read: {e}"

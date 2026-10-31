@@ -27,9 +27,9 @@ from .. import params as P
 from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
 from ..config import Home
-from ..engine import block_inputs, finished_text, input_ports
-from ..flow import (BlockSpec, FlowError, block_config, keep_source_names, load_flow, read_flow_file, run_clock,
-                   schedules_of, validate)
+from ..engine import block_inputs, finished_text, input_ports, run_part
+from ..flow import (BlockSpec, FlowError, block_config, keep_source_names, load_flow, read_flow_file, real_path,
+                   run_clock, schedules_of, validate)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
             self.open_flow(Path(path))
 
     def open_flow(self, path: Path) -> FlowTab | None:
-        path = Path(path).resolve()
+        path = real_path(path)
         for tab in self.tabs_list():
             if tab.doc.path == path:
                 self.tabs.setCurrentWidget(tab)
@@ -645,7 +645,7 @@ class MainWindow(QMainWindow):
                 return False
         before = tab.doc.path
         try:
-            tab.doc.save(path.resolve())
+            tab.doc.save(real_path(path))
         except OSError as e:  # e.g. a read-only file, or a folder you may not write to
             QMessageBox.warning(self, "Cannot save flow", f"{e}\n\nThe changes are not saved.")
             return False
@@ -663,7 +663,7 @@ class MainWindow(QMainWindow):
         """The file to save the flow as, chosen in the "Save flow" dialog (None: cancelled)."""
         suggested = str(tab.doc.path or Path.cwd() / f"{tab.doc.data.get('name') or 'flow'}.yaml")
         chosen, _ = QFileDialog.getSaveFileName(self, "Save flow", suggested, FLOW_FILTER)
-        return Path(chosen).resolve() if chosen else None
+        return real_path(chosen) if chosen else None
 
     def _remembered_identity(self) -> tuple[str, str]:
         """The name and email last typed in Save & Commit ("" each: none yet)."""
@@ -824,15 +824,17 @@ class MainWindow(QMainWindow):
             self.properties._finish_editing()
         tab.scene.commit_editing()
 
-    def _ready_to_run(self, tab: FlowTab):
-        """Save and validate; returns the loaded flow or None."""
+    def _ready_to_run(self, tab: FlowTab, run: dict | None = None, check: bool = True):
+        """Save and validate: for the run `run` says (engine.run_part's trigger, only or run_from), or the flow as a
+        whole (None, as Validate does); not `check`: only save and load it. Returns the loaded flow or None."""
         self._finish_editing(tab)
         if tab.doc.dirty or tab.doc.path is None:
             if not self.save(tab):
                 return None
         try:
             flow = load_flow(tab.doc.path)
-            errors, warnings = validate(flow, self.registry, self.home)
+            part = None if run is None else run_part(flow, self.registry, **run)
+            errors, warnings = validate(flow, self.registry, self.home, part) if check else ([], [])
         except (FlowError, ValueError) as e:
             errors, warnings, flow = getattr(e, "errors", [str(e)]), [], None
         now = dt.datetime.now().isoformat(timespec="milliseconds")
@@ -862,10 +864,13 @@ class MainWindow(QMainWindow):
             if not dialogs.offer_manual_start(self, tab.doc.title):
                 return
             tab.doc.add_manual_start(self.registry)
-        flow = self._ready_to_run(tab)
+        flow = self._ready_to_run(tab, check=False)
         if flow is None:
             return
         manual = [b for b, spec in flow.blocks.items() if spec.type == "trigger.manual"]
+        # Checked for what it runs: with several Manual Starts, once the one it starts from is chosen.
+        if not (start is None and len(manual) > 1) and self._ready_to_run(tab, {"trigger": start}) is None:
+            return
         if start is None and (len(manual) > 1 or self.settings.value("ask_before_run_now", "yes") != "no"):
             # Several Manual Starts: which one to start, asked whatever "Don't ask me again" said, remembered per flow.
             chosen_key = _flow_key("run_now", tab.doc.path)
@@ -878,6 +883,8 @@ class MainWindow(QMainWindow):
             if which:
                 start = None if go is True else go  # (None: all of them)
                 self.settings.setValue(chosen_key, start or "")
+                if self._ready_to_run(tab, {"trigger": start}) is None:
+                    return
         extra = ["--trigger", start] if start else []
         overrides = {}
         if flow.params:
@@ -1075,7 +1082,7 @@ class MainWindow(QMainWindow):
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
-        flow = self._ready_to_run(tab)  # saves your fix and checks the flow
+        flow = self._ready_to_run(tab, {"run_from" if on else "only": block_id})  # saves your fix and checks the flow
         if flow is None:
             return
         self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(run_id)], rerun=True)
@@ -1087,7 +1094,7 @@ class MainWindow(QMainWindow):
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
-        flow = self._ready_to_run(tab)
+        flow = self._ready_to_run(tab, {"run_from" if on else "only": block_id})
         if flow is None:
             return
         names = [name for name in input_ports(flow, self.registry, block_id) if name != AFTER]
@@ -1269,6 +1276,8 @@ class MainWindow(QMainWindow):
             self._refresh_schedule(tab)
             if not tab.running:
                 self._load_last_run(tab)
+        if self.current is not None:  # each run as it comes, whoever started it, whatever the canvas shows
+            self._refresh_history(self.current)
         self._show_scheduler_state(self.scheduler_running())
         self._show_running_flows()
 
@@ -1295,7 +1304,7 @@ class MainWindow(QMainWindow):
         menu.clear()
         today = dt.date.today().isoformat()
         try:
-            scheduled = {Path(p).resolve() for p in self.home.scheduled_flows()}
+            scheduled = {real_path(p) for p in self.home.scheduled_flows()}
         except ValueError:
             scheduled = set()
         for run in running:

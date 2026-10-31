@@ -6,6 +6,7 @@ import inspect
 import io
 import linecache
 import os
+import pickle
 import re
 import sys
 import types
@@ -19,8 +20,8 @@ from rich.traceback import Traceback
 
 from ..block import Block, fields, ports
 from ..expr import evaluate
-from ..engine import SecretStr, _masked, inline, preview, run_flow
-from ..flow import load_flow
+from ..engine import Failed, SecretStr, _masked, inline, preview, run_flow
+from ..flow import load_flow, real_path
 from ..table import Table
 
 
@@ -72,11 +73,13 @@ class PythonCode(Block):
         "inputs": fields.Names(default=["input"], help="Variables your code receives.",
                                examples=["input", "sales, regions", "load_sales, ask_region"]),
         "outputs": fields.Names(default=["output"], outputs=True,
-                                help="Variables your code sets; unset ones are not produced.",
+                                help="Variables your code sets; unset ones are not produced, but output, unless "
+                                     "your code sets it, is a dict of every variable your code creates.",
                                 examples=["output", "north, south", "result"]),
         "code": fields.Code("python", help="The Python your block runs. Each input is a variable named as in "
                                            "Inputs, params holds the flow's parameters and print() writes to the "
-                                           "Log; set the variables named in Outputs to pass values on.",
+                                           "Log. Unless it sets output, output is a dict of every variable it "
+                                           "creates; set output (or the other Outputs) to pass on something else.",
                             examples=["output = len(input)",
                                       'north = input[input["region"] == "North"]\noutput = north',
                                       'print(params["day"])\noutput = input']),
@@ -84,19 +87,46 @@ class PythonCode(Block):
                                        help="Run in your own Python environment, with the packages "
                                             "you installed (Tools → Python environment)"),
     }
-    # Only comments: as it is, the code runs and sets no output, in your environment and in Taskloom's Python.
+    # Only comments: as it is, the code runs and its output is {}, in your environment and in Taskloom's Python.
     new_config = {"use_environment": True, "code": """\
-# Each input is a variable named as in Inputs (by default `input`).
-# One block connected: input is that block's output.
-# Several blocks connected: input is a dict keyed by each block's name, e.g.
-#   input = {"load_sales": <a table>, "ask_region": "North"}
-#   sales, region = input["load_sales"], input["ask_region"]
-# A table arrives as a pandas DataFrame (in your Python environment), e.g.
+# Inputs are available as variables (default: `input`).
+#
+# ┌──────────────┐
+# │  Load Sales  │─────► Python
+# └──────────────┘
+#
+#   input = sales table
+#
+# ┌──────────────┐
+# │  Load Sales  │──┐
+# └──────────────┘  │
+#                   ├──► Python
+# ┌──────────────┐  │
+# │  Ask Region  │──┘
+# └──────────────┘
+#
+#   input = {
+#       "load_sales": <table>,
+#       "ask_region": "North"
+#   }
+#
+#   sales = input["load_sales"]
+#   region = input["ask_region"]
+#
+# Tables are pandas DataFrames:
 #   north = sales[sales["region"] == region]
-# params holds the flow's parameters, e.g. params["day"]
-# print() writes to the Log, e.g. print(len(north), "rows")
-# Set output to pass a value on (a DataFrame comes out as a table), e.g.
-#   output = north"""}
+#
+# Parameters:
+#   day = params["day"]
+#
+# Log output:
+#   print("Found", len(north), "rows")
+#
+# What goes out:
+#   By default, every variable you create, as a dict:
+#     output = {"sales": ..., "region": ..., "north": ...}
+#   To send something else, set output yourself:
+#     output = north"""}
 
     @classmethod
     def ports(cls, config):
@@ -106,14 +136,24 @@ class PythonCode(Block):
                 {n: ports.Any() for n in config["outputs"]})
 
     def run(self, ctx, **inputs):
+        values = {name: inputs.get(name) for name in self.config.inputs}
         if self.config.use_environment:
             from ..pyenv import run_code
 
-            values = {name: inputs.get(name) for name in self.config.inputs}
-            return run_code(ctx, self.config.code, values, self.config.outputs)
+            produced, left_out = run_code(ctx, self.config.code, values, self.config.outputs)
+        else:
+            produced, left_out = self._run_here(ctx, values)
+        if left_out:  # never dropped silently
+            ctx.warn("left out of output, as they cannot be passed on to the next blocks or kept with the run: "
+                     + ", ".join(f"{name} ({' '.join(why.split())})" for name, why in left_out.items()))
+        return produced
+
+    def _run_here(self, ctx, values: dict) -> tuple[dict, dict]:
+        """Run the code in Taskloom's own Python: (its outputs, {variable left out of output: why})."""
         helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table,
                    "print": _printer(ctx), "log": lambda *values: ctx.log(" ".join(map(str, values)))}
-        namespace = {**helpers, **{name: inputs.get(name) for name in self.config.inputs}}
+        namespace = {**helpers, **values}
+        given = set(namespace)
         # Registered with linecache under a short name, so error reports can show the code around the
         # failing line (rich looks the name up relative to the folder it was imported in).
         filename = f"{ctx.block_id}.py"
@@ -127,8 +167,35 @@ class PythonCode(Block):
                 raise CodeError(e, filename, namespace, set(helpers)) from None
         except Exception as e:
             raise CodeError(e, filename, namespace, set(helpers)) from None
-        # Outputs your code does not assign are not produced, so blocks after them are skipped.
-        return {name: namespace[name] for name in self.config.outputs if name in namespace}
+        # Outputs your code does not assign are not produced, so blocks after them are skipped; but output, unless
+        # it assigns it, is a dict of the variables it created.
+        produced = {name: namespace[name] for name in self.config.outputs if name in namespace}
+        left_out = {}
+        if "output" in self.config.outputs and "output" not in namespace:
+            produced["output"] = {}
+            for name, value in namespace.items():
+                if name in given or not _created(name, value):
+                    continue
+                try:  # as the run keeps it (_keep_outputs); its tables are kept as files of their own
+                    _TablesAside(io.BytesIO()).dump(value)
+                    produced["output"][name] = value
+                except Exception as error:  # e.g. an open file or connection
+                    left_out[name] = str(error) or type(error).__name__
+        return produced, left_out
+
+
+def _created(name: str, value) -> bool:
+    """Whether a variable of your code's goes into its default output: not a module it imported, a function or class
+    it defined, or a name starting with _."""
+    return not (name.startswith("_") or isinstance(value, types.ModuleType) or inspect.isroutine(value)
+                or inspect.isclass(value))
+
+
+class _TablesAside(pickle.Pickler):
+    """Pickles a value leaving its DataFrames aside (each is stored as a table file of its own)."""
+
+    def persistent_id(self, value):
+        return id(value) if Table.is_frame(value) else None
 
 
 class ReusableBlock(PythonCode):
@@ -255,21 +322,21 @@ class AskUser(Block):
     def run(self, ctx, value=None):
         c = self.config
         if c.kind == "choice" and not c.options:
-            raise ValueError("kind 'choice' needs options")
+            raise Failed("kind 'choice' needs options")
         if ctx.can_ask:
             answer = ctx.ask(c.prompt, c.kind, c.options, c.default)
             if answer is None:
-                raise RuntimeError("no answer was given")
+                raise Failed("no answer was given")
         elif c.secret:
             answer = ctx.home.get_secret(c.secret)
         elif c.default is not None:
             answer = c.default
         else:
-            raise RuntimeError("nobody can answer in this run; set a default or a secret for unattended runs")
+            raise Failed("nobody can answer in this run; set a default or a secret for unattended runs")
         if c.kind == "yes_no":
             answer = answer if isinstance(answer, bool) else str(answer).strip().lower() in ("yes", "y", "true", "1")
         elif c.kind == "choice" and answer not in c.options:
-            raise ValueError(f"answer {answer!r} is not one of {c.options}")
+            raise Failed(f"answer {answer!r} is not one of {c.options}")
         elif c.kind == "password" or c.secret:
             answer = SecretStr(answer)
         return {"answer": answer}
@@ -294,7 +361,7 @@ class ForEach(Block):
     def run(self, ctx, items):
         if not isinstance(items, (list, tuple)):
             raise TypeError(f"input 'items' must be a list, got {type(items).__name__}")
-        flow = load_flow(Path(self.config.flow).resolve())  # recorded as runs of that flow, as when it is run itself
+        flow = load_flow(real_path(self.config.flow))  # recorded as runs of that flow, as when it is run itself
         if self.config.param not in flow.params:
             raise ValueError(f"{self.config.flow} has no parameter '{self.config.param}'")
         results = []

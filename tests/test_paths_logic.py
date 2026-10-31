@@ -1251,7 +1251,7 @@ def test_not_answering_in_the_editor_fails_the_block_and_skips_what_needs_the_an
     assert not (tmp_path / "answer.txt").exists()
     with sqlite3.connect(tmp_path / "home" / "history.db") as db:
         found = dict((b, (s, e)) for b, s, e in db.execute("SELECT block, status, error FROM blocks"))
-    assert found["ask"] == ("failed", "RuntimeError: no answer was given")
+    assert found["ask"] == ("failed", "no answer was given")
     assert found["save"][0] == "skipped"
 
 

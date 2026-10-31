@@ -18,7 +18,8 @@ import polars as pl
 
 from . import params as P
 from .block import AFTER, DONE, all_ports, has_done_output
-from .flow import ERROR_PORT, Flow, FlowError, block_config, order, run_clock, validate
+from .flow import (ERROR_PORT, Flow, FlowError, _start_blocks, _taking_part, block_config, order, run_clock,
+                   validate)
 from .config import REVEALED, before_now, kept_runs, runs_kept_since
 from .history import History
 from .table import Table
@@ -29,6 +30,20 @@ STOP_GRACE_SECONDS = 2.0
 
 class Cancelled(Exception):
     pass
+
+
+class Failed(Exception):
+    """A failure the block expects, which its message says all about (e.g. no answer was given): told by that
+    message alone, without the Python traceback an unexpected error (a bug) keeps. Otherwise an ordinary failure:
+    retried, and out the block's error output."""
+
+
+def _told(error: BaseException) -> str:
+    """A block's error as its failure is told: by its message alone when the block expects it (Failed) or attaches
+    its own report (Python Code), otherwise with the kind of error first (e.g. KeyError: 'region')."""
+    if isinstance(error, Failed) or getattr(error, "details", None):
+        return str(error)
+    return f"{type(error).__name__}: {error}"
 
 
 class SecretStr(str):
@@ -181,7 +196,7 @@ def preview(value, limit: int = 4000) -> str:
     if isinstance(value, SecretStr):
         return "***"
     if isinstance(value, (dict, list, tuple)):
-        return redact(json.dumps(_masked(value), indent=2, default=str))[:limit]  # scrub, then cut
+        return redact(json.dumps(_masked(value), indent=2, default=str, ensure_ascii=False))[:limit]  # scrub, then cut
     return redact(str(value))[:limit]
 
 
@@ -230,15 +245,16 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     `before_start` is called once the flow is loaded and checked, just before its run is recorded and begins
     (`taskloom run --start-at` waits there for its time).
     """
-    errors, warnings = validate(flow, registry, home)
+    fired = _fired_triggers(flow, registry, trigger)
+    part = run_part(flow, registry, trigger, only, run_from)
+    # A problem of a block taking no part in it does not stop it: its Log warns about it.
+    errors, warnings = validate(flow, registry, home, part)
     if errors:
         raise FlowError(errors)
     now, funcs = run_clock(flow, home, as_of)
     values = P.resolve(flow.params, overrides or {}, funcs)
     texts = dict(given or {})  # as you typed them: shown again next time, and read again then
     start = only or run_from
-    fired = _fired_triggers(flow, registry, trigger)
-    part = {only} if only else blocks_from(flow, registry, run_from) if run_from else _line(flow, registry, fired)
     if start is not None:  # refuse before a run is recorded
         given = _evaluate_inputs(texts, values)
         _only_inputs(flow, registry, home, start, inputs_from, given, texts)
@@ -292,7 +308,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                          if Table.is_frame(v) else v for k, v in given.items()}
                 runner.only, runner.run_from = only, run_from
                 source = run_id if inputs_from is not None else None
-                runner.only_inputs, runner.only_typed = _only_inputs(flow, registry, home, start, source, given, texts)
+                runner.only_inputs, runner.only_typed, runner.only_came = _only_inputs(
+                    flow, registry, home, start, source, given, texts)
                 if run_from:
                     runner.outputs, runner.blocked, runner.before_unhandled, runner.outside = _from_before(
                         flow, registry, home, part, source, run_from)
@@ -326,13 +343,15 @@ class _Runner:
     only: str | None = None  # run just this block, with only_inputs
     only_inputs: dict = {}
     only_typed: dict = {}  # the ones you typed, as you typed them
+    only_came: dict = {}  # the others: the connections they came by (see _came)
+    brought: dict = {}  # what each of those connections brought: {input: {(block, output): value}}
     taking_part: set = set()  # the blocks this run takes part in: the only ones it runs and reports
     run_from: str | None = None  # run from this block on (with only_inputs): taking_part is it and the blocks after it
     outside: set = set()  # blocks taking no part in it (nor in the run it carries on from): see _gather
     before_unhandled: dict = {}  # blocks before them: {block: the failures behind it no block that ran handled}
 
     def run(self) -> str:
-        for block_id in [b for b in order(self.flow) if b in self.taking_part]:
+        for block_id in [b for b in order(self.flow, self.taking_part) if b in self.taking_part]:
             if self.cancel.is_set():
                 self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
                 continue
@@ -342,7 +361,8 @@ class _Runner:
                 continue
             self.ran.add(block_id)
             if alone:  # what it gets (maybe values you chose), saved before it can change them
-                self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed)
+                self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed, came=self.only_came)
+                self.brought = {name: _by_edge(inputs[name], came) for name, came in self.only_came.items()}
             status, produced = self._run_block(self.flow.blocks[block_id], inputs)
             self._keep_outputs(block_id, produced, status=status)
             if status == "failed":
@@ -399,10 +419,10 @@ class _Runner:
         return inputs
 
     def _keep_outputs(self, block_id: str, produced: dict, file: str | None = None, status: str | None = None,
-                      typed: dict | None = None):
-        """Save what the block produced and how it ended (or, with KEPT_INPUTS, what it got and which of
-        those you typed), so it can later feed a re-run of a single block. Values holding a password
-        are never written to disk."""
+                      typed: dict | None = None, came: dict | None = None):
+        """Save what the block produced and how it ended (or, with KEPT_INPUTS, what it got, which of
+        those you typed and the connections the others came by), so it can later feed a re-run of a single
+        block. Values holding a password are never written to disk."""
         kept, withheld = {}, []
         for port, value in produced.items():
             value = _tables_to_marks(value)
@@ -421,6 +441,8 @@ class _Runner:
             kept[STATUS] = status
         if typed:
             kept[TYPED] = typed
+        if came:
+            kept[CAME] = came
         folder = self.workspace / block_id
         folder.mkdir(parents=True, exist_ok=True)
         (folder / (file or KEPT_OUTPUTS)).write_bytes(pickle.dumps(kept))
@@ -471,7 +493,7 @@ class _Runner:
                     return self._fail(spec, attempt, e, inputs)
                 delay = retry.delay_after(attempt)
                 self.emit({"event": "log", "block": spec.id, "level": "ERROR",
-                           "message": f"attempt {attempt}/{retry.max_attempts} failed: {type(e).__name__}: {e}"})
+                           "message": f"attempt {attempt}/{retry.max_attempts} failed: {_told(e)}"})
                 self.emit({"event": "log", "block": spec.id, "level": "RETRY",
                            "message": f"waiting {delay:.3g} s before attempt {attempt + 1}/{retry.max_attempts}"})
                 if self.cancel.wait(delay):
@@ -480,7 +502,8 @@ class _Runner:
                 continue
             self.emit({"event": "block_finished", "block": spec.id, "status": "success", "attempts": attempt,
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
-                       "tables": {p: str(v.path) for p, v in produced.items() if isinstance(v, Table)},
+                       "tables": {where: path for p, v in produced.items()
+                                  for where, path in _table_files(v, p).items()},
                        "previews": {p: preview(v) for p, v in produced.items()}})
             if has_done_output(cls, out_ports):
                 produced[DONE] = True  # for blocks connected done -> after
@@ -491,21 +514,26 @@ class _Runner:
         block_id = spec.id
         cls = self.registry.get(spec.type)
         # Scrubbed here too: the error goes on to error handlers, which may email it.
-        # Blocks can attach a clearer report (Python Code: the code around the line, its variables).
-        details = getattr(error, "details", None)
-        message = redact(str(error) if details else f"{type(error).__name__}: {error}")
-        tb = redact(details or "".join(traceback.format_exception(error)))
+        # Blocks can attach a clearer report (Python Code: the code around the line, its variables); a failure the
+        # block expects (Failed) has nothing to add to its message.
+        message = redact(_told(error))
+        tb = "" if isinstance(error, Failed) else redact(
+            getattr(error, "details", None) or "".join(traceback.format_exception(error)))
         report = [f"{block_id} ({cls.title if cls else spec.type}) failed: {message}"]
         incoming = [e for e in self.flow.edges if e.dst == block_id]
         if incoming:
             report.append("Inputs:")
             for e in incoming:
-                if (e.src, e.src_port) in self.outputs:
-                    value = inline(self.outputs[(e.src, e.src_port)])
+                if block_id in (self.only, self.run_from):  # its inputs were worked out for this run (only_inputs)
+                    value = (self.brought[e.dst_port].get((e.src, e.src_port), NO_VALUE) if e.dst_port in self.brought
+                             else inputs.get(e.dst_port, NO_VALUE))  # typed (or left empty): by no connection
                 else:
-                    value = "(nothing arrived)"
+                    value = self.outputs.get((e.src, e.src_port), NO_VALUE)
+                value = "(nothing arrived)" if value is NO_VALUE else inline(value)
                 report.append(f"  {e.dst_port} ← {e.src}.{e.src_port}: {value}")
-        self.emit({"event": "log", "block": block_id, "level": "ERROR", "message": redact("\n".join(report)) + "\n" + tb})
+        if tb:
+            report.append(tb)
+        self.emit({"event": "log", "block": block_id, "level": "ERROR", "message": redact("\n".join(report))})
         self.emit({"event": "block_finished", "block": block_id, "status": "failed", "attempts": attempts, "error": message})
         return "failed", {ERROR_PORT: {"block": block_id, "error": message, "traceback": tb, "attempts": attempts}}
 
@@ -549,8 +577,7 @@ class _Runner:
         for port, value in result.items():
             if port not in out_ports:
                 raise ValueError(f"run() returned unknown output '{port}' (outputs: {', '.join(out_ports) or 'none'})")
-            if Table.is_frame(value):
-                value = Table.from_frame(value, ctx.new_path(f"{port}.parquet"))
+            value = _as_tables(value, ctx, port)
             if out_ports[port].kind == "table" and not isinstance(value, Table):
                 raise TypeError(f"output '{port}' must be a table, got {type(value).__name__}")
             produced[port] = value
@@ -563,6 +590,7 @@ STATUS = "__status__"  # how the block ended: success | failed | BLOCKED
 BLOCKED = "blocked"  # skipped because something before it failed
 SKIPPED = "skipped"  # skipped for another reason (e.g. a path not taken)
 TYPED = "__typed__"  # inputs you typed, as you typed them
+CAME = "__came__"  # the connections the other inputs came by (see _came)
 STALE = "__stale__"  # made from older data: a block before it ran again on its own since
 WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
 
@@ -598,6 +626,11 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
     {input: the text you typed for it}). If it ran on its own then: exactly what it got. Otherwise what
     a full run would give it now, from what the blocks before it hold (e.g. after fixing one of them).
     Raises ValueError when that run's files are gone."""
+    return _block_inputs(flow, registry, home, only, run_id)[:3]
+
+
+def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[dict, dict, dict, dict]:
+    """block_inputs, and the connections the inputs not typed came by ({input: see _came})."""
     input_ports(flow, registry, only)  # a block that exists
     cleaned = f"the files of run #{run_id} were cleaned up (Keep runs, keep_runs_for)"
     run_dir = home.runs_dir / str(run_id)
@@ -615,12 +648,12 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
         kept = pickle.loads((run_dir / only / KEPT_INPUTS).read_bytes())
         missing = {port: f"{only}.{port} held a password (or something that cannot be saved), so it was not kept"
                    for port in kept.pop(WITHHELD, [])}
-        typed = kept.pop(TYPED, {})
-        return {port: _map_marks(value, table) for port, value in kept.items()}, missing, typed
+        typed, came = kept.pop(TYPED, {}), kept.pop(CAME, {})
+        return {port: _map_marks(value, table) for port, value in kept.items()}, missing, typed, came
     verdict, ports = _Now(flow, registry, run_dir, run_id).inputs(only)
     if verdict in ("blocked", "unknown"):
-        return {}, {port: ports for port in connected}, {}
-    values, missing = {}, {}
+        return {}, {port: ports for port in connected}, {}, {}
+    values, missing, came = {}, {}, {}
     for port, got in ports.items():
         if isinstance(got, str):
             missing[port] = got
@@ -635,8 +668,9 @@ def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[di
             delivered.append((edge, None if withheld else _map_marks(saved[edge.src_port], table)))
         else:  # as the runner hands them over
             edges = [e for e in flow.edges if e.dst == only and e.dst_port == port]
-            values[port] = _arriving(input_ports(flow, registry, only).get(port), edges, delivered)
-    return values, missing, {}
+            in_port = input_ports(flow, registry, only).get(port)
+            values[port], came[port] = _arriving(in_port, edges, delivered), _came(in_port, edges, delivered)
+    return values, missing, {}, came
 
 
 def _arriving(port, edges: list, delivered: list) -> object:
@@ -653,6 +687,23 @@ def _arriving(port, edges: list, delivered: list) -> object:
         return {(f"{e.src}.{e.src_port}" if sources.count(e.src) > 1 else e.src): value for e, value in delivered}
     values = [value for _, value in delivered]
     return values if getattr(port, "many", False) or len(edges) > 1 else values[0]
+
+
+def _came(port, edges: list, delivered: list) -> object:
+    """The connections an input's value came by (as _arriving takes them): that value, with each connection's
+    part of it in place of its (block, output). Kept with the value, it tells which connection brought what
+    (_by_edge), as the connections were then."""
+    return _arriving(port, edges, [(e, (e.src, e.src_port)) for e, _ in delivered])
+
+
+def _by_edge(value, came) -> dict:
+    """What each connection brought ({(block, output): value}) out of an input's value and the connections it came
+    by (_came)."""
+    if isinstance(came, dict):
+        return {source: value[key] for key, source in came.items()}
+    if isinstance(came, list):
+        return dict(zip(came, value))
+    return {came: value}
 
 
 class _Now:
@@ -806,16 +857,17 @@ def _unhandled_failures(flow: Flow, now: "_Now", block: str) -> set[str]:
 
 
 def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict,
-                 texts: dict) -> tuple[dict, dict]:
+                 texts: dict) -> tuple[dict, dict, dict]:
     """The inputs for running just `only`: the ones you give, the rest as they reached it in run `run_id`;
-    and the ones you typed (now, or for the inputs it keeps from that run), as you typed them."""
+    the ones you typed (now, or for the inputs it keeps from that run), as you typed them; and the connections
+    the others came by ({input: see _came})."""
     in_ports = input_ports(flow, registry, only)
     unknown = sorted(set(given) - set(in_ports))
     if unknown:
         raise ValueError(f"{only} has no input named '{unknown[0]}'")
     try:
-        values, missing, typed = (block_inputs(flow, registry, home, only, run_id) if run_id is not None
-                                  else ({}, {}, {}))
+        values, missing, typed, came = (_block_inputs(flow, registry, home, only, run_id) if run_id is not None
+                                        else ({}, {}, {}, {}))
     except ValueError as e:
         raise ValueError(f"{e}: run the whole flow instead, or choose its inputs") from None
     if run_id is None and not given and any(e.dst == only and e.dst_port != AFTER for e in flow.edges):
@@ -830,7 +882,7 @@ def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, give
     if needed:
         raise ValueError(f"{only}.{needed[0]} needs a value")
     typed = {k: t for k, t in typed.items() if k not in given} | {k: texts[k] for k in given if texts[k].strip()}
-    return values, typed
+    return values, typed, {k: c for k, c in came.items() if k in values and k not in given}
 
 
 def _table_file(path) -> "pl.DataFrame | pl.LazyFrame":
@@ -869,6 +921,33 @@ def _after(flow: Flow, block: str) -> set[str]:
                 todo.insert(0, edge.dst)
         todo.pop()
     return found
+
+
+def _as_tables(value, ctx, name: str):
+    """`value` with each DataFrame in it (also inside dicts, lists and tuples, at any depth) stored as a Table, each
+    in a file of its own (output.parquet; inside it by position, e.g. output.4.0.parquet). Other kinds of dicts and
+    lists (e.g. a Counter) stay as they are."""
+    if Table.is_frame(value):
+        return Table.from_frame(value, ctx.new_path(f"{name}.parquet"))
+    if type(value) is dict:
+        return {k: _as_tables(v, ctx, f"{name}.{i}") for i, (k, v) in enumerate(value.items())}
+    if type(value) in (list, tuple):
+        return type(value)(_as_tables(v, ctx, f"{name}.{i}") for i, v in enumerate(value))
+    return value
+
+
+def _table_files(value, name: str) -> dict:
+    """The file of each table in `value` (also inside lists and dicts) by where it is, e.g. output.by_region.north
+    or output.parts[0]."""
+    if isinstance(value, Table):
+        return {name: str(value.path)}
+    if isinstance(value, dict):
+        parts = [(f"{name}.{k}", v) for k, v in value.items()]
+    elif isinstance(value, (list, tuple)):
+        parts = [(f"{name}[{i}]", v) for i, v in enumerate(value)]
+    else:
+        return {}
+    return {where: path for part, v in parts for where, path in _table_files(v, part).items()}
 
 
 def _tables_to_marks(value):
@@ -920,39 +999,15 @@ def _carry_over(old: Path, new: Path, after_only: set[str]):
         (new / block / kept_file.name).write_bytes(pickle.dumps(kept))
 
 
-def _taking_part(flow: Flow, registry, fired: set[str]) -> set[str] | None:
-    """The blocks a run takes part in. In a flow with start blocks: the blocks after the ones that started
-    it; the blocks whose data those need (e.g. a query feeding one of them; not through an error or a
-    run-after connection); and the error handlers of all of these, with what comes after them. A block
-    connected to no start block takes no part: that is how to switch it off.
-    None: a flow without start blocks runs all its blocks."""
-    if not any((cls := registry.get(spec.type)) is not None and cls.is_trigger for spec in flow.blocks.values()):
-        return None
-    part: set[str] = set()
-
-    def with_what_follows(blocks):
-        todo = [b for b in blocks if b not in part]
-        part.update(todo)
-        while todo:
-            block = todo.pop()
-            for edge in flow.edges:
-                if edge.src == block and edge.dst not in part:
-                    part.add(edge.dst)
-                    todo.append(edge.dst)
-
-    with_what_follows(fired)
-    grown = True
-    while grown:
-        grown = False
-        for edge in flow.edges:
-            data = edge.src_port not in (ERROR_PORT, DONE) and edge.dst_port != AFTER
-            if data and edge.dst in part and edge.src not in part:  # its data is needed
-                part.add(edge.src)
-                grown = True
-            elif edge.src_port == ERROR_PORT and edge.src in part and edge.dst not in part:  # its error handler
-                with_what_follows([edge.dst])
-                grown = True
-    return part
+def run_part(flow: Flow, registry, trigger: str | None = None, only: str | None = None,
+             run_from: str | None = None) -> set[str]:
+    """The blocks a run takes part in (its arguments as run_flow's): just `only`; `run_from` and the blocks after it;
+    or the lines of the start blocks that start it."""
+    if only:
+        return {only}
+    if run_from:
+        return blocks_from(flow, registry, run_from)
+    return _line(flow, registry, _fired_triggers(flow, registry, trigger))
 
 
 def _line(flow: Flow, registry, fired: set[str]) -> set[str]:
@@ -966,10 +1021,6 @@ def lines(flow: Flow, registry) -> dict[str, set[str]]:
     """Each start block's line, in the flow's order: the blocks the runs it starts take part in."""
     starts = _start_blocks(flow, registry)
     return {b: _line(flow, registry, {b}) for b in flow.blocks if b in starts}
-
-
-def _start_blocks(flow: Flow, registry) -> set[str]:
-    return {b for b, s in flow.blocks.items() if (cls := registry.get(s.type)) is not None and cls.is_trigger}
 
 
 def _fired_triggers(flow: Flow, registry, trigger: str | None) -> set[str]:

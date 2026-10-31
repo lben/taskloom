@@ -36,6 +36,9 @@ class Table:
     def summary(self) -> str:
         return f"{self.num_rows:,} rows × {len(self.schema)} columns"
 
+    def __repr__(self) -> str:  # how a table inside a dict or list reads in summaries, hovers and the Log
+        return f"<table: {self.summary()}>"
+
     @staticmethod
     def is_frame(value) -> bool:
         if isinstance(value, (pl.DataFrame, pl.LazyFrame, pa.Table)):
