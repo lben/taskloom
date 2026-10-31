@@ -445,7 +445,7 @@ def test_each_blocks_latest_and_earlier_results(env):
             "shared": runs["nightly"]}
         make = latest["make"]
         assert make["started"] == history.run(runs["only"])["started"] and make["started_by"] == "only make"
-        result = {k: make[k] for k in ("status", "attempts", "error", "summary", "tables", "previews")}
+        result = {k: make[k] for k in ("status", "attempts", "error", "summary", "tables", "previews", "finished")}
         assert result == history.blocks(runs["only"])["make"]  # its result in that run
         assert make["status"] == "success" and json.loads(make["previews"]["output"]) == {"n": 3}
         assert latest["shared"]["started_by"] == "nightly" and latest["manual"]["started_by"] == "manual"

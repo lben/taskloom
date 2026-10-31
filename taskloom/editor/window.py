@@ -17,10 +17,12 @@ from copy import deepcopy
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QEvent, QMargins, QPoint, QSettings, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QImageReader, QKeySequence, QTextDocument
+from PySide6.QtCore import QEvent, QMargins, QPoint, QRect, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import (QAction, QColor, QFontMetricsF, QImageReader, QKeySequence, QPainter, QPalette,
+                           QTextDocument)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayout, QMainWindow, QMenu, QMessageBox,
-                               QSizePolicy, QTabBar, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+                               QSizePolicy, QStyle, QStyleOptionToolButton, QStylePainter, QTabBar, QTabWidget,
+                               QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
 from .. import __version__, upgrade
 from .. import params as P
@@ -37,7 +39,7 @@ from ..scheduler import (acquire_lock, counted_from, paused, running_scheduler_v
                          set_start_at_login, startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView, value_html
-from . import dialogs, docs, git
+from . import dialogs, docs, git, theme
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
@@ -135,15 +137,43 @@ class HoverMenuButton(QToolButton):
         self._hover.stop()
 
 
+class NewFlowButton(QToolButton):
+    """The + right of the flows' tabs. Drawn, not the font's "+": twice the height of the text's capital letters,
+    bold, in the palette's text colour when it paints (so also after the colours change), on whole device pixels
+    (crisp at 150% and 200%)."""
+
+    def sizeHint(self):
+        side = round(2 * QFontMetricsF(self.font()).capHeight()) + 12
+        return QSize(max(24, side), side)
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.text = ""  # the + is drawn below
+        painter.drawComplexControl(QStyle.CC_ToolButton, option)  # (its frame when hovered)
+        ratio = self.devicePixelRatioF()
+        side = round(2 * QFontMetricsF(self.font()).capHeight() * ratio)
+        stroke = max(round(2 * ratio), round(side / 7))
+        side += (side - stroke) % 2  # the strokes cross in its middle
+        x, y = (round(self.width() * ratio) - side) // 2, (round(self.height() * ratio) - side) // 2
+        painter.scale(1 / ratio, 1 / ratio)  # in device pixels
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        colour = self.palette().color(QPalette.ButtonText)
+        painter.fillRect(x, y + (side - stroke) // 2, side, stroke, colour)
+        painter.fillRect(x + (side - stroke) // 2, y, stroke, side, colour)
+
+
 class FlowTabBar(QTabBar):
-    """The open flows' tabs, in `tabs`, with a + button just right of the last one (a new flow). Room is kept for
-    the + right of the tabs' row: it sits there when the tabs do not all fit (they scroll), so never over a tab."""
+    """The open flows' tabs, in `tabs`, with a + button just right of the last one (a new flow), as tall as the tabs'
+    row. Room is kept for the + right of the tabs' row: it sits there when the tabs do not all fit (they scroll), so
+    never over a tab."""
 
     GAP = 4
 
     def __init__(self, tabs: QTabWidget):
         super().__init__()
-        self.new_button = QToolButton(tabs, text="+", autoRaise=True, toolTip="New flow (File > New flow)")
+        self.new_button = NewFlowButton(tabs, text="+", autoRaise=True, toolTip="New flow (File > New flow)")
         room = QWidget()
         QHBoxLayout(room, contentsMargins=QMargins()).addSpacing(self.GAP + self.new_button.sizeHint().width())
         tabs.setCornerWidget(room)  # the tabs' row ends before it
@@ -166,7 +196,8 @@ class FlowTabBar(QTabBar):
         last = self.tabRect(self.count() - 1)  # (no tabs: an empty rect at 0)
         scrolls = self.tabRect(0).left() < 0 or last.right() >= self.width()
         x = (self.width() if scrolls else last.right() + 1) + self.GAP
-        self.new_button.move(self.mapToParent(QPoint(x, (self.height() - self.new_button.height()) // 2)))
+        self.new_button.setGeometry(QRect(self.mapToParent(QPoint(x, 0)),
+                                          QSize(self.new_button.sizeHint().width(), self.height())))
 
 
 class DocsBrowser(QTextBrowser):
@@ -195,6 +226,15 @@ class DocsBrowser(QTextBrowser):
         if kind == QTextDocument.HtmlResource:
             return self.pages().get(url.fileName(), "")
         return super().loadResource(kind, url)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        # A page's links take the link colour as it is read: read again in the new one (e.g. the theme changed), where
+        # it is scrolled to.
+        if event.type() == QEvent.PaletteChange and not self.source().isEmpty():
+            scroll = self.verticalScrollBar().value()
+            self.reload()
+            self.verticalScrollBar().setValue(scroll)
 
 
 class DocsColumn(QDockWidget):
@@ -342,11 +382,14 @@ def _ended(run: dict) -> str:
 
 class MainWindow(QMainWindow):
     def __init__(self, home: Home | None = None):
-        super().__init__()
-        self.home = home or Home.default()
-        self.registry = discover(self.home.blocks_dir)
+        home = home or Home.default()
         # Editor preferences live next to the rest of the user's Taskloom files.
-        self.settings = QSettings(str(self.home.root / "editor.ini"), QSettings.IniFormat)
+        settings = QSettings(str(home.root / "editor.ini"), QSettings.IniFormat)
+        theme.apply(theme.chosen(settings))  # before any of the window is made: never in other colours first
+        super().__init__()
+        self.home = home
+        self.registry = discover(self.home.blocks_dir)
+        self.settings = settings
         self.safety = Safety(self.home.root)
         self._quitting = False
         self.resize(1440, 900)
@@ -409,6 +452,7 @@ class MainWindow(QMainWindow):
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
         self._poll.start()
+        QApplication.styleHints().colorSchemeChanged.connect(self._system_colours_changed)
         if self.registry.warnings:
             self.statusBar().showMessage(f"{len(self.registry.warnings)} problem(s) with blocks: "
                                          + "; ".join(self.registry.warnings), 30000)
@@ -508,7 +552,7 @@ class MainWindow(QMainWindow):
         self.validate_action = act(m, "Validate", lambda: self.validate(self.current), "F7")
         m = bar.addMenu("&Tools")
         act(m, "Connections…", self.edit_connections)
-        act(m, "Settings…", lambda: dialogs.open_dialog(self, SettingsDialog, self.home))
+        act(m, "Settings…", self.edit_settings)
         act(m, "Python environment…", lambda: dialogs.open_dialog(self, PythonEnvDialog, self.home))
         act(m, "Check flows…", lambda: self.check_flows())
         m = bar.addMenu("&Help")
@@ -716,6 +760,24 @@ class MainWindow(QMainWindow):
     def edit_connections(self):
         dialogs.open_dialog(self, ConnectionsDialog, self.home)
         self.properties.refresh()  # new or renamed connections show up in the block's lists
+
+    def edit_settings(self):
+        """Tools > Settings: its Theme is the editor's own preference (editor.ini), shown at once when saved."""
+        dialog = dialogs.open_dialog(self, SettingsDialog, self.home, theme=theme.chosen(self.settings))
+        if dialog is not None:
+            self.settings.setValue("theme", dialog.theme.currentText())
+            self.apply_theme()
+
+    def apply_theme(self):
+        """The theme chosen, on the whole editor at once; drawn again, what is drawn once in the colours of the time."""
+        theme.apply(theme.chosen(self.settings))
+        self.scheduler_action.setIcon(scheduler_icon(self.flow_status.scheduler_on))
+        for tab in self.tabs_list():
+            self.flow_status.update_tab(tab)  # (its clock)
+
+    def _system_colours_changed(self):
+        # After Qt has taken the system's new colours (e.g. for tooltips): the theme's are shown over them.
+        QTimer.singleShot(0, self, self.apply_theme)
 
     def close_tab(self, tab: FlowTab | None) -> bool:
         if tab is None or not self._may_close(tab):
@@ -1170,7 +1232,7 @@ class MainWindow(QMainWindow):
         elif kind == "log":
             self._log(tab, e)
         elif kind == "block_finished":
-            self._apply_block_result(tab, block, e)
+            self._apply_block_result(tab, block, {**e, "finished": e["ts"]})
             if e.get("tables"):
                 self._log(tab, _block_line(block, e["ts"], e))
         elif kind == "run_finished":
@@ -1178,7 +1240,8 @@ class MainWindow(QMainWindow):
         self.flow_status.update_tab(tab)
 
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
-        """Show a block's result in run info["run_id"] (an event of it, or its row in the history)."""
+        """Show a block's result in run info["run_id"] (an event of it, or its row in the history), made at
+        info["finished"]."""
         status = info.get("status")
         tab.block_info[block] = {"status": status, "tables": info.get("tables") or {},
                                  "previews": info.get("previews") or {}, "error": info.get("error"),
@@ -1204,6 +1267,9 @@ class MainWindow(QMainWindow):
             text, tip = f"skipped · {info['summary']}", html.escape(f"skipped: {info['summary']}")
         else:
             text = tip = status
+        if info.get("finished"):  # (not known if the run process died mid-block)
+            tip += ('<p align="right" style="color:gray; font-size:small">results from '
+                    f'{info["finished"].replace("T", " ")[:19]}</p>')
         tab.scene.set_status(block, status, text, tip)
         if tab is self.current and block in tab.scene.selected_block_ids():
             self.preview.show_outputs(block, tab.block_info[block])

@@ -171,21 +171,21 @@ class History:
         return dict(zip(RUN_COLUMNS, row)) if row else None
 
     def blocks(self, run_id: int) -> dict:
-        rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews FROM blocks WHERE run_id=?",
-                          (run_id,))
+        rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews, finished FROM blocks "
+                          "WHERE run_id=?", (run_id,))
         return {r[0]: {"status": r[1], "attempts": r[2], "error": r[3], "summary": r[4],
-                       "tables": json.loads(r[5] or "{}"), "previews": json.loads(r[6] or "{}")} for r in rows}
+                       "tables": json.loads(r[5] or "{}"), "previews": json.loads(r[6] or "{}"), "finished": r[7]}
+                for r in rows}
 
     def latest_block_results(self, flow_path: str, after_run_id: int = 0) -> dict:
         """Each block's result in the latest run of the flow file (after run `after_run_id`) it took part in:
-        {block: {run_id, started (the run's), started_by, status, attempts, error, summary, tables, previews}}.
-        Runs still going count with the blocks they have finished."""
-        rows = self._block_results("r.flow_path=? AND r.id>? ORDER BY r.id", (flow_path, after_run_id))
-        return {block: {k: v for k, v in result.items() if k != "finished"} for block, result in rows}
+        {block: {run_id, started (the run's), started_by, status, attempts, error, summary, tables, previews,
+        finished (when the block finished)}}. Runs still going count with the blocks they have finished."""
+        return dict(self._block_results("r.flow_path=? AND r.id>? ORDER BY r.id", (flow_path, after_run_id)))
 
     def block_results(self, flow_path: str, block: str, limit: int = 200) -> list[dict]:
         """A block's results in the runs of the flow file it took part in, newest first: as
-        latest_block_results gives them, plus when the block finished."""
+        latest_block_results gives them."""
         return [result for _, result in self._block_results("r.flow_path=? AND b.block=? ORDER BY r.id DESC LIMIT ?",
                                                              (flow_path, block, limit))]
 

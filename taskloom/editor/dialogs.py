@@ -24,6 +24,7 @@ from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
 from .canvas import STATUS_COLORS
 from .panels import MONO
+from .theme import THEMES
 
 
 def open_dialog(parent, cls, home, **kw) -> QDialog | None:
@@ -574,7 +575,7 @@ def _folder_size(folder) -> int:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, home, parent=None):
+    def __init__(self, home, parent=None, theme: str = "System"):
         super().__init__(parent)
         self.home = home
         self.setWindowTitle("Settings")
@@ -587,6 +588,11 @@ class SettingsDialog(QDialog):
             raise ValueError("settings.yaml: max_concurrent_runs must be a whole number, "
                              f"got {self.settings['max_concurrent_runs']!r}") from None
         form = QFormLayout(self)
+        self.theme = QComboBox(toolTip="The editor's colours. System: light or dark as your system is. Kept in "
+                                       "editor.ini, the editor's own preferences")
+        self.theme.addItems(THEMES)
+        self.theme.setCurrentText(theme)
+        form.addRow("Theme", self.theme)
         self.calendar = QLineEdit(self.settings["calendar"] or "", placeholderText="weekends only, e.g. US or a calendars/<name>.yaml")
         self.keep_runs_for = QSpinBox(minimum=1, maximum=100000, value=number)
         self.keep_runs_unit = QComboBox()

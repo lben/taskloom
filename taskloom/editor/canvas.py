@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import html
 import math
+from functools import cache
+from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QTransform
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit,
                                QSpinBox, QStyle, QStyleFactory, QToolButton)
@@ -25,6 +28,24 @@ CATEGORY_COLORS = {
     "Email": "#a24d6b", "Servers": "#4d6a35", "Files": "#6d7682", "Logic": "#7a4f9e", "Debug": "#b7791f",
 }
 USER_COLOR = "#b0563a"
+# Each block's icon: white line drawings (24x24) from icons/: Tabler Icons (MIT, icons/LICENSE-tabler-icons.txt) and
+# our own (duck, polar-bear, move-files, manual-start, inspect, if). A second drawing is a badge at its bottom right.
+ICONS = Path(__file__).with_name("icons")
+BLOCK_ICONS = {
+    "trigger.manual": ("manual-start",), "trigger.schedule": ("calendar-time",),
+    "logic.python": ("brand-python",), "logic.if": ("if",), "logic.wait": ("stopwatch",),
+    "logic.ask_user": ("user-question",), "logic.for_each": ("list", "badge-repeat"), "logic.inspect": ("inspect",),
+    "data.duckdb_sql": ("duck",), "data.polars": ("polar-bear",), "data.read_file": ("file-export",),
+    "data.write_file": ("file-pencil",), "db.run_query": ("database",),
+    "files.copy": ("copy",), "files.move": ("move-files",), "files.delete": ("trash-x",),
+    "servers.ssh_command": ("terminal-2",), "servers.start_process": ("satellite", "badge-player-play"),
+    "servers.stop_process": ("satellite", "badge-player-stop"), "servers.health_check": ("stethoscope",),
+    "servers.remote_extract": ("satellite", "badge-download"),
+    "reports.chart": ("chart-pie",), "reports.html_template": ("file-code",), "reports.excel": ("file-spreadsheet",),
+    "email.send": ("mail-forward",),
+}
+USER_ICON = ("puzzle",)  # any block of the User Created group
+TEXT_ICON = ("text-size",)  # Text, in the blocks tree
 STATUS_COLORS = {"success": "#1f8a4c", "running": "#b7791f", "failed": "#c0392b",
                  "skipped": "#9aa6b2", "cancelled": "#9aa6b2", "retrying": "#b7791f"}
 OFF = ("off", "off · not connected to a start block",  # (status, text under the block, its tooltip)
@@ -34,6 +55,35 @@ OFF = ("off", "off · not connected to a start block",  # (status, text under th
 
 def is_dark() -> bool:
     return QApplication.palette().window().color().lightness() < 128
+
+
+@cache
+def _drawing(name: str) -> QSvgRenderer:
+    renderer = QSvgRenderer(str(ICONS / f"{name}.svg"))
+    if not renderer.isValid():
+        raise FileNotFoundError(f"The icon {ICONS / name}.svg is missing or not a drawing.")
+    return renderer
+
+
+def paint_icon(painter: QPainter, rect: QRectF, icon: tuple[str, ...], color: QColor):
+    """A block's icon filling the square `rect`: a rounded square of its group colour with the white drawing on it,
+    drawn at the painter's resolution (sharp on a scaled screen). A badge is drawn at half size at its bottom right, on
+    a circle of the group colour (its file has lines twice as wide, so they come out as wide as the drawing's)."""
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    painter.drawRoundedRect(rect, rect.width() / 5.5, rect.width() / 5.5)
+    pad = rect.width() / 11
+    box = rect.adjusted(pad, pad, -pad, -pad)  # the drawing's 24x24
+    u = box.width() / 24
+    for i, name in enumerate(icon):
+        if i:  # the badge
+            centre = box.topLeft() + QPointF(18 * u, 18 * u)
+            painter.drawEllipse(centre, 6.5 * u, 6.5 * u)
+            box = QRectF(centre.x() - 6 * u, centre.y() - 6 * u, 12 * u, 12 * u)
+        _drawing(name).render(painter, box)
+    painter.restore()
 
 
 def block_ports(registry, spec: dict) -> tuple[dict, dict]:
@@ -99,6 +149,8 @@ class NodeItem(QGraphicsItem):
             self.setToolTip(block_tooltip(cls))
         source = registry.sources.get(spec.get("type"), "")
         self.color = QColor(CATEGORY_COLORS.get(cls.category, USER_COLOR) if cls and source == "built-in" else USER_COLOR)
+        # (an unknown type shows its colour with no icon: nothing is known about it)
+        self.icon = () if cls is None else BLOCK_ICONS[cls.type_id] if source == "built-in" else USER_ICON
         inputs, outputs = block_ports(registry, spec)
         self.input_ports = inputs
         # `after` is the first row, drawn differently (it only sets when the block runs);
@@ -162,16 +214,14 @@ class NodeItem(QGraphicsItem):
         # header
         painter.setPen(QPen(pal.mid().color(), 1))
         painter.drawLine(QPointF(1, HEADER_H), QPointF(NODE_W - 1, HEADER_H))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(self.color)
-        painter.drawRoundedRect(QRectF(8, 7, 14, 14), 3, 3)
+        paint_icon(painter, QRectF(4, 3, 22, 22), self.icon, self.color)
         font = QFont(painter.font())
         font.setBold(True)
         font.setPointSizeF(max(font.pointSizeF(), 9) * 0.95)
         painter.setFont(font)
         painter.setPen(pal.text().color())
-        title = painter.fontMetrics().elidedText(self.block_id, Qt.ElideRight, NODE_W - 36)
-        painter.drawText(QRectF(28, 0, NODE_W - 34, HEADER_H), Qt.AlignVCenter, title)
+        title = painter.fontMetrics().elidedText(self.block_id, Qt.ElideRight, NODE_W - 40)
+        painter.drawText(QRectF(32, 0, NODE_W - 38, HEADER_H), Qt.AlignVCenter, title)
         # ports
         font.setBold(False)
         font.setPointSizeF(font.pointSizeF() * 0.92)
@@ -335,6 +385,8 @@ class NoteItem(QGraphicsTextItem):
         selected = self.isSelected()
         option.state &= ~QStyle.State_Selected  # its own outline, below
         option.state &= ~QStyle.State_HasFocus
+        if self.defaultTextColor() != QApplication.palette().text().color():  # the theme changed since
+            self.setDefaultTextColor(QApplication.palette().text().color())
         super().paint(painter, option, widget)
         if selected or self.editing:
             color = QApplication.palette().highlight().color()
@@ -758,14 +810,8 @@ class ZoomBar(QFrame):
         super().__init__(view)
         self.setFrameShape(QFrame.StyledPanel)
         self.setAutoFillBackground(True)
-        magnifier = QPixmap(14, 14)
-        magnifier.fill(Qt.transparent)
-        p = QPainter(magnifier)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(self.palette().windowText().color(), 1.6))
-        p.drawEllipse(QRectF(1.5, 1.5, 8, 8))
-        p.drawLine(QPointF(8.5, 8.5), QPointF(12.5, 12.5))
-        p.end()
+        self.magnifier = QLabel()
+        self._draw_magnifier()
         self.percent = ZoomField(alignment=Qt.AlignCenter, toolTip="The zoom: click it, type one (20-300%), Enter")
         self.percent.setFixedWidth(self.percent.fontMetrics().horizontalAdvance("300%") + 16)  # + and − stay put
         self.percent.returnPressed.connect(lambda: self._typed(view))
@@ -786,11 +832,28 @@ class ZoomBar(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 2, 2)
         layout.setSpacing(2)
-        for widget in (QLabel(pixmap=magnifier), self.percent, self.plus, self.step, self.minus):
+        for widget in (self.magnifier, self.percent, self.plus, self.step, self.minus):
             layout.addWidget(widget)
         self.plus.clicked.connect(lambda: view.zoom_to(view.zoom_percent() + self.step.value()))
         self.minus.clicked.connect(lambda: view.zoom_to(view.zoom_percent() - self.step.value()))
         self.adjustSize()
+
+    def _draw_magnifier(self):
+        """In the palette's text colour: drawn again when the colours change (e.g. the theme)."""
+        magnifier = QPixmap(14, 14)
+        magnifier.fill(Qt.transparent)
+        p = QPainter(magnifier)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(self.palette().windowText().color(), 1.6))
+        p.drawEllipse(QRectF(1.5, 1.5, 8, 8))
+        p.drawLine(QPointF(8.5, 8.5), QPointF(12.5, 12.5))
+        p.end()
+        self.magnifier.setPixmap(magnifier)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange:
+            self._draw_magnifier()
 
     def _typed(self, view: "FlowView"):
         """A zoom typed into the percentage (150 or 150%): zoom there (text that is not a number changes nothing)."""

@@ -13,12 +13,13 @@ from functools import partial
 from pathlib import Path
 
 import polars as pl
+import shiboken6
 import yaml
 from markdown_it import MarkdownIt
 from PySide6.QtCore import (QAbstractTableModel, QEvent, QObject, QDate, QMimeData, QModelIndex, QPoint, QPointF,
                             QRectF, QSize, QSizeF, Qt, QTime, QTimer, Signal)
-from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QImage,
-                           QImageIOHandler, QImageReader, QPainter, QPalette, QPen, QPixmap, QSyntaxHighlighter,
+from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QIconEngine,
+                           QImage, QImageIOHandler, QImageReader, QPainter, QPalette, QPen, QPixmap, QSyntaxHighlighter,
                            QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextDocumentFragment,
                            QTextFormat, QTextFrameFormat, QTextImageFormat)
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
@@ -39,8 +40,8 @@ from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
 from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
 from . import docs
-from .canvas import (BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ITEM, USER_COLOR,
-                     is_dark)
+from .canvas import (BLOCK_ICONS, BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ICON,
+                     TEXT_ITEM, USER_COLOR, USER_ICON, is_dark, paint_icon)
 
 # A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
 # <pre> (e.g. a table's rows in a tooltip) asks for on Qt's offscreen platform (as in the proofs): name real ones.
@@ -58,6 +59,31 @@ def _square_icon(color: str, size: int = 14) -> QIcon:
     p.drawRoundedRect(QRectF(1, 1, size - 2, size - 2), 3, 3)
     p.end()
     return QIcon(pix)
+
+
+class _BlockIcon(QIconEngine):
+    """A block's icon in the blocks tree, the one its header shows on the canvas, drawn at the size and resolution
+    it is shown at (sharp on a scaled screen)."""
+
+    def __init__(self, icon: tuple[str, ...], color: str):
+        super().__init__()
+        self.icon, self.color = icon, color
+
+    def paint(self, painter, rect, mode, state):
+        paint_icon(painter, QRectF(rect), self.icon, QColor(self.color))
+
+    _clones = []  # Qt owns a clone and deletes it, but Python would delete it first: kept here until Qt has
+
+    def clone(self):
+        _BlockIcon._clones[:] = [c for c in _BlockIcon._clones if shiboken6.isValid(c)]
+        copy = _BlockIcon(self.icon, self.color)
+        _BlockIcon._clones.append(copy)
+        return copy
+
+
+def _slate() -> QColor:
+    """The grey of the scheduler's clocks (and of its button while it is off): lighter on a dark background."""
+    return QColor("#9aa6b2" if is_dark() else "#5f6d7c")
 
 
 def status_icon(status: str | None, frame: int = 0, size: int = 14, clock: bool = False) -> QIcon:
@@ -85,7 +111,7 @@ def status_icon(status: str | None, frame: int = 0, size: int = 14, clock: bool 
         p.drawEllipse(QPointF(c, c), 4, 4)
     if clock:
         x = size + 2 + c
-        p.setPen(QPen(QColor("#5f6d7c"), 1.4))
+        p.setPen(QPen(_slate(), 1.4))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(x, c), c - 1.5, c - 1.5)
         p.drawLine(QPointF(x, c), QPointF(x, 3.5))
@@ -100,7 +126,7 @@ def scheduler_icon(running: bool, size: int = 20) -> QIcon:
     pix.fill(Qt.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.Antialiasing)
-    color = QColor(STATUS_COLORS["success"] if running else "#5f6d7c")
+    color = QColor(STATUS_COLORS["success"]) if running else _slate()
     p.setPen(Qt.NoPen)
     p.setBrush(color)
     if running:
@@ -161,6 +187,7 @@ class Palette(QWidget):
         self.tree.setHeaderHidden(True)
         self.tree.setDragEnabled(True)
         self.tree.setIndentation(14)
+        self.tree.setIconSize(QSize(18, 18))  # (room for a block's icon)
         self.tree.setRootIsDecorated(True)
         layout.addWidget(title)
         layout.addWidget(self.search)
@@ -190,7 +217,8 @@ class Palette(QWidget):
             self.tree.addTopLevelItem(folder)
             for cls in sorted(groups[category], key=lambda c: c.title or c.type_id):
                 item = QTreeWidgetItem([cls.title or cls.type_id])
-                item.setIcon(0, _square_icon(color))
+                icon = BLOCK_ICONS[cls.type_id] if registry.sources.get(cls.type_id) == "built-in" else USER_ICON
+                item.setIcon(0, QIcon(_BlockIcon(icon, color)))
                 item.setData(0, Qt.UserRole, cls.type_id)
                 item.setToolTip(0, block_tooltip(cls))
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
@@ -205,7 +233,7 @@ class Palette(QWidget):
         folder.setFont(0, font)
         self.tree.addTopLevelItem(folder)
         item = QTreeWidgetItem(["Text"])
-        item.setIcon(0, _square_icon(NOTES_COLOR))
+        item.setIcon(0, QIcon(_BlockIcon(TEXT_ICON, NOTES_COLOR)))
         item.setData(0, Qt.UserRole, TEXT_ITEM)
         item.setToolTip(0, "<b>Text</b><br>A title or remark on the canvas, to explain the flow. It does not run."
                            "<br>Double-click it on the canvas to write in it; Properties has its style and font.")
@@ -261,7 +289,7 @@ class FlowTabsStatus(QObject):
         self.tabs.setTabToolTip(index, f"{tab.doc.path or 'not saved yet'}\n{subtitle}")
         self.tabs.setTabIcon(index, status_icon(status, self._frame, clock=tab.next_run is not None))
         self.tabs.tabBar().setTabTextColor(index, QColor(STATUS_COLORS["failed"]) if status == "failed"
-                                           else self.tabs.palette().text().color())
+                                           else QColor())  # (none: the tabs' own, also after the theme changes)
         tab.shown_status = (status, tab.next_run is not None)
 
     def _spin(self):
@@ -404,11 +432,15 @@ class CodeHighlighter(QSyntaxHighlighter):
         super().__init__(document)
         self.tokens = PYTHON_TOKENS if language == "python" else SQL_TOKENS
         self.long = "string" if language == "python" else "comment"
-        dark = is_dark()  # the theme now, as the box is made
-        self.formats = {}
+        self.formats = {kind: QTextCharFormat() for kind in CODE_COLORS}
+        self.recolour()
+
+    def recolour(self):
+        """In the colours of the theme now, light or dark: as the box is made, and again when the theme changes."""
+        dark = is_dark()
         for kind, (light, on_dark) in CODE_COLORS.items():
-            self.formats[kind] = QTextCharFormat()
             self.formats[kind].setForeground(QColor(on_dark if dark else light))
+        self.rehighlight()
 
     def highlightBlock(self, text):
         self.setCurrentBlockState(0)
@@ -470,6 +502,11 @@ class CodeEditor(CodeEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._fit_numbers()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange:  # (e.g. the theme changed)
+            self.highlighter.recolour()
 
     def paint_line_numbers(self, widget: QWidget, rect):
         """Each shown line's number (from 1, as in error messages), on its row."""
@@ -1795,10 +1832,11 @@ class LogPanel(QWidget):
         self.text.installEventFilter(self)
 
     def eventFilter(self, watched, event):
-        # The Log's own palette change (e.g. the system's dark mode turned on or off), not the panel's: Qt gives the
-        # panel its new palette before the Log. The diagrams it shows are drawn again on its new background, the Log
-        # staying where it is scrolled to (or following new lines, at the bottom).
-        if event.type() == QEvent.PaletteChange and any(map(callable, self.text.document().pictures.values())):
+        # The Log's own palette change (e.g. the theme changed), not the panel's: Qt gives the panel its new palette
+        # before the Log. It is drawn again in its new colours (its diagrams on its new background, its Markdown's links
+        # in the new link colour, which Qt fixes as it reads the Markdown), the Log staying where it is scrolled to (or
+        # following new lines, at the bottom).
+        if event.type() == QEvent.PaletteChange:
             scroll, sideways, follow = self.text.verticalScrollBar(), self.text.horizontalScrollBar(), self._follow
             value, across = scroll.value(), sideways.value()
             self._render()

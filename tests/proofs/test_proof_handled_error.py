@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QToolBar
 
 from proofs.conftest import choose, menu_item, right_click
 from tests.test_lines import shown, tab_icon_is, wait_runs
+from tests.test_result_time import finished_at, lines_of
 
 ASKED = ("Not asked by you: found while proving v0.23.0's Python Code changes. A run said “success” although a block "
          "failed and the block its error went to was skipped, so the failure was hidden.")
@@ -184,11 +185,13 @@ def test_a_run_fails_when_a_failed_blocks_error_reaches_no_block_that_runs(proof
            "says it was skipped, and why, under its name; taskloom run lists it too (step 8).")
     tip = hover(tab, tab.scene.nodes["handler"].footer, qtbot)
     said = tip.text()
-    p.shot(tip, "handler was skipped because something before it failed: check, whose orders it takes.", over=win,
-           highlight=[tip], zoom=[tip, "handler"])
+    p.shot(tip, "handler was skipped because something before it failed: check, whose orders it takes. At its "
+                "bottom right, when that result was made.", over=win, highlight=[tip], zoom=[tip, "handler"])
     tip.hide()
-    p.check("handler says it was skipped because something before it failed",
-            said == "skipped: something before it failed")
+    doc, lines = lines_of(said)  # (the lines are the document's: kept while read)
+    p.check("handler says it was skipped because something before it failed, and when it was",
+            [line.text() for line in lines]
+            == ["skipped: something before it failed", f"results from {finished_at(win, first)['handler']}"])
 
     p.step("Look at the flow's tab, above the canvas.")
     name = flow_tab(win, tab)

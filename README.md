@@ -55,12 +55,17 @@ taskloom editor examples/daily-sales-report.yaml
 
 - Drag blocks from the tree on the left onto the canvas (or double-click them); drag
   from an output port (right side of a block) to an input port (left side) to connect.
-  Hover over a block to see what it does.
+  Hover over a block to see what it does. Each block shows its icon left of its name, on its
+  group's colour (blocks of your own: a puzzle piece).
 - **Documentation in the editor:** rest the mouse on any row of the Properties tab for a card
   with what it is for, examples of what it takes, and **Learn more ›**, which opens that row's
   entry in **Help → Documentation** (F1): a column at the right of the window, next to the
   canvas and Properties, with this guide and a reference of every block and setting (your own
   blocks too), and Back, Forward and Contents. Drag its edge to resize it, or float it.
+- **Theme:** Tools → Settings → **Theme** is **System** (the default: light or dark as your
+  operating system is, also when it switches while the editor is open), **Light** or **Dark**
+  (colours like those of JetBrains' dark theme). It applies at once to the whole editor and is
+  kept in `editor.ini`, not in `settings.yaml`.
 - **Zoom** with the mouse wheel or the control at the top right of the canvas: it shows the
   zoom, and **+** and **−** zoom in and out by the step between them (5% by default, change
   it with its arrows), from 20% to 300%. Or click the zoom, type one (`150` or `150%`) and
@@ -163,7 +168,7 @@ taskloom editor examples/daily-sales-report.yaml
   is `Condition is required`. A Python Code block of only comments still runs (its output
   is `{}`), and Inspect's message starts empty. Blocks already in a flow file, and pasted ones, keep
   what they have.
-- The **+** just right of the last tab opens a new flow (as File → New flow).
+- The large **+** just right of the last tab (as tall as the tabs) opens a new flow (as File → New flow).
 - Each open flow's tab shows its last result (a coloured dot; a red ✕ while any line's last
   run failed) and, when it is scheduled, a clock; hover the tab for how each start block's
   line last ended (e.g. `manual: ok 2026-10-20 10:28:20`; re-running a block counts for the
@@ -189,7 +194,9 @@ taskloom editor examples/daily-sales-report.yaml
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it (a table over 10 rows: its first 5 rows, `…`, its last 5). Every run's
   values are kept in **Run history** (double-click a run, then hover) for as long as its start
-  block's **Keep runs** says (by default `keep_runs_for`: 5 years). Hover over the message under a block to read all of it. The canvas follows the runs of the flow, including scheduled ones: each block
+  block's **Keep runs** says (by default `keep_runs_for`: 5 years). Hover over the message under a block to read all of it;
+  its bottom right says when that result was made, the time the block finished in its run (e.g.
+  `results from 2026-10-31 14:03:22`; none while the block runs). The canvas follows the runs of the flow, including scheduled ones: each block
   shows its result from the latest run it took part in, and a run that starts clears only
   its own blocks. Opening an older run from Run history shows only that run (the blocks not
   in it show nothing) until you start a run or open the newest one. A flow you open starts
@@ -682,4 +689,5 @@ MIT. The packaged editor includes dulwich (Apache-2.0 or GPL-2.0-or-later), urll
 mmdr and novasvg (MIT), which draw Mermaid diagrams; their licence texts are in its `licenses`
 folder. mmdr is built from Rust components, some under the MPL-2.0 or the EPL-2.0 and included
 unmodified: `licenses/mmdr` has those licence texts, where each one's source is, and mmdr's
-full list of components.
+full list of components. Most of the blocks' icons are from Tabler Icons (MIT); its licence text
+is next to them, in `taskloom/editor/icons`, and in the packaged editor's `licenses` folder.

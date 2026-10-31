@@ -42,6 +42,9 @@ def main():
                     (folder / "licenses" / name).mkdir(parents=True, exist_ok=True)
                     shutil.copy(file.locate(), folder / "licenses" / name / file.name)
         mermaid_notices(folder / "licenses" / "mmdr")
+        (folder / "licenses" / "tabler-icons").mkdir(parents=True)  # the blocks' icons
+        shutil.copy(ROOT / "taskloom" / "editor" / "icons" / "LICENSE-tabler-icons.txt",
+                    folder / "licenses" / "tabler-icons" / "LICENSE")
 
     system = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     # No version in the name, so flows that deploy it don't change with each release; it is in VERSION.

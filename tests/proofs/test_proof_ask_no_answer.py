@@ -11,6 +11,7 @@ from proofs.test_proof_run_output import click as click_block
 from tests.test_ask_no_answer import python_internals
 from tests.test_lines import shown, wait_runs
 from tests.test_paths_editor_running import click, visible_ask
+from tests.test_result_time import finished_at, lines_of
 
 ASKED = ("Testing Ask User and choosing “Don't answer” gave in the Log “ERROR ask_user (Ask User) failed: "
          "RuntimeError: no answer was given”, followed by a Python traceback. You decided it should be a “clean "
@@ -161,10 +162,13 @@ def test_dont_answer_is_a_clean_failure_that_goes_out_the_error_output(proof, en
     p.step("Rest the mouse on ask_region's last line.")
     tip = hover(tab, tab.scene.nodes["ask_region"].footer, qtbot)
     said = tip.text()
-    p.shot(tip, "Its tooltip gives the failure in full: no answer was given, and nothing more.", over=win,
-           highlight=[tip], zoom=[tip, "ask_region"])
+    p.shot(tip, "Its tooltip gives the failure in full: no answer was given, and nothing more but, at its bottom "
+                "right, when that result was made.", over=win, highlight=[tip], zoom=[tip, "ask_region"])
     tip.hide()
-    p.check("The tooltip says “no answer was given”, and nothing more", said == f"<pre>{FAILED}</pre>")
+    doc, lines = lines_of(said)  # (the lines are the document's: kept while read)
+    p.check("The tooltip says “no answer was given”, and nothing more but when ask_region finished",
+            [line.text() for line in lines]
+            == [FAILED, f"results from {finished_at(win, first)['ask_region']}"])
 
     p.step("Click the Run history tab, under the canvas.")
     click_bottom_tab(win, win.history_panel)
