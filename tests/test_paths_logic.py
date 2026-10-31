@@ -905,8 +905,8 @@ def test_wait_pauses_then_passes_its_input_on_unchanged(env):
     ("{type: logic.wait}", "Seconds is required"),
     ("{type: logic.wait, config: {seconds: soon}}", "Seconds:"),
     ("{type: logic.ask_user}", "Prompt is required"),
-    ("{type: logic.ask_user, config: {prompt: 'Go?', kind: number}}",
-     "Kind: expected one of ['text', 'password', 'yes_no', 'choice']"),
+    ("{type: logic.ask_user, config: {prompt: 'Go?', kind: date}}",
+     "Kind: expected one of ['text', 'number', 'password', 'yes_no', 'choice']"),
     ("{type: logic.ask_user, config: {prompt: 'Go?', kind: choice, options: EU}}", "Options: expected a list"),
     ("{type: logic.ask_user, config: {prompt: 'Region for {country}?'}}", "unknown parameter {country}"),
     ("{type: logic.for_each, config: {param: region}}", "Flow is required"),
@@ -989,7 +989,7 @@ def test_ask_users_secret_is_used_unattended_and_never_shows(env):
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "API token?", secret: api_token}
+            config: {prompt: "API token?", kind: password, secret: api_token}
           show:
             type: logic.inspect
             config: {message: "token is {value}"}
@@ -1197,7 +1197,7 @@ def test_ask_users_question_in_the_editor_is_its_prompt_filled_in_with_the_param
     def answer(dialog):
         shown = [label.text() for label in dialog.findChildren(QLabel)]
         assert "Restart the app in São Paulo?" in shown, shown
-        assert dialog.input.text() == "São Paulo-north"
+        assert dialog.input.text() == "" and dialog.input.placeholderText() == "São Paulo-north"
         click(dialog, "OK")
 
     monkeypatch.setattr(RunDialog, "exec", run_for_sao_paulo)
@@ -1209,7 +1209,7 @@ def test_ask_users_question_in_the_editor_is_its_prompt_filled_in_with_the_param
 
 def test_ask_user_text_in_the_editor_starts_from_its_default(win, qtbot, tmp_path):
     def answer(dialog):
-        assert dialog.input.text() == "EU"
+        assert dialog.input.text() == "" and dialog.input.placeholderText() == "EU"  # OK on the empty box: EU
         click(dialog, "OK")
 
     ask_in_editor(win, qtbot, tmp_path, "{prompt: 'Region?', default: EU}", answer)

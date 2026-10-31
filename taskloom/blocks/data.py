@@ -57,6 +57,23 @@ class DuckDBSQL(Block):
                                      "select * from sales where day = :day",
                                      "select s.*, r.manager from sales s join regions r using (region)"]),
     }
+    # Only comments (no {name} in them: runs would fill it in): as it is, "SQL is required".
+    new_config = {"sql": """\
+-- Lines starting with -- are notes: no need to delete them.
+-- Each table connected to this block is a table here, named as in Inputs
+-- (at first one, named input):
+--   select * from input
+--
+-- Several tables: name them in Inputs (e.g. sales, regions) and join them:
+--   select s.*, r.manager from sales s join regions r using (region)
+--
+-- Parameters: :name is the value of the flow parameter called name:
+--   select * from input where day = :day
+--
+-- A list parameter gives one value per item:
+--   select * from input where region in (:regions)
+--
+-- What goes out: result, the table your query gives."""}
     outputs = {"result": ports.Table()}
 
     @classmethod
@@ -93,6 +110,20 @@ class PolarsTransform(Block):
                                   examples=['df.filter(pl.col("amount") > 0)',
                                             'df.with_columns((pl.col("amount") * 1.2).alias("gross"))',
                                             'df.group_by("region").agg(pl.col("amount").sum())'])}
+    # Only comments: as it is, "Code is required".
+    new_config = {"code": """\
+# Lines starting with # are notes: no need to delete them.
+# Write one Polars expression that gives the new table. The table
+# connected to the table input is df (a LazyFrame); pl is Polars:
+#   df.filter(pl.col("amount") > 0)
+#
+# Add or change columns:
+#   df.with_columns((pl.col("amount") * 1.2).alias("gross"))
+#
+# Parameters: params["name"] is the value of the flow parameter called name:
+#   df.filter(pl.col("day") == params["day"])
+#
+# What goes out: table, the table your expression gives."""}
 
     def run(self, ctx, table):
         result = eval(compile(f"({self.config.code}\n)", f"<block {ctx.block_id}>", "eval"),

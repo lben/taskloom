@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractScrollArea, QAbstractSp
                                QLineEdit, QPlainTextEdit, QTextBrowser, QTimeEdit, QWidget)
 
 from taskloom import params as P  # noqa: E402
-from taskloom.block import fields, setting_label  # noqa: E402
+from taskloom.block import applies, fields, setting_label  # noqa: E402
 from taskloom.blocks.logic import write_reusable_block  # noqa: E402
 from taskloom.blocks.triggers import KeptRuns  # noqa: E402
 from taskloom.config import Home  # noqa: E402
@@ -818,6 +818,14 @@ def connect_into(tab, block: str, cls):
             select_only(tab, block)
 
 
+def show_setting(tab, block: str, cls, key: str):
+    """A setting only for some values of other settings (fields.Field.only_if) that is not for the block's config yet:
+    choose the first of those values in them, so Properties shows its row."""
+    if not applies(cls, key, tab.doc.blocks[block].get("config") or {}):
+        tab.doc.set_block_values(block, {other: values[0] for other, values in cls.config[key].only_if.items()})
+        settle()
+
+
 def setting_row(win, cls, key: str) -> Row:
     """The row a setting's value is typed in: its own, or (fields.SourceNames) the first in its box."""
     label = setting_label(key, cls.config[key])
@@ -866,14 +874,21 @@ def test_every_row_of_every_built_in_block_shows_a_card_with_what_it_is_for_exam
         settle()
         problems, hovered = [], 0
         for cls in list(win.registry.blocks.values()):
-            connect_into(tab, add_block(win, tab, cls.title), cls)
-            rows = property_rows(win, cls.title, cls)
-            assert rows and rows[0].label == "Name", f"{cls.title}: {[r.label for r in rows]}"
-            shown = {r.field[1] for r in rows if r.field}
-            expected = {k for k in cls.config if not (cls.type_id == "trigger.schedule" and k in WHEN_FIELDS)}
-            assert shown == expected, f"{cls.title}: rows found for {sorted(shown)}, settings {sorted(expected)}"
-            problems += check_rows(qtbot, win, rows, pages)
-            hovered += len(rows)
+            block = add_block(win, tab, cls.title)
+            connect_into(tab, block, cls)
+            # As added, then with each setting that is only for some values of another (e.g. Ask User's Options) shown.
+            for key in [None, *(k for k, f in cls.config.items() if f.only_if)]:
+                if key is not None:
+                    show_setting(tab, block, cls, key)
+                rows = property_rows(win, cls.title, cls)
+                assert rows and rows[0].label == "Name", f"{cls.title}: {[r.label for r in rows]}"
+                shown = {r.field[1] for r in rows if r.field}
+                config = tab.doc.blocks[block].get("config") or {}
+                expected = {k for k in cls.config if applies(cls, k, config)
+                            and not (cls.type_id == "trigger.schedule" and k in WHEN_FIELDS)}
+                assert shown == expected, f"{cls.title}: rows found for {sorted(shown)}, settings {sorted(expected)}"
+                problems += check_rows(qtbot, win, rows, pages)
+                hovered += len(rows)
         dismiss(qtbot, win)
         assert problems == [], "\n".join(problems)
         assert hovered > 100, hovered
@@ -1586,9 +1601,11 @@ def test_every_built_in_example_is_accepted_by_its_properties_input_and_by_valid
             connect_into(tab, block, cls)
             keys = sorted(wanted, key=lambda k: not isinstance(cls.config[k], (fields.Names, fields.SourceNames)))
             for key in keys:  # the names first; every setting filled, so the settings are read (and checked) whole
+                show_setting(tab, block, cls, key)
                 type_in_row(setting_row(win, cls, key), wanted[key][0])
             for key in keys:
                 label = setting_label(key, cls.config[key])
+                show_setting(tab, block, cls, key)
                 for example in wanted[key]:
                     type_in_row(setting_row(win, cls, key), example)
                     tried += 1

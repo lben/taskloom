@@ -442,8 +442,9 @@ class NoteItem(QGraphicsTextItem):
 
 
 class FlowScene(QGraphicsScene):
-    block_selected = Signal(object)  # block id or None
-    note_selected = Signal(str)  # a text on the canvas, when it alone is selected
+    # Each with whether it was chosen: False when the canvas is only drawn again after a change to the flow.
+    block_selected = Signal(object, bool)  # block id or None
+    note_selected = Signal(str, bool)  # a text on the canvas, when it alone is selected
     block_menu = Signal(str, object)  # block id, screen position (right-click on a block)
     canvas_menu = Signal(object, object)  # scene position, screen position (right-click on empty canvas)
 
@@ -514,7 +515,7 @@ class FlowScene(QGraphicsScene):
                 self.edge_items.append(edge)
         self._rebuilding = False
         self.refresh_tooltips()
-        self._on_selection()
+        self._on_selection(chosen=False)
 
     # --- values from the run on screen, shown when hovering ----------------------------
 
@@ -626,7 +627,7 @@ class FlowScene(QGraphicsScene):
     def selected_note_ids(self) -> list[str]:
         return [i.note_id for i in self.selectedItems() if isinstance(i, NoteItem)]
 
-    def _on_selection(self):
+    def _on_selection(self, chosen=True):
         if self._rebuilding:
             return
         ids, notes = self.selected_block_ids(), self.selected_note_ids()
@@ -634,9 +635,9 @@ class FlowScene(QGraphicsScene):
         # waits until Qt is done with this selection change (it would delete the items in it).
         self._in_selection = True
         try:
-            self.block_selected.emit(ids[0] if len(ids) == 1 else None)
+            self.block_selected.emit(ids[0] if len(ids) == 1 else None, chosen)
             if not ids and len(notes) == 1:
-                self.note_selected.emit(notes[0])
+                self.note_selected.emit(notes[0], chosen)
         finally:
             self._in_selection = False
 

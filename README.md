@@ -114,7 +114,32 @@ taskloom editor examples/daily-sales-report.yaml
   by two lines shows the most recent one.
 - Select a block to edit its properties, retry and timeout; the **Parameters** tab
   previews parameter values on any day; **Flow** sets the name (a new flow takes its file's
-  name when you first save it) and calendar.
+  name when you first save it) and calendar. Selecting a block or a text shows its
+  Properties; an edit on Parameters or Flow stays on that tab, and what is selected stays
+  selected.
+- Some settings are only for some choices of another setting: Properties shows them only
+  then, and shows or hides them at once when you change that choice. A value left in a
+  setting that is not shown stays in the flow file, but runs do not use it. Help >
+  Documentation says which choices each such setting is for.
+- **Ask User** asks you a question when you run the flow from the editor. Its **Kind** is
+  what it takes: `text`; `number` (the question box takes only a number: for anything else
+  it says to type one and keeps asking; the answer is a whole number such as 7, or 2.5, so
+  an If after it can compare it, e.g. `value > 10`);
+  `password`; `yes_no` (true or false); or `choice` (one of its **Options**, which only
+  this kind has). Only a password answer is hidden (`***` in the Log, Inspect, Data preview
+  and the run history); any other answer shows as it is. Runs nobody can answer (scheduled
+  ones, `taskloom run`) use its **Default**, which every kind but password has; for kind
+  number it must be a number, or Validate and runs refuse the flow. A password never comes
+  from a Default: its **Stored secret** setting names a password saved in Taskloom's secret
+  store (`taskloom secret set NAME`), and runs nobody can answer use that one. With no
+  name there, or a name never saved, such a run fails and says what is missing.
+- In Ask User's question box, the **Default** of a text or number question is shown in
+  grey in the empty box, with a note under it: OK (or Enter) with the box left empty
+  answers the Default, and the Log says so; what you type replaces it. A choice question
+  opens on its Default; for yes_no, Enter presses the Default's button (Yes without one); a
+  password box shows no Default. When the run stops waiting for the answer (you press
+  **Stop**, the block's Timeout runs out, or the run ends), the box closes by itself and the
+  Log says why; what was typed into it is not used, and a retry asks again in a new box.
 - **Python and SQL code** (Python Code, Polars Transform, DuckDB SQL, Run Query and blocks
   of your own) is written in a code box: keywords, strings, comments and numbers in their
   own colours (only on the screen), each line's number on the left (as in error messages,
@@ -123,6 +148,21 @@ taskloom editor examples/daily-sales-report.yaml
   new line as deep as the one before (one level deeper after a Python line ending with `:`),
   Tab inserts spaces to the next multiple of 4, Tab and Shift+Tab indent and unindent the
   selected lines by 4 spaces, and Backspace after indentation goes back a level.
+- **A new block where you write code** (added in the editor) starts with a few lines of
+  comments, in its language's own form, that show with small examples how to use it: DuckDB
+  SQL (`--`: each connected table by its name in Inputs, at first `input`; `:name`
+  parameters; its `result`), Run Query (`--`: `:name` from the flow parameters or its
+  `params` input; its `result`), Polars Transform (`#`: `df`, `pl`, `params["name"]`; its
+  `table`) and HTML Template (`<!-- -->`: `{name}`, `{name:format}`; its `html`). No need to
+  delete them: what you write below or between them runs as if they were not there (SQL is
+  sent with its comments), and code that is only comments counts as empty, so Properties,
+  Validate and runs say it is required (e.g. `load: SQL is required`); an HTML Template of
+  only comments shows every input in turn, as an empty one does. A new If block's condition
+  starts with `# No need to delete this. Examples: value > 10, value is True, value ==
+  'Option A'`: lines starting with `#` in a condition are comments, and one of only comments
+  is `Condition is required`. A Python Code block of only comments still runs (its output
+  is `{}`), and Inspect's message starts empty. Blocks already in a flow file, and pasted ones, keep
+  what they have.
 - The **+** just right of the last tab opens a new flow (as File → New flow).
 - Each open flow's tab shows its last result (a coloured dot; a red ✕ while any line's last
   run failed) and, when it is scheduled, a clock; hover the tab for how each start block's
@@ -190,8 +230,9 @@ taskloom editor examples/daily-sales-report.yaml
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
   the values of your variables. A failure Ask User expects (you chose **Don't answer**;
-  nobody can be asked, e.g. in a scheduled run, and it has no default or secret; an answer
-  that is not one of its Options; kind choice without Options) says so in a short message,
+  nobody can be asked, e.g. in a scheduled run, and it has no Default, or for a password no
+  stored secret or one never saved; an answer that is not one of its Options; kind choice
+  without Options) says so in a short message,
   without a Python traceback. It is a failure like any other: it goes out the block's
   `error` output, and a retry setting on the block asks again. When you run a block again
   (Retry after a fix, Test a block with values you choose), each connection into an input
@@ -282,11 +323,20 @@ taskloom editor examples/daily-sales-report.yaml
   list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
-  secure store, never in a file) and click **Save and test connection**. For a database,
-  choosing the driver .jar file(s) with **…** fills in the Driver class from the jar
-  (JDBC 4 drivers name it in `META-INF/services/java.sql.Driver`): when the jar names several,
-  you choose one; when it names none (an older driver), a note says so and you type it. A
-  class you typed is replaced only if you say so.
+  secure store, never in a file) and click **Save and test connection**. A database
+  connection asks for its driver .jar file(s) first, then the Driver class, URL, User name
+  and Password. Choosing the jar(s) with **…**, or typing or pasting their paths (separate
+  several with `;`) and then leaving the field or pressing Enter (there it does not save),
+  fills in the Driver class from the jar (JDBC 4 drivers name it in
+  `META-INF/services/java.sql.Driver`): when the jar names several, you choose one; when it
+  names none (an older driver), a note under the Driver class says so and you type it. A
+  class you typed is replaced only if you say so. A typed path that does not exist is named
+  under the jar field.
+- Java gets the jars of every database connection at once (one class path), so a
+  connection whose own jars do not hold its driver class can still connect through another
+  connection's jars. Tools → Connections warns about it on that connection, naming the
+  connection it relies on (removing that one breaks it), and **Save and test connection**
+  says the same when it connects. Give each connection its own driver jar.
 
 ## Versions with Git: Save & Commit
 
@@ -378,7 +428,10 @@ a style you write yourself wins.
   list item by item, nothing for an empty value, and anything else as its text, escaped,
   where you put it. Enter makes no new line in the email: write `<br>`, and put a table or
   a chart between `<br>`s rather than inside a `<p>`. An empty Template shows every input in
-  turn. A name the Template does not know, or a brace left alone, is shown in red and stops
+  turn. A comment, `<!-- ... -->`, is a note for you: it is left out of the email, and a
+  `{name}` in it shows nothing; Outlook's conditional comments (`<!--[if mso]> ...
+  <![endif]-->`) and `<style>` elements are kept as written. A name the Template does not
+  know, or a brace left alone, is shown in red and stops
   Validate and runs; every connected block must deliver (after an If, the path not taken
   skips the template, and the email).
 - **Formatting buttons** above the Template box (and every html code box): B, I, U, Heading,

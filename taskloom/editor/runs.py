@@ -31,6 +31,7 @@ class RunProcess(QObject):
         self.extra_args = list(extra_args)
         self.run_id: int | None = None
         self.status: str | None = None
+        self.asking: dict = {}  # ask_id -> the box of its question, while it waits for your answer
         self._buffer = b""
         self.proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
@@ -71,6 +72,7 @@ class RunProcess(QObject):
             self.proc.kill()
 
     def answer(self, ask_id: str, value):
+        self.asking.pop(ask_id, None)
         self._send({"ask_id": ask_id, "value": value})
 
     def _read_stdout(self):

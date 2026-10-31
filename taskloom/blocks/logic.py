@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import io
 import linecache
+import math
 import os
 import pickle
 import re
@@ -18,7 +19,7 @@ from rich.console import Console
 from rich import traceback as rich_traceback
 from rich.traceback import Traceback
 
-from ..block import Block, fields, ports
+from ..block import Block, fields, ports, setting_label
 from ..expr import evaluate
 from ..engine import Failed, SecretStr, _masked, inline, preview, run_flow
 from ..flow import load_flow, real_path
@@ -82,7 +83,7 @@ class PythonCode(Block):
                                            "creates; set output (or the other Outputs) to pass on something else.",
                             examples=["output = len(input)",
                                       'north = input[input["region"] == "North"]\noutput = north',
-                                      'print(params["day"])\noutput = input']),
+                                      'print(params["day"])\noutput = input'], script=True),
         "use_environment": fields.Bool(default=False, label="Run in my Python environment",
                                        help="Run in your own Python environment, with the packages "
                                             "you installed (Tools → Python environment)"),
@@ -277,6 +278,8 @@ class If(Block):
     config = {"condition": fields.Code("expression", help="e.g. len(value) > 0 or is_business_day(today())",
                                        examples=["len(value) > 0", "is_business_day(today())",
                                                  "value['healthy']"])}
+    # Lines starting with # are comments: a condition of only comments is as if left empty.
+    new_config = {"condition": "# No need to delete this. Examples: value > 10, value is True, value == 'Option A'"}
 
     def run(self, ctx, value=None):
         result = evaluate(self.config.condition, {**ctx.functions, **ctx.params, "value": value})
@@ -301,45 +304,101 @@ class Wait(Block):
 class AskUser(Block):
     type_id = "logic.ask_user"
     title = "Ask User"
-    description = 'Asks you a question while you run the flow from the editor (text, password, yes/no or a choice). In scheduled runs it uses the default answer you set.'
+    description = ('Asks you a question while you run the flow from the editor: text, a number, a password, yes/no or '
+                   'a choice. Runs nobody can answer (e.g. scheduled ones) use its Default, or for a password the '
+                   'stored secret it names.')
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"answer": ports.Any()}
     config = {
         "prompt": fields.Text(help="The question you are asked when you run the flow from the editor",
                               examples=["Which region?", "Send the report now?", "Password for the warehouse"]),
-        "kind": fields.Choice(["text", "password", "yes_no", "choice"], default="text",
-                              help="The answer it takes: text; a password (hidden in the Log); yes_no (true or "
-                                   "false); or choice (one of Options)"),
-        "options": fields.List(default=[], help="Choices for kind 'choice'",
+        "kind": fields.Choice(["text", "number", "password", "yes_no", "choice"], default="text",
+                              help="The answer it takes: text; number (12 or 2.5, so that an If after it can compare "
+                                   "it, e.g. value > 10); password (the only answer that is hidden: *** in the Log and "
+                                   "the run history); yes_no (true or false); or choice (one of Options)"),
+        "options": fields.List(default=[], only_if={"kind": ["choice"]}, help="The answers to choose from",
                                examples=["North, South", "small, medium, large"]),
-        "default": fields.Text(required=False, help="Used when nobody can be asked (scheduled runs)",
-                               examples=["North", "yes", "2026-10-01"]),
-        "secret": fields.Text(required=False, help="Secret to use when nobody can be asked",
+        "default": fields.Text(required=False, only_if={"kind": ["text", "number", "yes_no", "choice"]},
+                               help="The answer used when nobody can be asked (scheduled runs): for kind number a "
+                                    "number, for yes_no yes or no, for choice one of Options",
+                               examples=["North", "yes", "12"]),
+        "secret": fields.Text(required=False, label="Stored secret (name)", only_if={"kind": ["password"]},
+                              help="The name of a password saved in Taskloom's secret store (taskloom secret set "
+                                   "NAME): runs nobody can answer (unattended, e.g. scheduled ones) use it as the "
+                                   "answer. A name never saved makes the run fail.",
                               examples=["warehouse_password", "report_token"]),
     }
 
+    @classmethod
+    def problems(cls, config, sources, params):
+        if config["kind"] == "number" and config["default"] is not None:
+            try:
+                as_number(config["default"])
+            except ValueError as e:
+                return [f"{setting_label('default', cls.config['default'])}: {e}; kind number needs a number, "
+                        "e.g. 12 or 2.5"]
+        return []
+
     def run(self, ctx, value=None):
-        c = self.config
+        c = self.config  # (a setting that is not for its kind is left empty: block.applies)
         if c.kind == "choice" and not c.options:
             raise Failed("kind 'choice' needs options")
         if ctx.can_ask:
             answer = ctx.ask(c.prompt, c.kind, c.options, c.default)
             if answer is None:
                 raise Failed("no answer was given")
-        elif c.secret:
-            answer = ctx.home.get_secret(c.secret)
+            if answer == "" and c.default is not None and c.kind in ("text", "number"):  # the box left empty
+                ctx.log(f"nothing was typed: the default {c.default!r} is the answer")
+                answer = c.default
+        elif c.kind == "password":  # never the Default
+            if not c.secret:
+                raise Failed("nobody can answer in this run; a password needs a stored secret for unattended runs: "
+                             "set Stored secret (name)")
+            try:
+                answer = ctx.home.get_secret(c.secret)
+            except KeyError as e:  # (it says how to save it)
+                raise Failed(e.args[0]) from None
         elif c.default is not None:
             answer = c.default
         else:
-            raise Failed("nobody can answer in this run; set a default or a secret for unattended runs")
+            raise Failed("nobody can answer in this run; set a default for unattended runs")
         if c.kind == "yes_no":
-            answer = answer if isinstance(answer, bool) else str(answer).strip().lower() in ("yes", "y", "true", "1")
+            answer = as_yes_no(answer)
+        elif c.kind == "number":
+            try:
+                answer = as_number(answer)
+            except ValueError as e:
+                raise Failed(str(e)) from None
         elif c.kind == "choice" and answer not in c.options:
             raise Failed(f"answer {answer!r} is not one of {c.options}")
-        elif c.kind == "password" or c.secret:
+        elif c.kind == "password":
             answer = SecretStr(answer)
         return {"answer": answer}
+
+
+def as_yes_no(value) -> bool:
+    """A yes_no answer (or Default) as true or false: yes, y, true or 1 (any case) is true, anything else false."""
+    return value if isinstance(value, bool) else str(value).strip().lower() in ("yes", "y", "true", "1")
+
+
+def as_number(value) -> int | float:
+    """A number, or a text such as 12 or 2.5, as a number: an int when it is whole (also 4.0), else a float.
+    ValueError if it is not one."""
+    if isinstance(value, str):
+        try:
+            return int(value)  # (exact, however many digits)
+        except ValueError:
+            pass
+        try:
+            value = float(value)
+        except ValueError:
+            raise ValueError(f"{value!r} is not a number") from None
+    if isinstance(value, float) and math.isfinite(value):
+        return int(value) if value.is_integer() else value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise ValueError(f"{value!r} is not a number")
 
 
 class ForEach(Block):

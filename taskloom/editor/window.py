@@ -542,9 +542,9 @@ class MainWindow(QMainWindow):
 
     def add_tab(self, doc: FlowDocument) -> FlowTab:
         tab = FlowTab(doc, self.registry)
-        tab.scene.block_selected.connect(lambda block_id, t=tab: self._on_block_selected(t, block_id))
+        tab.scene.block_selected.connect(lambda block_id, chosen, t=tab: self._on_block_selected(t, block_id, chosen))
         tab.scene.block_menu.connect(lambda block_id, pos, t=tab: self._block_menu(t, block_id, pos))
-        tab.scene.note_selected.connect(lambda note_id, t=tab: self._on_note_selected(t, note_id))
+        tab.scene.note_selected.connect(lambda note_id, chosen, t=tab: self._on_note_selected(t, note_id, chosen))
         tab.scene.canvas_menu.connect(lambda at, pos, t=tab: self._canvas_menu_for(t, at).exec(pos))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
         doc.changed.connect(tab.autosave.start)
@@ -770,11 +770,11 @@ class MainWindow(QMainWindow):
         tab = self.current
         self.setWindowTitle(f"Taskloom — {tab.doc.title}{' *' if tab.doc.dirty else ''}" if tab else "Taskloom")
 
-    def _on_block_selected(self, tab: FlowTab, block_id):
+    def _on_block_selected(self, tab: FlowTab, block_id, chosen=True):
         if tab is not self.current:
             return
         self.properties.show_block(tab.doc, self.registry, block_id)
-        if block_id is not None:
+        if block_id is not None and chosen:  # (an edit on Parameters or Flow stays on that tab)
             self.right_tabs.setCurrentWidget(self.properties)
         self.log.set_filter(block_id)
         if block_id is not None:
@@ -983,10 +983,11 @@ class MainWindow(QMainWindow):
             at = tab.view.mapToScene(tab.view.viewport().rect().center())
         tab.scene.add_note_at(at)
 
-    def _on_note_selected(self, tab: FlowTab, note_id: str):
+    def _on_note_selected(self, tab: FlowTab, note_id: str, chosen=True):
         if tab is self.current:
             self.properties.show_note(tab.doc, note_id)
-            self.right_tabs.setCurrentWidget(self.properties)
+            if chosen:
+                self.right_tabs.setCurrentWidget(self.properties)
 
     def _block_menu(self, tab: FlowTab, block_id: str, pos):
         self._block_menu_for(tab, block_id).exec(pos)
@@ -1141,6 +1142,9 @@ class MainWindow(QMainWindow):
         if kind == "ask":  # questions are answered whichever run is on screen
             self._ask(run, e)
             return
+        if kind == "ask_closed":  # the run no longer waits for the answer (its Log says why)
+            self._close_question(run, e["ask_id"])
+            return
         if run is not tab.shown_run:
             return
         block = e.get("block")
@@ -1209,9 +1213,22 @@ class MainWindow(QMainWindow):
                            e.get("options") or [], e.get("default"), self)
         dialog.setObjectName("ask-dialog")
         dialog.finished.connect(lambda result: run.answer(e["ask_id"], dialog.value if result else None))
+        run.asking[e["ask_id"]] = dialog
         dialog.open()
 
+    def _close_question(self, run: RunProcess, ask_id: str):
+        """Close the box of a question the run no longer waits for: nothing typed into it is sent."""
+        dialog = run.asking.pop(ask_id, None)
+        if dialog is not None:
+            dialog.finished.disconnect()
+            dialog.reject()
+
     def _on_finished(self, tab: FlowTab, run: RunProcess, status: str):
+        for ask_id, dialog in list(run.asking.items()):  # its process ended while a question waited
+            if run is tab.shown_run:
+                self._log(tab, {"ts": dt.datetime.now().isoformat(), "block": dialog.block, "level": "WARNING",
+                                "message": f"question closed without an answer: the run ended ({status})"})
+            self._close_question(run, ask_id)
         if run is tab.shown_run:
             for block, info in tab.block_info.items():
                 if info.get("status") == "running":  # the process died mid-block

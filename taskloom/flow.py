@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from . import params as P
-from .block import AFTER, DONE, IDENTIFIER, all_ports, fields, setting_label
+from .block import AFTER, DONE, IDENTIFIER, all_ports, applies, fields, setting_label
 from .calendars import load_calendar
 from .config import keep_runs_for
 from .expr import functions
@@ -309,7 +309,8 @@ def schedules_of(data: dict) -> tuple[list[Trigger], list[str]]:
 
 
 def block_config(cls, spec: BlockSpec) -> dict:
-    """Apply defaults, migrations and type coercion to a block's config."""
+    """Apply defaults, migrations and type coercion to a block's config. A setting that is not for it (block.applies)
+    gets its default; required code that is only comments is as if left empty (only_comments)."""
     config = dict(spec.config)
     if spec.version is not None and spec.version < cls.version:
         config = cls.migrate(config, spec.version)
@@ -320,16 +321,30 @@ def block_config(cls, spec: BlockSpec) -> dict:
         raise ValueError(f"unknown setting(s) {sorted(unknown)}")
     result = {}
     for name, f in cls.config.items():
-        if name in config and config[name] is not None:
+        if not applies(cls, name, config):
+            result[name] = f.default  # (a value written for it is not used)
+        elif f.required and (config.get(name) is None or only_comments(f, config[name])):
+            raise ValueError(f"{setting_label(name, f)} is required")
+        elif name in config and config[name] is not None:
             try:
                 result[name] = f.coerce(config[name])
             except ValueError as e:
                 raise ValueError(f"{setting_label(name, f)}: {e}") from None
-        elif f.required:
-            raise ValueError(f"{setting_label(name, f)} is required")
         else:
             result[name] = f.default
     return result
+
+
+def only_comments(f: fields.Field, value) -> bool:
+    """Whether a code setting's value is only comments and blank lines: SQL's -- and /* */, or a Python expression's
+    lines starting with #. Not a script's (fields.Code.script), which runs as it is."""
+    if not isinstance(f, fields.Code) or f.script or not isinstance(value, str):
+        return False
+    if f.language == "sql":
+        return not P.without_comments(value).strip()
+    if f.language in ("python", "expression"):
+        return all(line.lstrip().startswith("#") for line in value.splitlines() if line.strip())
+    return False
 
 
 def keep_source_names(data: dict, registry, moved: dict | None = None, within: set | None = None):

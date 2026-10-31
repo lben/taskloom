@@ -78,6 +78,37 @@ def driver_classes(jars: list[str]) -> list[str]:
     return list(dict.fromkeys(name for name in found if name))
 
 
+def _holds(jars: list[str], class_name: str) -> bool:
+    """Whether one of the jars holds the class (its .class file; an older driver lists none in META-INF)."""
+    entry = class_name.replace(".", "/") + ".class"
+    for jar in jars:
+        try:
+            with zipfile.ZipFile(Path(jar).expanduser()) as archive:
+                archive.getinfo(entry)
+                return True
+        except (OSError, KeyError, zipfile.BadZipFile):  # not there, not a jar, or not in it
+            continue
+    return False
+
+
+def borrowed_driver(name: str, connections: dict) -> str:
+    """A warning when the JDBC connection `name` works only through other connections' jars: Java gets the jars of
+    every connection (one class path), so a driver class its own jars do not hold is loaded from theirs. Empty when
+    its own jars hold it, or no other connection's do."""
+    conn = connections[name]
+    driver = conn.get("driver")
+    if conn.get("kind") != "jdbc" or not driver or _holds(_jars(conn), driver):
+        return ""
+    lenders = [other for other, c in connections.items()
+               if other != name and c.get("kind") == "jdbc" and _holds(_jars(c), driver)]
+    if not lenders:
+        return ""
+    named = " and ".join(lenders)
+    return (f"{driver} is not in this connection's own jars: it works only because {named} "
+            f"list{'s' if len(lenders) == 1 else ''} a jar holding it (Java gets the jars of every connection), "
+            f"so removing {named} breaks this connection. Give this connection the driver's jar too.")
+
+
 def connect(conn: dict, classpath: list[str], java_home: str | None = None):
     """Open a JDBC connection: driver class, URL and driver properties (user, password, …)."""
     for key in ("driver", "url"):

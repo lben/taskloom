@@ -43,7 +43,7 @@ REPORT = "region-report.yaml"  # nothing is connected to ask_region's error outp
 HANDLED = "region-report-handled.yaml"  # show_problem is
 BLOCKS = ["start", "ask_region", "load_sales"]
 FAILED = "no answer was given"
-NOBODY = "nobody can answer in this run; set a default or a secret for unattended runs"
+NOBODY = "nobody can answer in this run; set a default for unattended runs"
 KEYS = ['"block"', '"error"', '"traceback"', '"attempts"']  # the lines of what goes out the error output
 
 
@@ -69,8 +69,8 @@ def test_dont_answer_is_a_clean_failure_that_goes_out_the_error_output(proof, en
            "blocks that needed the answer are skipped. A retry setting on the block asks you again, as it retries "
            "any failure.")
     p.idea("Ask User's other failures that it expects are told the same way: an unattended run (taskloom run, or "
-           "the scheduler service) where nobody can answer and no default or secret is set; an answer that is not "
-           "one of its Options; kind choice without Options.")
+           "the scheduler service) where nobody can answer and no default (for a password: no stored secret) is "
+           "set; an answer that is not one of its Options; kind choice without Options.")
     p.idea("Only the failures a block expects, like these, are told by their message alone. An unexpected error "
            "inside a block (a bug) still shows its traceback, in the Log and in what goes out the error output, so "
            "it can be found and fixed.")
@@ -101,8 +101,8 @@ def test_dont_answer_is_a_clean_failure_that_goes_out_the_error_output(proof, en
            "the traceback (empty here) and the number of attempts. A block made to handle other failures handles "
            "this one unchanged.")
     p.fits("taskloom run and the scheduler service, which starts scheduled runs with that same command, cannot ask "
-           "anyone: Ask User then uses its Default or its Secret. With neither, it fails with the clean “nobody can "
-           "answer” message, as the last step shows.")
+           "anyone: Ask User then uses its Default (for a password: its stored secret). Without one, it fails with the "
+           "clean “nobody can answer” message, as the last step shows.")
 
     assert win.home.root == env.home, "the editor and the command line use the same Taskloom folder"
     env.env["PYTHONIOENCODING"] = "utf-8"  # what taskloom run prints, as a terminal shows it (on Windows too)
@@ -249,7 +249,7 @@ def test_dont_answer_is_a_clean_failure_that_goes_out_the_error_output(proof, en
 
     # --- an unattended run: nobody can answer ------------------------------------------------------------------
     p.step(f"In a terminal, in the folder of the flows, run the first flow: taskloom run {REPORT}. Nobody is there "
-           "to answer, as in the runs the scheduler service starts, and ask_region has no Default and no Secret.")
+           "to answer, as in the runs the scheduler service starts, and ask_region has no Default.")
     result = env.taskloom("run", REPORT, encoding="utf-8", errors="replace")
     printed = (result.stdout + result.stderr).strip()  # (a run's lines go to stderr)
     third, status = env.last_run()
@@ -260,5 +260,5 @@ def test_dont_answer_is_a_clean_failure_that_goes_out_the_error_output(proof, en
             "history",
             "[load_sales] skipped · something before it failed" in printed
             and printed.endswith(f"run #{third} failed") and (result.returncode, status) == (1, "failed"))
-    p.note("This is shown as the command's output: it is what a terminal shows when you run it. With a Default or a "
-           "Secret set on ask_region, the same run would use it, and go on.")
+    p.note("This is shown as the command's output: it is what a terminal shows when you run it. With a Default set "
+           "on ask_region, the same run would use it, and go on.")

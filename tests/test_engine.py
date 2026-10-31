@@ -347,7 +347,7 @@ def test_ask_user_without_anyone_to_ask_uses_the_default_or_fails_at_once(env):
     assert env.taskloom("run", no_default).returncode == 1
     assert time.monotonic() - started < 15
     run_id, _ = env.last_run()
-    assert "set a default or a secret" in env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]
+    assert "set a default" in env.query("SELECT error FROM blocks WHERE run_id=?", run_id)[0][0]
 
 
 def test_for_each_runs_a_flow_once_per_item(env):

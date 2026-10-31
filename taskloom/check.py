@@ -40,7 +40,9 @@ def test_connection(home, name: str) -> str:
         connection = jdbc.connect(conn, jdbc.all_jars(conns), home.settings()["java_home"])
         try:
             meta = connection.getMetaData()
-            return f"Connected to {meta.getDatabaseProductName()} {meta.getDatabaseProductVersion()}"
+            borrowed = jdbc.borrowed_driver(name, conns)
+            return (f"Connected to {meta.getDatabaseProductName()} {meta.getDatabaseProductVersion()}"
+                    + (f"\n{borrowed}" if borrowed else ""))
         finally:
             connection.close()
     raise ValueError(f"unknown connection kind '{kind}'")

@@ -25,6 +25,20 @@ class RunQuery(Block):
         "chunk_size": fields.Int(default=50_000, minimum=1, help="Rows fetched and written per chunk",
                                  examples=["50000", "10000", "200000"]),
     }
+    # Only comments (no {name} in them: runs would fill it in): as it is, "SQL is required".
+    new_config = {"sql": """\
+-- Lines starting with -- are notes, sent with the query: no need to delete them.
+-- Write the query this block runs on the database of its Connection:
+--   select region, count(*) as orders from orders group by region
+--
+-- Parameters: :name is the value of the flow parameter called name, or of
+-- the key name of the dict connected to the params input (that one wins):
+--   select * from sales where day = :day
+--
+-- A list gives one value per item:
+--   select * from customers where region in (:regions)
+--
+-- What goes out: result, the rows the query gives, as a table."""}
 
     def run(self, ctx, params=None):
         if params is not None and not isinstance(params, dict):

@@ -154,6 +154,17 @@ def field_card(f) -> tuple[str, str]:
     return f.help or NO_HELP, line
 
 
+def only_if_line(cls, key: str) -> str:
+    """For a setting that is only for some values of others (fields.Field.only_if), the line saying so (HTML), e.g.
+    Only when Kind is choice. '' for the others."""
+    parts = []
+    for other, values in cls.config[key].only_if.items():
+        shown = [_shown(v) for v in values]
+        parts.append(f"{setting_label(other, cls.config[other])} is "
+                     + (f"{', '.join(shown[:-1])} or {shown[-1]}" if len(shown) > 1 else shown[0]))
+    return html.escape(f"Only when {' and '.join(parts)}.") if parts else ""
+
+
 def row_card(row: str) -> tuple[str, str, str]:
     """A ROWS row's label and what it is for (plain text), and its line of valid values (HTML)."""
     label, what, values = ROWS[row]
@@ -292,5 +303,7 @@ def _setting(cls, key: str, f) -> str:
             f'<a href="{row_href(row)}">{html.escape(ROWS[row][0])}</a>' for row in WHEN_SET_BY[key]) + "."
     else:
         line = field_card(f)[1]
+    only = only_if_line(cls, key)
     return (f'<h3 id="{html.escape(cls.type_id)}.{html.escape(key)}">{html.escape(setting_label(key, f))}</h3>'
-            f"<p>{html.escape(f.help or NO_HELP)}</p><p>{takes}</p><div>{line}</div>")
+            f"<p>{html.escape(f.help or NO_HELP)}</p>" + (f"<p>{only}</p>" if only else "")
+            + f"<p>{takes}</p><div>{line}</div>")

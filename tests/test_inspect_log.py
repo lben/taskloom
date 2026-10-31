@@ -66,9 +66,11 @@ def look(**config) -> dict:
     return {"type": "logic.inspect", **({"config": config} if config else {})}
 
 
-def secret(value: str) -> dict:
-    """An Ask User block for a password: in a run nobody can answer, its default, as a secret."""
-    return {"type": "logic.ask_user", "config": {"prompt": "Key?", "kind": "password", "default": value}}
+def secret(env, value: str) -> dict:
+    """An Ask User block for a password: in a run nobody can answer, the stored secret `key`, saved holding `value`."""
+    (env.home / "secrets.yaml").write_text(yaml.safe_dump({"key": value}), encoding="utf-8")
+    (env.home / "secrets.yaml").chmod(0o600)
+    return {"type": "logic.ask_user", "config": {"prompt": "Key?", "kind": "password", "secret": "key"}}
 
 
 def chart_flow(folder: Path, **look_config) -> Path:
@@ -179,7 +181,7 @@ def test_values_that_are_not_pictures_are_shown_as_text_as_today(env):
             "long = 'x' * 5000 + '.png'\none = 'one.png'\ntwo = 'two.png'\n")
     flow = write_flow(flow_dir / "values.yaml", {
         "make": python(code, outputs=["missing", "notes", "multiline", "long", "one", "two"]),
-        "key": secret("hidden.png"),
+        "key": secret(env, "hidden.png"),
         **{f"look_{n}": look() for n in ("missing", "notes", "multiline", "long", "several", "secret")},
     }, ["make.missing -> look_missing.value", "make.notes -> look_notes.value",
         "make.multiline -> look_multiline.value", "make.long -> look_long.value", "make.one -> look_several.value",
@@ -230,7 +232,7 @@ def test_show_as_markdown_marks_the_message_or_a_text_value_only(env):
         "sales": {"type": "data.duckdb_sql",
                   "config": {"inputs": [], "sql": "select 'North' as region, 120 as total union all select 'South', 80"}},
         "info": python("output = {'region': 'North', 'total': 120}"),
-        "key": secret("s3cret-value"),
+        "key": secret(env, "s3cret-value"),
         "hi": look(message="## Hi {value}", markdown=True),
         "hi_plain": look(message="## Hi {value}"),
         "n_md": look(markdown=True),

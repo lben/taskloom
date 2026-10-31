@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html as html_lib
+import re
 import string
 import uuid
 from pathlib import Path
@@ -120,6 +121,14 @@ def _placed(value, name: str, spec: str, max_rows: int) -> Html:
 
 
 BRACES = "write {{ and }} for literal braces"
+# A note in a Template, <!-- ... -->: left out of the email, and a {name} in it shows nothing. Kept as written: Outlook's
+# conditional comments (<!--[if mso]> ... <![endif]-->, <!--[if !mso]><!--> ... <!--<![endif]-->), and <style>
+# elements, whose CSS may be inside <!-- -->.
+_NOTES = re.compile(r"(?is)(<style\b.*?</style>|<!--(?:\[if\b|<!\[endif\]).*?-->)|<!--.*?-->")
+
+
+def _without_notes(template: str) -> str:
+    return _NOTES.sub(lambda m: m.group(1) or "", template)
 
 
 class HtmlTemplate(Block):
@@ -145,6 +154,22 @@ class HtmlTemplate(Block):
                                help="Emails get slow and get clipped with very long tables",
                                examples=["500", "100", "50"]),
     }
+    # Only a note: as it is, it shows every input in turn, as an empty Template does.
+    new_config = {"template": """\
+<!--
+  This is a note: it is left out of the email, so there is no need to delete it.
+  Write the email body in HTML. Enter makes no new line in the email; <br> does:
+    <b>Daily sales</b><br>Good morning, the figures are below.
+
+  {name} shows an input (connected to data, named as in Inputs) or a flow
+  parameter. A table shows as a table and a chart as its picture:
+    Hi team, please see the chart below<br>{chart}
+
+  {name:format} formats a number or a date; write {{ and }} for literal braces:
+    Total {total:,.2f} on {day:%d %B %Y}
+
+  What goes out: html, the email body. With no body, it shows every input in turn.
+-->"""}
 
     @classmethod
     def problems(cls, config, sources, params):
@@ -160,7 +185,7 @@ class HtmlTemplate(Block):
                              "give the input another name")
         try:
             placeholders = [(name, conversion) for _, name, _, conversion
-                            in string.Formatter().parse(config["template"]) if name is not None]
+                            in string.Formatter().parse(_without_notes(config["template"])) if name is not None]
         except ValueError as e:  # an unmatched brace
             return found + [f"Template: {e}; {BRACES}"]
         listed = ", ".join(dict.fromkeys(names.values())) or "none"
@@ -177,12 +202,13 @@ class HtmlTemplate(Block):
         problems = self.problems(vars(c), {"data": list(data)}, set(ctx.params))
         if problems:  # (run on its own, it may get inputs kept from an earlier run, connected otherwise then)
             raise ValueError(problems[0])
-        if not c.template.strip():
+        template = _without_notes(c.template)
+        if not template.strip():
             return {"html": _shown(list(data.values()), c.max_rows)}
         names = fields.SourceNames.in_effect(c.names, list(data), ctx.params)
         values = {**ctx.params, **{name: data[source] for source, name in names.items()}}
         shown, parts = {}, []
-        for text, name, spec, _ in string.Formatter().parse(c.template):
+        for text, name, spec, _ in string.Formatter().parse(template):
             parts.append(text)
             if name is not None:
                 if (name, spec) not in shown:  # each once: a chart shown twice is attached once

@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
                                QVBoxLayout, QWidget)
 
 from .. import params as P
-from ..block import IDENTIFIER, RESERVED_OUTPUTS, fields, setting_label
+from ..block import IDENTIFIER, RESERVED_OUTPUTS, applies, fields, setting_label
 from ..blocks.logic import ReusableBlock
 from ..calendars import load_calendar
 from ..config import kept_runs
@@ -704,7 +704,10 @@ class PropertiesPanel(QScrollArea):
 
     def _field_help(self, cls, key: str, label, *inputs):
         f = cls.config[key]
-        self._help(label, list(inputs), setting_label(key, f), *docs.field_card(f), docs.field_href(cls, key))
+        what, line = docs.field_card(f)
+        only = docs.only_if_line(cls, key)
+        self._help(label, list(inputs), setting_label(key, f), what, line + (f"<br>{only}" if only else ""),
+                   docs.field_href(cls, key))
 
     def _add_row(self, form: QFormLayout, row: str, widget: QWidget, *inputs):
         """Add the row `row` of docs.ROWS to `form`, with its label and card (on `inputs`, or `widget` itself)."""
@@ -809,6 +812,8 @@ class PropertiesPanel(QScrollArea):
         for key, f in cls.config.items():
             if when and key in ("cron", "every", "at") or keeps and key in ("keep", "keep_failed"):
                 continue  # in the When box, or the Keep runs box
+            if not applies(cls, key, config):
+                continue  # not for the value chosen in another setting (e.g. Ask User's Options, but for kind choice)
             if isinstance(f, fields.SourceNames):
                 layout.addWidget(self._source_names_box(cls, key, f, config.get(key)))
                 continue
@@ -1144,6 +1149,9 @@ class PropertiesPanel(QScrollArea):
         if self.doc is None or self.block_id not in self.doc.blocks:
             return  # the block was deleted while its field was being edited
         self._commit(lambda: self.doc.set_block_value(self.block_id, key, value, section))
+        cls = self.registry.get(self.doc.blocks[self.block_id].get("type"))
+        if section == "config" and cls and any(key in f.only_if for f in cls.config.values()):
+            self.refresh()  # the settings shown change with it
 
     def _field_widget(self, key, f, value):
         default = f.default

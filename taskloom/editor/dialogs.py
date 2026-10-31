@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from ..block import IDENTIFIER
+from ..blocks.logic import as_number, as_yes_no
 from ..config import SETTINGS_DEFAULTS, keep_runs_for
 from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
@@ -100,15 +101,17 @@ class AskDialog(QDialog):
     def __init__(self, block: str, prompt: str, kind: str, options: list, default, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{block} asks")
-        self.kind, self.value = kind, None
+        self.block, self.kind, self.default, self.value = block, kind, default, None
         layout = QVBoxLayout(self)
         label = QLabel(prompt)
         label.setWordWrap(True)
         layout.addWidget(label)
         buttons = QDialogButtonBox()
         if kind == "yes_no":
+            yes = default is None or as_yes_no(default)
             for text, value in (("Yes", True), ("No", False)):
                 b = buttons.addButton(text, QDialogButtonBox.AcceptRole)
+                b.setDefault(value == yes)  # Enter presses the Default's button (Yes without one)
                 b.clicked.connect(lambda _=False, v=value: self._answer(v))
         else:
             if kind == "choice":
@@ -117,17 +120,34 @@ class AskDialog(QDialog):
                 if default is not None:
                     self.input.setCurrentText(str(default))
             else:
-                self.input = QLineEdit("" if default is None or kind == "password" else str(default))
+                self.input = QLineEdit()
                 if kind == "password":
                     self.input.setEchoMode(QLineEdit.Password)
             layout.addWidget(self.input)
+            if kind in ("text", "number") and default is not None:  # (Ask User takes an empty answer as the Default)
+                self.input.setPlaceholderText(str(default))  # grey, in the empty box: what you type replaces it
+                note = QLabel(f"Leave it empty to use the default: {default}", textFormat=Qt.PlainText, wordWrap=True)
+                note.setStyleSheet("color: palette(placeholder-text);")
+                layout.addWidget(note)
+            if kind == "number":
+                self.why = QLabel("Type a number, e.g. 12 or 2.5")  # when OK is pressed without one
+                self.why.setStyleSheet(f"color: {STATUS_COLORS['failed']};")
+                self.why.hide()
+                layout.addWidget(self.why)
             ok = buttons.addButton("OK", QDialogButtonBox.AcceptRole)
+            ok.setDefault(True)  # Enter answers
             ok.clicked.connect(lambda: self._answer(self.input.currentText() if kind == "choice" else self.input.text()))
         cancel = buttons.addButton("Don't answer", QDialogButtonBox.RejectRole)
         cancel.clicked.connect(self.reject)
         layout.addWidget(buttons)
 
     def _answer(self, value):
+        if self.kind == "number" and (value != "" or self.default is None):  # (empty with a Default: the Default)
+            try:
+                value = as_number(value)  # (an int when whole, else a float)
+            except ValueError:
+                self.why.show()
+                return  # only a number is taken: the question stays
         self.value = value
         self.accept()
 
@@ -148,7 +168,7 @@ class ConnectionsDialog(QDialog):
         "smtp": "The mail server Send Email and notifications use. Inside a company this is often a relay "
                 "on port 25 that needs no login; ask your IT team.",
     }
-    LABELS = {"driver": "Driver class", "url": "URL", "jars": "Driver .jar file(s)", "host": "Host", "port": "Port",
+    LABELS = {"jars": "Driver .jar file(s)", "driver": "Driver class", "url": "URL", "host": "Host", "port": "Port",
               "security": "Security", "username": "User name", "key_file": "Key file", "sender": "Send as"}
 
     def __init__(self, home, parent=None, select: str | None = None, new_kind: str | None = None):
@@ -195,14 +215,22 @@ class ConnectionsDialog(QDialog):
         browse = QToolButton(text="…")
         jar_layout.addWidget(self.edits["jars"])
         jar_layout.addWidget(browse)
-        self.driver_note = QLabel("No driver class found in the jar (an older driver): type it above; the "
-                                  "driver's documentation names it.")
-        self.driver_note.setWordWrap(True)
+        self.jar_note = QLabel()  # the typed paths that do not exist
+        self.jar_note.setStyleSheet(f"color: {STATUS_COLORS['failed']};")
+        self.driver_note = QLabel("No driver class found in the jar (an older driver): type it in Driver class; "
+                                  "the driver's documentation names it.")
         self.driver_note.setStyleSheet("color: palette(placeholder-text);")
+        self.borrowed_note = QLabel()  # the driver class is only in other connections' jars
+        self.borrowed_note.setStyleSheet(f"color: {STATUS_COLORS['running']};")
+        for note in (self.jar_note, self.driver_note, self.borrowed_note):
+            note.setWordWrap(True)
         for key, edit in self.edits.items():
             self.form.addRow(self.LABELS[key], self.jar_row if key == "jars" else edit)
+            if key == "jars":
+                self.form.addRow("", self.jar_note)
             if key == "driver":
                 self.form.addRow("", self.driver_note)
+                self.form.addRow("", self.borrowed_note)
         self.password = QLineEdit(echoMode=QLineEdit.Password)
         self.password_status = QLabel()
         self.form.addRow("Password", self.password)
@@ -241,6 +269,8 @@ class ConnectionsDialog(QDialog):
         rename.clicked.connect(self._rename)
         remove.clicked.connect(self._remove)
         browse.clicked.connect(self._browse)
+        self.edits["jars"].editingFinished.connect(self._jars_typed)
+        self.edits["driver"].editingFinished.connect(self._show_borrowed)
         self.add_prop.clicked.connect(lambda: self._add_prop("", ""))
         self.remove_prop.clicked.connect(lambda: self.props.removeRow(self.props.currentRow()))
         self.test_button.clicked.connect(self._test)
@@ -272,12 +302,28 @@ class ConnectionsDialog(QDialog):
             self.form.setRowVisible(self.jar_row if key == "jars" else edit,
                                     enabled and key in self.FIELDS.get(kind, ()))
         self.edits["port"].setPlaceholderText({"ssh": "22", "smtp": "25 (or 587 with starttls, 465 with ssl)"}.get(kind, ""))
-        self.form.setRowVisible(self.driver_note, False)  # until you choose jars that name no driver class
+        self.form.setRowVisible(self.jar_note, False)  # until you type jars that do not exist
+        self.form.setRowVisible(self.driver_note, False)  # until you give jars that name no driver class
         for w in (self.props, self.props_label, self.add_prop, self.remove_prop):
             w.setVisible(enabled and kind == "jdbc")
         self.form.setRowVisible(self.password, enabled)
         self.form.setRowVisible(self.password_status, enabled)
         self._show_password_status()
+        self._show_borrowed()
+
+    def _jars(self) -> list[str]:
+        return [j.strip() for j in self.edits["jars"].text().split(";") if j.strip()]
+
+    def _show_borrowed(self):
+        """Warn when the driver class is not in this connection's jars but in another's (see borrowed_driver)."""
+        from ..jdbc import borrowed_driver
+
+        text = ""
+        if self.current is not None and self._kind() == "jdbc":
+            conn = {"kind": "jdbc", "driver": self.edits["driver"].text().strip(), "jars": self._jars()}
+            text = borrowed_driver(self.current, {**self.conns, self.current: conn})
+        self.borrowed_note.setText(text)
+        self.form.setRowVisible(self.borrowed_note, bool(text))
 
     def _password_ref(self, conn: dict):
         return (conn.get("properties") or {}).get("password") if conn.get("kind") == "jdbc" else conn.get("password")
@@ -315,7 +361,7 @@ class ConnectionsDialog(QDialog):
         for key in self.FIELDS.get(kind, ()):
             text = self.edits[key].text().strip()
             if key == "jars":
-                conn["jars"] = [j.strip() for j in text.split(";") if j.strip()]
+                conn["jars"] = self._jars()
             elif key == "username" and kind == "jdbc":
                 continue  # a JDBC user name is a driver setting
             elif text:
@@ -418,14 +464,34 @@ class ConnectionsDialog(QDialog):
         paths, _ = QFileDialog.getOpenFileNames(self, "JDBC driver jars", "", "Jar files (*.jar)")
         if paths:
             self.edits["jars"].setText("; ".join(paths))
-            self._fill_driver(paths)
+            self._use_jars()
+
+    def _jars_typed(self):
+        """Typed or pasted jars are used once you leave the field or press Enter (not on each key)."""
+        if self.edits["jars"].isModified():  # (since … or showing the connection set it)
+            self.edits["jars"].setModified(False)
+            self._use_jars()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.focusWidget() is self.edits["jars"]:
+            return  # Enter there only fills in the Driver class (_jars_typed); it does not Save
+        super().keyPressEvent(event)
+
+    def _use_jars(self):
+        """Say which of the jars do not exist; fill in the Driver class from the others."""
+        jars = self._jars()
+        missing = [j for j in jars if not Path(j).expanduser().is_file()]
+        self.jar_note.setText(f"Not found (check the path): {'; '.join(missing)}")
+        self.form.setRowVisible(self.jar_note, bool(missing))
+        self._fill_driver([j for j in jars if j not in missing])
+        self._show_borrowed()
 
     def _fill_driver(self, jars):
         """Driver class from the jars (JDBC 4 drivers name it); one you typed is replaced only if you say so."""
         from ..jdbc import driver_classes
 
         found, typed = driver_classes(jars), self.edits["driver"].text().strip()
-        self.form.setRowVisible(self.driver_note, not found)
+        self.form.setRowVisible(self.driver_note, bool(jars) and not found)
         if not found or typed in found:
             return
         if typed and QMessageBox.question(
@@ -477,8 +543,8 @@ class ConnectionsDialog(QDialog):
             err = next((line.removeprefix("error: ")[:400] for line in err.splitlines() if line.startswith("error: ")),
                        err[-400:])
             ok = code == 0
-            self.test_result.setText(f"<span style='color:{'#1f8a4c' if ok else '#c0392b'}'>"
-                                     f"{'✓ ' + html.escape(out) if ok else '✕ ' + html.escape(err)}</span>")
+            said = "✓ " + html.escape(out).replace("\n", "<br>") if ok else "✕ " + html.escape(err)  # (a warning: its line)
+            self.test_result.setText(f"<span style='color:{'#1f8a4c' if ok else '#c0392b'}'>{said}</span>")
             self.test_button.setEnabled(True)
 
         proc.finished.connect(done)

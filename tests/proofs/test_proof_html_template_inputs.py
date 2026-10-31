@@ -251,14 +251,16 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
     p.check("The canvas takes it: a new block, html_template", dropped and "html_template" in tab.doc.blocks)
     click(tab, "html_template")
     box, template = inputs_box(win), template_box(win)
-    p.shot(win, "① The new html_template. ② Its Inputs box says how to connect blocks. ③ The Template box is empty. "
-                "There is no red text at the top of Properties: nothing is required.",
+    p.shot(win, "① The new html_template. ② Its Inputs box says how to connect blocks. ③ The Template box holds only "
+                "a note (an HTML comment, left out of the email) on how to write it. There is no red text at the top "
+                "of Properties: nothing is required.",
            highlight=["html_template", box, template], badges=True,
            zoom=[text_box(win, "html_template"), box, template])
     p.check("No red text in Properties", error_shown(win) == "")
     p.check("② The Inputs box says nothing is connected yet, and how to connect blocks",
             any(t.startswith("Nothing is connected yet. Connect blocks") for t in box_texts(win)))
-    p.check("③ The Template box is empty", template.toPlainText() == "")
+    p.check("③ The Template box holds only its note, one HTML comment",
+            re.fullmatch(r"<!--.*?-->", template.toPlainText(), re.S) is not None)
     assert win.save(tab)
     result = env.taskloom("validate", path)
     p.check("Saved as it is, the flow passes taskloom validate: a new HTML Template needs nothing filled in",

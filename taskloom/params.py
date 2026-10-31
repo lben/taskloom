@@ -114,6 +114,11 @@ _SQL_TOKENS = re.compile(
 )
 
 
+def without_comments(sql: str) -> str:
+    """The SQL without its -- and /* */ comments (a -- or /* in quotes starts none)."""
+    return _SQL_TOKENS.sub(lambda m: "" if m.group(0).startswith(("--", "/*")) else m.group(0), sql)
+
+
 def to_qmark(sql: str, values: dict | None = None) -> tuple[str, list[str]]:
     """Rewrite `:name` bind parameters as `?`; return the SQL and the names in order.
 

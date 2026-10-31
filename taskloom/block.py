@@ -49,13 +49,16 @@ class fields:
         template = False
 
         def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = "",
-                     examples=()):
+                     examples=(), only_if: dict | None = None):
             self.default = default
             self.required = default is None if required is None else required
             self.help = help  # what it is for, in plain words (the editor shows it when you hover over it)
             self.label = label  # the name the editor shows; empty: made from the config key
             # 1 to 3 valid values, each as you type it in Properties (a list comma-separated, code as code).
             self.examples = tuple(examples)
+            # {another setting of the block: the values of it this one is for}, e.g. {"kind": ["choice"]}; empty: it
+            # is for every value. See applies.
+            self.only_if = dict(only_if or {})
 
         def coerce(self, value):
             return value
@@ -102,10 +105,13 @@ class fields:
             return value
 
     class Code(Field):
-        def __init__(self, language: str, default=None, **kw):
+        def __init__(self, language: str, default=None, script: bool = False, **kw):
             super().__init__(default=default, **kw)
             self.language = language
             self.template = language == "sql"
+            # A script (Python Code's code) runs as it is, also when it is only comments; any other required code
+            # that is only comments is as if left empty (flow.only_comments).
+            self.script = script
 
         def coerce(self, value):
             return str(value)
@@ -197,6 +203,16 @@ def setting_label(key: str, f: fields.Field) -> str:
     """The name the editor's Properties panel shows for the setting `key` (and messages about it use)."""
     words = key.replace("_", " ").capitalize().split(" ")
     return f.label or " ".join(w.upper() if w.lower() in ("url", "sql", "pid", "id") else w for w in words)
+
+
+def applies(cls, key: str, config: dict) -> bool:
+    """Whether the setting `key` of the block class `cls` is for its `config` (as written in the flow file: a setting
+    left out has its default): each setting its only_if names has one of the values given there. Properties does not
+    show a setting that is not, and runs do not use its value (it gets its default)."""
+    def value(other):
+        return config[other] if config.get(other) is not None else cls.config[other].default
+
+    return all(value(other) in values for other, values in cls.config[key].only_if.items())
 
 
 class Block:

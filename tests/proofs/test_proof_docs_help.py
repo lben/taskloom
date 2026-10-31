@@ -18,7 +18,7 @@ from tests.test_docs_help import (CONNECTION_OF_KIND, CONNECTIONS, LEARN_MORE, N
                                   click_link, connect_into, examples_of_field, heading_at_top, hover,
                                   label_is_bold, learn_more_href, listed, nav_button, needs_examples, page_and_anchor,
                                   params_used, plain_line, problems_in_flow, property_rows, readme_parts, row_named,
-                                  setting_row, type_in_row, wait_for)
+                                  setting_row, show_setting, type_in_row, wait_for)
 from tests.test_docs_help import choose as choose_in_box
 from tests.test_editor import write_flow
 from tests.test_paths_editor_editing import error_shown
@@ -573,9 +573,13 @@ def sweep(win, qtbot, tmp_path) -> dict:
     for cls in built_in:
         block = add_block(win, tab, cls.title)
         connect_into(tab, block, cls)
-        found = property_rows(win, cls.title, cls)
-        rows += len(found)
-        row_problems += check_rows(qtbot, win, found, pages)
+        # As added, then with each setting that is only for some values of another (e.g. Ask User's Options) shown.
+        for key in [None, *(k for k, f in cls.config.items() if f.only_if)]:
+            if key is not None:
+                show_setting(tab, block, cls, key)
+            found = property_rows(win, cls.title, cls)
+            rows += len(found)
+            row_problems += check_rows(qtbot, win, found, pages)
         wanted = {k: examples_of_field(f) for k, f in cls.config.items() if needs_examples(cls, k, f)}
         params = {}
         for key, said in wanted.items():
@@ -587,9 +591,11 @@ def sweep(win, qtbot, tmp_path) -> dict:
                 choose_in_box(row_named(win, setting_label(key, f), "", cls).inputs[0], data=CONNECTION_OF_KIND[f.kind])
         keys = sorted(wanted, key=lambda k: not isinstance(cls.config[k], (fields.Names, fields.SourceNames)))
         for key in keys:  # the names first, and every setting filled: the block's settings are checked as a whole
+            show_setting(tab, block, cls, key)
             type_in_row(setting_row(win, cls, key), wanted[key][0])
         for key in keys:
             label = setting_label(key, cls.config[key])
+            show_setting(tab, block, cls, key)
             for example in wanted[key]:
                 type_in_row(setting_row(win, cls, key), example)
                 examples += 1

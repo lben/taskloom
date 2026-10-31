@@ -132,13 +132,20 @@ class Context:
         return self._answers is not None
 
     def ask(self, prompt: str, kind: str = "text", options=None, default=None):
-        """Ask the person running the flow and wait for the answer (None if they decline)."""
+        """Ask the person running the flow and wait for the answer (None if they decline). Stopped waiting (the run
+        stopped, or the block's Timeout ran out): the Log says why, and the editor closes the question's box."""
         if self._answers is None:
             raise RuntimeError("this run cannot ask questions")
         ask_id = uuid.uuid4().hex
         self._emit({"event": "ask", "block": self.block_id, "ask_id": ask_id, "prompt": prompt,
                     "kind": kind, "options": list(options or []), "default": default})
-        return self._answers.wait(ask_id, self)
+        try:
+            return self._answers.wait(ask_id, self)
+        except Cancelled:
+            why = "the run was stopped" if self._run_cancel.is_set() else "the block's Timeout ran out"
+            self.warn(f"question closed without an answer: {why}")
+            self._emit({"event": "ask_closed", "block": self.block_id, "ask_id": ask_id})
+            raise
 
     @property
     def cancel_event(self) -> threading.Event:
