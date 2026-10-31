@@ -18,6 +18,8 @@ import pytest
 # not in the test process either (a test that looks up a secret itself would otherwise pick the real one for the
 # rest of the session). A test that needs a store sets its own.
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unless pointed at them: no text is drawn
+    os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 REPO = Path(__file__).resolve().parents[1]
 H2_URL = "https://repo1.maven.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar"
