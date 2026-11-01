@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QLocale, QProcess, QProcessEnvironment, Qt
+from PySide6.QtCore import QLocale, QProcess, QProcessEnvironment, Qt, QTimer
 
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
@@ -27,6 +27,25 @@ from .panels import MONO
 from .theme import THEMES
 
 
+def answered(dialog: QDialog) -> int:
+    """Show `dialog` until it is answered (its exec() result); the caller reads its answers at once, then it is
+    deleted. Left to its window, Python would free it at some moment of the editor's exit, which can crash it."""
+    result = dialog.exec()
+    _delete_when_done(dialog)
+    return result
+
+
+def _delete_when_done(dialog: QDialog):
+    """Delete the dialog (when control is back in the event loop: after its answers are read), once no program of its
+    own is running (a connection's test, creating the Python environment): it would be stopped with it. A program
+    that ends may start the next one (the list of packages): looked at again then."""
+    running = next((p for p in dialog.findChildren(QProcess) if p.state() != QProcess.NotRunning), None)
+    if running is None:
+        dialog.deleteLater()
+    else:
+        running.finished.connect(lambda *_: QTimer.singleShot(0, dialog, lambda: _delete_when_done(dialog)))
+
+
 def open_dialog(parent, cls, home, **kw) -> QDialog | None:
     """Open a dialog of your files (settings, connections); the dialog if you closed it with OK or Save. A mistake
     in one of the files, e.g. made by hand, is named instead: the dialog would write over what the file holds."""
@@ -36,7 +55,7 @@ def open_dialog(parent, cls, home, **kw) -> QDialog | None:
         QMessageBox.warning(parent, "Mistake in a settings file",
                             f"{e}\n\nIt is in {home.root}: put it right, then try again.")
         return None
-    return dialog if dialog.exec() else None
+    return dialog if answered(dialog) else None
 
 
 class RunDialog(QDialog):
@@ -722,13 +741,13 @@ def confirm_run_now(parent, flow_name: str, what: str, starts=(), chosen: str | 
         choices = {box.addButton(start, QMessageBox.AcceptRole): start for start in starts}
         everything = box.addButton("All of them", QMessageBox.AcceptRole)
         box.setDefaultButton(next((b for b, start in choices.items() if start == chosen), everything))
-        box.exec()
+        answered(box)
         clicked = box.clickedButton()
         return (True if clicked is everything else choices.get(clicked, False)), False
     box.button(QMessageBox.Yes).setText("Run")
     never = QCheckBox("Don't ask me again")
     box.setCheckBox(never)
-    go = box.exec() == QMessageBox.Yes
+    go = answered(box) == QMessageBox.Yes
     return go, go and never.isChecked()
 
 

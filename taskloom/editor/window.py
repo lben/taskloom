@@ -497,7 +497,7 @@ class MainWindow(QMainWindow):
         reports = [upgrade.check(p, self.registry, self.home) for p in paths]
         if quiet and all(r.ok for r in reports):
             return
-        if not dialogs.CheckFlowsDialog(reports, self, intro).exec():
+        if not dialogs.answered(dialogs.CheckFlowsDialog(reports, self, intro)):
             return
         done, skipped = [], []
         for report in (r for r in reports if r.fixes):
@@ -743,7 +743,7 @@ class MainWindow(QMainWindow):
             return
         name, email = git.identity(path.parent, *self._remembered_identity())
         dialog = dialogs.CommitDialog(path.name, target, path.parent, name, email, self)
-        if not dialog.exec():
+        if not dialogs.answered(dialog):
             return
         name, email = dialog.name.text().strip(), dialog.email.text().strip()
         self.settings.setValue("git/name", name)
@@ -979,7 +979,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Parameters", str(e))
                 return
             dialog = RunDialog(flow.name, flow.params, computed, self)
-            if not dialog.exec():
+            if not dialogs.answered(dialog):
                 return
             overrides = dialog.overrides()
         if tab.running:
@@ -989,7 +989,7 @@ class MainWindow(QMainWindow):
                 current = next(r for r in reversed(tab.runs) if r.running)
                 detail = f"Run #{current.run_id} has not finished yet." if current.run_id else "It has just started."
                 dialog = OverlapDialog(flow.name, detail, self)
-                if not dialog.exec():
+                if not dialogs.answered(dialog):
                     return
                 choice = dialog.choice
                 if dialog.remember.isChecked():
@@ -1121,11 +1121,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Create Reusable block", f"{block_id} cannot be saved as a block yet: {e}")
             return
         dialog = dialogs.ReusableBlockDialog(self._reusable_name_problem, self)
-        accepted = dialog.exec()
-        # Deleted on this (the GUI) thread, after its answers are read below: once exec() returns Python owns it, and
-        # if the garbage collector freed it on another thread its timers would still fire here, on a deleted widget.
-        dialog.deleteLater()
-        if not accepted:
+        if not dialogs.answered(dialog):
             return
         title = dialog.name.text().strip()
         path = write_reusable_block(self.home.blocks_dir, title, dialog.what.toPlainText().strip(),
@@ -1211,7 +1207,7 @@ class MainWindow(QMainWindow):
         finally:
             history.close()
         dialog = dialogs.BlockResultsDialog(block_id, results, self)
-        if dialog.exec() and dialog.run_id is not None:
+        if dialogs.answered(dialog) and dialog.run_id is not None:
             self.show_history_run(dialog.run_id, tab)
 
     def rerun_block(self, tab: FlowTab, block_id: str, on: bool = False):
@@ -1250,7 +1246,7 @@ class MainWindow(QMainWindow):
                 run_id = None
         dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing,
                                             self._run_label(run_id) if run_id is not None else None, self, typed)
-        if not dialog.exec():
+        if not dialogs.answered(dialog):
             return
         args = ["--from" if on else "--only", block_id]
         # Start from that run (the rest of the flow's results carry over), unless that run has
