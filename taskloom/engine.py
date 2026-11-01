@@ -288,7 +288,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         before_start()
 
     history = History(home.history_db)
-    run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps)
+    run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps, flow.version)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
 

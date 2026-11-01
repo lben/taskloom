@@ -149,8 +149,9 @@ taskloom editor examples/daily-sales-report.yaml
   grey in the empty box, with a note under it: OK (or Enter) with the box left empty
   answers the Default, and the Log says so; what you type replaces it. A choice question
   opens on its Default; for yes_no, Enter presses the Default's button (Yes without one); a
-  password box shows no Default. When the run stops waiting for the answer (you press
-  **Stop**, the block's Timeout runs out, or the run ends), the box closes by itself and the
+  password box shows no Default. The box waits above the editor without blocking it, so
+  **Stop** can be clicked while it is open. When the run stops waiting for the answer (you
+  press Stop, the block's Timeout runs out, or the run ends), the box closes by itself and the
   Log says why; what was typed into it is not used, and a retry asks again in a new box.
 - **Python and SQL code** (Python Code, Polars Transform, DuckDB SQL, Run Query and blocks
   of your own) is written in a code box: keywords, strings, comments and numbers in their
@@ -400,6 +401,23 @@ folder stay as they are. A flow that is the same as in its last commit makes no 
   copy's file (it shows as modified). A flow never committed, or in no repository, gets
   nothing in Git. When the history cannot be copied (e.g. no name and email known yet: give
   them once in Save & Commit), the copy is saved and Taskloom says why.
+
+**File → Commit History…** (just under Save & Commit, for a saved flow) opens a window of
+its own with the commits of the flow file, newest first: each card shows the message and, at
+its bottom right, the author date and time and the short commit id (so the versions Save as
+copies keep their dates). Typing in its search field (`.*` regular expressions, on as it
+opens; `Aa` match case, off) filters the cards at once, grouped by where they match: first
+the commit message, then the outputs of the latest run of that version, then the code of its
+blocks (Python, SQL, Polars, HTML templates, If conditions, every code setting), then
+anything else in the flow file; each card says where. Up and Down move through the cards,
+also from the search field. On the right, a read-only preview draws the flow as it was at the
+selected commit, with the results of the latest run made with exactly that version under its
+blocks (hover one for its outputs, as on the canvas). Each run keeps the Git blob id of the
+flow file's bytes it ran, so a run of changes not committed, or one from before runs kept it,
+is no version's run. **Restore this version** puts that version into the flow's tab as one
+change (Undo takes it back); nothing is written until you save it, and Save & Commit then
+commits it as the newest version, the older ones kept. A Save & Commit adds its commit to the
+open window; closing the flow's tab closes it.
 
 Taskloom carries its own Git (dulwich): no Git program is needed. Its commits run no hooks
 and are never signed, no `.gitattributes`, filter, LFS or line-end conversion is applied (the

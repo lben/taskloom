@@ -1688,6 +1688,18 @@ class FindToggles(QObject):
         self.case = QAction("Aa", self, checkable=True, toolTip="Match case: on, only the case typed; off, any case")
 
 
+def find_pattern(text: str, toggles: FindToggles) -> tuple[re.Pattern | None, str]:
+    """What finding `text` looks for, as the toggles say (None: nothing typed, or not a valid pattern), and why it is
+    not a valid pattern ("" if it is)."""
+    if not text:
+        return None, ""
+    try:
+        return re.compile(text if toggles.regex.isChecked() else re.escape(text),
+                          re.MULTILINE | (0 if toggles.case.isChecked() else re.IGNORECASE)), ""
+    except (re.error, OverflowError) as e:  # (a repeat count too large is an OverflowError)
+        return None, f"Not a valid regular expression: {e}"
+
+
 class FindBar(QWidget):
     """Ctrl+F (Cmd+F on macOS) in `view`: the Log, a code box, Data preview's table or text, or Run history. Left to
     right: the search field, the count ("3/12": the current match of all), previous and next (also Shift+Enter and
@@ -1811,13 +1823,7 @@ class FindBar(QWidget):
     def _search(self, go: bool = True, keep: tuple | None = None):
         """Find the field's text in the view. `go`: the current match is the first from where the search started, and
         is shown; else it is `keep` (a table's cell) if that is a match, or keeps its number."""
-        text, pattern, self.problem = self.field.text(), None, ""
-        if text:
-            try:
-                pattern = re.compile(text if self.toggles.regex.isChecked() else re.escape(text),
-                                     re.MULTILINE | (0 if self.toggles.case.isChecked() else re.IGNORECASE))
-            except (re.error, OverflowError) as e:  # (a repeat count too large is an OverflowError)
-                self.problem = f"Not a valid regular expression: {e}"
+        pattern, self.problem = find_pattern(self.field.text(), self.toggles)
         self.matches = self._find(pattern) if pattern else []
         if not self.matches:
             self.at = -1

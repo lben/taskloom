@@ -63,12 +63,12 @@ class History:
         self._db.executescript(SCHEMA)
         columns = {table: {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
                    for table in ("runs", "logs", "blocks")}
-        # A history file from before runs recorded their process, what started them, or the start blocks they
-        # count for, before log lines said how the Log shows them, or before blocks kept the query they sent: it
-        # gets the column.
+        # A history file from before runs recorded their process, what started them, the start blocks they count
+        # for, or the version of the flow file they ran, before log lines said how the Log shows them, or before
+        # blocks kept the query they sent: it gets the column (a run from before has no version: NULL).
         for table, name, kind in (("runs", "pid", "INTEGER"), ("runs", "started_by", "TEXT NOT NULL DEFAULT ''"),
-                                  ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("logs", "show", "TEXT"),
-                                  ("blocks", "query", "TEXT")):
+                                  ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("runs", "version", "TEXT"),
+                                  ("logs", "show", "TEXT"), ("blocks", "query", "TEXT")):
             if name not in columns[table]:
                 try:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
@@ -81,19 +81,20 @@ class History:
             return self._db.execute(sql, args)
 
     def start_run(self, flow: str, flow_path: str, params: dict, ts: str, started_by: str = "",
-                  counts_for=(), keeps: dict | None = None) -> int:
+                  counts_for=(), keeps: dict | None = None, version: str | None = None) -> int:
         """`started_by`: the start blocks that started it ("manual, manual_2"), or "only load" / "from load".
         `counts_for`: the start blocks it counts for. `keeps`: the flow's start blocks, with their Keep runs and
-        Always keep failed runs ({block: (keep, keep_failed)}); from now on these decide for all their runs."""
+        Always keep failed runs ({block: (keep, keep_failed)}); from now on these decide for all their runs.
+        `version`: the version of the flow file it runs (the Git blob id of the bytes it read)."""
         for block, (kept, failed) in (keeps or {}).items():  # first: a run is never without its start blocks' keeps
             self._exec("INSERT INTO keeps (flow_path, block, keep, keep_failed) VALUES (?, ?, ?, ?) ON CONFLICT "
                        "(flow_path, block) DO UPDATE SET keep=excluded.keep, keep_failed=excluded.keep_failed",
                        (flow_path, block, kept, failed))
         cur = self._exec(
-            "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by, counts_for) "
-            "VALUES (?, ?, ?, 'running', ?, ?, ?, ?)",
+            "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by, counts_for, version) "
+            "VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)",
             (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by,
-             ", ".join(counts_for)),
+             ", ".join(counts_for), version),
         )
         return cur.lastrowid
 
@@ -166,6 +167,14 @@ class History:
                          f"AND ({match}) ORDER BY id DESC LIMIT 1",
                          [flow_path, *(f", {name}, " for name in started_by)]).fetchone()
         return dict(zip(RUN_COLUMNS, row)) if row else None
+
+    def version_runs(self, flow_path: str) -> dict[str, dict]:
+        """The latest finished run of each version of a flow file (see start_run) it was run with:
+        {version: {id, started, finished}}. A run from before runs kept their version is none's."""
+        rows = self._exec("SELECT version, id, started, finished FROM runs WHERE flow_path=? AND version IS NOT NULL "
+                          "AND status != 'running' ORDER BY id", (flow_path,))
+        return {version: {"id": run_id, "started": started, "finished": finished}
+                for version, run_id, started, finished in rows}
 
     def label(self, run_id: int) -> str:
         """'run #12 · 2026-10-15 14:03:22' (when it started), or 'run #12' if it is not known."""

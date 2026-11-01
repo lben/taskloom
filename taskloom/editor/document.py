@@ -381,7 +381,8 @@ class FlowDocument(QObject):
         self._done()
 
     def restore(self, data: dict):
-        """Put back recovered unsaved changes (they stay unsaved until you save)."""
+        """Put back recovered unsaved changes, or a version from the Git history (unsaved until you save), in one
+        step."""
         self._change()
         self.data = data
         self._fill_in_lists()

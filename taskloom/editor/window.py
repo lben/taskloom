@@ -6,7 +6,6 @@ import ctypes
 import datetime as dt
 import hashlib
 import heapq
-import html
 import os
 import shutil
 import signal
@@ -39,8 +38,9 @@ from ..launch import frozen, runner_command
 from ..scheduler import (acquire_lock, counted_from, paused, running_scheduler_version, set_paused,
                          set_start_at_login, startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
-from .canvas import FlowScene, FlowView, value_html
+from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
+from .commits import CommitHistory
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FindToggles, FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
@@ -50,11 +50,6 @@ from .safety import CRASH_LOG, Safety, pid_alive
 
 CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
-
-
-def _short(text: str, n: int = 60) -> str:
-    text = " ".join(str(text).split())
-    return text if len(text) <= n else text[: n - 1] + "…"
 
 
 MAX_LOG_ENTRIES = 20000  # the Log keeps earlier runs' messages, up to this many lines
@@ -430,6 +425,7 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.addTab(self.preview, "Data preview")
         self.bottom_tabs.addTab(self.history_panel, "Run history")
         self.output = self._dock("Output", self.bottom_tabs, Qt.BottomDockWidgetArea)
+        self.histories: dict[FlowTab, CommitHistory] = {}  # each flow's Commit History window, while it is open
 
         self._make_actions()
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -541,6 +537,8 @@ class MainWindow(QMainWindow):
         act(m, "Save", lambda: self.save(self.current), QKeySequence.Save)
         act(m, "Save as…", lambda: self.save(self.current, ask=True), QKeySequence.SaveAs)
         act(m, "Save && Commit…", lambda: self.save_and_commit(self.current))
+        self.history_action = act(m, "Commit History…", lambda: self.commit_history(self.current))
+        m.setToolTipsVisible(True)  # (why Commit History… is disabled)
         act(m, "Close flow", lambda: self.close_tab(self.current), QKeySequence.Close)
         m.addSeparator()
         act(m, "Quit", self.close, QKeySequence.Quit)
@@ -586,6 +584,7 @@ class MainWindow(QMainWindow):
         self.scheduler_action.triggered.connect(self.toggle_scheduler)
         toolbar.addAction(self.scheduler_action)
         self._show_scheduler_state(False)
+        self._update_history_action()
 
     # --- tabs -----------------------------------------------------------------------
 
@@ -707,6 +706,7 @@ class MainWindow(QMainWindow):
             return False
         if tab.doc.path != before:
             tab.seen_up_to = None  # another file: which of its runs you saw is read again
+            self._close_history(tab)  # (its window showed the other file's history)
         self.safety.drop_copy(tab.tab_id)
         self._load_last_run(tab)
         self._sync_schedule(tab)
@@ -757,6 +757,43 @@ class MainWindow(QMainWindow):
                                 "\n\nFix that, then Save & Commit again.")
             return
         self.statusBar().showMessage(said, 15000)
+        if tab in self.histories:  # the new commit on top of its list
+            self.histories[tab].load()
+
+    def commit_history(self, tab: FlowTab | None):
+        """File → Commit History…: the window of the saved flow's Git history (see commits.py), one per flow; brought
+        to the front if it is open."""
+        if tab is None or tab.doc.path is None:
+            return
+        window = self.histories.get(tab)
+        if window is None:
+            window = self.histories[tab] = CommitHistory(tab.doc.path, self.registry, self.home, self)
+            window.restore.connect(lambda data, said, t=tab: self._restore_version(t, data, said))
+            window.destroyed.connect(lambda _=None, t=tab: self.histories.pop(t, None))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _restore_version(self, tab: FlowTab, data: dict, said: str):
+        """Commit History's Restore this version: the version into its flow's tab, as one change (Undo takes it back);
+        nothing is written."""
+        self._finish_editing(tab)
+        tab.doc.restore(data)
+        self.tabs.setCurrentWidget(tab)
+        self.statusBar().showMessage(said, 15000)
+
+    def _close_history(self, tab: FlowTab):
+        window = self.histories.pop(tab, None)
+        if window is not None:
+            window.close()
+
+    def _update_history_action(self):
+        """File → Commit History… is for the flow on screen once it is saved (the history of its file)."""
+        saved = self.current is not None and self.current.doc.path is not None
+        self.history_action.setEnabled(saved)
+        self.history_action.setToolTip("The Git history of this flow's file: search its commits, see each version "
+                                       "with its outputs, restore one" if saved else
+                                       "Save the flow first: Commit History shows the Git history of its file")
 
     def _carry_history(self, original: Path, copy: Path):
         """After Save as: the copy gets the original's Git history (see git.carry_history), or you are told why not."""
@@ -808,6 +845,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _remove_tab(self, tab: FlowTab):
+        self._close_history(tab)
         tab.autosave.stop()
         self.safety.drop_copy(tab.tab_id)
         self.tabs.removeTab(self.tabs.indexOf(tab))
@@ -816,6 +854,7 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         if self.statusBar().currentMessage().startswith("Showing run"):  # what the tab you left showed
             self.statusBar().clearMessage()
+        self._update_history_action()
         tab = self.current
         if tab is None:
             self.properties.show_block(None, self.registry, None)
@@ -835,6 +874,7 @@ class MainWindow(QMainWindow):
         self._refresh_schedule(tab)
         self.flow_status.update_tab(tab)
         if tab is self.current:
+            self._update_history_action()
             self.properties.on_doc_changed()
             self.parameters.on_doc_changed()
             self.flow_settings.refresh()
@@ -1318,35 +1358,10 @@ class MainWindow(QMainWindow):
     def _apply_block_result(self, tab: FlowTab, block: str, info: dict):
         """Show a block's result in run info["run_id"] (an event of it, or its row in the history), made at
         info["finished"]."""
-        status = info.get("status")
-        tab.block_info[block] = {"status": status, "tables": info.get("tables") or {},
+        tab.block_info[block] = {"status": info.get("status"), "tables": info.get("tables") or {},
                                  "previews": info.get("previews") or {}, "error": info.get("error"),
                                  "run_id": info.get("run_id")}
-        values = dict(info.get("previews") or {})
-        if status == "success":
-            values["done"] = "finished successfully"
-        elif status == "failed" and info.get("error"):
-            values["error"] = info["error"]
-        tab.scene.set_values(block, values)
-        attempts = info.get("attempts") or 0
-        retried = f" · retried {attempts - 1}×" if attempts > 1 else ""
-        if status == "success":
-            text = "✓ " + _short(info.get("summary") or "done", 48) + retried
-            # Hovering it shows each output as the connections do (e.g. JSON laid out).
-            tip = "".join(f"<b>{html.escape(port)}</b><pre>{value_html(value)}</pre>"
-                          for port, value in (info.get("previews") or {}).items())
-            tip = (tip or html.escape(info.get("summary") or "done")) + html.escape(retried)
-        elif status == "failed":
-            text = "✕ " + _short(info.get("error") or "failed", 48)
-            tip = f"<pre>{value_html(info.get('error') or 'failed')}</pre>"
-        elif status == "skipped" and info.get("summary"):
-            text, tip = f"skipped · {info['summary']}", html.escape(f"skipped: {info['summary']}")
-        else:
-            text = tip = status
-        if info.get("finished"):  # (not known if the run process died mid-block)
-            tip += ('<p align="right" style="color:gray; font-size:small">results from '
-                    f'{info["finished"].replace("T", " ")[:19]}</p>')
-        tab.scene.set_status(block, status, text, tip)
+        tab.scene.show_result(block, info)
         if tab is self.current and block in tab.scene.selected_block_ids():
             self.preview.show_outputs(block, tab.block_info[block])
 
@@ -1356,7 +1371,8 @@ class MainWindow(QMainWindow):
         dialog.setObjectName("ask-dialog")
         dialog.finished.connect(lambda result: run.answer(e["ask_id"], dialog.value if result else None))
         run.asking[e["ask_id"]] = dialog
-        dialog.open()
+        dialog.show()  # not modal: Stop can be clicked while it waits (and closes it); it is above the editor
+        dialog.activateWindow()  # (the keyboard in it)
 
     def _close_question(self, run: RunProcess, ask_id: str):
         """Close the box of a question the run no longer waits for: nothing typed into it is sent."""

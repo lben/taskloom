@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import random
 import re
@@ -132,6 +133,7 @@ class Flow:
     notify: dict | None
     blocks: dict[str, BlockSpec]
     edges: list[Edge]
+    version: str | None = None  # the Git blob id of the bytes it was loaded from (load_flow)
 
 
 class _FlowLoader(yaml.SafeLoader):
@@ -155,8 +157,13 @@ class _FlowLoader(yaml.SafeLoader):
 
 def read_flow_file(path: Path):
     """What the flow file at `path` holds. Raises OSError, or ValueError saying why it is not readable YAML."""
+    return flow_file_data(path.read_bytes())
+
+
+def flow_file_data(raw: bytes):
+    """What a flow file holding the bytes `raw` holds. Raises ValueError saying why it is not readable YAML."""
     try:
-        return yaml.load(path.read_text(encoding="utf-8"), _FlowLoader)
+        return yaml.load(raw.decode("utf-8"), _FlowLoader)  # (YAML reads CRLF line ends as LF ones)
     except UnicodeDecodeError as e:  # e.g. UTF-16, as Windows PowerShell writes
         raise ValueError(f"not UTF-8 text, save it as UTF-8 ({e})") from None
     except yaml.YAMLError as e:
@@ -186,13 +193,22 @@ def real_path(path) -> Path:
     return path
 
 
+def version_id(raw: bytes) -> str:
+    """The version of a flow file holding the bytes `raw`: their Git blob id, as Git computes it."""
+    return hashlib.sha1(b"blob %d\0" % len(raw) + raw).hexdigest()
+
+
 def load_flow(path) -> Flow:
+    """The flow in the file at `path`, with the version of the bytes it was read from."""
     path = Path(path)
     try:
-        data = read_flow_file(path)
+        raw = path.read_bytes()
+        data = flow_file_data(raw)
     except (OSError, ValueError) as e:
         raise FlowError([f"cannot read {path}: {e}"]) from None
-    return flow_from_data(data, path)
+    flow = flow_from_data(data, path)
+    flow.version = version_id(raw)
+    return flow
 
 
 def flow_from_data(data, path: Path) -> Flow:

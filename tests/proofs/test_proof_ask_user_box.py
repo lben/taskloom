@@ -6,7 +6,7 @@ import json
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QComboBox, QDialogButtonBox, QLabel, QLineEdit, QToolBar
+from PySide6.QtWidgets import QApplication, QComboBox, QDialogButtonBox, QLabel, QLineEdit, QToolBar
 
 from proofs.test_proof_handled_error import log_has, open_flow, press_run_now
 from proofs.test_proof_run_output import click as click_block, setting
@@ -112,8 +112,8 @@ def test_ask_users_box_shows_the_default_as_a_grey_placeholder(proof, win, qtbot
            "without a Default). A password is unchanged: a masked, empty box, and nothing about a default.")
     p.idea("When the run stops waiting for the answer, because the block's Timeout ran out or the run ended, the box "
            "closes by itself. The Log says why, and nothing typed into the box is sent. A stopped run closes its box "
-           "the same way, but you cannot press Stop while a box is open: the box keeps the editor's window waiting, "
-           "as any dialog does. This proof presses Stop from the program to show it.")
+           "the same way, and Stop can be clicked while the box is open: the box waits above the editor without "
+           "keeping its window waiting.")
     p.why_simplest("The Default was already the answer Ask User uses when nobody can be asked (taskloom run, the "
                    "scheduler service). The box now shows it as Qt, the toolkit the editor is built with, shows any "
                    "placeholder: in the theme's placeholder grey, only while the box is empty, gone at the first key. "
@@ -366,18 +366,11 @@ def test_ask_users_box_shows_the_default_as_a_grey_placeholder(proof, win, qtbot
     p.shot(box, "① Stop, in the toolbar. ② The question waits, with South typed in it.", over=win,
            highlight=[stop, around(edit, win)], badges=True, zoom=[box])
 
-    p.step("Stop the run while the box is open: the proof presses Stop from the program, because the box keeps the "
-           "button from being clicked.")
+    p.step("Click Stop, in the toolbar, while the box is open.")
     before = len(sent)
-    # A click on Stop and its key, Shift+F5, as the system delivers them: to the window under the mouse, and to the
-    # box, which has the keys.
+    p.check("Nothing keeps the editor's window waiting while the box is open", QApplication.activeModalWidget() is None)
+    # The click as the system delivers it: to the editor's window, under the mouse.
     QTest.mouseClick(win.windowHandle(), Qt.LeftButton, Qt.NoModifier, stop.mapTo(win, stop.rect().center()))
-    QTest.keyClick(box.windowHandle(), Qt.Key_F5, Qt.ShiftModifier)
-    QTest.qWait(300)
-    p.check("A click on Stop, and Shift+F5, made as the system makes them, do not reach the editor's window while "
-            "the box is open: nothing is sent, and the box stays open",
-            len(sent) == before and box.isVisible())
-    QTest.mouseClick(stop, Qt.LeftButton)  # as the button does, from the program
     qtbot.waitUntil(lambda: not box.isVisible(), timeout=20_000)
     closed_at = len(sent)
     stopped_run = wait_runs(qtbot, tab, 3)

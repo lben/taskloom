@@ -237,10 +237,11 @@ def test_save_and_commit_and_save_as_keeps_the_history(proof, win, qtbot, tmp_pa
 
     def in_the_menu(menu):
         items = [a.text() for a in menu.actions() if not a.isSeparator()]
-        p.shot(menu, "① Save & Commit… is new in the File menu, right under Save as… and above Close flow.", over=win,
-               highlight=[menu_item(menu, SAVE_AND_COMMIT)], badges=True, zoom=[menu])
-        p.check("① Save & Commit… is right under Save as…, before Close flow",
-                items[items.index("Save as…") + 1:items.index("Save as…") + 3] == [SAVE_AND_COMMIT, "Close flow"])
+        p.shot(menu, "① Save & Commit… is new in the File menu, right under Save as… and above Commit History….",
+               over=win, highlight=[menu_item(menu, SAVE_AND_COMMIT)], badges=True, zoom=[menu])
+        p.check("① Save & Commit… is right under Save as…, before Commit History…",
+                items[items.index("Save as…") + 1:items.index("Save as…") + 3] == [SAVE_AND_COMMIT,
+                                                                                    "Commit History…"])
         p.step("Choose Save & Commit…, and type your name, your email and what changed.")
         p.note("To show that no Git program is needed, the proof hides the git program from Taskloom while you do "
                "this, as on a PC without Git: Taskloom finds none, and needs none.")

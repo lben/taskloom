@@ -301,14 +301,14 @@ def status_bar(win) -> str:
 # --- the menu item -----------------------------------------------------------------------------------------------
 
 def test_save_and_commit_is_in_the_file_menu_after_save_as_with_no_shortcut_and_enabled(win, tmp_path):
-    """§5: "Save & Commit…" directly after "Save as…" and before "Close flow", no shortcut, enabled for a flow
+    """§5: "Save & Commit…" directly after "Save as…" and before "Commit History…", no shortcut, enabled for a flow
     that is saved (saved does not mean committed)."""
     win.open_flow(write_flow(tmp_path / "nightly" / "report.yaml"))
     (file_menu,) = [a.menu() for a in win.menuBar().actions() if shown(a.text()) == "File"]
     actions = file_menu.actions()
     at = [a.text() for a in actions].index("Save as…")
 
-    assert [a.text() for a in actions[at + 1:at + 3]] == [SAVE_AND_COMMIT, "Close flow"]
+    assert [a.text() for a in actions[at + 1:at + 3]] == [SAVE_AND_COMMIT, "Commit History…"]
     assert shown(actions[at + 1].text()) == "Save & Commit…"
     assert actions[at + 1].shortcuts() == [] and actions[at + 1].isEnabled()
 

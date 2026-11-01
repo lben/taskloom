@@ -35,7 +35,7 @@ seen = []
 
 
 def answer():  # each dialog as it opens: Run now's question and the Run dialog go on, every other one is cancelled
-    box = QApplication.activeModalWidget()
+    box = QApplication.activeModalWidget() or QApplication.activeWindow()  # (the Ask User box is not modal)
     if isinstance(box, QMessageBox):
         seen.append("QMessageBox")  # (its title is not kept on macOS)
         box.button(QMessageBox.Yes).click()

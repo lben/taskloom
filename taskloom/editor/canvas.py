@@ -300,6 +300,11 @@ def value_html(text: str) -> str:
     return html.escape(text if len(text) <= 4000 else text[:4000] + "…", quote=False)  # e.g. a wide table's rows
 
 
+def _short(text: str, n: int = 60) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
 NOTE_STYLES = {"title": 22, "heading": 16, "normal": 11, "small": 9}  # point sizes
 
 
@@ -632,6 +637,36 @@ class FlowScene(QGraphicsScene):
         """Under a block: its result on the canvas; without one, that it is off if no start block leads to it
         (not a result: it goes away once the block is connected to a line)."""
         return self.statuses.get(block_id) or (OFF if block_id in self.off else (None, "", ""))
+
+    def show_result(self, block_id: str, info: dict):
+        """A block's result in a run (an event of the run, or its row in the history), made at info["finished"]: under
+        it, and on its outputs when hovering them."""
+        status = info.get("status")
+        values = dict(info.get("previews") or {})
+        if status == "success":
+            values["done"] = "finished successfully"
+        elif status == "failed" and info.get("error"):
+            values["error"] = info["error"]
+        self.set_values(block_id, values)
+        attempts = info.get("attempts") or 0
+        retried = f" · retried {attempts - 1}×" if attempts > 1 else ""
+        if status == "success":
+            text = "✓ " + _short(info.get("summary") or "done", 48) + retried
+            # Hovering it shows each output as the connections do (e.g. JSON laid out).
+            tip = "".join(f"<b>{html.escape(port)}</b><pre>{value_html(value)}</pre>"
+                          for port, value in (info.get("previews") or {}).items())
+            tip = (tip or html.escape(info.get("summary") or "done")) + html.escape(retried)
+        elif status == "failed":
+            text = "✕ " + _short(info.get("error") or "failed", 48)
+            tip = f"<pre>{value_html(info.get('error') or 'failed')}</pre>"
+        elif status == "skipped" and info.get("summary"):
+            text, tip = f"skipped · {info['summary']}", html.escape(f"skipped: {info['summary']}")
+        else:
+            text = tip = status
+        if info.get("finished"):  # (not known if the run process died mid-block)
+            tip += ('<p align="right" style="color:gray; font-size:small">results from '
+                    f'{info["finished"].replace("T", " ")[:19]}</p>')
+        self.set_status(block_id, status, text, tip)
 
     def set_countdown(self, block_id: str, text: str, tip: str = ""):
         """Under a Schedule block: when it starts the flow next."""

@@ -16,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit  # noqa: E402
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit, QToolBar  # noqa: E402
 from shiboken6 import isValid  # noqa: E402
 
 from taskloom.blocks.logic import AskUser  # noqa: E402
@@ -214,6 +214,24 @@ def test_stop_closes_the_question_and_the_log_says_why(win, qtbot, tmp_path):
 
     assert tab.runs[-1].status == "cancelled"
     assert saying_why_the_question_closed(win, r"stop|cancel"), log_lines(win)
+    assert answered(tmp_path) is None
+
+
+def test_the_stop_button_can_be_clicked_while_the_question_waits(win, qtbot, tmp_path):
+    """Decided with the user: the question box does not block the editor, so Stop can be clicked with the mouse while
+    the question waits (the box is the active window as it opens, the keyboard in it); clicking Stop ends the run and
+    closes the box."""
+    tab, dialog = ask(win, qtbot, tmp_path, {"kind": "text"})
+    assert QApplication.activeModalWidget() is None, "the question box blocks the editor's window"
+    assert QApplication.activeWindow() is dialog
+
+    stop = next(bar.widgetForAction(win.stop_action) for bar in win.findChildren(QToolBar)
+                if bar.widgetForAction(win.stop_action) is not None)
+    QTest.mouseClick(win.windowHandle(), Qt.LeftButton, Qt.NoModifier, stop.mapTo(win, stop.rect().center()))
+    qtbot.waitUntil(lambda: closed(dialog), timeout=CLOSES_WITHIN_MS)
+    wait_runs(qtbot, tab, 1)
+
+    assert tab.runs[-1].status == "cancelled"
     assert answered(tmp_path) is None
 
 
