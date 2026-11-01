@@ -7,7 +7,6 @@ tests/test_dialog_speed.py does, and listens to what it asks Windows."""
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel
 
 from taskloom.editor.safety import CRASH_LOG
+from tests.test_dialog_speed import run_to_files
 
 WINDOWS = sys.platform == "win32"
 ASKED = ("Dialog boxes take some time to show up, it feels slow, why? It can likely be optimized — and later: even "
@@ -276,9 +276,8 @@ def run_editor(folder: Path) -> dict:
     (folder / "weekly-sales.yaml").write_text(FLOW, encoding="utf-8")
     environment = {name: value for name, value in os.environ.items() if name != "QT_QPA_FONTDIR"}  # (the system's)
     environment.update(QT_QPA_PLATFORM="windows" if WINDOWS else "offscreen", TASKLOOM_HOME=str(home))
-    done = subprocess.run([sys.executable, str(folder / "editor_steps.py"), str(folder / "weekly-sales.yaml"),
-                           str(pictures), str(BOXES)], cwd=folder, env=environment, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=150)
+    done = run_to_files([sys.executable, str(folder / "editor_steps.py"), str(folder / "weekly-sales.yaml"),
+                         str(pictures), str(BOXES)], folder, environment, 150)
     said = f"stdout:\n{done.stdout[-4000:]}\nstderr:\n{done.stderr[-4000:]}"
     assert "started" in done.stdout.splitlines(), f"Qt's platform did not start: {said}"
     lines = [line for line in done.stdout.splitlines() if line.startswith("RESULT ")]

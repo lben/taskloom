@@ -241,6 +241,25 @@ os._exit(code)  # (the editor ships for Windows only; elsewhere Python's own shu
 '''
 
 
+def run_to_files(command: list, folder, environment: dict, timeout: float) -> subprocess.CompletedProcess:
+    """Run `command` with its output in files of `folder`, not pipes: a process the editor starts (a run) may hold a
+    pipe open after the editor has ended. Fails, with what it printed, if it has not ended within `timeout` s."""
+    out, err = folder / "stdout.txt", folder / "stderr.txt"
+    with open(out, "w", encoding="utf-8") as stdout, open(err, "w", encoding="utf-8") as stderr:
+        process = subprocess.Popen(command, env={**environment, "PYTHONIOENCODING": "utf-8"}, cwd=folder,
+                                   stdout=stdout, stderr=stderr)
+        try:
+            process.wait(timeout=timeout)
+            ended = True
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            ended = False
+    printed = [path.read_text(encoding="utf-8", errors="replace") for path in (out, err)]
+    assert ended, f"it had not ended after {timeout} s; stdout:\n{printed[0][-4000:]}\nstderr:\n{printed[1][-4000:]}"
+    return subprocess.CompletedProcess(command, process.returncode, *printed)
+
+
 def run_editor(folder, platform: str, mode: str = "pass") -> dict:
     """The editor through the steps above, on Qt's `platform`, DwmSetWindowAttribute working (mode "pass") or failing
     (mode "fail"): what it recorded. Skipped only if Qt's Windows platform cannot start here (no QApplication)."""
@@ -249,8 +268,7 @@ def run_editor(folder, platform: str, mode: str = "pass") -> dict:
     script.write_text(SCRIPT, encoding="utf-8")
     flow.write_text(FLOW, encoding="utf-8")
     environment = {**os.environ, "QT_QPA_PLATFORM": platform, "TASKLOOM_HOME": str(home)}
-    done = subprocess.run([sys.executable, str(script), mode, str(flow), str(QUESTIONS)], env=environment, cwd=folder,
-                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    done = run_to_files([sys.executable, str(script), mode, str(flow), str(QUESTIONS)], folder, environment, 120)
     if platform == "windows" and "started" not in done.stdout.splitlines():
         pytest.skip(f"Qt's Windows platform could not start on this machine: {done.stderr[-800:]}")
     said = f"stdout:\n{done.stdout[-4000:]}\nstderr:\n{done.stderr[-4000:]}"
