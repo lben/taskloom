@@ -235,8 +235,7 @@ app = QApplication(sys.argv[:1])  # (the editor reuses it): Qt's platform has st
 print("started", flush=True)
 code = cli.main(["editor", FLOW])
 print(result(code=code), flush=True)
-sys.stdout.flush()
-os._exit(code)
+sys.exit(code)  # as taskloom's own entry point ends: os._exit with Qt's windows still alive crashes on Windows
 '''
 
 
