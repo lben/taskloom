@@ -71,8 +71,15 @@ taskloom editor examples/daily-sales-report.yaml
   it with its arrows), from 20% to 300%. Or click the zoom, type one (`150` or `150%`) and
   press Enter.
 - **Copy and paste** (Ctrl+C, Ctrl+V or the Edit menu) the selected blocks and texts, in the
-  same flow or into another one: the copies get new names and are selected, to move them;
-  Undo takes the whole paste back.
+  same flow or into another one, at any zoom: the copies keep their layout and land where you
+  are working. With the mouse pointer on the canvas, Ctrl+V puts their top-left corner at the
+  pointer; right-click an empty spot → **Paste** puts it at that spot; otherwise (Edit →
+  Paste clicked, or the pointer on a panel) they go in the middle of the visible canvas.
+  Pasted again at the same place, they go 40 px right and down of the copies already there,
+  so none is hidden under another; likewise while a pasted text would be under a block, or a
+  pasted block wholly over a text (texts are drawn behind blocks); if that takes them out
+  of view, the canvas scrolls to show them. The copies get new names and are selected, to
+  move them; Undo takes the whole paste back.
 - Two kinds of connectors: **circles carry data** (an output into an input), **diamonds set
   the order**. Every block but a start block has a **run after** diamond input: connect any
   output of another block (or a start block's `start`) to it and the block waits for that
@@ -185,12 +192,26 @@ taskloom editor examples/daily-sales-report.yaml
   inside a dict or list also on its own, by where it is, e.g. `output.combined`), and
   **Run history** lists every run of the flow as its own row, newest first, whoever started
   it (Run now, the scheduler service, a terminal): a run started while the flow is open
-  comes in as it goes, also while an older run is shown or one of yours is going. The runs
+  comes in as it goes, also while an older run is shown or one of yours is going. The run you
+  select (click its row) stays selected as runs come in and finish (with Ctrl+F open, the
+  current match stays on its run and the count follows), and the list stays where
+  you scrolled to (at the top, each new run shows at the top); a selected run that Keep runs
+  removes leaves nothing selected. The runs
   are those of the flow's file, however its path is spelled (through a link, with `..`, or
   in other case where the file system ignores case). It reopens any past run; its
   **Started by** column says what started each
   run: its start blocks (e.g. `manual`, `nightly`), or `only BLOCK` / `from BLOCK` for a
-  re-run. **Stop** cancels.
+  re-run. Right-click a run → **Copy executed query** copies the SQL a Run Query or DuckDB SQL
+  block sent in it, also one the database refused, with each parameter's value written in
+  (`'O''Brien'`, `DATE '2026-01-16'`, a secret as `<hidden: secret NAME>`), to paste into a
+  SQL tool and run; several such blocks are listed in the order they ran, and a run in which
+  no query ran (or one recorded before runs kept their queries) says so. **Stop** cancels.
+- **Ctrl+F** (Cmd+F on macOS) in the Log, Data preview, Run history or a code box opens a find
+  bar at its bottom (just under a code box) that counts (`3/12`) and highlights the matches of
+  what you type, or of the text selected there, and steps through them with Enter and
+  Shift+Enter (or ↓ and ↑) until Esc, with a `.*` toggle for regular expressions (on as the
+  editor starts; a pattern that is not valid shows in red and says so) and an `Aa` toggle to
+  match case (off), both shared by every find bar while the editor runs.
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it (a table over 10 rows: its first 5 rows, `…`, its last 5). Every run's
   values are kept in **Run history** (double-click a run, then hover) for as long as its start
@@ -323,7 +344,12 @@ taskloom editor examples/daily-sales-report.yaml
   `taskloom run` and on schedule. It has no Code field (its Properties say what it does and
   what its inputs expect): to change its code, edit its file or make a new one. A name
   another block already has (as its title or block type) is refused. The block it was made
-  from stays as it is.
+  from stays as it is. To delete a block of your own, right-click it under **User Created**
+  in the blocks tree (or select it and press Delete) → **Delete block…**: once you say yes
+  to a question naming its file, any other blocks that file defines (deleted with it) and
+  the blocks of open flows that use it (shown as unknown blocks from then on), the file is
+  deleted and the block is gone from the editor at once (the User Created group too when
+  none is left); built-in blocks cannot be deleted.
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
   the flows you had open come back with them after a crash or a restart. If the editor
   ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. The

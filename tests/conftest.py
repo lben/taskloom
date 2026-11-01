@@ -205,6 +205,7 @@ def win(qtbot, tmp_path, monkeypatch):
     """The real editor window, offscreen; message boxes are recorded (and fail the test), Run now's question
     is answered yes, and no real scheduler service is started."""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtGui import QCursor
     from PySide6.QtWidgets import QMessageBox
 
     from taskloom.config import Home
@@ -221,11 +222,14 @@ def win(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(dialogs, "offer_manual_start", lambda *a, **k: True)  # no start block: add one
     # A real scheduler service would outlive the test (and run its flows): the tests that need one say so.
     monkeypatch.setattr(MainWindow, "start_scheduler", lambda self, by_you=False: None)
+    # A test may move the mouse pointer; Qt sends a right-click's menu to the widget under it, so it is put back.
+    pointer = QCursor.pos()
     w = MainWindow(Home(tmp_path / "home"))
     w.message_boxes = shown
     qtbot.addWidget(w)
     w.show()
     yield w
+    QCursor.setPos(pointer)
     assert shown == [], f"unexpected message boxes: {shown}"
     for tab in w.tabs_list():
         for run in tab.runs:

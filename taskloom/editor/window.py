@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import datetime as dt
 import hashlib
 import heapq
@@ -17,7 +18,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QEvent, QMargins, QPoint, QRect, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QMargins, QObject, QPoint, QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (QAction, QColor, QFontMetricsF, QImageReader, QKeySequence, QPainter, QPalette,
                            QTextDocument)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayout, QMainWindow, QMenu, QMessageBox,
@@ -42,7 +43,7 @@ from .canvas import FlowScene, FlowView, value_html
 from . import dialogs, docs, git, theme
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
-from .panels import (FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
+from .panels import (FindToggles, FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
                      PreviewPanel, PropertiesPanel, mermaid_picture, scheduler_icon)
 from .runs import RunProcess
 from .safety import CRASH_LOG, Safety, pid_alive
@@ -406,7 +407,8 @@ class MainWindow(QMainWindow):
         self.blocks_dock = self._dock("Blocks", self.palette_panel, Qt.LeftDockWidgetArea)
         self.flow_status = FlowTabsStatus(self.tabs)  # each flow's last result and next run, on its tab
 
-        self.properties = PropertiesPanel(self.home, self.settings)
+        toggles = FindToggles(self)  # the find bars' (Ctrl+F), shared by them all
+        self.properties = PropertiesPanel(self.home, self.settings, toggles)
         self.parameters = ParametersPanel(self.home)
         self.flow_settings = FlowSettingsPanel(self.home)
         self.right_tabs = QTabWidget()
@@ -420,9 +422,9 @@ class MainWindow(QMainWindow):
         self.docs.hide()
         self.properties.card.learn_more.connect(self.docs.open_at)
 
-        self.log = LogPanel()
-        self.preview = PreviewPanel()
-        self.history_panel = HistoryPanel()
+        self.log = LogPanel(toggles)
+        self.preview = PreviewPanel(toggles)
+        self.history_panel = HistoryPanel(toggles)
         self.bottom_tabs = QTabWidget()
         self.bottom_tabs.addTab(self.log, "Log")
         self.bottom_tabs.addTab(self.preview, "Data preview")
@@ -433,7 +435,17 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tabs.tabCloseRequested.connect(lambda i: self.close_tab(self.tabs.widget(i)))
         self.palette_panel.add_requested.connect(lambda t: self.current and self.current.view.add_at_center(t))
+        blocks_list = self.palette_panel.tree  # a block of your own: right-click it (or press Delete) → Delete block…
+        blocks_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        blocks_list.customContextMenuRequested.connect(self._blocks_list_menu)
+        delete_block = QAction("Delete block…", blocks_list)
+        delete_block.setShortcuts([QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)])
+        delete_block.setShortcutContext(Qt.WidgetShortcut)
+        delete_block.triggered.connect(lambda: self.delete_user_block(blocks_list.currentItem()))
+        blocks_list.addAction(delete_block)
         self.history_panel.open_run.connect(self.show_history_run)
+        self.history_panel.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.history_panel.table.customContextMenuRequested.connect(self._run_menu)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
         # Each just after a second of the clock (see _show_countdowns), so they move on as the clock does.
         self._countdown = QTimer(self, singleShot=True, timerType=Qt.PreciseTimer)
@@ -538,7 +550,7 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         # Only on the canvas: elsewhere (the Log, text fields) Ctrl+C and Ctrl+V copy and paste text.
         for action in (act(m, "Copy", self.copy_blocks, QKeySequence.Copy),
-                       act(m, "Paste", self.paste_blocks, QKeySequence.Paste)):
+                       act(m, "Paste", lambda: self.paste_blocks(), QKeySequence.Paste)):
             action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
             self.tabs.addAction(action)
         act(m, "Add text", lambda: self.add_text(self.current))
@@ -858,7 +870,10 @@ class MainWindow(QMainWindow):
                 "notes": {n: tab.doc.notes[n] for n in notes}}
         QApplication.clipboard().setText(yaml.safe_dump(data, sort_keys=False))
 
-    def paste_blocks(self):
+    def paste_blocks(self, at=None):
+        """The copied blocks and texts, in their layout and selected, with their top-left corner at `at` (the spot
+        right-clicked), else at the mouse pointer on the canvas, else in the middle of the visible canvas (moved right
+        and down while one would be hidden: FlowView.paste_corner; then the canvas scrolls to show them)."""
         tab = self.current
         if tab is None:
             return
@@ -870,12 +885,19 @@ class MainWindow(QMainWindow):
             return
         notes = data.get("notes") if isinstance(data.get("notes"), dict) else {}
         if data[CLIPBOARD_KEY] or notes:
-            new_ids, new_notes = tab.doc.paste_blocks(data[CLIPBOARD_KEY], data.get("edges") or [], notes, 40, 40)
+            at, for_text = tab.view.paste_corner(data[CLIPBOARD_KEY], notes, at)
+            new_ids, new_notes = tab.doc.paste_blocks(data[CLIPBOARD_KEY], data.get("edges") or [], notes,
+                                                      at.x(), at.y())
             tab.scene.clearSelection()
             for block_id in new_ids:
                 tab.scene.nodes[block_id].setSelected(True)
             for note_id in new_notes:
                 tab.scene.note_items[note_id].setSelected(True)
+            if for_text:  # (moved off a block or a text, it may have left the view: the canvas follows it)
+                group = QRectF()
+                for item in tab.scene.selectedItems():
+                    group |= item.sceneBoundingRect()
+                tab.view.ensureVisible(group, 10, 10)
 
     # --- running --------------------------------------------------------------------
 
@@ -1035,6 +1057,7 @@ class MainWindow(QMainWindow):
     def _canvas_menu_for(self, tab: FlowTab, at) -> QMenu:
         menu = QMenu(self)
         menu.addAction("Add text here", lambda: self.add_text(tab, at))
+        menu.addAction("Paste", lambda: self.paste_blocks(at))  # (the canvas right-clicked is the flow on screen)
         return menu
 
     def add_text(self, tab: FlowTab | None, at=None):
@@ -1098,7 +1121,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Create Reusable block", f"{block_id} cannot be saved as a block yet: {e}")
             return
         dialog = dialogs.ReusableBlockDialog(self._reusable_name_problem, self)
-        if not dialog.exec():
+        accepted = dialog.exec()
+        # Deleted on this (the GUI) thread, after its answers are read below: once exec() returns Python owns it, and
+        # if the garbage collector freed it on another thread its timers would still fire here, on a deleted widget.
+        dialog.deleteLater()
+        if not accepted:
             return
         title = dialog.name.text().strip()
         path = write_reusable_block(self.home.blocks_dir, title, dialog.what.toPlainText().strip(),
@@ -1122,6 +1149,59 @@ class MainWindow(QMainWindow):
         if (self.home.blocks_dir / f"{name}.py").exists():
             return f"{name}.py is already in your blocks folder ({self.home.blocks_dir}): choose another name."
         return ""
+
+    def _user_block_file(self, item) -> Path | None:
+        """The file of the User Created block on that row of the Blocks list (None: a built-in block, a group…)."""
+        source = item and self.registry.sources.get(item.data(0, Qt.UserRole))
+        return None if source in (None, "built-in", "plugin") else Path(source)
+
+    def _blocks_list_menu(self, pos):
+        """The Blocks list's menu for the User Created block you right-clicked: Delete block…"""
+        tree = self.palette_panel.tree
+        item = tree.itemAt(pos)
+        if self._user_block_file(item) is None:
+            return
+        menu = QMenu(self)
+        menu.addAction("Delete block…", lambda: self.delete_user_block(item))
+        menu.exec(tree.viewport().mapToGlobal(pos))
+
+    def delete_user_block(self, item):
+        """Delete the file of the User Created block on that row of the Blocks list, once you say yes. Its blocks
+        (all those the file defines) are gone at once from the Blocks list, the documentation and the hover help;
+        open flows show their blocks of those types as unknown blocks."""
+        path = self._user_block_file(item)
+        if path is None:
+            return
+        type_id = item.data(0, Qt.UserRole)
+        titles = {t: self.registry.blocks[t].title or t for t, source in self.registry.sources.items()
+                  if source == str(path)}
+        title, others = titles[type_id], sorted(name for t, name in titles.items() if t != type_id)
+        it, it_is = ("them", "they are") if others else ("it", "it is")
+        text = f"Delete the block {title}? Its file will be deleted:\n{path}"
+        if others:
+            text += f"\n\nThat file also defines {', '.join(others)}, deleted with it."
+        used = [f"{tab.doc.title}: {block}" for tab in self.tabs_list() for block, spec in tab.doc.blocks.items()
+                if spec.get("type") in titles]
+        if used:
+            text += (f"\n\nThese blocks of open flows use {it}; they will show as unknown blocks until {it_is} made "
+                     "again:\n" + "\n".join(used))
+        else:
+            text += f"\n\nNo open flow uses {it}."
+        if QMessageBox.question(self, "Delete block", text, QMessageBox.Yes | QMessageBox.Cancel,
+                                QMessageBox.Cancel) != QMessageBox.Yes:
+            return
+        try:
+            path.unlink()
+        except OSError as e:
+            QMessageBox.warning(self, "Delete block", f"{path} could not be deleted: {e.strerror or e}. Nothing was "
+                                                      "changed.")
+            return
+        self.registry.remove_file(path)  # (the registry the open flows use)
+        self.palette_panel.show_blocks(self.registry)
+        self.docs.browser.rebuild()  # in Contents and on its page
+        for tab in self.tabs_list():
+            tab.scene.rebuild()
+        self.statusBar().showMessage(f"{title} deleted, with its file {path}", 15000)
 
     def show_block_results(self, tab: FlowTab, block_id: str):
         """A block's results in the runs it took part in; one of those runs can be put on the canvas."""
@@ -1598,6 +1678,35 @@ class MainWindow(QMainWindow):
         self._show_results(tab, None if newest else run_id)
         self._show_log(tab, run_id)
 
+    def _run_menu(self, pos):
+        """Run history's menu for the run you right-clicked: Copy executed query."""
+        table = self.history_panel.table
+        row = table.rowAt(pos.y())
+        if row < 0:
+            return
+        run_id = int(table.item(row, 0).text())
+        history = self._history()
+        try:
+            queries = history.queries(run_id)
+        finally:
+            history.close()
+        menu = QMenu(self)
+        if len(queries) == 1:
+            menu.addAction("Copy executed query", lambda: self._copy_query(run_id, queries[0]))
+        elif queries:  # in the order they ran
+            choose = menu.addMenu("Copy executed query")
+            for query in queries:
+                choose.addAction(f"{query['block']} ({query['title']})",
+                                 lambda query=query: self._copy_query(run_id, query))
+        else:  # (also a run from before blocks kept the queries they sent)
+            menu.addAction("Copy executed query (no query ran in this run)").setEnabled(False)
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _copy_query(self, run_id: int, query: dict):
+        """Copy the SQL a block sent in run `run_id`, with each value written in, to paste into a SQL tool."""
+        QApplication.clipboard().setText(P.written_in(query["sql"], query["values"]))
+        self.statusBar().showMessage(f"Copied the query of {query['block']}, run #{run_id}", 10000)
+
     def _show_results(self, tab: FlowTab, run_id: int | None = None):
         """On the canvas: each block's result from the latest run (since the flow was opened) it took part in,
         following the runs to come; or only run `run_id`'s results."""
@@ -1658,10 +1767,31 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+class NoOpenAnimation(QObject):
+    """On Windows, every window and dialog of the editor appears at once: just before it shows, the open and close
+    animation Windows plays for a new window is turned off for it. Menus, tooltips and popups are left as they are."""
+
+    def __init__(self, app: QApplication):
+        super().__init__(app)
+        self._set_attribute = ctypes.WinDLL("dwmapi").DwmSetWindowAttribute
+        self._set_attribute.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+        self._true = ctypes.c_int(1)  # a BOOL
+
+    def eventFilter(self, watched, event):
+        if (event.type() == QEvent.Show and isinstance(watched, QWidget)
+                and watched.windowType() in (Qt.Window, Qt.Dialog, Qt.Tool)):  # (a floating dock is a Tool)
+            # DWMWA_TRANSITIONS_FORCEDISABLED = 3. Its result is ignored: where Windows cannot do it, the window
+            # still shows, with the animation.
+            self._set_attribute(int(watched.winId()), 3, ctypes.byref(self._true), ctypes.sizeof(self._true))
+        return False
+
+
 def main(paths=()) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Taskloom")
     app.setOrganizationName("Taskloom")
+    if app.platformName() == "windows":  # Qt's Windows platform (not the offscreen one the tests use)
+        app.installEventFilter(NoOpenAnimation(app))
     window = MainWindow()
     window.safety.install_crash_log(on_error=window.show_error)
     window.show()

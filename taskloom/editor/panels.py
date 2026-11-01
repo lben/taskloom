@@ -8,27 +8,30 @@ import keyword
 import math
 import os
 import re
+from bisect import bisect_right
 from collections import OrderedDict
 from functools import partial
+from itertools import accumulate
+from operator import itemgetter
 from pathlib import Path
 
 import polars as pl
 import shiboken6
 import yaml
 from markdown_it import MarkdownIt
-from PySide6.QtCore import (QAbstractTableModel, QEvent, QObject, QDate, QMimeData, QModelIndex, QPoint, QPointF,
-                            QRectF, QSize, QSizeF, Qt, QTime, QTimer, Signal)
-from PySide6.QtGui import (QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QIconEngine,
-                           QImage, QImageIOHandler, QImageReader, QPainter, QPalette, QPen, QPixmap, QSyntaxHighlighter,
-                           QTextBlockFormat, QTextCharFormat, QTextCursor, QTextDocument, QTextDocumentFragment,
-                           QTextFormat, QTextFrameFormat, QTextImageFormat)
+from PySide6.QtCore import (QAbstractTableModel, QEvent, QItemSelectionModel, QObject, QDate, QMimeData, QModelIndex,
+                            QPoint, QPointF, QRectF, QSignalBlocker, QSize, QSizeF, Qt, QTime, QTimer, Signal)
+from PySide6.QtGui import (QAction, QColor, QDrag, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon,
+                           QIconEngine, QImage, QImageIOHandler, QImageReader, QKeySequence, QPainter, QPalette, QPen,
+                           QPixmap, QShortcut, QSyntaxHighlighter, QTextBlockFormat, QTextCharFormat, QTextCursor,
+                           QTextDocument, QTextDocumentFragment, QTextFormat, QTextFrameFormat, QTextImageFormat)
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QCheckBox,
                                QComboBox, QDateEdit, QDateTimeEdit, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
                                QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QPlainTextEdit,
-                               QPushButton, QScrollArea, QSpinBox, QTableView, QTableWidget, QTableWidgetItem,
-                               QTextBrowser, QTimeEdit, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
-                               QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QSpinBox, QStyledItemDelegate, QTableView, QTableWidget,
+                               QTableWidgetItem, QTextBrowser, QTextEdit, QTimeEdit, QToolButton, QToolTip, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, applies, fields, setting_label
@@ -721,10 +724,11 @@ def _inputs(widget: QWidget) -> list:
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
-    def __init__(self, home, settings):
+    def __init__(self, home, settings, toggles: FindToggles):
         super().__init__()
         self.home = home
         self.settings = settings  # (the editor's preferences)
+        self.toggles = toggles  # (of the code boxes' find bars)
         self.setWidgetResizable(True)
         self.doc = self.registry = self.block_id = self.note_id = None
         self._committing = False
@@ -760,6 +764,10 @@ class PropertiesPanel(QScrollArea):
 
     def show_block(self, doc, registry, block_id):
         shown = (self.doc, self.block_id)
+        if self._committing and (doc, block_id) == shown and any(bar.isVisible() for bar in self.findChildren(FindBar)):
+            # The canvas drawn again after an edit here, e.g. a code box saved as the focus went into its find bar:
+            # this shows it already, and building it again would take the open bar away from under the focus.
+            return
         self._finish_editing()
         if (doc, block_id) == shown and self.block_id != block_id:
             block_id = self.block_id  # finishing renamed it: show it under its new name
@@ -1213,17 +1221,17 @@ class PropertiesPanel(QScrollArea):
             w.setToolTip(_as_written(f.help))  # (the box's own: it may be under buttons)
             w.editing_finished.connect(lambda: self._set(key, w.toPlainText() or None))
             if f.language == "html":
-                return _with_html_buttons(w)
-            if not code:
-                return w
-            wrap_box = QCheckBox("Wrap lines", checked=wrap)
-            self._row_help("wrap", None, wrap_box)
-            wrap_box.toggled.connect(lambda on: (self.settings.setValue("wrap_code", on), w.set_wrap(on)))
-            box = QWidget()
-            column = QVBoxLayout(box)
-            column.setContentsMargins(0, 0, 0, 0)
-            column.addWidget(w)
-            column.addWidget(wrap_box)
+                box = _with_html_buttons(w)
+            else:
+                box = QWidget()
+                QVBoxLayout(box).setContentsMargins(0, 0, 0, 0)
+                box.layout().addWidget(w)
+            box.layout().addWidget(FindBar(w, self.toggles))  # Ctrl+F in the box: just under it
+            if code:
+                wrap_box = QCheckBox("Wrap lines", checked=wrap)
+                self._row_help("wrap", None, wrap_box)
+                wrap_box.toggled.connect(lambda on: (self.settings.setValue("wrap_code", on), w.set_wrap(on)))
+                box.layout().addWidget(wrap_box)
             return box
         w = QLineEdit(_to_text(value))
         w.setPlaceholderText(_to_text(default))
@@ -1661,6 +1669,278 @@ class FlowSettingsPanel(QWidget):
         self._show_schedule()
 
 
+# --- Find (Ctrl+F) ------------------------------------------------------------------
+
+# The highlight behind every match and behind the current one, and the red of a pattern that is not valid, on a light
+# and on a dark background (as in JetBrains' light and dark themes): the text reads on each, the red stands out.
+FOUND, CURRENT, INVALID = ("#ffe58f", "#32593d"), ("#a6d2ff", "#214283"), ("#c0392b", "#f75464")
+
+
+class FindToggles(QObject):
+    """The ".*" (regular expressions) and "Aa" (match case) toggles of a window's find bars: shared by all of them,
+    regular expressions on and match case off as the editor starts, kept while it runs (never saved)."""
+
+    def __init__(self, parent: QObject):
+        super().__init__(parent)
+        self.regex = QAction(".*", self, checkable=True, toolTip="Regular expressions: on, what you type is a pattern "
+                             "(e.g. error|failed, \\d+ s); off, it is found as typed")
+        self.regex.setChecked(True)
+        self.case = QAction("Aa", self, checkable=True, toolTip="Match case: on, only the case typed; off, any case")
+
+
+class FindBar(QWidget):
+    """Ctrl+F (Cmd+F on macOS) in `view`: the Log, a code box, Data preview's table or text, or Run history. Left to
+    right: the search field, the count ("3/12": the current match of all), previous and next (also Shift+Enter and
+    Enter), the window's two toggles, and close (also Esc). Every match is highlighted, the current one more strongly;
+    going to one shows it (in a table, selected). It never changes what it searches in. `headers`: a table's column
+    headers are searched too."""
+
+    def __init__(self, view: QWidget, toggles: FindToggles, headers: bool = False):
+        super().__init__()
+        self.view, self.toggles, self.headers = view, toggles, headers
+        self.table = isinstance(view, QAbstractItemView)
+        self.matches, self.at, self.origin, self.problem = [], -1, (-1, -1), ""
+        self.marked = {}  # a table's matches: (row, column) -> whether it is the current one (a header's row: -1)
+        # Its own tooltip, else its field's and count's would be the one around it (e.g. a code setting's help).
+        self.setToolTip("Enter: next match, Shift+Enter: previous, Esc: close")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 2, 4, 2)
+        self.field = QLineEdit(placeholderText="Find")
+        self.count = QLabel()
+        row.addWidget(self.field, 1)
+        row.addWidget(self.count)
+        for arrow, tip, by in ((Qt.UpArrow, "Previous match (Shift+Enter)", -1), (Qt.DownArrow, "Next match (Enter)", 1)):
+            button = QToolButton(arrowType=arrow, toolTip=tip, autoRaise=True)
+            button.clicked.connect(lambda _=False, by=by: self.step(by))
+            row.addWidget(button)
+        for action in (toggles.regex, toggles.case):
+            button = QToolButton(autoRaise=True)
+            button.setDefaultAction(action)  # (its text, tooltip and state: the same in every find bar)
+            row.addWidget(button)
+            action.toggled.connect(self._toggled)
+        close = QToolButton(text="×", toolTip="Close (Esc)", autoRaise=True)
+        close.clicked.connect(self.close_bar)
+        row.addWidget(close)
+        self.field.textChanged.connect(lambda: self._search())
+        self._again = QTimer(self, singleShot=True, interval=0)  # (the lines a run printed at once: one search)
+        self._again.timeout.connect(lambda: self.isHidden() or self._search(go=False))
+        self.hide()
+        QShortcut(QKeySequence.Find, view, self.open).setContext(Qt.WidgetShortcut)  # only with the focus in the view
+        view.installEventFilter(self)
+        if self.table:
+            view.setItemDelegate(_FoundCells(self))
+            if headers:
+                view.setHorizontalHeader(_FoundHeader(self))
+        else:
+            view.document().contentsChanged.connect(self.refresh)
+            for signal in (view.verticalScrollBar().valueChanged, view.verticalScrollBar().rangeChanged):
+                signal.connect(self._scrolled)  # other lines in view: theirs highlighted
+
+    def open(self):
+        """Show the bar, the focus in its field, with the text selected in the view (on one line) put in it."""
+        if self.table:
+            index = self.view.currentIndex()
+            self.origin = (index.row(), index.column()) if index.isValid() else (-1, -1)
+        else:
+            cursor = self.view.textCursor()
+            self.origin = (cursor.selectionStart(), cursor.selectionStart())  # (as a match: start, end)
+            selected = cursor.selectedText()
+            if selected and selected.splitlines() == [selected]:
+                if self.toggles.regex.isChecked():  # found as it is written: its special characters made plain
+                    selected = re.sub(r"[\\.^$*+?{}()\[\]|]", r"\\\g<0>", selected)
+                with QSignalBlocker(self.field):
+                    self.field.setText(selected)
+        self.show()
+        self.field.setFocus()
+        self.field.selectAll()
+        self._search()
+
+    def refresh(self, moved: dict[int, int] | None = None):
+        """What the view shows changed (new lines in the Log, another table, an edit in a code box): find again once
+        the change is done, keeping the current match's number, without moving the view. `moved`: a table refilled
+        with its rows in new places (each row's place now; in Run history new runs come on top): found again now, the
+        current match the same cell in its new place."""
+        if self.isHidden():
+            return
+        if moved is None:
+            self._again.start()
+        else:
+            row, column = self.matches[self.at] if self.at >= 0 else (-1, -1)
+            self._search(go=False, keep=(moved.get(row), column))
+
+    def step(self, by: int):
+        """The next (1) or previous (-1) match, round from the last to the first and back."""
+        if self.matches:
+            self.at = (self.at + by) % len(self.matches)
+            self._show(go=True)
+
+    def close_bar(self):
+        """Close it and its highlights, the focus back in the view."""
+        if self.view.isVisible():
+            self.view.setFocus()  # (first: once the bar is hidden, its field would give the focus to the next widget)
+        self.hide()
+        self.matches, self.at = [], -1
+        self._show(go=False)
+
+    def keyPressEvent(self, event):  # (the keys its field leaves)
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.step(-1 if event.modifiers() & Qt.ShiftModifier else 1)
+        elif event.key() == Qt.Key_Escape:
+            self.close_bar()
+        else:
+            super().keyPressEvent(event)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange:  # (e.g. the theme changed: its colours)
+            self.refresh()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Hide and watched.isHidden() and not self.isHidden():
+            self.close_bar()  # its view was put away (Data preview shows a table, or text, instead)
+        return False
+
+    def _toggled(self):
+        if not self.isHidden():
+            self._search()
+
+    def _scrolled(self):
+        if not self.isHidden():
+            self._mark_text()
+
+    def _search(self, go: bool = True, keep: tuple | None = None):
+        """Find the field's text in the view. `go`: the current match is the first from where the search started, and
+        is shown; else it is `keep` (a table's cell) if that is a match, or keeps its number."""
+        text, pattern, self.problem = self.field.text(), None, ""
+        if text:
+            try:
+                pattern = re.compile(text if self.toggles.regex.isChecked() else re.escape(text),
+                                     re.MULTILINE | (0 if self.toggles.case.isChecked() else re.IGNORECASE))
+            except (re.error, OverflowError) as e:  # (a repeat count too large is an OverflowError)
+                self.problem = f"Not a valid regular expression: {e}"
+        self.matches = self._find(pattern) if pattern else []
+        if not self.matches:
+            self.at = -1
+        elif go:
+            self.at = next((i for i, match in enumerate(self.matches) if match >= self.origin), 0)
+        elif keep in self.matches:
+            self.at = self.matches.index(keep)
+        else:
+            self.at = min(max(self.at, 0), len(self.matches) - 1)
+        red = f"color: {INVALID[is_dark()]};" if self.problem else ""
+        if self.field.styleSheet() != red:
+            self.field.setStyleSheet(red)
+            self.count.setStyleSheet(red)
+        self.field.setToolTip(self.problem)
+        self.count.setToolTip(self.problem)
+        self._show(go)
+
+    def _find(self, pattern: re.Pattern) -> list[tuple[int, int]]:
+        """Where `pattern` matches, in order (an empty match is none): a table's cells as (row, column), its headers as
+        (-1, column); in a text, (start, end) as Qt counts positions."""
+        def found(value) -> bool:
+            return any(m.end() > m.start() for m in pattern.finditer("" if value is None else str(value)))
+
+        if self.table:
+            model = self.view.model()
+            if model is None:
+                return []
+            columns = range(model.columnCount())
+            heads = [(-1, c) for c in columns if self.headers and found(model.headerData(c, Qt.Horizontal))]
+            return heads + [(r, c) for r in range(model.rowCount()) for c in columns if found(model.index(r, c).data())]
+        text = self.view.document().toPlainText()
+        matches = [(m.start(), m.end()) for m in pattern.finditer(text) if m.end() > m.start()]
+        if re.search("[\U00010000-\U0010ffff]", text):  # Qt counts such a character (e.g. an emoji) as two
+            wide = list(accumulate((c > "\uffff" for c in text), initial=0))
+            matches = [(start + wide[start], end + wide[end]) for start, end in matches]
+        return matches
+
+    def _show(self, go: bool):
+        """The count and the highlights; `go`: the view at the current match."""
+        self.count.setText("Invalid regex" if self.problem else "" if not self.field.text() else
+                           f"{self.at + 1}/{len(self.matches)}" if self.matches else "0 results")
+        view = self.view
+        if self.table:
+            self.marked = {match: i == self.at for i, match in enumerate(self.matches)}
+            view.viewport().update()
+            view.horizontalHeader().viewport().update()
+            if not go or self.at < 0:
+                return
+            row, column = self.matches[self.at]
+            model = view.model()
+            if row < 0:  # a column's header: its column in view
+                view.clearSelection()
+                if model.rowCount():
+                    view.scrollTo(model.index(max(view.rowAt(0), 0), column))
+                return
+            index = model.index(row, column)
+            rows = QItemSelectionModel.Rows if view.selectionBehavior() == QAbstractItemView.SelectRows else \
+                QItemSelectionModel.NoUpdate
+            view.selectionModel().setCurrentIndex(index, QItemSelectionModel.ClearAndSelect | rows)  # (not Shift's)
+            view.scrollTo(index)
+            return
+        if go and self.at >= 0:
+            cursor = QTextCursor(view.document())
+            for position in reversed(self.matches[self.at]):  # its end, then its start, in view
+                cursor.setPosition(position)
+                view.setTextCursor(cursor)
+                view.ensureCursorVisible()
+        self._mark_text()
+
+    def _mark_text(self):
+        """Highlight the matches on the lines in view: only those (a long Log can have thousands, each new line would
+        highlight them all again), painted over the text, not in it (nothing to undo)."""
+        view, dark = self.view, is_dark()
+        top = view.cursorForPosition(QPoint(0, 0)).block().position()
+        bottom = view.cursorForPosition(QPoint(0, view.viewport().height())).block()
+        bottom = bottom.position() + bottom.length()
+        selections = []
+        i = bisect_right(self.matches, top, key=itemgetter(1))  # the first that ends after the top line's start
+        while i < len(self.matches) and self.matches[i][0] < bottom:
+            fmt, cursor = QTextCharFormat(), QTextCursor(view.document())
+            fmt.setBackground(QColor((CURRENT if i == self.at else FOUND)[dark]))
+            cursor.setPosition(self.matches[i][0])
+            cursor.setPosition(self.matches[i][1], QTextCursor.KeepAnchor)
+            selection = QTextEdit.ExtraSelection()
+            selection.format, selection.cursor = fmt, cursor
+            selections.append(selection)
+            i += 1
+        view.setExtraSelections(selections)
+
+
+class _FoundCells(QStyledItemDelegate):
+    """A table's cells as usual, those its find bar found on their highlight (under the selection, when selected)."""
+
+    def __init__(self, bar: FindBar):
+        super().__init__(bar.view)
+        self.bar = bar
+
+    def paint(self, painter, option, index):
+        current = self.bar.marked.get((index.row(), index.column()))
+        if current is not None:
+            painter.fillRect(option.rect, QColor((CURRENT if current else FOUND)[is_dark()]))
+        super().paint(painter, option, index)
+
+
+class _FoundHeader(QHeaderView):
+    """A table's column headers, those its find bar found tinted with their highlight (every style draws its own
+    header, so the tint goes over it)."""
+
+    def __init__(self, bar: FindBar):
+        super().__init__(Qt.Horizontal, bar.view)
+        self.bar = bar
+        self.setSectionsClickable(True)  # as a table's own header: a click selects the column
+        self.setHighlightSections(True)
+
+    def paintSection(self, painter, rect, section):
+        super().paintSection(painter, rect, section)
+        current = self.bar.marked.get((-1, section))
+        if current is not None:
+            tint = QColor((CURRENT if current else FOUND)[is_dark()])
+            tint.setAlpha(110)
+            painter.fillRect(rect, tint)
+
+
 # --- Log ----------------------------------------------------------------------------
 
 LEVEL_COLORS = {"ERROR": STATUS_COLORS["failed"], "WARNING": STATUS_COLORS["running"],
@@ -1807,7 +2087,7 @@ class _LogView(QTextBrowser):
 class LogPanel(QWidget):
     filter_cleared = Signal()
 
-    def __init__(self):
+    def __init__(self, toggles: FindToggles | None = None):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1821,6 +2101,8 @@ class LogPanel(QWidget):
         layout.addLayout(bar)
         self.text = _LogView()
         layout.addWidget(self.text)
+        self.find_bar = FindBar(self.text, toggles or FindToggles(self))  # (on its own, as in a proof: its own toggles)
+        layout.addWidget(self.find_bar)
         self.entries, self.block = [], None
         # New lines keep the view at the bottom when it is there, and leave it where you scrolled up to.
         self._follow = True
@@ -2030,7 +2312,7 @@ class PreviewPanel(QWidget):
     PREVIEW_ROWS = 200
     HINT = "Select a block to see what it produced in the last run (run the flow first)."
 
-    def __init__(self):
+    def __init__(self, toggles: FindToggles):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2051,6 +2333,10 @@ class PreviewPanel(QWidget):
         layout.addWidget(self.view)
         layout.addWidget(self.text)
         self.text.hide()
+        self.find_bar = FindBar(self.view, toggles, headers=True)
+        self.text_find_bar = FindBar(self.text, toggles)
+        layout.addWidget(self.find_bar)
+        layout.addWidget(self.text_find_bar)
         self.tables: dict[str, str] = {}
         self.previews: dict[str, str] = {}
         self.block_id = None
@@ -2068,6 +2354,7 @@ class PreviewPanel(QWidget):
         self.ports.setVisible(len(names) > 1)
         if not names:
             self.view.setModel(None)
+            self.find_bar.refresh()
             self.text.hide()
             self.view.show()
             status = info.get("status")
@@ -2093,9 +2380,11 @@ class PreviewPanel(QWidget):
             df = lazy.head(self.PREVIEW_ROWS).collect()
         except Exception as e:
             self.view.setModel(None)
+            self.find_bar.refresh()
             self.label.setText(f"Cannot preview: {e} (runs are cleaned up as Keep runs or keep_runs_for says)")
             return
         self.view.setModel(FrameModel(df))
+        self.find_bar.refresh()
         self.label.setText(f"{self.block_id}.{port}: {total:,} rows × {df.width} columns"
                            + (f" (showing first {self.PREVIEW_ROWS})" if total > self.PREVIEW_ROWS else ""))
 
@@ -2105,7 +2394,7 @@ class PreviewPanel(QWidget):
 class HistoryPanel(QWidget):
     open_run = Signal(int)
 
-    def __init__(self):
+    def __init__(self, toggles: FindToggles):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2115,16 +2404,27 @@ class HistoryPanel(QWidget):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)  # one run, kept selected as runs come in
         self.runs: list[dict] = []  # as listed
         hint = QLabel("Double-click a run to show it on the canvas.")
         hint.setStyleSheet("color: palette(placeholder-text); padding: 2px 6px;")
         layout.addWidget(hint)
         layout.addWidget(self.table)
+        self.find_bar = FindBar(self.table, toggles)
+        layout.addWidget(self.find_bar)
         self.table.cellDoubleClicked.connect(lambda row, _: self.open_run.emit(int(self.table.item(row, 0).text())))
 
     def show_runs(self, runs: list[dict]):
         if runs == self.runs:  # nothing new: the row you selected and where you scrolled to stay
             return
+        # Refilled, the list keeps the run you selected (by its number) and the run at the top of the view, unless
+        # it was at the top: then each new run shows at the top.
+        table, bar = self.table, self.table.verticalScrollBar()
+        current, column, top, scrolled = table.currentRow(), table.currentColumn(), table.rowAt(0), bar.value()
+        before = [run["id"] for run in self.runs]
+        selected = before[current] if current >= 0 and table.item(current, 0).isSelected() else None
+        anchor = before[top] if top >= 0 and scrolled else None
+        offset = table.rowViewportPosition(top)  # (scrolled by pixels: how far the top row is cut off)
         self.runs = runs
         self.table.setRowCount(0)
         for run in runs:
@@ -2143,3 +2443,13 @@ class HistoryPanel(QWidget):
                     item.setIcon(status_icon(run["status"]))
                 self.table.setItem(row, col, item)
         self.table.resizeColumnsToContents()
+        place = {run["id"]: row for row, run in enumerate(runs)}  # each run's row now
+        if selected in place:  # (a run Keep runs removed leaves nothing selected)
+            table.setAutoScroll(False)  # (else the list scrolls to it, now or when it shows next)
+            table.setCurrentCell(place[selected], column)
+            table.setAutoScroll(True)
+        table.doItemsLayout()  # (the scroll bar's range for the new rows)
+        if anchor in place:
+            table.scrollTo(table.model().index(place[anchor], 0), QAbstractItemView.PositionAtTop)
+            bar.setValue(bar.value() - offset)
+        self.find_bar.refresh({row: place[run_id] for row, run_id in enumerate(before) if run_id in place})

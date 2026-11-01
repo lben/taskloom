@@ -115,6 +115,14 @@ class Context:
     def warn(self, message: str):
         self.log(message, "WARNING")
 
+    def sending_query(self, title: str, sql: str, names: list[str], values: dict):
+        """Keep in the run history the SQL the block is sending (its :names made ?s by params.to_qmark) and the value
+        bound to each ?, in order, as an SQL literal: a secret only as <hidden: secret NAME> (NAME its bind
+        parameter's), never its text. For Run history's Copy executed query."""
+        bound = [f"<hidden: secret {name}>" if isinstance(value, SecretStr) else P.sql_literal(value)
+                 for name in names for value in (values[name] if isinstance(values[name], list) else [values[name]])]
+        self._emit({"event": "query", "block": self.block_id, "title": title, "sql": sql, "values": bound})
+
     def new_path(self, name: str) -> Path:
         """A path inside this attempt's private workspace folder."""
         self.workspace.mkdir(parents=True, exist_ok=True)

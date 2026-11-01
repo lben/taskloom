@@ -142,10 +142,10 @@ def test_run_history_lists_every_run_scheduled_ones_too_as_they_come(proof, env,
                    "started it (Started by says who). That did not change. What changed is when the editor reads "
                    "it: at the check it already makes every 2 seconds, of the flows' schedules, of the scheduler "
                    "service and of the flows running, for the flow you are looking at.")
-    p.why_simplest("When the runs it reads are the ones already listed, the list is left as it is: the row you "
-                   "clicked stays highlighted, and the list stays where you scrolled to. It is written again only "
-                   "when the runs have changed (one has started, ended or been deleted); the row you clicked is then "
-                   "no longer highlighted, but the canvas stays on the run you double-clicked (step 5).")
+    p.why_simplest("When the runs it reads are the ones already listed, the list is left as it is. It is written "
+                   "again only when the runs have changed (one has started, ended or been deleted); the run you "
+                   "selected then stays selected and the list stays where you scrolled to, and the canvas stays on "
+                   "the run you double-clicked (step 5).")
     p.why_simplest("Each flow file has one spelling. When the editor opens or saves a flow, and when a run starts "
                    "(the editor, the scheduler service and a terminal all start runs with taskloom run), the path is "
                    "turned into the way the file is written on disk: whole, without links or “..”, each name with "
@@ -259,16 +259,16 @@ def test_run_history_lists_every_run_scheduled_ones_too_as_they_come(proof, env,
         p.shot(win, f"① The schedule's next run, {fourth}, started by every_minute at {started_at(win, fourth)}, is "
                     "a new row at the top; the rows under it are as they were.",
                highlight=[rows(win, [0])], badges=True, zoom=rows(win, range(4)))
-        p.note(f"Run {first}'s row was highlighted until run {fourth} came; it no longer is. When a run comes, the "
-               "list is written anew, and the highlight of the row you clicked does not stay. The canvas is what "
-               "keeps showing the run you double-clicked.")
+        p.note(f"Run {first}'s row, the one you double-clicked, is still highlighted after run {fourth} came: when "
+               "a run comes, the run you selected stays selected. The canvas keeps showing the run you "
+               "double-clicked.")
         p.check("Every run of the flow in the run history is a row, newest first: "
                 f"{', '.join(r[0] for r in recorded(win, flow))}",
                 lists_them_all(win, flow) and len(listed(win)) == 4)
         p.check(f"① Run {fourth} is the new row at the top, started by every_minute",
                 listed(win)[0] == (fourth, "every_minute", "success"))
-        p.check(f"Run {first}'s row was highlighted after the double-click, and is no longer once run {fourth} came",
-                highlighted == [first] and selected_runs(win) == [])
+        p.check(f"Run {first}'s row was highlighted after the double-click, and still is once run {fourth} came",
+                highlighted == [first] and selected_runs(win) == [first])
         p.shot(win, f"② The canvas still shows run {first}, the one you double-clicked: note_time says "
                     f"“{first_time}”, as in run {first} (in run {second} it said “{second_time}”). ③ load_sales "
                     f"shows no result, though run {fourth} has just run it: every_minute's line took no part in run "

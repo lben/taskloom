@@ -209,10 +209,13 @@ class FlowDocument(QObject):
         self._done()
         return block_id
 
-    def paste_blocks(self, blocks: dict, edges: list[str], notes: dict, dx: float,
-                     dy: float) -> tuple[list[str], list[str]]:
-        """Add copies of blocks (new ids) and the edges between them, and of texts (new ids), all moved by dx, dy,
-        in one step. Returns the new block ids and note ids."""
+    def paste_blocks(self, blocks: dict, edges: list[str], notes: dict, x: float,
+                     y: float) -> tuple[list[str], list[str]]:
+        """Add copies of blocks (new ids) and the edges between them, and of texts (new ids), in one step, in their
+        layout, with the group's top-left corner (its smallest x and y) at x, y. Returns the new block ids and note
+        ids."""
+        spots = [(spec.get("ui") or {}) for spec in blocks.values()] + list(notes.values())
+        dx, dy = x - min(s.get("x", 0) for s in spots), y - min(s.get("y", 0) for s in spots)
         self._change()
         renamed = {}
         for old_id, spec in blocks.items():

@@ -8,7 +8,8 @@ from functools import cache
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QTransform
+from PySide6.QtGui import (QColor, QCursor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
+                           QTransform)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit,
@@ -964,6 +965,43 @@ class FlowView(QGraphicsView):
             cls = self.scene().registry.get(type_id)
             self.scene().doc.add_block(type_id, at.x() - NODE_W / 2, at.y() - HEADER_H / 2,
                                        cls.new_config if cls else None)
+
+    def paste_corner(self, blocks: dict, notes: dict, at: QPointF | None = None) -> tuple[QPointF, bool]:
+        """Where pasted blocks and texts (as copied) put their top-left corner: at `at` (the spot right-clicked), else
+        at the mouse pointer when it is over the canvas, else where the group is in the middle of the visible canvas;
+        then 40 px right and down while a copy would be exactly where a block or text already is (pasted again at the
+        same place), a pasted text under a block or a pasted block wholly over a text (texts are drawn behind
+        blocks): none is hidden. Returns the corner, and whether it was moved for a text (it may then be anywhere)."""
+        scene, canvas = self.scene(), self.viewport()
+        nodes = [NodeItem(i, spec, scene.registry) for i, spec in blocks.items()]
+        texts = [NoteItem(i, note) for i, note in notes.items()]
+        corner = QPointF(min(item.x() for item in nodes + texts), min(item.y() for item in nodes + texts))
+        pointer = QCursor.pos()
+        if at is None and QApplication.widgetAt(pointer) is canvas:  # (not on a menu, e.g. Edit > Paste, or a panel)
+            at = self.mapToScene(canvas.mapFromGlobal(pointer))
+        elif at is None:
+            group = QRectF()
+            for item in nodes + texts:
+                group = group.united(item.sceneBoundingRect())
+            at = self.mapToScene(canvas.rect().center()) - (group.center() - corner)
+        at = QPointF(round(at.x()), round(at.y()))  # (positions are stored as whole numbers)
+        there_nodes, there_texts = list(scene.nodes.values()), list(scene.note_items.values())
+        taken = {(item.x(), item.y()) for item in there_nodes + there_texts}
+
+        def repeated(shift: QPointF) -> bool:
+            return any((item.x() + shift.x(), item.y() + shift.y()) in taken for item in nodes + texts)
+
+        def covered(shift: QPointF) -> bool:
+            return (any(b.sceneBoundingRect().intersects(t.sceneBoundingRect().translated(shift))
+                        for t in texts for b in there_nodes) or
+                    any(b.sceneBoundingRect().translated(shift).contains(t.sceneBoundingRect())
+                        for b in nodes for t in there_texts))
+
+        for_text = False
+        while repeated(at - corner) or covered(at - corner):
+            for_text = for_text or covered(at - corner)
+            at += QPointF(40, 40)
+        return at, for_text
 
     def add_at_center(self, type_id: str):
         center = self.mapToScene(self.viewport().rect().center())

@@ -35,6 +35,8 @@ def _print_event(event: dict):
     elif kind == "run_started":
         params = " ".join(f"{k}={v}" for k, v in event["params"].items())
         line = f"{ts} run #{event['run_id']} of {event['flow']} started" + (f" · {params}" if params else "")
+    elif kind == "query":  # (kept in the run history, for Copy executed query)
+        return
     else:
         line = f"{ts} run #{event['run_id']} {event['status']}"
     print(line, file=sys.stderr, flush=True)

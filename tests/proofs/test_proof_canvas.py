@@ -4,6 +4,7 @@ results; the zoom can be typed, with bolder + and - and the step box's arrows st
 import copy
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QLineEdit, QStyle, QStyleFactory,
                                QStyleOptionButton, QStyleOptionSpinBox, QToolBar)
@@ -67,6 +68,12 @@ def on_screen(tab, scene_point: QPointF) -> QPoint:
     return tab.view.mapFromScene(scene_point)
 
 
+def point_at(widget, at: QPoint):
+    """Move the mouse pointer onto `at` on `widget`."""
+    QCursor.setPos(widget.mapToGlobal(at))
+    QApplication.processEvents()
+
+
 def click_block(tab, block: str, modifier=Qt.NoModifier):
     """Click a block's title bar, as you would (with Ctrl: add it to what is selected)."""
     at = tab.scene.nodes[block].mapToScene(QPointF(NODE_W / 2, HEADER_H / 2))
@@ -107,18 +114,13 @@ def drag_port_to_port(tab, src: str, src_port: str, dst: str, dst_port: str):
     QApplication.processEvents()
 
 
-def bring_into_view(tab, blocks=(), notes=()):
-    """Drag the canvas with the middle mouse button until these blocks and texts are in the middle of it."""
+def in_the_middle(tab, blocks=(), notes=()) -> bool:
+    """These blocks and texts are in view, together in the middle of the visible canvas (to within 2 pixels)."""
     rect = QRectF()
     for item in [tab.scene.nodes[b] for b in blocks] + [tab.scene.note_items[n] for n in notes]:
         rect |= item.sceneBoundingRect()
-    viewport = tab.view.viewport()
-    a, b = on_screen(tab, rect.center()), viewport.rect().center()
-    QTest.mousePress(viewport, Qt.MiddleButton, Qt.NoModifier, a)
-    for i in range(1, 6):
-        QTest.mouseMove(viewport, a + (b - a) * i / 5)
-    QTest.mouseRelease(viewport, Qt.MiddleButton, Qt.NoModifier, b)
-    QApplication.processEvents()
+    shown, canvas = tab.view.mapFromScene(rect).boundingRect(), tab.view.viewport().rect()
+    return canvas.contains(shown) and (shown.center() - canvas.center()).manhattanLength() <= 2
 
 
 def text_area(win, tab, note_id: str) -> QRect:
@@ -172,9 +174,10 @@ def test_texts_are_copied_and_pasted_like_blocks(proof, win, qtbot, tmp_path, mo
               "I cannot copy/paste Text blocks, copy/pasting should be available for all blocks")
     p.idea("Texts on the canvas can now be copied and pasted like blocks: on their own, or together with blocks, in "
            "the same flow or into another one.")
-    p.idea("Select a text (or texts and blocks together) and choose Edit > Copy, or press Ctrl+C. Edit > Paste, or "
-           "Ctrl+V, adds a copy of each, a little to the right of and below the original: the same words in the same "
-           "look (style, size, font, bold, italic, underline, where its lines wrap).")
+    p.idea("Select a text (or texts and blocks together) and choose Edit > Copy, or press Ctrl+C. Edit > Paste adds a "
+           "copy of each in the middle of the canvas you see (Ctrl+V with the mouse pointer on the canvas: at the "
+           "pointer): the same words in the same look (style, size, font, bold, italic, underline, where its lines "
+           "wrap).")
     p.idea("The copies are selected, so you can drag them straight to where you want them, and one Undo takes back "
            "the whole paste.")
     p.why_simplest("Copy already put the selected blocks, with the connections between them, on the clipboard; Paste "
@@ -193,9 +196,9 @@ def test_texts_are_copied_and_pasted_like_blocks(proof, win, qtbot, tmp_path, mo
                   "set again on every copy.")
     p.fits("Copy and Paste stay where they were, in the Edit menu, with the same shortcuts. They act on the canvas: "
            "in the Log or in a text field, Ctrl+C and Ctrl+V still copy and paste text there.")
-    p.fits("A pasted text lands where a pasted block does, a little to the right and below, and texts and blocks "
-           "pasted together keep their places next to each other. Like pasted blocks, the copies are selected, and "
-           "one Undo removes the whole paste.")
+    p.fits("A pasted text lands where a pasted block does, in the middle of the canvas you see or at the mouse "
+           "pointer, and texts and blocks pasted together keep their places next to each other. Like pasted blocks, "
+           "the copies are selected, and one Undo removes the whole paste.")
     p.fits("Each copy is a new text: pasting into a flow that already has texts never replaces one of them.")
     flow = write_flow(tmp_path / "daily-sales.yaml", FLOW)
     QApplication.clipboard().setText("")
@@ -220,10 +223,11 @@ def test_texts_are_copied_and_pasted_like_blocks(proof, win, qtbot, tmp_path, mo
 
     from_edit_menu(p, win, "Copy", copy_it)
 
-    p.step("Choose Edit > Paste.")
+    p.step("Choose Edit > Paste. The copy goes in the middle of the canvas you see; were it behind a block there "
+           "(texts are drawn behind blocks), it goes right and down until it is clear of the blocks.")
     from_edit_menu(p, win, "Paste")
     pasted = [n for n in tab.doc.notes if n != "note_1"]
-    p.shot(win, "① The copy, a little to the right of and below the original. The copy is the one selected (its "
+    p.shot(win, "① The copy, near the middle of the canvas, clear of the blocks. The copy is the one selected (its "
                 "dashed frame), ready to be dragged where you want it; the original is as it was.",
            highlight=[text_area(win, tab, n) for n in pasted], badges=True,
            zoom=[text_area(win, tab, n) for n in pasted + ["note_1"]] + ["read_sales"])
@@ -232,8 +236,10 @@ def test_texts_are_copied_and_pasted_like_blocks(proof, win, qtbot, tmp_path, mo
     p.check(f"The copy has the same words, “{TITLE}”, in the same look: heading style, bold",
             looks(the_copy) == looks(original) and tab.scene.note_items[pasted[0]].toPlainText() == TITLE
             and tab.scene.note_items[pasted[0]].font().bold())
-    p.check("The copy is a little to the right of and below the original",
-            the_copy["x"] > original["x"] and the_copy["y"] > original["y"])
+    shown = tab.scene.note_items[pasted[0]].sceneBoundingRect()
+    p.check("The copy is in view, and no block hides it",
+            tab.view.viewport().rect().contains(tab.view.mapFromScene(shown).boundingRect())
+            and not any(node.sceneBoundingRect().intersects(shown) for node in tab.scene.nodes.values()))
     p.check("① The copy is selected, the original is not", tab.scene.selected_note_ids() == pasted)
     p.check("The original is unchanged", tab.doc.notes["note_1"] == original)
 
@@ -251,20 +257,17 @@ def test_texts_are_copied_and_pasted_like_blocks(proof, win, qtbot, tmp_path, mo
            highlight=[text_area(win, tab, "note_1"), ["read_sales", "total_sales"]], badges=True,
            zoom=[text_area(win, tab, "note_1"), "read_sales", "total_sales"])
 
-    p.step("Press + next to the tabs to start a new flow, and choose Edit > Paste there. Paste puts the copies where "
-           "the originals were in the first flow, a little to the right and below: here that is past the right edge "
-           "of the canvas, so drag the canvas with the middle mouse button to bring them into view.")
-    QTest.mouseClick(win.tabs.tabBar().new_button, Qt.LeftButton)
+    p.step("Press + next to the tabs to start a new flow, and choose Edit > Paste there. The copies land in the "
+           "middle of the canvas you see, in view at once.")
+    plus = win.tabs.tabBar().new_button
+    point_at(plus, plus.rect().center())  # (the pointer leaves the canvas)
+    QTest.mouseClick(plus, Qt.LeftButton)
     QApplication.processEvents()
     target = win.current
     p.check("A new flow opens, in its own tab", target is not tab and list(target.doc.blocks) == ["start"])
     from_edit_menu(p, win, "Paste")
-    bring_into_view(target, ["read_sales", "total_sales"], list(target.doc.notes))
-    canvas = target.view.viewport().rect()
-    p.check("Dragging the canvas brought the pasted text and blocks into view",
-            all(canvas.contains(target.view.mapFromScene(item.sceneBoundingRect()).boundingRect())
-                for item in [target.scene.nodes["read_sales"], target.scene.nodes["total_sales"],
-                             *target.scene.note_items.values()]))
+    p.check("The pasted text and blocks are in view, together in the middle of the canvas you see",
+            in_the_middle(target, ["read_sales", "total_sales"], list(target.doc.notes)))
     p.check("The new flow now has the text and the two blocks, with the connection between them",
             [n["text"] for n in target.doc.notes.values()] == [TITLE]
             and set(target.doc.blocks) == {"start", "read_sales", "total_sales"}

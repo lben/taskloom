@@ -90,6 +90,7 @@ class DuckDBSQL(Block):
             con.execute(f"SET temp_directory = {_sql_literal(str(ctx.new_path('duckdb_tmp')))}")
             for name, table in inputs.items():
                 con.execute(f'CREATE VIEW "{name}" AS SELECT * FROM read_parquet({_sql_literal(str(table.path))})')
+            ctx.sending_query(self.title, sql, names, ctx.params)
             result = con.sql(sql, params=args or None)
             if result is None:
                 raise ValueError("the SQL must end with a query that gives a table, e.g. select * from ...")

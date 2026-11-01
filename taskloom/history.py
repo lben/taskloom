@@ -62,11 +62,13 @@ class History:
         self._db = connect(path)
         self._db.executescript(SCHEMA)
         columns = {table: {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
-                   for table in ("runs", "logs")}
+                   for table in ("runs", "logs", "blocks")}
         # A history file from before runs recorded their process, what started them, or the start blocks they
-        # count for, or before log lines said how the Log shows them: it gets the column.
+        # count for, before log lines said how the Log shows them, or before blocks kept the query they sent: it
+        # gets the column.
         for table, name, kind in (("runs", "pid", "INTEGER"), ("runs", "started_by", "TEXT NOT NULL DEFAULT ''"),
-                                  ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("logs", "show", "TEXT")):
+                                  ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("logs", "show", "TEXT"),
+                                  ("blocks", "query", "TEXT")):
             if name not in columns[table]:
                 try:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
@@ -119,6 +121,10 @@ class History:
                 "INSERT INTO logs (run_id, block, ts, level, message, show) VALUES (?, ?, ?, ?, ?, ?)",
                 (run_id, event.get("block"), ts, event["level"], event["message"], event.get("show")),
             )
+        elif kind == "query":
+            query = {k: event[k] for k in ("title", "sql", "values")}
+            self._exec("UPDATE blocks SET query=? WHERE run_id=? AND block=?",
+                       (json.dumps(query, ensure_ascii=False), run_id, event["block"]))
         elif kind == "run_finished":
             self._exec("UPDATE runs SET status=?, finished=? WHERE id=?", (event["status"], ts, run_id))
 
@@ -200,6 +206,14 @@ class History:
         return [(r[0], {"run_id": r[1], "started": r[2], "started_by": r[3], "status": r[4], "attempts": r[5],
                         "error": r[6], "summary": r[7], "tables": json.loads(r[8] or "{}"),
                         "previews": json.loads(r[9] or "{}"), "finished": r[10]}) for r in rows]
+
+    def queries(self, run_id: int) -> list[dict]:
+        """The queries a run's blocks sent, in the order the blocks ran: {block, title (its type's), sql (as sent),
+        values (the literal of each ?'s value, in order)}. Empty for a run from before blocks kept them, as for one in
+        which no query ran."""
+        rows = self._exec("SELECT block, query FROM blocks WHERE run_id=? AND query IS NOT NULL ORDER BY started, rowid",
+                          (run_id,))
+        return [{"block": block, **json.loads(query)} for block, query in rows]
 
     def logs(self, run_id: int) -> list[dict]:
         """Each log line of a run: block, ts, level, message and show (how the Log draws it: None, "image" or

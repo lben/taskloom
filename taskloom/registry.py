@@ -54,6 +54,11 @@ class Registry:
             return
         self._add_from(module, str(path))
 
+    def remove_file(self, path: Path):
+        """Forget the blocks of a user block file (e.g. it was deleted)."""
+        for type_id in [t for t, source in self.sources.items() if source == str(path)]:
+            del self.blocks[type_id], self.sources[type_id]
+
 
 def discover(user_blocks_dir: Path | None) -> Registry:
     registry = Registry()

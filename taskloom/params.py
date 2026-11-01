@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import decimal
 import re
 import string
 
@@ -109,6 +110,7 @@ _SQL_TOKENS = re.compile(
       | /\*.*?\*/             # block comment
       | ::                    # cast operator
       | :([A-Za-z_][A-Za-z0-9_]*)  # bind parameter
+      | (\?)                  # a value bound to it (in the SQL to_qmark gives)
     """,
     re.VERBOSE | re.DOTALL,
 )
@@ -139,3 +141,26 @@ def to_qmark(sql: str, values: dict | None = None) -> tuple[str, list[str]]:
         return match.group(0)
 
     return _SQL_TOKENS.sub(replace, sql), names
+
+
+def sql_literal(value) -> str:
+    """A value bound to a ?, written in SQL: text in single quotes (' doubled), a number as it is, TRUE/FALSE, NULL,
+    DATE 'YYYY-MM-DD', TIMESTAMP 'YYYY-MM-DD HH:MM:SS[.ffffff]'; anything else as the text it is sent as."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float, decimal.Decimal)):
+        return str(value)
+    if isinstance(value, dt.datetime):  # (sent as its clock time, as jdbc does)
+        return f"TIMESTAMP '{value.replace(tzinfo=None).isoformat(' ')}'"
+    if isinstance(value, dt.date):
+        return f"DATE '{value.isoformat()}'"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def written_in(sql: str, literals: list[str]) -> str:
+    """The SQL to_qmark gave, with each ? replaced by its value's literal, in order; a ? in quotes or a comment is
+    none and stays."""
+    values = iter(literals)
+    return _SQL_TOKENS.sub(lambda m: next(values, "?") if m.group(2) else m.group(0), sql)
