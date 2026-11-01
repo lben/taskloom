@@ -21,6 +21,7 @@ WINDOWS = sys.platform == "win32"
 ASKED = ("Dialog boxes take some time to show up, it feels slow, why? It can likely be optimized — and later: even "
          "plain Yes/No boxes are slow, every time (on Windows 11).")
 WITHIN_MS = 100  # a Yes/No box is on screen within this long of being asked for
+TICK_MS = 16  # one Windows clock tick of tolerance, as tests/test_dialog_speed.py allows
 BOXES = 3  # Yes/No boxes asked, one after the other ("every time")
 TRANSITIONS_FORCEDISABLED = 3  # Windows' setting that turns a window's open and close animation off
 FLOW = """\
@@ -460,8 +461,9 @@ def test_dialogs_and_yes_no_boxes_open_at_once_on_windows(proof, qtbot, tmp_path
                     f"animation turned off. The three were on screen {times} after they were asked for.",
            highlight=[box], badges=True, zoom=box)
     check_turned_off(p, boxes, "each Yes/No box")
-    p.check(f"Each Yes/No box was on screen within {WITHIN_MS} ms of being asked for: {times}",
-            len(boxes) == BOXES and all(e["ms"] is not None and e["ms"] < WITHIN_MS for e in boxes))
+    p.check(f"Each Yes/No box was on screen within {WITHIN_MS} ms of being asked for, give or take one {TICK_MS} ms "
+            f"tick of Windows' clock: {times}",
+            len(boxes) == BOXES and all(e["ms"] is not None and e["ms"] < WITHIN_MS + TICK_MS for e in boxes))
     p.check("The editor showed its window, Settings and the three Yes/No boxes, each answered, and no other window",
             as_expected(recorded))
 
@@ -480,8 +482,8 @@ def test_dialogs_and_yes_no_boxes_open_at_once_on_windows(proof, qtbot, tmp_path
     p.note("What this proof cannot show is the animation itself. The pictures here are the editor's own: they show "
            "only what the editor drew. Windows plays the animation afterwards, on top of that; and on a build "
            "machine, where this proof usually runs, Windows may not play it at all. So the proof checks the two "
-           "parts apart: the editor has each box on screen within 100 ms, and Windows was told, before each window "
-           "showed, not to animate it.")
+           "parts apart: the editor has each box on screen within 100 ms (give or take one tick of Windows' "
+           "clock), and Windows was told, before each window showed, not to animate it.")
     p.note("The editor's own windows lose both of Windows' animations: they open at once, and close at once. Menus, "
            "tooltips and your Windows settings stay as they are, and so do other programs' windows. The animation is "
            "the best-supported explanation for the wait on Windows 11, but only your PC can confirm it: please say "
