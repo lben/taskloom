@@ -224,7 +224,7 @@ def test_validate_reports_all_problems(env):
     result = env.taskloom("validate", flow)
 
     assert result.returncode == 2
-    assert "unknown parameter {missing}" in result.stderr
+    assert "{missing} is neither a flow parameter nor an input of this block" in result.stderr
     assert "'b' has no output 'nope'" in result.stderr
     assert env.taskloom("run", flow).returncode == 2
 

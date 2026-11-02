@@ -17,7 +17,7 @@ from pathlib import Path
 import polars as pl
 
 from . import params as P
-from .block import AFTER, DONE, all_ports, has_done_output
+from .block import AFTER, DONE, all_ports, fields, has_done_output, setting_label
 from .flow import (ERROR_PORT, Flow, FlowError, _start_blocks, _taking_part, block_config, order, run_clock,
                    validate)
 from .config import REVEALED, before_now, kept_runs, runs_kept_since
@@ -170,6 +170,12 @@ class Context:
     def check_cancelled(self):
         if self.cancelled:
             raise Cancelled()
+
+    def waiting_until(self, until: dt.datetime | None):
+        """Tell the editor this block waits until `until` (local time; None: it no longer waits): it shows the time
+        left on the block. Not kept in the run history; `taskloom run` prints nothing for it."""
+        self._emit({"event": "waiting", "block": self.block_id,
+                    "until": until and until.isoformat(timespec="milliseconds")})
 
     def wait(self, seconds: float):
         """Sleep, but stop early (raising Cancelled) if the run is cancelled or times out."""
@@ -473,10 +479,9 @@ class _Runner:
         cls = self.registry.get(spec.type)
         try:
             config = block_config(cls, spec)
-            for name, f in cls.config.items():
-                if f.template and isinstance(config[name], str):
-                    config[name] = P.render(config[name], self.values)
             in_ports, out_ports = cls.ports(config)
+            connected = {e.dst_port for e in self.flow.edges if e.dst == spec.id}
+            config = _filled(cls, config, self.values, inputs, set(in_ports) - {AFTER}, connected)
             for name, port in in_ports.items():
                 if port.kind == "table" and name in inputs and not isinstance(inputs[name], Table):
                     raise TypeError(f"input '{name}' expects a table, got {type(inputs[name]).__name__}")
@@ -608,6 +613,59 @@ TYPED = "__typed__"  # inputs you typed, as you typed them
 CAME = "__came__"  # the connections the other inputs came by (see _came)
 STALE = "__stale__"  # made from older data: a block before it ran again on its own since
 WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
+
+
+# What a placeholder can write into a setting: a single value (a bool is an int; a datetime is a date).
+SINGLE_VALUES = (str, int, float, decimal.Decimal, dt.date, dt.time)
+
+
+def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, connected: set) -> dict:
+    """The block's config with the placeholders of its templated settings filled in (validate checked their names): a
+    flow parameter, or what arrived at the block's data input of that name (not in SQL code); a number setting written
+    with placeholders is then read as its number. Raises Failed, naming the setting, for one it cannot fill."""
+    def fill(label: str, text: str, own: set) -> str:
+        values = dict(params)
+        for name in sorted(P.template_names(text) & own):
+            if name not in inputs:
+                why = "nothing arrived at" if name in connected else "nothing is connected to"
+                raise Failed(f"{label}: {{{name}}}: {why} the input {name}")
+            value = values[name] = inputs[name]
+            if not isinstance(value, SINGLE_VALUES):
+                got = ("a table" if isinstance(value, Table) or Table.is_frame(value) else
+                       "None" if value is None else f"a {type(value).__name__}")
+                raise Failed(f"{label}: {{{name}}}: the input {name} got {got}, but only a single value (text, a "
+                             "number, a date or time, yes/no) can be written into a setting")
+        try:
+            return P.render(text, values)
+        except ValueError as e:
+            raise Failed(f"{label}: {e}") from None
+
+    filled = dict(config)
+    for key, f in cls.config.items():
+        if not f.template:
+            continue
+        value, label = config[key], setting_label(key, f)
+        own = set() if isinstance(f, fields.Code) else data_inputs  # SQL code: flow parameters only
+        if isinstance(value, list):
+            filled[key] = [fill(label, item, own) for item in value]
+        elif isinstance(value, str):
+            filled[key] = fill(label, value, own)
+            if isinstance(f, (fields.Int, fields.Float)):  # (one written without placeholders is a number already)
+                filled[key] = _number(f, label, value, filled[key])
+    return filled
+
+
+def _number(f, label: str, written: str, text: str):
+    """The number a number setting written as `written` takes, filled in as `text`, within its own limits."""
+    whole = isinstance(f, fields.Int)
+    try:
+        number = int(text) if whole else float(text)  # (spaces around it ignored)
+    except ValueError:
+        raise Failed(f"{label}: {written} gave {text!r}, which is not a {'whole ' if whole else ''}number") from None
+    try:
+        return f.coerce(number)
+    except ValueError as e:  # e.g. an Int's minimum
+        raise Failed(f"{label}: {written} gave {text!r}: {e}") from None
 
 
 def _holds_secret(value) -> bool:

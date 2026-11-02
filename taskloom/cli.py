@@ -37,6 +37,8 @@ def _print_event(event: dict):
         line = f"{ts} run #{event['run_id']} of {event['flow']} started" + (f" · {params}" if params else "")
     elif kind == "query":  # (kept in the run history, for Copy executed query)
         return
+    elif kind == "waiting":  # (for the editor's countdown; the Log line before it says how long and until when)
+        return
     else:
         line = f"{ts} run #{event['run_id']} {event['status']}"
     print(line, file=sys.stderr, flush=True)

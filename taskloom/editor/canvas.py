@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPat
                                QSpinBox, QStyle, QStyleFactory, QToolButton)
 
 from ..block import AFTER, DONE, all_ports
+from ..blocks.logic import written_seconds
 from ..flow import ERROR_PORT, BlockSpec, block_config
 from .document import FlowDocument, edge_text
 
@@ -160,11 +161,15 @@ class NodeItem(QGraphicsItem):
         self.outputs = ([DONE] if DONE in outputs else []) + [n for n in outputs if n != DONE] + \
             ([] if cls is not None and cls.is_trigger else [ERROR_PORT])
         rows = max(len(self.inputs), len(self.outputs), 1)
-        # A Schedule block has a line of its own for when it starts the flow next, above its result.
-        self.counts_down = spec.get("type") == "trigger.schedule"
+        # A Schedule block has a line of its own for when it starts the flow next, a Wait block for how long it waits
+        # (while it waits: the time left), above its result.
+        self.counts_down = spec.get("type") in ("trigger.schedule", "logic.wait")
         self.height = HEADER_H + 6 + rows * ROW_H + (COUNTDOWN_H if self.counts_down else 0) + FOOTER_H
         self.status, self.status_text = None, ""
         self.countdown = ""
+        seconds = (spec.get("config") or {}).get("seconds")
+        self.resting = ("…" if spec.get("type") != "logic.wait" else "needs seconds" if seconds is None
+                        else f"waits {written_seconds(seconds)} s")  # the line without a countdown
         self.ports: dict[tuple[str, bool], PortItem] = {}
         for i, name in enumerate(self.inputs):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
@@ -241,11 +246,11 @@ class NodeItem(QGraphicsItem):
             if font.italic():
                 font.setItalic(False)
                 painter.setFont(font)
-        if self.counts_down:  # when it starts the flow next
+        if self.counts_down:  # when it starts the flow next; how long it waits, or the time left
             painter.setPen(pal.text().color())
             line = QRectF(10, self.height - FOOTER_H - COUNTDOWN_H, NODE_W - 20, COUNTDOWN_H)
             painter.drawText(line, Qt.AlignVCenter, painter.fontMetrics().elidedText(
-                "⏱ " + (self.countdown or "…"), Qt.ElideRight, int(line.width())))
+                "⏱ " + (self.countdown or self.resting), Qt.ElideRight, int(line.width())))
         # footer: the run status, else the type
         text = self.status_text if self.status else self.type_title
         painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS and self.status != "skipped"
@@ -511,7 +516,7 @@ class FlowScene(QGraphicsScene):
         self.doc, self.registry = doc, registry
         self.nodes: dict[str, NodeItem] = {}
         self.note_items: dict[str, NoteItem] = {}
-        self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule block -> (text, tip)
+        self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule or Wait block -> (text, tip)
         self.edge_items: list[EdgeItem] = []
         self.statuses: dict[str, tuple[str, str, str]] = {}  # block -> (status, text, tip)
         self.off: set[str] = set()  # blocks connected to no start block (in a flow with start blocks)
@@ -669,7 +674,8 @@ class FlowScene(QGraphicsScene):
         self.set_status(block_id, status, text, tip)
 
     def set_countdown(self, block_id: str, text: str, tip: str = ""):
-        """Under a Schedule block: when it starts the flow next."""
+        """Under a Schedule block: when it starts the flow next; under a Wait block: the time left while it waits ("":
+        how long it waits)."""
         self.countdowns[block_id] = (text, tip)
         if block_id in self.nodes and (self.nodes[block_id].countdown, self.nodes[block_id].countdown_area.toolTip()) != (text, tip):
             self.nodes[block_id].set_countdown(text, tip)

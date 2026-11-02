@@ -1476,7 +1476,8 @@ def test_a_user_blocks_settings_without_help_or_examples_show_the_hint_and_their
 
         caption = row_named(mine, "Caption", "", tally)
         card = hover(qtbot, mine, caption.inputs[0], "Caption", "Tally › Caption")
-        assert card_lines(card)[1:] == [NO_HELP, NO_EXAMPLES, LEARN_MORE], card_lines(card)
+        lines = card_lines(card)[1:]  # a text setting: and what placeholders it takes
+        assert lines[:2] == [NO_HELP, NO_EXAMPLES] and "{name}" in lines[2] and lines[3:] == [LEARN_MORE], lines
         mode = row_named(mine, "Mode", "", tally)
         card = hover(qtbot, mine, mode.inputs[0], "Mode", "Tally › Mode")
         assert card_lines(card)[1:] == [NO_HELP, "One of: rows · distinct", LEARN_MORE], card_lines(card)

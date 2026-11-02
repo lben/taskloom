@@ -91,10 +91,13 @@ def schedule_countdown(config: dict, now: dt.datetime, scheduled: bool, schedule
                                          "The Scheduler service button (top right) turns it on.")
     if not upcoming:  # every N: the service has not seen it as it is now (it does within a second)
         return "starts when the service picks it up", tip
-    left = int((upcoming[0] - now).total_seconds())
-    days, rest = divmod(left, 86400)
-    clock = f"{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
-    return f"next run in {f'{days}d ' if days else ''}{clock}", tip
+    return f"next run in {clock(int((upcoming[0] - now).total_seconds()))}", tip
+
+
+def clock(seconds: int) -> str:
+    """A time left as the countdowns under the blocks write it: 00:00:42, from a day 1d 01:01:05."""
+    days, rest = divmod(seconds, 86400)
+    return f"{f'{days}d ' if days else ''}{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
 
 
 def _block_line(block: str, ts: str, result: dict) -> dict:
@@ -329,6 +332,7 @@ class FlowTab(QWidget):
         self.entries: list[dict] = []  # log of the runs shown on the canvas
         self.block_info: dict[str, dict] = {}  # block -> status, tables, …, run_id: the result it shows
         self.shown_run: RunProcess | None = None  # the run going whose events the canvas shows
+        self.waits: dict[str, dt.datetime] = {}  # Wait block -> when its wait ends, while it waits in that run
         self.run_blocks: list[str] = []  # the blocks that run takes part in
         # Show each block's latest result (incl. scheduled runs), unless an older run was opened: among the runs
         # after since_run (the newest you had seen when the flow was opened).
@@ -1071,6 +1075,7 @@ class MainWindow(QMainWindow):
         tab.runs.append(run)
         if not tab.following_latest:  # an older run was on the canvas: each block's latest result again
             self._show_results(tab)
+        self._end_waits(tab)  # (the run on screen until now, if it is still going)
         tab.shown_run, tab.run_blocks = run, []
         if not rerun:
             tab.entries = tab.entries[-MAX_LOG_ENTRIES:]  # its messages follow the earlier runs'
@@ -1347,7 +1352,14 @@ class MainWindow(QMainWindow):
             tab.scene.set_status(block, "running", text)
         elif kind == "log":
             self._log(tab, e)
+        elif kind == "waiting":
+            if e["until"] is None:  # its wait ended (a retry may follow)
+                self._end_waits(tab, [block])
+            else:
+                tab.waits[block] = dt.datetime.fromisoformat(e["until"])
+                self._show_waits(tab)
         elif kind == "block_finished":
+            self._end_waits(tab, [block])
             self._apply_block_result(tab, block, {**e, "finished": e["ts"]})
             if e.get("tables"):
                 self._log(tab, _block_line(block, e["ts"], e))
@@ -1388,6 +1400,7 @@ class MainWindow(QMainWindow):
                                 "message": f"question closed without an answer: the run ended ({status})"})
             self._close_question(run, ask_id)
         if run is tab.shown_run:
+            self._end_waits(tab)
             for block, info in tab.block_info.items():
                 if info.get("status") == "running":  # the process died mid-block
                     self._apply_block_result(tab, block, {"status": "failed", "run_id": info["run_id"],
@@ -1570,6 +1583,21 @@ class MainWindow(QMainWindow):
                 tab.scene.set_countdown(block_id, *schedule_countdown(spec.get("config") or {}, now, tab.scheduled,
                                                                       self.flow_status.scheduler_on, tab.doc.dirty,
                                                                       starts.get(block_id)))
+        self._show_waits(tab)
+
+    def _show_waits(self, tab: FlowTab):
+        """Under each Wait block waiting in the run on screen: the time left, from when the run said it ends."""
+        now = dt.datetime.now()
+        for block, until in tab.waits.items():
+            left = (until - now).total_seconds()
+            tab.scene.set_countdown(block, f"{clock(int(left))} left" if left > 0 else "")
+
+    def _end_waits(self, tab: FlowTab, blocks=None):
+        """The Wait blocks (`blocks`; None: all) no longer waiting in the run on screen: their line says again how
+        long they wait."""
+        for block in list(tab.waits) if blocks is None else blocks:
+            if tab.waits.pop(block, None) is not None:
+                tab.scene.set_countdown(block, "")
 
     def _show_scheduler_state(self, running: bool):
         if running != self.flow_status.scheduler_on:  # the tabs say when their flows run next only while it is on
@@ -1684,6 +1712,7 @@ class MainWindow(QMainWindow):
         if tab is None:
             return
         tab.shown_run = None
+        self._end_waits(tab)  # (a past run's waits have ended)
         newest = tab.last is None or run_id >= tab.last["id"]
         if newest:  # it counts even if you had seen it before opening the flow
             tab.since_run = min(tab.since_run, run_id - 1)

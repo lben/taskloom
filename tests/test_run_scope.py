@@ -172,7 +172,7 @@ SSH_CONNECTION = "files:\n  kind: ssh\n  host: localhost\n"
     ({"spare": {"type": "reports.html_template", "config": {"template": "{nothing}"}}}, [], {}, "spare",
      "Template: {nothing} is not an input or a flow parameter"),
     ({"spare": {"type": "logic.ask_user", "config": {"prompt": "Which {region}?"}}}, [], {}, "spare",
-     "Prompt: unknown parameter {region}"),
+     "Prompt: {region} is neither a flow parameter nor an input of this block"),
     ({"spare": {"type": "data.duckdb_sql", "config": {"inputs": [], "sql": "select :day"}}}, [], {}, "spare",
      "SQL: unknown bind parameter :day"),
     ({"spare": {"type": "db.run_query", "config": {"connection": "nowhere", "sql": "select 1"}}}, [], {}, "spare",

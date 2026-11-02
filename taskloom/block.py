@@ -45,7 +45,8 @@ class fields:
     """Config field types. The editor builds the properties panel from these."""
 
     class Field:
-        # Templated fields get `{param}` / `{param:format}` substitution at run time.
+        # Templated fields get `{name}` / `{name:format}` placeholders filled in as the block runs (engine._filled):
+        # with the flow parameter `name` or, but in SQL code, the value arriving at the block's own input `name`.
         template = False
 
         def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = "",
@@ -70,11 +71,15 @@ class fields:
             return str(value)
 
     class Int(Field):
+        template = True
+
         def __init__(self, default=None, minimum: int | None = None, **kw):
             super().__init__(default=default, **kw)
             self.minimum = minimum
 
         def coerce(self, value):
+            if has_placeholders(value):
+                return value  # read as a whole number once its placeholders are filled in, as the block runs
             if isinstance(value, bool) or not isinstance(value, (int, str)):
                 raise ValueError(f"expected an integer, got {value!r}")
             value = int(value)
@@ -83,7 +88,11 @@ class fields:
             return value
 
     class Float(Field):
+        template = True
+
         def coerce(self, value):
+            if has_placeholders(value):
+                return value  # read as a number once its placeholders are filled in, as the block runs
             if isinstance(value, bool) or not isinstance(value, (int, float, str)):
                 raise ValueError(f"expected a number, got {value!r}")
             return float(value)
@@ -138,6 +147,8 @@ class fields:
 
     class List(Field):
         """A list of text values."""
+
+        template = True  # in each item
 
         def coerce(self, value):
             if not isinstance(value, list):
@@ -197,6 +208,11 @@ class fields:
                 result[source] = next(c for c in candidates if c not in taken)
                 taken.add(result[source])
             return result
+
+
+def has_placeholders(value) -> bool:
+    """Whether a setting's value is a text with {name} placeholders (or braces) in it."""
+    return isinstance(value, str) and ("{" in value or "}" in value)
 
 
 def setting_label(key: str, f: fields.Field) -> str:

@@ -17,6 +17,9 @@ from ..blocks.triggers import KeptRuns
 
 NO_HELP = 'No help yet: add help="..." and examples=[...] to this setting in its block file.'
 NO_EXAMPLES = "No examples yet"
+# On the card of a setting that takes placeholders (fields.Field.template, but code), under its examples.
+PLACEHOLDERS = ("Placeholders: {name} fills in a flow parameter, or the value arriving at the block's input of that "
+                "name; {name:format} formats it; write {{ and }} for braces")
 
 
 class OneOf(tuple):
@@ -151,6 +154,8 @@ def field_card(f) -> tuple[str, str]:
     if line is None:
         examples = tuple(f.examples)
         line = examples_line(examples, isinstance(f, fields.Code)) if examples else NO_EXAMPLES
+        if f.template and not isinstance(f, fields.Code):
+            line += f"<br>{html.escape(PLACEHOLDERS)}"
     return f.help or NO_HELP, line
 
 

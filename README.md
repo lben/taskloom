@@ -141,7 +141,8 @@ taskloom editor examples/daily-sales-report.yaml
   this kind has). Only a password answer is hidden (`***` in the Log, Inspect, Data preview
   and the run history); any other answer shows as it is. Runs nobody can answer (scheduled
   ones, `taskloom run`) use its **Default**, which every kind but password has; for kind
-  number it must be a number, or Validate and runs refuse the flow. A password never comes
+  number it must be a number (or have `{name}` placeholders, read as the block runs), or
+  Validate and runs refuse the flow. A password never comes
   from a Default: its **Stored secret** setting names a password saved in Taskloom's secret
   store (`taskloom secret set NAME`), and runs nobody can answer use that one. With no
   name there, or a name never saved, such a run fails and says what is missing.
@@ -446,6 +447,28 @@ edges:
 
 - `:name` in SQL binds a parameter with its type (a `list` as its items, for
   `where region in (:regions)`); `{name:format}` fills text.
+- `{name}` placeholders work in every setting you type a value into, in every block: text,
+  paths, whole numbers, numbers and each item of a list. `{name}` is the flow parameter
+  `name`, or the value arriving at the block's own input `name` (not its run after);
+  `{name:format}` formats it (`{value:.1f}`, `{day:%Y-%m-%d}`) and `{{` and `}}` are
+  literal braces. A number setting reads the filled-in text as its number (spaces around it
+  ignored), within its own limits, e.g. `count: "{value}0"`. SQL code takes flow
+  parameters only; other code (Python, Polars, If, and an HTML Template, which fills in its
+  own `{name}`) and yes/no and choice settings take none. Validate (F7, `taskloom check`,
+  `taskloom validate`) refuses a name that is neither a parameter nor an input of the
+  block, and one that is both (`{value} could be the parameter value or the input value:
+  rename one`). Nothing is filled in silently: the
+  block fails before it does anything, naming the setting, the placeholder and why, when
+  nothing is connected to that input or nothing arrived there, a table arrived (only a
+  single value can be written into a setting: text, a number, a date or time, yes/no), or a
+  number setting's text is not a number (`Seconds: {value} gave 'abc', which is not a
+  number`).
+- **Wait** (`logic.wait`) pauses for its **Seconds**, then passes its `value` input on:
+  a number, `{value}` for the number arriving at its value input, or `{name}` for a flow
+  parameter, e.g. `seconds: "{pause}"`. The Log says once how long it waits and until when
+  (`waiting 90 s, until 14:05:30`). In the editor, the line at the bottom of the block says how
+  long it waits (`⏱ waits 90 s`) and, while it waits, counts down the time left
+  (`⏱ 00:01:29 left`), as a Schedule block's line counts down to its next run.
 - Every block has an `error` output; connect it to handle failures.
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
 

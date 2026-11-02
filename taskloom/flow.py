@@ -351,6 +351,22 @@ def block_config(cls, spec: BlockSpec) -> dict:
     return result
 
 
+def placeholder_problems(f: fields.Field, text: str, params, inputs) -> list[str]:
+    """What is wrong with the {name} placeholders in `text`, the value (or an item) of the templated setting `f` of a
+    block with the input ports `inputs`: each must name a flow parameter (`params`: their names) or, but in SQL code,
+    one of the block's data inputs (not its run after), and not both."""
+    try:
+        names = P.template_names(text)
+    except ValueError as e:
+        return [f"{e} (write {{{{ and }}}} for literal braces)"]
+    if isinstance(f, fields.Code):  # SQL: flow parameters only
+        return [f"unknown parameter {{{n}}}" for n in sorted(names - set(params))]
+    data = set(inputs) - {AFTER}
+    return [f"{{{n}}} could be the parameter {n} or the input {n}: rename one" if n in params
+            else f"{{{n}}} is neither a flow parameter nor an input of this block"
+            for n in sorted(names) if (n in params) == (n in data)]
+
+
 def only_comments(f: fields.Field, value) -> bool:
     """Whether a code setting's value is only comments and blank lines: SQL's -- and /* */, or a Python expression's
     lines starting with #. Not a script's (fields.Code.script), which runs as it is."""
@@ -449,16 +465,12 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         has_params_input = any(e.dst == block_id and e.dst_port == "params" for e in flow.edges)
         for name, f in cls.config.items():
             value = config.get(name)
-            if not isinstance(value, str):
-                continue
             setting = f"{block_id}: {setting_label(name, f)}"
             if f.template:
-                try:
-                    missing = P.template_names(value) - set(flow.params)
-                except ValueError as e:
-                    found.append(f"{setting}: {e} (write {{{{ and }}}} for literal braces)")
-                    continue
-                found += [f"{setting}: unknown parameter {{{m}}}" for m in sorted(missing)]
+                found += [f"{setting}: {problem}" for text in (value if isinstance(value, list) else [value])
+                          if isinstance(text, str) for problem in placeholder_problems(f, text, flow.params, inputs)]
+            if not isinstance(value, str):
+                continue
             if isinstance(f, fields.Code) and f.language == "sql" and not has_params_input:
                 missing = set(P.to_qmark(value)[1]) - set(flow.params)
                 found += [f"{setting}: unknown bind parameter :{m}" for m in sorted(missing)]

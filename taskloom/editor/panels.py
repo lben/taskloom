@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import params as P
-from ..block import IDENTIFIER, RESERVED_OUTPUTS, applies, fields, setting_label
+from ..block import IDENTIFIER, RESERVED_OUTPUTS, applies, fields, has_placeholders, setting_label
 from ..blocks.logic import ReusableBlock
 from ..calendars import load_calendar
 from ..config import kept_runs
@@ -1238,10 +1238,10 @@ class PropertiesPanel(QScrollArea):
         if isinstance(f, (fields.Names, fields.List)):
             w.setPlaceholderText(_to_text(default) or "comma, separated")
             convert = lambda t: None if not t.strip() else [x.strip() for x in t.split(",") if x.strip()]  # noqa: E731
-        elif isinstance(f, fields.Int):
-            convert = lambda t: int(t) if t.strip() else None  # noqa: E731
+        elif isinstance(f, fields.Int):  # (with placeholders: as typed, read as the block runs)
+            convert = lambda t: t if has_placeholders(t) else int(t) if t.strip() else None  # noqa: E731
         elif isinstance(f, fields.Float):
-            convert = lambda t: float(t) if t.strip() else None  # noqa: E731
+            convert = lambda t: t if has_placeholders(t) else float(t) if t.strip() else None  # noqa: E731
         elif isinstance(f, fields.Text):
             convert = lambda t: t if t != "" else None  # noqa: E731
         else:  # a field type from a plugin: edit its value as YAML

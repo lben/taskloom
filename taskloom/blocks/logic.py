@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import inspect
 import io
 import linecache
@@ -19,7 +20,7 @@ from rich.console import Console
 from rich import traceback as rich_traceback
 from rich.traceback import Traceback
 
-from ..block import Block, fields, ports, setting_label
+from ..block import Block, fields, has_placeholders, ports, setting_label
 from ..expr import evaluate
 from ..engine import Failed, SecretStr, _masked, inline, preview, run_flow
 from ..flow import load_flow, real_path
@@ -293,12 +294,26 @@ class Wait(Block):
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"value": ports.Any()}
-    config = {"seconds": fields.Float(help="How long to wait, in seconds: a number, 0.5 for half a second",
-                                      examples=["5", "0.5", "90"])}
+    config = {"seconds": fields.Float(help="How long to wait, in seconds: a number (0.5 for half a second), {value} "
+                                           "for the number arriving at its value input, or {name} for a flow "
+                                           "parameter", examples=["5", "0.5", "90"])}
 
     def run(self, ctx, value=None):
-        ctx.wait(self.config.seconds)
+        seconds = self.config.seconds
+        if seconds > 0:  # the Log says once how long and until when; the editor shows the time left on the block
+            until = dt.datetime.now() + dt.timedelta(seconds=seconds)
+            ctx.log(f"waiting {written_seconds(seconds)} s, until {until:%H:%M:%S}")
+            ctx.waiting_until(until)
+            try:
+                ctx.wait(seconds)
+            finally:  # time up, stopped, or the block's timeout ended it (a retry may follow): no more counting
+                ctx.waiting_until(None)
         return {"value": value}
+
+
+def written_seconds(seconds) -> str:
+    """A Wait block's Seconds as written: 90 (not 90.0), 0.5, a placeholder such as {value}."""
+    return str(int(seconds)) if isinstance(seconds, float) and seconds.is_integer() else str(seconds)
 
 
 class AskUser(Block):
@@ -332,8 +347,8 @@ class AskUser(Block):
 
     @classmethod
     def problems(cls, config, sources, params):
-        if config["kind"] == "number" and config["default"] is not None:
-            try:
+        if config["kind"] == "number" and config["default"] is not None and not has_placeholders(config["default"]):
+            try:  # (with placeholders: read as the block runs)
                 as_number(config["default"])
             except ValueError as e:
                 return [f"{setting_label('default', cls.config['default'])}: {e}; kind number needs a number, "

@@ -932,8 +932,8 @@ def test_a_bcc_or_a_misspelt_parameter_is_refused_before_anything_is_sent(env, s
 
     assert result.returncode == 2 and smtp.messages == []
     assert "blind: unknown setting(s) ['bcc']" in result.stderr
-    assert "subject_typo: Subject: unknown parameter {dya}" in result.stderr
-    assert "message_typo: Message: unknown parameter {regon}" in result.stderr
+    assert "subject_typo: Subject: {dya} is neither a flow parameter nor an input of this block" in result.stderr
+    assert "message_typo: Message: {regon} is neither a flow parameter nor an input of this block" in result.stderr
 
 
 def test_a_subject_from_data_cannot_add_recipients_or_headers(env):

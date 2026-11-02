@@ -201,7 +201,8 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
            "the window, with the canvas and Properties still in view.")
     p.idea("The card shows the row's name in bold, what it is for, then one line of valid values: “Examples:” with "
            "one to three values written as you would type them, or “One of:” with the choices of a box, or, for a "
-           "connection, which of your connections it takes. Last comes Learn more ›. The card stays while the mouse "
+           "connection, which of your connections it takes; a setting that takes {name} placeholders adds a line "
+           "saying so. Last comes Learn more ›. The card stays while the mouse "
            "is on the row or on the card, so you can reach the link, and goes when the mouse leaves both, when you "
            "type or press Esc, or when you switch to another program. It never takes the keyboard from the box "
            "you are typing in.")
@@ -262,12 +263,13 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
     card = hover(qtbot, win, source.inputs[0], "Source", "Copy Files › Source")
     label, what, values, last = card_says(card)
     parts = card_parts(win, card)
-    p.shot(card, "The card, just under Source: its name in bold, ① what it is for, ② examples of valid values, ③ "
-                 "Learn more ›.", over=win, highlight=parts, badges=True, zoom=[card, source.label_widget, *parts])
+    p.shot(card, "The card, just under Source: its name in bold, ① what it is for, ② examples of valid values (and "
+                 "the {name} placeholders a text setting takes), ③ Learn more ›.", over=win, highlight=parts,
+           badges=True, zoom=[card, source.label_widget, *parts])
     p.check("The card shows Source in bold", label == "Source" and label_is_bold(card))
     p.check("① It says what Source is for: the help Copy Files gives it", what == copy_files.config["source"].help)
     p.check("② It gives its three examples: " + " · ".join(copy_files.config["source"].examples),
-            listed(values, "Examples:") == list(copy_files.config["source"].examples))
+            listed(values.split("\n")[0], "Examples:") == list(copy_files.config["source"].examples))
     p.check("③ Its last line is Learn more ›", last == LEARN_MORE)
     p.check("The Source box keeps the keyboard: the card took no focus", QApplication.focusWidget() is source.inputs[0])
 
@@ -526,7 +528,8 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
     parts = card_parts(win, card)
     p.shot(card, "tally.py gives Caption no help and no examples: ① its card says so, and how to add them.",
            over=win, highlight=[parts[:2]], badges=True, zoom=[card, caption.label_widget, *parts])
-    p.check("① The card says “" + NO_HELP + "” and “" + NO_EXAMPLES + "”", (what, values) == (NO_HELP, NO_EXAMPLES))
+    p.check("① The card says “" + NO_HELP + "” and “" + NO_EXAMPLES + "”",
+            (what, values.split("\n")[0]) == (NO_HELP, NO_EXAMPLES))
     href = click_learn_more(card)
     wait_for(qtbot, lambda: heading_at_top(browser, "my.tally.caption"), "Caption's entry is not at the top")
     said = " ".join(browser.toPlainText().split())
