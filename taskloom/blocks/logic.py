@@ -23,7 +23,8 @@ from rich.traceback import Traceback
 from ..block import Block, fields, has_placeholders, ports, setting_label
 from ..expr import evaluate
 from ..engine import Failed, SecretStr, _masked, inline, preview, run_flow
-from ..flow import load_flow, real_path
+from ..flow import (AT_MOST, LINES, LINES_RUN, MERGER, ONE_AFTER_ANOTHER, SAME_TIME, SPLITTER, load_flow,
+                    real_path)
 from ..table import Table
 
 
@@ -309,6 +310,65 @@ class Wait(Block):
             finally:  # time up, stopped, or the block's timeout ended it (a retry may follow): no more counting
                 ctx.waiting_until(None)
         return {"value": value}
+
+
+_AT_MOST = fields.Int(required=False, minimum=1, label="At most at once", only_if={LINES_RUN: [SAME_TIME]},
+                      help="How many of its lines run at once, at most: a whole number, 1 or more (empty: all of "
+                           "them). The next line starts as soon as one ends, in line order. A limit protects the "
+                           "database and the computer from too many lines at once. No {placeholders}: Validate "
+                           "checks the lines with it before the run.",
+                      examples=["2", "4", "8"])
+_AT_MOST.template = False  # (see Splitter.problems)
+
+
+class Splitter(Block):
+    type_id = SPLITTER
+    title = "Splitter"
+    description = ("Starts lines: each connection leaving its lines output starts one line, which gets its own copy of "
+                   "the value that arrived. A line is the block that connection goes to and the blocks after it, up "
+                   "to a Merger, which joins the lines. The lines run at the same time (no more than At most at once "
+                   "of them, if you set it) or one after another, top to bottom as on the canvas, each to its end "
+                   "before the next starts. A line may use what another line makes; a failed line stops no other.")
+    inputs_help = "value: anything (optional): each line gets its own copy of it."
+    category = "Logic"
+    inputs = {"value": ports.Any(required=False)}
+    outputs = {LINES: ports.Any()}
+    config = {
+        LINES_RUN: fields.Choice([SAME_TIME, ONE_AFTER_ANOTHER], default=SAME_TIME,
+                                 help="at the same time: the lines run together, each line's own blocks one after "
+                                      "another; one after another: line 1 runs to its end, then line 2, and so on, "
+                                      "top to bottom as on the canvas (the canvas numbers the connections)"),
+        AT_MOST: _AT_MOST,
+    }
+
+    @classmethod
+    def problems(cls, config, sources, params):
+        if has_placeholders(config[AT_MOST]):
+            return [f"{_AT_MOST.label}: write a whole number, 1 or more (not a placeholder: Validate checks the lines "
+                    "with it before the run)"]
+        return []
+
+    def run(self, ctx, value=None):
+        return {LINES: value}  # (the run gives each line its own copy, and writes in the Log how they run)
+
+
+class Merger(Block):
+    type_id = MERGER
+    title = "Merger"
+    description = ("Joins the lines of a Splitter: waits until every line connected to it has delivered, then passes "
+                   "on one value, {line name: that line's output}, named as Python Code names inputs from several "
+                   "blocks (the block's name; block.output when a block connects several of its outputs). If a line "
+                   "failed, it fails, saying which; if a line delivered nothing (e.g. an If sent it nowhere), it is "
+                   "skipped, saying which.")
+    inputs_help = "lines: the last block of each line (any number of connections)."
+    category = "Logic"
+    inputs = {LINES: ports.Any(many=True, by_source=True)}
+    outputs = {"value": ports.Any()}
+
+    def run(self, ctx, lines):
+        blocks = [source.split(".")[0] for source in lines]  # (each "block.output")
+        return {"value": {(source if blocks.count(block) > 1 else block): value
+                          for (source, value), block in zip(lines.items(), blocks)}}
 
 
 def written_seconds(seconds) -> str:

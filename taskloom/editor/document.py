@@ -11,7 +11,8 @@ from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
 from ..engine import lines as start_lines
-from ..flow import _EDGE, FlowError, flow_from_data, keep_source_names, read_flow_file
+from ..flow import (_EDGE, ONE_AFTER_ANOTHER, FlowError, flow_from_data, keep_source_names, lines_run, read_flow_file,
+                    splitter_lines)
 
 UNDO_LIMIT = 200
 
@@ -138,6 +139,17 @@ class FlowDocument(QObject):
             return start_lines(flow_from_data(self.data, self.path or Path("flow.yaml")), registry)
         except FlowError:
             return {}
+
+    def numbered_lines(self, registry) -> dict[str, dict[str, int]]:
+        """The Splitters that run their lines one after another, with the number of each of their lines by its first
+        block, in line order ({} while the flow cannot be read)."""
+        try:
+            flow = flow_from_data(self.data, self.path or Path("flow.yaml"))
+        except FlowError:
+            return {}
+        return {splitter: {first: number for number, (first, _) in enumerate(its_lines, 1)}
+                for splitter, its_lines in splitter_lines(flow).items()
+                if lines_run(flow, registry, splitter)[0] == ONE_AFTER_ANOTHER}
 
     # --- editing -----------------------------------------------------------------
 

@@ -454,7 +454,8 @@ edges:
   literal braces. A number setting reads the filled-in text as its number (spaces around it
   ignored), within its own limits, e.g. `count: "{value}0"`. SQL code takes flow
   parameters only; other code (Python, Polars, If, and an HTML Template, which fills in its
-  own `{name}`) and yes/no and choice settings take none. Validate (F7, `taskloom check`,
+  own `{name}`), yes/no and choice settings, and a Splitter's At most at once (Validate
+  checks the lines with it before the run) take none. Validate (F7, `taskloom check`,
   `taskloom validate`) refuses a name that is neither a parameter nor an input of the
   block, and one that is both (`{value} could be the parameter value or the input value:
   rename one`). Nothing is filled in silently: the
@@ -473,11 +474,70 @@ edges:
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
 
 Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
-`logic.for_each`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
+`logic.for_each`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
 `data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
 `servers.health_check`, `servers.remote_extract`, `reports.html_template`,
 `reports.chart`, `reports.excel`, `email.send`.
+
+### Splitter and Merger: lines that run at the same time
+
+A **Splitter** (`logic.splitter`) starts lines: each connection leaving its `lines` output
+starts one, which gets its own copy of the value that arrived at its `value` input. A line
+is the block that connection goes to and the blocks after it, up to the **Merger**
+(`logic.merger`) that joins the lines; the Merger and what follows it come after the lines,
+also a block that uses a line's output too. A block a Splitter's connection goes to starts
+its own line. A Splitter inside another Splitter's line is not supported yet: Validate
+refuses it.
+
+- **Lines run**: *at the same time* (as the block is added) runs the lines together, each
+  line's own blocks one after another, in the flow's order. **At most at once** (a whole
+  number, 1 or more; empty: all of them) limits how many run at once, to spare the database
+  and the computer: the next line starts as soon as one ends, in line order. *One after
+  another* runs line 1 to its end, then line 2, and so on. Line order is top to bottom by
+  where each line's first block is on the canvas, then left to right; in this mode the canvas
+  numbers the connections leaving the Splitter 1, 2, 3, and the numbers follow when you move
+  the blocks.
+- The Log says once how the lines run, e.g. `3 lines at the same time, at most 2 at once:
+  load_sales, load_costs, load_stock` or `3 lines one after another: 1 load_sales,
+  2 load_costs, 3 load_stock`. While lines run at the same time the canvas shows each of
+  their running blocks as running, each Log line keeps its block's tag, and the run history
+  keeps every line, result and status as with one block at a time.
+- **Lines connecting across**: a block of one line may use what a block of another line
+  makes; it waits until that has arrived. A block that several lines lead to runs in the
+  last of them, so one after another it runs once those lines have. The lines of two
+  Splitters side by side may feed each other one way, into the first block of a line. In a run
+  with two or more lines, each block gets its own copy of what it
+  receives, so no line can change another's data.
+- The blocks outside the lines run one at a time, in the flow's order, as in a flow without
+  a Splitter; a Splitter left at one line runs it so too. While one of them waits for the
+  lines (the Merger), a block after it that need not wait runs meanwhile: a line may be
+  waiting for it.
+- The **Merger** waits until every line connected to its `lines` input has delivered, then
+  passes on one value, `{line name: that line's output}`, named as Python Code names inputs
+  from several blocks: the block's name, or `block.output` when a block connects several of
+  its outputs (also with only one line connected).
+- **A failed line** stops no other line: the others run to their end, nothing is cancelled.
+  The Merger then fails, saying which (`load_costs failed: …`, in the Log too), and what
+  follows it does not run; its error output handles that as any block's. A line that delivered
+  nothing without failing (an If sent it nowhere) makes the Merger skipped, saying which. The
+  lines that succeeded keep their outputs: once you have fixed the failed block, right-click
+  it > **Run from this block on, with the same inputs** (`taskloom run flow.yaml --from
+  load_costs --inputs-from 12`) runs it, the rest of its line, the Merger and what follows;
+  the other lines do not run again, their kept outputs reach the Merger. **Run only this
+  block** on the Merger gets the lines' kept outputs.
+- Stop cancels every running line at once; a block's Timeout ends only that block.
+- **Validate** (F7, `taskloom validate`, `taskloom check`) refuses, before any run, a layout
+  that could never finish, naming the connection: one after another (or at the same time
+  with an At most at once lower than the number of lines), a connection from a later line
+  into the block an earlier one starts with, which would wait forever for a line that cannot
+  start before it ends (`edge load_stock.output -> load_sales.stock: from line 3 of split into
+  line 1, …`). In any mode it refuses a Splitter inside another Splitter's line, a block that
+  takes from the lines of two Splitters side by side, and the lines of Splitters side by side
+  that feed each other both ways. It warns
+  about a Splitter with fewer than two lines and a Merger with fewer than two connections.
+- Next: the Merger's other mode, *as each finishes*, which runs the blocks after it once for
+  each line, as soon as that line ends.
 
 ## Reports and email
 

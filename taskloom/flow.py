@@ -34,6 +34,11 @@ _UNITS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, None: 1}
 # no run).
 NOT_IN_RUN = "not taking part in this run"
 OFF = "off: not connected to a start block"
+# The Splitter and the Merger (blocks/logic.py): each connection leaving a Splitter's `lines` output starts a line,
+# which the Merger joins. How the Splitter runs its lines: its settings' keys and Lines run's choices.
+SPLITTER, MERGER, LINES = "logic.splitter", "logic.merger", "lines"
+LINES_RUN, AT_MOST = "lines_run", "at_most"
+SAME_TIME, ONE_AFTER_ANOTHER = "at the same time", "one after another"
 
 
 class FlowError(Exception):
@@ -510,7 +515,173 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
                 errors += e.errors
             else:
                 warnings += [f"{problem} ({why})" for problem in e.errors]
+    if not errors:
+        never, few = _lines_problems(flow, registry, part)
+        errors += never
+        warnings += few
     return errors, warnings
+
+
+def _lines_problems(flow: Flow, registry, part: set[str]) -> tuple[list[str], list[str]]:
+    """(the layouts of Splitters' lines that could never finish, or that are not supported yet; a Splitter with fewer
+    than two lines and a Merger with fewer than two connections). A line waits for what a connection across brings it:
+    when not all of its lines can run at once, a connection from a later line into an earlier one makes the earlier
+    line wait for a line that cannot start until it has ended; the lines of Splitters side by side that feed each
+    other both ways can wait for each other forever."""
+    never, few = [], []
+    lines = splitter_lines(flow)
+    owners: dict[str, dict[str, int]] = {}  # each block of a line: {the Splitter whose line it is in: that line}
+    for splitter, its_lines in lines.items():
+        for i, (_, blocks) in enumerate(its_lines):
+            for block in sorted(blocks & part):
+                owners.setdefault(block, {}).setdefault(splitter, i)
+    owner = {block: next(iter(its)) for block, its in owners.items() if len(its) == 1}
+    for block, its in owners.items():
+        if flow.blocks[block].type == SPLITTER:
+            outer, i = next(iter(its.items()))
+            never.append(f"{block}: a Splitter inside line {i + 1} of {outer}: a Splitter inside another Splitter's "
+                         f"line is not supported yet (put it after {outer}'s Merger)")
+            continue
+        into = [e for e in flow.edges if e.dst == block and e.src in part]
+        sides = {s: [str(e) for e in into if owner.get(e.src) == s or e.src == s] for s in its}
+        if sum(bool(edges) for edges in sides.values()) > 1:
+            never.append(f"{block} takes from the lines of Splitters side by side: " + ", ".join(
+                f"{s} (edge {', '.join(edges)})" for s, edges in sides.items() if edges) + " (connect into the first "
+                "block of a line, or a Merger's output, instead)")
+    # One Splitter's lines wait for another's when a connection into its lines brings what the other's make (also
+    # through blocks after the other's Merger): Splitters waiting for each other in a circle could do so forever.
+    arcs = {}
+    for e in flow.edges:
+        to = owner.get(e.dst)
+        if to is not None and e.src in part and owner.get(e.src) != to:
+            for s in sorted(_lines_before(flow, e.src, owner) - {to}):
+                arcs.setdefault((s, to), e)
+    circles = []
+    for (a, b), e in arcs.items():
+        path = _arc_path(arcs, b, a)
+        if path and set(path) not in circles:
+            circles.append(set(path))
+            edges = [e, *(arcs[(x, y)] for x, y in zip(path, path[1:]))]
+            never.append(f"the lines of {' and '.join(dict.fromkeys(path))} feed each other both ways ("
+                         + ", ".join(f"edge {edge}" for edge in edges) + "), so they could wait for each other "
+                         "forever (connect the lines of Splitters side by side one way only, or a Merger's output)")
+    runs = line_runs(flow, part, lines)
+    for splitter, its_lines in lines.items():
+        if len(its_lines) < 2:
+            few.append(f"{splitter}: a Splitter with {len(its_lines)} line{'s' if len(its_lines) != 1 else ''} (each "
+                       "connection leaving its lines output starts one; it is for running two or more)")
+        mode, at_most = lines_run(flow, registry, splitter)
+        if mode == SAME_TIME and (at_most is None or at_most >= len(its_lines)):
+            continue
+        how = ("runs its lines one after another" if mode == ONE_AFTER_ANOTHER
+               else f"runs at most {at_most} of its {len(its_lines)} lines at once")
+        for e in flow.edges:
+            src, dst = (runs.get(b, (None, None)) if b in part else (None, None) for b in (e.src, e.dst))
+            if src[0] == dst[0] == splitter and src[1] > dst[1]:
+                never.append(f"edge {e}: from line {src[1] + 1} of {splitter} into line {dst[1] + 1}, which would "
+                             f"wait for it forever: {splitter} {how} (connect a line only into a later one, or run all "
+                             "its lines at once)")
+    for block_id, spec in flow.blocks.items():
+        joined = [e for e in flow.edges if e.dst == block_id and e.dst_port == LINES]
+        if spec.type == MERGER and len(joined) < 2:
+            few.append(f"{block_id}: a Merger with {len(joined)} connection{'s' if len(joined) != 1 else ''} into its "
+                       "lines input (it joins two or more lines)")
+    return never, few
+
+
+def _lines_before(flow: Flow, block: str, owner: dict) -> set[str]:
+    """The Splitters whose lines `block` is in or comes after."""
+    found, seen, todo = set(), set(), [block]
+    while todo:
+        b = todo.pop()
+        if b not in seen:
+            seen.add(b)
+            found.update([owner[b]] if b in owner else [])
+            todo += [e.src for e in flow.edges if e.dst == b]
+    return found
+
+
+def _arc_path(arcs: dict, start: str, goal: str) -> list[str] | None:
+    """The Splitters from `start` to `goal` along `arcs` ({(from, to): ...}), both included; None if there is none."""
+    paths, seen = [[start]], {start}
+    while paths:
+        path = paths.pop(0)
+        if path[-1] == goal:
+            return path
+        for a, b in arcs:
+            if a == path[-1] and b not in seen:
+                seen.add(b)
+                paths.append(path + [b])
+    return None
+
+
+def splitter_lines(flow: Flow) -> dict[str, list[tuple[str, set[str]]]]:
+    """Each Splitter's lines, in line order: (the block its connection goes to, the blocks of the line: that block and
+    the blocks after it, up to the Merger that joins the lines and the first blocks of other lines, its own or another
+    Splitter's). The Merger and what follows it, even a block also taking a line's output, are after the lines; a
+    block after several of its lines is in each of them (line_runs says which runs it). Line order: top to bottom by
+    where each line's first block is on the canvas, then left to right."""
+    firsts = {}
+    for splitter, spec in flow.blocks.items():
+        if spec.type == SPLITTER:
+            its = list(dict.fromkeys(e.dst for e in flow.edges if e.src == splitter and e.src_port == LINES
+                                     and e.dst in flow.blocks))
+            firsts[splitter] = sorted(its, key=lambda b: (flow.blocks[b].ui.get("y", 0), flow.blocks[b].ui.get("x", 0)))
+    starts = {b for its in firsts.values() for b in its}
+    found = {}
+    for splitter, its in firsts.items():
+        reached = [_line_blocks(flow, first, starts) for first in its]
+        after = set().union(*(joins for _, joins in reached))  # the Mergers joining the lines, and what follows them
+        todo = list(after)
+        while todo:
+            block = todo.pop()
+            for e in flow.edges:
+                if e.src == block and e.dst in flow.blocks and e.dst not in after:
+                    after.add(e.dst)
+                    todo.append(e.dst)
+        found[splitter] = [(first, blocks - after) for first, (blocks, _) in zip(its, reached)]
+    return found
+
+
+def line_runs(flow: Flow, part: set[str], lines: dict | None = None) -> dict[str, tuple[str, int]]:
+    """Which line runs each block of a Splitter's lines (splitter_lines): (the Splitter, the line's index). A Splitter
+    with one line taking part in the run (`part`) runs it with the blocks around it, as a flow without one: it has
+    none here. A block in several of its lines runs in the last of them in line order: once the lines before it are
+    done with, what they bring it has arrived. (Validate refuses a block in the lines of two Splitters.)"""
+    lines = splitter_lines(flow) if lines is None else lines
+    found = {}
+    for splitter, its in lines.items():
+        if sum(bool(blocks & part) for _, blocks in its) > 1:
+            for i, (_, blocks) in reversed(list(enumerate(its))):
+                for block in blocks:
+                    found.setdefault(block, (splitter, i))
+    return found
+
+
+def _line_blocks(flow: Flow, first: str, starts: set[str]) -> tuple[set[str], set[str]]:
+    """(the blocks from `first` on, up to the Mergers and the first blocks of other lines; those Mergers)."""
+    blocks, joins, todo = set(), set(), [first]
+    while todo:
+        block = todo.pop()
+        if block in blocks or block in joins or (block in starts and block != first):
+            continue
+        if flow.blocks[block].type == MERGER:  # it, and what follows it, come after the lines
+            joins.add(block)
+            continue
+        blocks.add(block)
+        todo += [e.dst for e in flow.edges if e.src == block and e.dst in flow.blocks]
+    return blocks, joins
+
+
+def lines_run(flow: Flow, registry, splitter: str) -> tuple[str, int | None]:
+    """How a Splitter runs its lines: at the same time or one after another, and its At most at once (None: all
+    lines at once). While its settings cannot be read, as when it is added (validate says what is wrong)."""
+    try:
+        config = block_config(registry.get(SPLITTER), flow.blocks[splitter])
+        mode, at_most = config[LINES_RUN], config[AT_MOST]
+    except Exception:
+        return SAME_TIME, None
+    return mode, at_most if isinstance(at_most, int) else None
 
 
 def unconnected_starts(flow: Flow, registry) -> list[str]:

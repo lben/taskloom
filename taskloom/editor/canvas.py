@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPat
 
 from ..block import AFTER, DONE, all_ports
 from ..blocks.logic import written_seconds
-from ..flow import ERROR_PORT, BlockSpec, block_config
+from ..flow import ERROR_PORT, LINES, BlockSpec, block_config
 from .document import FlowDocument, edge_text
 
 BLOCK_MIME = "application/x-taskloom-block"
@@ -37,6 +37,7 @@ BLOCK_ICONS = {
     "trigger.manual": ("manual-start",), "trigger.schedule": ("calendar-time",),
     "logic.python": ("brand-python",), "logic.if": ("if",), "logic.wait": ("stopwatch",),
     "logic.ask_user": ("user-question",), "logic.for_each": ("list", "badge-repeat"), "logic.inspect": ("inspect",),
+    "logic.splitter": ("arrows-split",), "logic.merger": ("arrows-join",),
     "data.duckdb_sql": ("duck",), "data.polars": ("polar-bear",), "data.read_file": ("file-export",),
     "data.write_file": ("file-pencil",), "db.run_query": ("database",),
     "files.copy": ("copy",), "files.move": ("move-files",), "files.delete": ("trash-x",),
@@ -272,17 +273,53 @@ def _curve(a: QPointF, b: QPointF) -> QPainterPath:
     return path
 
 
+def canvas_color() -> QColor:
+    """The colour of the canvas behind the blocks."""
+    window = QApplication.palette().window().color()
+    return window.lighter(103) if not is_dark() else window.darker(110)
+
+
+class LineNumber(QGraphicsItem):
+    """The number of a line, on its connection from a Splitter that runs its lines one after another: in the text
+    colour, on a round patch of the canvas's colour (the connection does not run through it)."""
+
+    R = 9
+
+    def __init__(self, edge: "EdgeItem", number: int):
+        super().__init__(edge)
+        self.number = str(number)
+        self.setAcceptedMouseButtons(Qt.NoButton)
+
+    def boundingRect(self):
+        return QRectF(-self.R - 1, -self.R - 1, 2 * self.R + 2, 2 * self.R + 2)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#8a9bb0"), 1.5))
+        painter.setBrush(canvas_color())
+        painter.drawEllipse(QPointF(0, 0), self.R, self.R)
+        font = QFont(painter.font())
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QApplication.palette().text().color())
+        painter.drawText(QRectF(-self.R, -self.R, 2 * self.R, 2 * self.R), Qt.AlignCenter, self.number)
+
+
 class EdgeItem(QGraphicsPathItem):
-    def __init__(self, src_port: PortItem, dst_port: PortItem):
+    def __init__(self, src_port: PortItem, dst_port: PortItem, number: int | None = None):
         super().__init__()
         self.src_port, self.dst_port = src_port, dst_port
         self.text = edge_text(src_port.node.block_id, src_port.name, dst_port.node.block_id, dst_port.name)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setZValue(0)
+        self.number = None if number is None else LineNumber(self, number)
         self.update_path()
 
     def update_path(self):
         self.setPath(_curve(self.src_port.anchor(), self.dst_port.anchor()))
+        if self.number is not None:  # near the Splitter, where the connections have parted
+            path = self.path()
+            self.number.setPos(path.pointAtPercent(path.percentAtLength(min(160, 0.4 * path.length()))))
 
     def shape(self):
         stroker = QPainterPathStroker()
@@ -569,11 +606,12 @@ class FlowScene(QGraphicsScene):
             if block_id in self.countdowns:
                 node.set_countdown(*self.countdowns[block_id])
             node.setSelected(block_id in selected)
+        numbered = self.doc.numbered_lines(self.registry)
         for src, sp, dst, dp in self.doc.edges():
             a = self.nodes.get(src) and self.nodes[src].ports.get((sp, True))
             b = self.nodes.get(dst) and self.nodes[dst].ports.get((dp, False))
             if a and b:
-                edge = EdgeItem(a, b)
+                edge = EdgeItem(a, b, numbered.get(src, {}).get(dst) if sp == LINES else None)
                 self.addItem(edge)
                 self.edge_items.append(edge)
         self._rebuilding = False
@@ -828,7 +866,7 @@ class FlowScene(QGraphicsScene):
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
         pal = QApplication.palette()
-        painter.fillRect(rect, pal.window().color().lighter(103) if not is_dark() else pal.window().color().darker(110))
+        painter.fillRect(rect, canvas_color())
         painter.setPen(QPen(pal.mid().color(), 1.4))
         step = 20
         left, top = int(rect.left()) - int(rect.left()) % step, int(rect.top()) - int(rect.top()) % step

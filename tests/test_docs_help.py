@@ -45,7 +45,7 @@ from taskloom.config import Home  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
 from taskloom.flow import FlowError, flow_from_data, validate  # noqa: E402
 from taskloom.registry import discover  # noqa: E402
-from tests.test_editor import add_from_palette, drag_port_to_port  # noqa: E402
+from tests.test_editor import add_from_palette  # noqa: E402
 from tests.test_paths_editor_editing import clean, error_shown, flow_file, press, select_only, settle  # noqa: E402
 from tests.test_paths_editor_running import right_click  # noqa: E402
 from tests.test_reusable_block import CREATE, fill_all, in_the_window, names_flow  # noqa: E402
@@ -810,10 +810,12 @@ def add_block(win, tab, title: str) -> str:
 
 def connect_into(tab, block: str, cls):
     """A setting that lists the outputs connected into an input (fields.SourceNames) has a row for each one connected
-    there: connect the new flow's start, as a user does, so it has one."""
+    there: connect the new flow's start, as the canvas does when you drag one to the other, so it has one. (Not by a
+    drag: every block is added at the middle of the canvas, over the start, so another block's port can be the one
+    under the mouse there.)"""
     for f in cls.config.values():
         if isinstance(f, fields.SourceNames):
-            drag_port_to_port(tab, "start", "start", block, f.port)
+            tab.doc.connect("start", "start", block, f.port, many=True)
             settle()
             select_only(tab, block)
 
