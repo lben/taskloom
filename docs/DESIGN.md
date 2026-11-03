@@ -80,8 +80,10 @@ workstation or on a Linux server, without admin/root rights.
 - **Isolation**: the editor never runs a flow in its own process. It launches the
   runner as a subprocess and streams events back, so a crash or out-of-memory in a
   flow cannot take down the editor.
-- **Loops**: `For Each` runs a referenced sub-flow once per item (e.g. per server),
-  keeping every graph acyclic.
+- **Loops**: a Loop is a box drawn on the canvas around a set of blocks, which run once
+  per item of a list (e.g. per server), as a small flow of their own, up to "At the same
+  time" items at once. A block inside connects out of it only through the Loop's result, so
+  each level of the graph stays acyclic.
 
 ### Run context
 
@@ -368,7 +370,7 @@ PySide6 (Qt) application:
 
 | Category | Blocks | Milestone |
 |---|---|---|
-| Logic | Python Code, Expression, If, Wait, For Each (sub-flow), Ask User | M1 / M3 |
+| Logic | Python Code, Expression, If, Wait, Loop (a box around blocks), Ask User | M1 / M3 |
 | Data | DuckDB SQL, Polars Transform, Read File, Write File (CSV/Excel/Parquet) | M1 |
 | Database | Run Query (JDBC), Execute Statement (JDBC) | M1 |
 | Reports | HTML Template, Chart, To Excel | M4 |
@@ -455,7 +457,7 @@ dialogs, Ask User.
 flow from the UI; editor survives a flow that crashes.
 
 **M3 — Servers, files and scheduling**
-SSH/SFTP blocks, Start Remote Process, Health Check, file blocks, For Each,
+SSH/SFTP blocks, Start Remote Process, Health Check, file blocks, Loop,
 scheduler with misfire policies, Startup-folder registration, tray notifications,
 server scheduler and keeper.
 *Accept*: a watchdog flow detects a killed process and restarts it; the keeper

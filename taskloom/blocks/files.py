@@ -275,7 +275,7 @@ class CopyFiles(Block):
         "source": _Path("Source on", help=f"What to copy or move: {FILES}",
                         examples=["C:/data/sales.csv", "C:/data/*.csv", "~/logs/app-*.log"]),
         "destination_server": fields.Server(label="Destination on", help=f"Where the destination is: {WHERE}"),
-        "destination": _Path("Destination on", help=(
+        "destination": _Path("Destination on", writes=True, help=(
             "A folder, ending with / (C:/archive/, ~/incoming/): what is copied or moved goes into it, a folder "
             "with its name. Or, for one file, its new name (C:/archive/sales-old.csv). Missing folders are made."),
             examples=["C:/archive/", "~/incoming/", "C:/archive/sales-old.csv"]),

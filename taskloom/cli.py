@@ -25,7 +25,8 @@ EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
 
 def _print_event(event: dict):
     kind, ts = event["event"], event["ts"][11:19]
-    block = f"[{event['block']}] " if event.get("block") else ""
+    # (a block inside a Loop: also the item, e.g. [item 2/5]; its Log lines say it in their message)
+    block = f"[{event['block']}] " + (f"{event['item']} " if event.get("item") else "") if event.get("block") else ""
     if kind == "log":
         line = f"{ts} {block}{event['level']}: {event['message']}"
     elif kind == "block_started":
@@ -38,6 +39,8 @@ def _print_event(event: dict):
     elif kind == "query":  # (kept in the run history, for Copy executed query)
         return
     elif kind == "waiting":  # (for the editor's countdown; the Log line before it says how long and until when)
+        return
+    elif kind == "progress":  # (a Loop's items done and running, for the editor's box; its Log lines say the rest)
         return
     else:
         line = f"{ts} run #{event['run_id']} {event['status']}"

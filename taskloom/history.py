@@ -64,11 +64,12 @@ class History:
         columns = {table: {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
                    for table in ("runs", "logs", "blocks")}
         # A history file from before runs recorded their process, what started them, the start blocks they count
-        # for, or the version of the flow file they ran, before log lines said how the Log shows them, or before
-        # blocks kept the query they sent: it gets the column (a run from before has no version: NULL).
+        # for, or the version of the flow file they ran, before log lines said how the Log shows them, before
+        # blocks kept the query they sent, or how a block inside a Loop ended over its items: it gets the column (a run
+        # from before has no version: NULL).
         for table, name, kind in (("runs", "pid", "INTEGER"), ("runs", "started_by", "TEXT NOT NULL DEFAULT ''"),
                                   ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("runs", "version", "TEXT"),
-                                  ("logs", "show", "TEXT"), ("blocks", "query", "TEXT")):
+                                  ("logs", "show", "TEXT"), ("blocks", "query", "TEXT"), ("blocks", "items", "TEXT")):
             if name not in columns[table]:
                 try:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
@@ -107,15 +108,16 @@ class History:
                 "ON CONFLICT (run_id, block) DO UPDATE SET status='running', attempts=excluded.attempts",
                 (run_id, event["block"], ts, event["attempt"]),
             )
-        elif kind == "block_finished":
+        elif kind == "block_finished":  # (a block inside a Loop: once per item, then over its items, with items)
             self._exec(
-                "INSERT INTO blocks (run_id, block, status, finished, attempts, error, summary, tables, previews) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "INSERT INTO blocks (run_id, block, status, finished, attempts, error, summary, tables, previews, "
+                "items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (run_id, block) DO UPDATE SET status=excluded.status, finished=excluded.finished, "
                 "attempts=excluded.attempts, error=excluded.error, summary=excluded.summary, tables=excluded.tables, "
-                "previews=excluded.previews",
+                "previews=excluded.previews, items=excluded.items",
                 (run_id, event["block"], event["status"], ts, event.get("attempts", 0), event.get("error"),
-                 event.get("summary"), json.dumps(event.get("tables") or {}), json.dumps(event.get("previews") or {})),
+                 event.get("summary"), json.dumps(event.get("tables") or {}), json.dumps(event.get("previews") or {}),
+                 json.dumps(event["items"], ensure_ascii=False) if event.get("items") else None),
             )
         elif kind == "log":
             self._exec(
@@ -186,16 +188,20 @@ class History:
         return dict(zip(RUN_COLUMNS, row)) if row else None
 
     def blocks(self, run_id: int) -> dict:
-        rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews, finished FROM blocks "
-                          "WHERE run_id=?", (run_id,))
+        """Each block's result in a run: status, attempts, error, summary, tables, previews, finished; a block inside
+        a Loop also items: {ended: e.g. ✓ 4 ✕ 1, last: the tag of the last item to end, status: how it ended there}."""
+        rows = self._exec("SELECT block, status, attempts, error, summary, tables, previews, finished, items "
+                          "FROM blocks WHERE run_id=?", (run_id,))
         return {r[0]: {"status": r[1], "attempts": r[2], "error": r[3], "summary": r[4],
-                       "tables": json.loads(r[5] or "{}"), "previews": json.loads(r[6] or "{}"), "finished": r[7]}
+                       "tables": json.loads(r[5] or "{}"), "previews": json.loads(r[6] or "{}"), "finished": r[7],
+                       **({"items": json.loads(r[8])} if r[8] else {})}
                 for r in rows}
 
     def latest_block_results(self, flow_path: str, after_run_id: int = 0) -> dict:
         """Each block's result in the latest run of the flow file (after run `after_run_id`) it took part in:
         {block: {run_id, started (the run's), started_by, status, attempts, error, summary, tables, previews,
-        finished (when the block finished)}}. Runs still going count with the blocks they have finished."""
+        finished (when the block finished), and a block inside a Loop items (see blocks)}}. Runs still going count with
+        the blocks they have finished."""
         return dict(self._block_results("r.flow_path=? AND r.id>? ORDER BY r.id", (flow_path, after_run_id)))
 
     def block_results(self, flow_path: str, block: str, limit: int = 200) -> list[dict]:
@@ -210,11 +216,12 @@ class History:
 
     def _block_results(self, where: str, args) -> list[tuple[str, dict]]:
         rows = self._exec("SELECT b.block, b.run_id, r.started, r.started_by, b.status, b.attempts, b.error, b.summary, "
-                          "b.tables, b.previews, b.finished FROM blocks b JOIN runs r ON r.id = b.run_id "
+                          "b.tables, b.previews, b.finished, b.items FROM blocks b JOIN runs r ON r.id = b.run_id "
                           f"WHERE b.status != 'running' AND {where}", args)
         return [(r[0], {"run_id": r[1], "started": r[2], "started_by": r[3], "status": r[4], "attempts": r[5],
                         "error": r[6], "summary": r[7], "tables": json.loads(r[8] or "{}"),
-                        "previews": json.loads(r[9] or "{}"), "finished": r[10]}) for r in rows]
+                        "previews": json.loads(r[9] or "{}"), "finished": r[10],
+                        **({"items": json.loads(r[11])} if r[11] else {})}) for r in rows]
 
     def queries(self, run_id: int) -> list[dict]:
         """The queries a run's blocks sent, in the order the blocks ran: {block, title (its type's), sql (as sent),

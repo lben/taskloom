@@ -30,8 +30,8 @@ from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
 from ..config import Home
 from ..engine import block_inputs, finished_text, input_ports, run_part
-from ..flow import (BlockSpec, FlowError, block_config, keep_source_names, load_flow, read_flow_file, real_path,
-                   run_clock, schedules_of, validate)
+from ..flow import (LOOP, RESULT, BlockSpec, FlowError, block_config, keep_source_names, load_flow, read_flow_file,
+                   real_path, run_clock, schedules_of, validate)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -334,6 +334,7 @@ class FlowTab(QWidget):
         self.shown_run: RunProcess | None = None  # the run going whose events the canvas shows
         self.waits: dict[str, dt.datetime] = {}  # Wait block -> when its wait ends, while it waits in that run
         self.run_blocks: list[str] = []  # the blocks that run takes part in
+        self.item_runs: dict[str, set[str]] = {}  # a block inside a Loop -> the items running it now, in that run
         # Show each block's latest result (incl. scheduled runs), unless an older run was opened: among the runs
         # after since_run (the newest you had seen when the flow was opened).
         self.following_latest = True
@@ -904,6 +905,7 @@ class MainWindow(QMainWindow):
         """The selected blocks (with the connections between them) and texts, onto the clipboard."""
         tab = self.current
         ids = tab.scene.selected_block_ids() if tab else []
+        ids += [b for i in list(ids) for b in tab.doc.within(i) if b not in ids]  # a Loop with the blocks inside it
         notes = tab.scene.selected_note_ids() if tab else []
         if not ids and not notes:
             return
@@ -1130,21 +1132,35 @@ class MainWindow(QMainWindow):
                      else "Run the flow from here")
             menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
             return menu
-        run_id = tab.inputs_run(block_id)
-        shown = f" ({self._run_label(run_id)})" if run_id else ""
-        rerun = menu.addAction(f"Run only this block, with the same inputs{shown}")
-        rerun.setEnabled(run_id is not None and not tab.running)
-        rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
-        choose = menu.addAction("Run only this block, with inputs I choose…")
-        choose.setEnabled(not tab.running)
-        choose.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id))
-        onwards = menu.addAction(f"Run from this block on, with the same inputs{shown}")
-        onwards.setToolTip("This block and every block after it; the blocks before it are not run again")
-        onwards.setEnabled(run_id is not None and not tab.running)
-        onwards.triggered.connect(lambda: self.rerun_block(tab, block_id, on=True))
-        choose_on = menu.addAction("Run from this block on, with inputs I choose…")
-        choose_on.setEnabled(not tab.running)
-        choose_on.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id, on=True))
+        if around := tab.doc.containers(block_id):  # not offered yet: what to do instead, in each entry's tooltip
+            menu.setToolTipsVisible(True)
+            why = (f"{block_id} is inside the loop {around[-1]}: running a block inside a loop on its own is not "
+                   f"offered yet. Right-click the loop {around[-1]} and choose Run from this block on: it runs again "
+                   "the items that failed or did not run.")
+            for text in ("Run only this block, with the same inputs", "Run only this block, with inputs I choose…",
+                         "Run from this block on, with the same inputs",
+                         "Run from this block on, with inputs I choose…"):
+                entry = menu.addAction(text)
+                entry.setEnabled(False)
+                entry.setToolTip(why)
+        else:
+            run_id = tab.inputs_run(block_id)
+            shown = f" ({self._run_label(run_id)})" if run_id else ""
+            rerun = menu.addAction(f"Run only this block, with the same inputs{shown}")
+            rerun.setEnabled(run_id is not None and not tab.running)
+            rerun.triggered.connect(lambda: self.rerun_block(tab, block_id))
+            choose = menu.addAction("Run only this block, with inputs I choose…")
+            choose.setEnabled(not tab.running)
+            choose.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id))
+            onwards = menu.addAction(f"Run from this block on, with the same inputs{shown}")
+            onwards.setToolTip("This block and every block after it; the blocks before it are not run again"
+                               + ("; of its items, only those that failed or did not run then"
+                                  if cls is not None and cls.type_id == LOOP else ""))
+            onwards.setEnabled(run_id is not None and not tab.running)
+            onwards.triggered.connect(lambda: self.rerun_block(tab, block_id, on=True))
+            choose_on = menu.addAction("Run from this block on, with inputs I choose…")
+            choose_on.setEnabled(not tab.running)
+            choose_on.triggered.connect(lambda: self.run_block_with_inputs(tab, block_id, on=True))
         results = menu.addAction("Results of this block…")
         results.setToolTip("Its results in the earlier runs: when each run started, what started it, its values")
         results.setEnabled(tab.doc.path is not None)
@@ -1281,7 +1297,8 @@ class MainWindow(QMainWindow):
         flow = self._ready_to_run(tab, {"run_from" if on else "only": block_id})
         if flow is None:
             return
-        names = [name for name in input_ports(flow, self.registry, block_id) if name != AFTER]
+        names = [name for name in input_ports(flow, self.registry, block_id)  # (a Loop's result: from inside it)
+                 if name != AFTER and not (name == RESULT and flow.blocks[block_id].type == LOOP)]
         run_id = tab.inputs_run(block_id)
         values, missing, typed = {}, {}, {}
         if run_id is not None:
@@ -1342,11 +1359,13 @@ class MainWindow(QMainWindow):
             finally:
                 history.close()
             self._mark_seen(tab, e["run_id"])
-            tab.run_blocks = e["blocks"]
+            tab.run_blocks, tab.item_runs = e["blocks"], {}
             self._clear_blocks(tab, e["blocks"])  # the blocks it takes part in; the others keep what they show
             params = " ".join(f"{k}={v}" for k, v in e.get("params", {}).items())
             self._log(tab, _started_line(e["run_id"], e["ts"], params))
         elif kind == "block_started":
+            if e.get("item"):  # (a block inside a Loop: it shows as running while any item runs it)
+                tab.item_runs.setdefault(block, set()).add(e["item"])
             tab.block_info[block] = {"status": "running", "run_id": e["run_id"]}
             text = "running" if e["attempt"] == 1 else f"running · attempt {e['attempt']}"
             tab.scene.set_status(block, "running", text)
@@ -1359,10 +1378,17 @@ class MainWindow(QMainWindow):
                 tab.waits[block] = dt.datetime.fromisoformat(e["until"])
                 self._show_waits(tab)
         elif kind == "block_finished":
+            running = tab.item_runs.get(block, set())
+            running.discard(e.get("item"))
+            if running:  # other items still run it
+                self.flow_status.update_tab(tab)
+                return
             self._end_waits(tab, [block])
             self._apply_block_result(tab, block, {**e, "finished": e["ts"]})
-            if e.get("tables"):
+            if e.get("tables") and not e.get("item"):  # (inside a Loop: once, over its items, as the history has it)
                 self._log(tab, _block_line(block, e["ts"], e))
+        elif kind == "progress":  # a Loop's items
+            tab.scene.set_progress(block, e["done"], e["of"], e["running"])
         elif kind == "run_finished":
             self._log(tab, _finished_line(e["run_id"], e["status"], e["ts"]))
         self.flow_status.update_tab(tab)

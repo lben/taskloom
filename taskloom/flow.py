@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from . import params as P
-from .block import AFTER, DONE, IDENTIFIER, all_ports, applies, fields, setting_label
+from .block import AFTER, DONE, IDENTIFIER, all_ports, applies, fields, has_placeholders, setting_label
 from .calendars import load_calendar
 from .config import keep_runs_for
 from .expr import functions
@@ -25,7 +25,9 @@ FORMAT_VERSION = 1
 FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone", "triggers", "overlap", "notify",
              "blocks", "edges", "notes"}  # notes: text on the canvas; only the editor uses them
 OVERLAP_POLICIES = ("skip", "queue", "allow")
-BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui"}
+# inside: the Loop (logic.loop) a block is inside, which runs it once per item; ui: where the canvas draws it (a Loop's
+# box: also its width and height, once you resized it).
+BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui", "inside"}
 ERROR_PORT = "error"
 _EDGE = re.compile(r"^\s*(\w+)\.(\w+)\s*->\s*(\w+)\.(\w+)\s*$")
 _DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$")
@@ -39,6 +41,11 @@ OFF = "off: not connected to a start block"
 SPLITTER, MERGER, LINES = "logic.splitter", "logic.merger", "lines"
 LINES_RUN, AT_MOST = "lines_run", "at_most"
 SAME_TIME, ONE_AFTER_ANOTHER = "at the same time", "one after another"
+# The Loop (blocks/logic.py): a box on the canvas around blocks (those whose `inside` names it), which run once for
+# every item arriving at its `items`, getting the item and its index from its `item` and `index`; what reaches its
+# `result` is each item's, collected, in the items' order, in its `results`. Its setting At the same time.
+LOOP, ITEMS, ITEM, INDEX, RESULT, RESULTS = "logic.loop", "items", "item", "index", "result", "results"
+AT_ONCE = "at_the_same_time"
 
 
 class FlowError(Exception):
@@ -113,6 +120,7 @@ class BlockSpec:
     retry: Retry = field(default_factory=Retry)
     timeout: float | None = None
     ui: dict = field(default_factory=dict)
+    inside: str | None = None  # the Loop it is inside
 
 
 @dataclass
@@ -253,13 +261,17 @@ def flow_from_data(data, path: Path) -> Flow:
         if spec.get("version") is not None and not isinstance(spec["version"], int):
             errors.append(f"{where}: version must be a whole number, got {spec['version']!r}")
             continue
+        inside = spec.get("inside")
+        if inside is not None and not (isinstance(inside, str) and IDENTIFIER.match(inside)):
+            errors.append(f"{where}: inside must be the name of the Loop it is inside, got {inside!r}")
+            continue
         try:
             blocks[block_id] = BlockSpec(
                 id=block_id, type=str(spec["type"]), version=spec.get("version"),
                 config=dict(_mapping(spec.get("config"), f"{where}.config", errors)),
                 retry=Retry.parse(spec.get("retry")),
                 timeout=parse_duration(spec["timeout"]) if spec.get("timeout") is not None else None,
-                ui=dict(_mapping(spec.get("ui"), f"{where}.ui", errors)),
+                ui=dict(_mapping(spec.get("ui"), f"{where}.ui", errors)), inside=inside,
             )
         except (ValueError, TypeError) as e:
             errors.append(f"{where}: {e}")
@@ -412,8 +424,7 @@ def run_clock(flow: Flow, home, as_of: dt.datetime | None = None) -> tuple[dt.da
 
     `as_of` replaces 'now', e.g. the time a missed scheduled run was due. Like
     schedules, it is in the machine's local time unless it has a time zone of its
-    own (e.g. the time of the run that For Each runs this flow from); with a flow
-    time zone it is converted, as the current time is.
+    own; with a flow time zone it is converted, as the current time is.
     """
     tz = ZoneInfo(flow.timezone) if flow.timezone else None
     if as_of is not None:
@@ -507,6 +518,9 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
                     f"blocks.{block_id}: required input '{name}' is not connected")
     warnings += [f"{problem} ({why})" for problem in apart]
     warnings += unconnected_starts(flow, registry)
+    loop_errors, loop_warnings = _loop_problems(flow, registry)
+    errors += loop_errors
+    warnings += loop_warnings
     if not errors:
         try:
             order(flow)
@@ -519,6 +533,113 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         never, few = _lines_problems(flow, registry, part)
         errors += never
         warnings += few
+    return errors, warnings
+
+
+def containers(flow: Flow, block: str) -> list[str]:
+    """The Loops `block` is inside, the innermost first (they end at a name that is no block: Validate refuses it)."""
+    found, loop = [], flow.blocks[block].inside
+    while loop is not None and loop in flow.blocks and loop not in found:
+        found.append(loop)
+        loop = flow.blocks[loop].inside
+    return found
+
+
+def at_level(flow: Flow, block: str, loop: str | None) -> str | None:
+    """`block`, or the Loop it is inside, that is directly inside `loop` (None: in the flow itself, inside no Loop);
+    None when `block` is not inside `loop`."""
+    for b in [block, *containers(flow, block)]:
+        if flow.blocks[b].inside == loop:
+            return b
+    return None
+
+
+def from_inside(flow: Flow, edge: Edge) -> bool:
+    """Whether a connection goes out of a Loop into the Loop itself: into its result, from a block inside it."""
+    return edge.src in flow.blocks and edge.dst in containers(flow, edge.src)
+
+
+def _level_pairs(flow: Flow) -> list[tuple[str, str]]:
+    """The connections as they set the order: each between the two blocks (or Loops) it joins at the level where both
+    are. One from outside a Loop into a block inside it orders the Loop after its source (the Loop runs its blocks).
+    A Loop's item and index into its blocks, and its blocks into its result, are inside it: they order nothing."""
+    pairs = []
+    for e in flow.edges:
+        if e.src not in flow.blocks or e.dst not in flow.blocks:
+            continue
+        src_in, dst_in = containers(flow, e.src), containers(flow, e.dst)
+        if e.src in dst_in or e.dst in src_in:
+            continue
+        common = next((c for c in src_in if c in dst_in), None)  # the innermost Loop both are inside
+        a, b = at_level(flow, e.src, common), at_level(flow, e.dst, common)
+        if a is not None and b is not None:
+            pairs.append((a, b))
+    return pairs
+
+
+def _loop_problems(flow: Flow, registry) -> tuple[list[str], list[str]]:
+    """(what is wrong with the Loops and the blocks inside them: a block inside something that is not a Loop of the
+    flow, a connection out of a Loop but through its result, a Loop's item, index or result used outside it or its
+    results inside it, a start block inside one, a Loop's retry or timeout; what to look at: a Loop inside another
+    (its blocks run items × items times), a Loop's results connected but its result not, a file path a block inside a
+    Loop writes to without a {placeholder}, as every item writes to it)."""
+    errors, warnings = [], []
+    loops = {b for b, spec in flow.blocks.items() if spec.type == LOOP}
+    for block_id, spec in flow.blocks.items():
+        if spec.inside is not None and spec.inside not in loops:
+            errors.append(f"{block_id}: inside: {spec.inside} is not a Loop of this flow")
+        elif block_id in containers(flow, block_id):
+            errors.append(f"{block_id}: inside: it is inside itself (through {', '.join(containers(flow, block_id))})")
+    if errors:
+        return errors, warnings
+    for e in flow.edges:
+        if e.src not in flow.blocks or e.dst not in flow.blocks:
+            continue  # (an unknown block, which validate names)
+        src_in, dst_in = containers(flow, e.src), containers(flow, e.dst)
+        if flow.blocks[e.dst].type == LOOP and e.dst_port == RESULT:
+            if flow.blocks[e.src].inside != e.dst:
+                inner = next((c for c in src_in if flow.blocks[c].inside == e.dst), None)
+                errors.append(f"edge {e}: {e.dst}.result takes what each item gives back, from a block inside "
+                              + (f"{e.dst} itself ({e.src} is inside {inner}: connect it to {inner}.result, and "
+                                 f"{inner}.results to {e.dst}.result)" if inner else
+                                 f"{e.dst}: connect a block inside the loop to it"))
+        elif flow.blocks[e.src].type == LOOP and e.src_port in (ITEM, INDEX):
+            if e.src not in dst_in:
+                errors.append(f"edge {e}: {e.src}.{e.src_port} is for the blocks inside {e.src}: connect it to a "
+                              "block inside the loop")
+        elif e.src in dst_in:
+            errors.append(f"edge {e}: {e.src}.{e.src_port} comes once all the items of {e.src} have run, so no block "
+                          f"inside it can take it (inside, take {e.src}.item or {e.src}.index)")
+        elif leaving := [c for c in src_in if c not in dst_in]:
+            errors.append(f"edge {e}: from inside the loop {leaving[0]} to outside it: a block inside a loop connects "
+                          f"out of it only through the loop's result (connect it to {leaving[0]}.result, and take "
+                          f"{leaving[0]}.results outside the loop)")
+    for block_id, spec in flow.blocks.items():
+        around = containers(flow, block_id)
+        if spec.type == LOOP:
+            if spec.retry.policy != "none" or spec.timeout is not None:
+                errors.append(f"{block_id}: a Loop has no retry or timeout of its own: set them on the blocks inside "
+                              "it")
+            if around:
+                warnings.append(f"{block_id}: a loop inside the loop {around[0]}: its blocks run for every item of "
+                                f"{block_id} once per item of {around[0]} (items × items times)")
+            if (any(e.src == block_id and e.src_port == RESULTS for e in flow.edges)
+                    and not any(e.dst == block_id and e.dst_port == RESULT for e in flow.edges)):
+                warnings.append(f"{block_id}: its results is connected, but nothing is connected to its result inside "
+                                f"it: every item's result is None (connect to {block_id}.result the block inside that "
+                                "gives what each item gives back)")
+        cls = registry.get(spec.type)
+        if cls is None or not around:
+            continue
+        if cls.is_trigger:
+            errors.append(f"{block_id}: a start block cannot be inside a Loop (it is inside {around[0]})")
+        for key, f in cls.config.items():
+            value = spec.config.get(key)
+            if (f.writes and isinstance(value, str) and value and not has_placeholders(value)
+                    and applies(cls, key, spec.config)):
+                warnings.append(f"{block_id}: {setting_label(key, f)}: every item of the loop {around[0]} writes to "
+                                f"{value} (it has no {{placeholder}}, so each item writes over what the one before "
+                                "wrote)")
     return errors, warnings
 
 
@@ -597,7 +718,7 @@ def _lines_before(flow: Flow, block: str, owner: dict) -> set[str]:
         if b not in seen:
             seen.add(b)
             found.update([owner[b]] if b in owner else [])
-            todo += [e.src for e in flow.edges if e.dst == b]
+            todo += [e.src for e in flow.edges if e.dst == b and not from_inside(flow, e)]
     return found
 
 
@@ -636,7 +757,7 @@ def splitter_lines(flow: Flow) -> dict[str, list[tuple[str, set[str]]]]:
         while todo:
             block = todo.pop()
             for e in flow.edges:
-                if e.src == block and e.dst in flow.blocks and e.dst not in after:
+                if e.src == block and e.dst in flow.blocks and e.dst not in after and not from_inside(flow, e):
                     after.add(e.dst)
                     todo.append(e.dst)
         found[splitter] = [(first, blocks - after) for first, (blocks, _) in zip(its, reached)]
@@ -669,7 +790,7 @@ def _line_blocks(flow: Flow, first: str, starts: set[str]) -> tuple[set[str], se
             joins.add(block)
             continue
         blocks.add(block)
-        todo += [e.dst for e in flow.edges if e.src == block and e.dst in flow.blocks]
+        todo += [e.dst for e in flow.edges if e.src == block and e.dst in flow.blocks and not from_inside(flow, e)]
     return blocks, joins
 
 
@@ -732,41 +853,44 @@ def _start_blocks(flow: Flow, registry) -> set[str]:
 
 
 def order(flow: Flow, part: set[str] | None = None) -> list[str]:
-    """Topological order; ties keep the order blocks appear in the file. With `part` (the blocks a run takes part
-    in), a loop among the other blocks, which do not run, is left out of it (with its connections)."""
-    loops = {b for b in flow.blocks if b not in part and _leads_back(flow, b)} if part is not None else set()
-    blocks = [b for b in flow.blocks if b not in loops]
-    edges = [e for e in flow.edges if e.src not in loops and e.dst not in loops]
+    """Topological order (the blocks inside a Loop among themselves, see _level_pairs); ties keep the order blocks
+    appear in the file. With `part` (the blocks a run takes part in), a cycle among the other blocks, which do not run,
+    is left out of it (with its connections)."""
+    pairs = _level_pairs(flow)
+    circles = {b for b in flow.blocks if b not in part and _leads_back(flow, b, pairs)} if part is not None else set()
+    blocks = [b for b in flow.blocks if b not in circles]
+    pairs = [(a, b) for a, b in pairs if a not in circles and b not in circles]
     indegree = {b: 0 for b in blocks}
-    for e in edges:
-        indegree[e.dst] += 1
+    for _, b in pairs:
+        indegree[b] += 1
     ready = [b for b in blocks if indegree[b] == 0]
     result = []
     while ready:
         block_id = ready.pop(0)
         result.append(block_id)
-        for e in edges:
-            if e.src == block_id:
-                indegree[e.dst] -= 1
-                if indegree[e.dst] == 0:
-                    ready.append(e.dst)
+        for a, b in pairs:
+            if a == block_id:
+                indegree[b] -= 1
+                if indegree[b] == 0:
+                    ready.append(b)
         ready.sort(key=list(flow.blocks).index)
     if len(result) != len(blocks):  # left out: the blocks in a cycle and those after one
-        cyclic = sorted(b for b in blocks if b not in result and _leads_back(flow, b))
+        cyclic = sorted(b for b in blocks if b not in result and _leads_back(flow, b, pairs))
         raise FlowError([f"the flow has a cycle through: {', '.join(cyclic)}"])
     return result
 
 
-def _leads_back(flow: Flow, block_id: str) -> bool:
-    """Whether connections lead from the block back to itself."""
+def _leads_back(flow: Flow, block_id: str, pairs: list | None = None) -> bool:
+    """Whether connections lead from the block back to itself (as they set the order: _level_pairs)."""
+    pairs = _level_pairs(flow) if pairs is None else pairs
     seen, todo = set(), [block_id]
     while todo:
         current = todo.pop()
-        for e in flow.edges:
-            if e.src == current:
-                if e.dst == block_id:
+        for a, b in pairs:
+            if a == current:
+                if b == block_id:
                     return True
-                if e.dst not in seen:
-                    seen.add(e.dst)
-                    todo.append(e.dst)
+                if b not in seen:
+                    seen.add(b)
+                    todo.append(b)
     return False

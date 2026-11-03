@@ -1,5 +1,5 @@
 """Runs a flow: blocks in topological order, with retries, timeouts, error ports and cancellation; a Splitter's lines
-at the same time or one after another."""
+at the same time or one after another; the blocks inside a Loop once per item."""
 
 from __future__ import annotations
 
@@ -20,8 +20,9 @@ import polars as pl
 
 from . import params as P
 from .block import AFTER, DONE, all_ports, fields, has_done_output, setting_label
-from .flow import (ERROR_PORT, LINES, MERGER, ONE_AFTER_ANOTHER, Flow, FlowError, _start_blocks, _taking_part,
-                   block_config, line_runs, lines_run, order, run_clock, splitter_lines, validate)
+from .flow import (AT_ONCE, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, MERGER, ONE_AFTER_ANOTHER, RESULT, RESULTS,
+                   Flow, FlowError, _start_blocks, _taking_part, at_level, block_config, containers,
+                   from_inside, line_runs, lines_run, order, run_clock, splitter_lines, validate)
 from .config import REVEALED, before_now, kept_runs, runs_kept_since
 from .history import History
 from .table import Table
@@ -241,9 +242,12 @@ def inline(value, limit: int = 300) -> str:
 
 def finished_text(event: dict) -> str:
     """A finished block's line (after its name): its status, its summary or error, and the full path of the file
-    of each table it produced, to copy."""
+    of each table it produced, to copy. A block inside a Loop, over its items: how they ended (✓ 4 ✕ 1), then that
+    for the last item to end."""
     detail = event.get("summary") or event.get("error")
-    return " · ".join([event["status"], *([detail] if detail else []), *(event.get("tables") or {}).values()])
+    items = event.get("items")
+    status = f"{items['ended']} · the last, {items['last']}: {items['status']}" if items else event["status"]
+    return " · ".join([status, *([detail] if detail else []), *(event.get("tables") or {}).values()])
 
 
 def _summary(produced: dict) -> str:
@@ -278,11 +282,18 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     values = P.resolve(flow.params, overrides or {}, funcs)
     texts = dict(given or {})  # as you typed them: shown again next time, and read again then
     start = only or run_from
+    if start in flow.blocks and (around := containers(flow, start)):
+        raise ValueError(f"{start} is inside the loop {around[-1]}: running a block inside a loop on its own is not "
+                         f"offered yet; run from {around[-1]} instead (it runs again the items that failed or did not "
+                         "run)")
+    # Running from a block, or only a Loop (it runs the blocks inside it), the blocks that run take what the blocks
+    # before them, which do not run again, held in run inputs_from.
+    takes_before = bool(run_from or (only and part - {only}))
     if start is not None:  # refuse before a run is recorded
         given = _evaluate_inputs(texts, values)
         _only_inputs(flow, registry, home, start, inputs_from, given, texts)
-        if run_from:
-            _from_before(flow, registry, home, part, inputs_from, run_from)
+        if takes_before:
+            _from_before(flow, registry, home, part, inputs_from, start)
     started_by = (f"only {only}" if only else f"from {run_from}" if run_from
                   else ", ".join(b for b in flow.blocks if b in fired))
     # The start blocks it counts for (a re-run: those whose lines hold its block), and how the flow's start blocks
@@ -322,7 +333,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         for message in registry.warnings + warnings:
             emit({"event": "log", "level": "WARNING", "message": message})
         runner = _Runner(flow, registry, home, values, now, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
-        runner.taking_part, runner.outside = part, set(flow.blocks) - part
+        runner.taking_part, runner.outside, runner.inputs_from = part, set(flow.blocks) - part, inputs_from
         try:
             if start is not None:
                 chosen = f"; inputs you chose: {', '.join(given)}" if given else ""
@@ -340,9 +351,9 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                 source = run_id if inputs_from is not None else None
                 runner.only_inputs, runner.only_typed, runner.only_came = _only_inputs(
                     flow, registry, home, start, source, given, texts)
-                if run_from:
+                if takes_before:
                     runner.outputs, runner.blocked, runner.before_unhandled, runner.outside = _from_before(
-                        flow, registry, home, part, source, run_from)
+                        flow, registry, home, part, source, start)
             status = runner.run()
         except BaseException:
             # Never leave the run, or a block of it, recorded as "running" (e.g. a forced second Ctrl+C).
@@ -382,19 +393,28 @@ class _Runner:
     run_from: str | None = None  # run from this block on (with only_inputs): taking_part is it and the blocks after it
     outside: set = set()  # blocks taking no part in it (nor in the run it carries on from): see _gather
     before_unhandled: dict = {}  # blocks before them: {block: the failures behind it no block that ran handled}
+    inputs_from: int | None = None  # the run it carries on from
+    # Running the blocks inside a Loop for one of its items (see _item_runner): the Loop, and the item's tag in the
+    # Log, e.g. [item 2/5]. None and "": the flow's own blocks.
+    loop: str | None = None
+    item: str = ""
+    ordered: list | None = None  # the flow's blocks in order (order()), worked out once for the run
 
     def run(self) -> str:
         """The blocks outside a Splitter's lines run here one at a time, in the flow's order (each once the blocks
         before it are done with; see _run_blocks), as in a flow without one; each line runs its own blocks so, in a
-        thread of its own, once its Splitter is done with, as the Splitter says (_start_lines)."""
-        self.lines = splitter_lines(self.flow)
+        thread of its own, once its Splitter is done with, as the Splitter says (_start_lines). Only the blocks of its
+        level: the flow's own, or (running an item of a Loop) those directly inside the Loop; a Loop runs the blocks
+        inside it (_run_loop)."""
+        self.lines = {s: its for s, its in splitter_lines(self.flow).items() if self.flow.blocks[s].inside == self.loop}
         self.runs = line_runs(self.flow, self.taking_part, self.lines)
+        self.ordered = self.ordered or order(self.flow, self.taking_part)
         self.units: dict = {}  # None (outside the lines) or (Splitter, line index): its blocks, in the flow's order
-        for block_id in [b for b in order(self.flow, self.taking_part) if b in self.taking_part]:
+        for block_id in [b for b in self.ordered if b in self.taking_part and self.flow.blocks[b].inside == self.loop]:
             self.units.setdefault(self.runs.get(block_id), []).append(block_id)
-        # With lines, each block gets its own copy of what it receives: no line (nor a block running meanwhile) can
-        # change another's data.
-        self.copies = any(unit is not None for unit in self.units)
+        # With lines, or inside a Loop (its items may run at the same time), each block gets its own copy of what it
+        # receives: no line, item (nor a block running meanwhile) can change another's data.
+        self.copies = self.loop is not None or any(unit is not None for unit in self.units)
         self.settled: set[str] = set()  # the blocks done with: ran, skipped or cancelled
         self.changed = threading.Condition()
         self.threads: list[threading.Thread] = []
@@ -409,16 +429,23 @@ class _Runner:
             raise self.crashed[0]
         if self.cancel.is_set():
             return "cancelled"
-        # A failure is handled when its error reached a block that ran: an error handler that was skipped
-        # (e.g. it also needs the failed block's data) handles nothing.
+        return "failed" if self.unhandled() else "success"
+
+    def unhandled(self) -> list[str]:
+        """The failures it answers for that are not handled, in the flow's order. A failure is handled when its error
+        reached a block that ran: an error handler that was skipped (e.g. it also needs the failed block's data)
+        handles nothing."""
         handled = {e.src for e in self.flow.edges if e.src_port == ERROR_PORT and e.dst in self.ran}
-        return "failed" if self.failures - handled else "success"
+        return [b for b in self.flow.blocks if b in self.failures - handled]
 
     def _run_blocks(self, blocks: list[str]):
         """Run these blocks one after another, in the flow's order, each once the blocks before it are done with; while
         one waits (for what a line makes), the first after it that need not wait runs meanwhile (a line may be waiting
-        for that one). After a Splitter, its lines start."""
-        before = {b: {e.src for e in self.flow.edges if e.dst == b and e.src in self.taking_part} for b in blocks}
+        for that one). After a Splitter, its lines start. (A Loop also waits for what the blocks inside it take from
+        outside it.)"""
+        pairs = [(at_level(self.flow, e.src, self.loop), at_level(self.flow, e.dst, self.loop))
+                 for e in self.flow.edges if e.src in self.flow.blocks and e.dst in self.flow.blocks]
+        before = {b: {a for a, d in pairs if d == b and a not in (None, b) and a in self.taking_part} for b in blocks}
         todo = list(blocks)
         while todo:
             with self.changed:
@@ -482,6 +509,159 @@ class _Runner:
         self.threads.append(thread)
         thread.start()
 
+    def _run_loop(self, spec, inputs) -> tuple[str, dict, list | None]:
+        """Run a Loop: the blocks inside it once for every item arriving at its items (a table: each row, as a dict of
+        its columns), as a flow of their own (_item_runner), At the same time items at once, the next starting as soon
+        as one ends, in item order. Once an item fails (or a block of it fails with nothing at its error output, which
+        fails it) no new one starts; the items running end, then the Loop fails, listing the failed items. Running from the Loop (or only it), the items that succeeded in the run this one
+        carries on from keep the results they gave there and are not run again. Returns how it ended, its outputs, and
+        each item's (item, status, result), kept with its outputs for that (None: it could not start)."""
+        loop, cls = spec.id, self.registry.get(spec.type)
+        try:
+            connected = {e.dst_port for e in self.flow.edges if e.dst == loop and not from_inside(self.flow, e)}
+            at_once = _filled(cls, block_config(cls, spec), self.values, inputs, {ITEMS}, connected)[AT_ONCE]
+            items = _items_of(inputs.get(ITEMS))
+        except Exception as e:
+            return (*self._fail(spec, 0, e, inputs), None)
+        n, started = len(items), time.monotonic()
+        kept = self._earlier_items(loop, items) if loop in (self.only, self.run_from) else {}
+        records: list = [(items[k], "success", kept[k]) if k in kept else None for k in range(n)]
+        self.emit({"event": "block_started", "block": loop, "attempt": 1})
+        said = f"{n} item{'s' if n != 1 else ''}, {at_once} at the same time"
+        if kept:
+            numbers = [str(k + 1) for k in sorted(kept)]
+            said += (f"; item {numbers[0]} keeps its result" if len(numbers) == 1 else
+                     f"; items {', '.join(numbers[:-1])} and {numbers[-1]} keep their results")
+            said += f" from run #{self.inputs_from}, where {'it' if len(numbers) == 1 else 'they'} succeeded"
+        self.emit({"event": "log", "block": loop, "level": "INFO", "message": said})
+        source = next((e for e in self.flow.edges if e.dst == loop and e.dst_port == RESULT), None)
+        part = {b for b in self.taking_part if loop in containers(self.flow, b)}  # the blocks inside it that run
+        todo = [k for k in range(n) if records[k] is None]
+        running, ended, tally, failing = set(), {}, {}, set()
+        changed = threading.Condition()
+
+        def run_item(k: int):
+            status, result, failed, missing = "failed", None, [], False
+            try:
+                runner = self._item_runner(loop, k, n, items[k], part, tally, failing, changed)
+                status = runner.run()
+                if source is not None:
+                    result = runner.outputs.get((source.src, source.src_port))
+                    missing = (source.src, source.src_port) not in runner.outputs
+                failed = [f"{b} failed: {runner.errors[b]}" if b in runner.errors else f"{b} failed"
+                          for b in runner.unhandled()]
+            except BaseException as e:  # a bug of Taskloom's: the run fails with it
+                self.crashed.append(e)
+            finally:
+                with changed:
+                    ended[k] = (status, result, failed, missing)
+                    changed.notify_all()
+
+        def progress(finished: int):
+            self.emit({"event": "progress", "block": loop, "done": finished, "of": n, "running": len(running)})
+
+        finished, stopping = len(kept), False
+        progress(finished)
+        while True:
+            with changed:
+                starting = []
+                while (todo and len(running) < at_once and not stopping and not failing and not self.cancel.is_set()
+                       and not self.crashed):
+                    starting.append(todo.pop(0))
+                    running.add(starting[-1])
+                if not running:
+                    break
+                if not starting:
+                    changed.wait(0.05)
+                ending = sorted(running & set(ended))
+                for k in ending:
+                    running.discard(k)
+                    stopping |= ended[k][0] != "success"
+                finished += sum(ended[k][0] != "cancelled" for k in ending)  # (stopped: not done)
+            for k in starting:  # (in item order)
+                threading.Thread(target=run_item, args=(k,), daemon=True, name=f"{loop}-item-{k + 1}").start()
+            if starting or ending:
+                progress(finished)
+        for k, (status, result, _, _) in ended.items():
+            records[k] = (items[k], status, result)
+        if not self.item:  # (inside an item of another Loop: that Loop tells it, for all its items)
+            self._tell_items(tally)
+        if self.cancel.is_set():
+            self.emit({"event": "block_finished", "block": loop, "status": "cancelled", "attempts": 1})
+            return "cancelled", {}, records
+        failed = {k + 1: why for k, (status, _, why, _) in sorted(ended.items()) if status != "success"}
+        if failed:
+            error = f"{len(failed)} of {n} items failed: " + ", ".join(
+                f"item {k} ({'; '.join(why) or 'it did not end'})" for k, why in failed.items())
+            return (*self._fail(spec, 1, Failed(error + (f"; {len(todo)} not run" if todo else "")), inputs), records)
+        missing = [str(k + 1) for k, (_, _, _, nothing) in sorted(ended.items()) if nothing]
+        if missing:
+            self.emit({"event": "log", "block": loop, "level": "WARNING", "message": (
+                f"nothing reached {loop}.result for item{'s' if len(missing) > 1 else ''} {', '.join(missing)} (from "
+                f"{source.src}.{source.src_port}): {'their results are' if len(missing) > 1 else 'its result is'} "
+                "None")})
+        produced = {RESULTS: [record[2] for record in records]}
+        self.emit({"event": "log", "block": loop, "level": "INFO", "message": f"{n} item{'s' if n != 1 else ''} done"})
+        self.emit({"event": "block_finished", "block": loop, "status": "success", "attempts": 1,
+                   "duration": round(time.monotonic() - started, 3), "summary": _summary(produced),
+                   "tables": {where: path for p, v in produced.items() for where, path in _table_files(v, p).items()},
+                   "previews": {p: preview(v) for p, v in produced.items()}})
+        return "success", {**produced, DONE: True}, records
+
+    def _item_runner(self, loop: str, k: int, n: int, item, part: set, tally: dict, failing: set,
+                     changed) -> "_Runner":
+        """A runner for the blocks inside `loop` (those in `part` directly inside it, see run) for its item number
+        k + 1 of n: they get `item` and k + 1 from its item and index, and what the blocks outside it hold (each block
+        its own copy); the item's Log lines and events carry its tag ([item 2/5]); each block's end goes into `tally`
+        (under `changed`), for _tell_items; k into `failing` once a block directly inside the Loop fails with nothing
+        connected to its error output (nothing can handle it: the item fails)."""
+        tag = f"[item {k + 1}/{n}]"
+
+        def emit(event: dict):
+            event = dict(event)
+            if event["event"] == "log":
+                event["message"] = f"{tag} {event['message']}"
+            elif event.get("block"):
+                event["item"] = f"{tag} {event['item']}" if event.get("item") else tag
+            if event["event"] == "block_finished" and "items" not in event:
+                with changed:
+                    tally.setdefault(event["block"], []).append(dict(event))
+                    if (event["status"] == "failed" and self.flow.blocks[event["block"]].inside == loop
+                            and not any(e.src == event["block"] and e.src_port == ERROR_PORT for e in self.flow.edges)):
+                        failing.add(k)
+            self.emit(event)
+
+        runner = _Runner(self.flow, self.registry, self.home, self.values, self.now, self.funcs, emit, self.cancel,
+                         self.workspace / loop / "items" / str(k + 1), self.answers)
+        runner.loop, runner.item, runner.ordered = loop, tag, self.ordered
+        runner.taking_part, runner.outside, runner.blocked = part, self.outside, set(self.blocked)
+        runner.outputs = {**self.outputs, (loop, ITEM): item, (loop, INDEX): k + 1}
+        return runner
+
+    def _tell_items(self, tally: dict):
+        """How each block inside a Loop ended over its items (e.g. ✓ 4 ✕ 1), with what the last item to end gave it:
+        told as its result in the run (`tally`: each block's ends, in the order they came)."""
+        marks = {"success": "✓", "failed": "✕", "skipped": "skipped", "cancelled": "cancelled"}
+        for block, ends in tally.items():
+            statuses, last = [e["status"] for e in ends], ends[-1]
+            self.emit({**{k: last[k] for k in ("attempts", "summary", "error", "tables", "previews") if k in last},
+                       "event": "block_finished", "block": block,
+                       "status": next(s for s in ("failed", "cancelled", "success", "skipped") if s in statuses),
+                       "items": {"ended": " ".join(f"{mark} {statuses.count(s)}" for s, mark in marks.items()
+                                                   if s in statuses),
+                                 "last": last["item"], "status": last["status"]}})
+
+    def _earlier_items(self, loop: str, items: list) -> dict:
+        """Running from the Loop (or only it): its items that succeeded in the run this one carries on from, the same
+        items now, with the results they gave there ({index: result}); not one whose tables are gone."""
+        found = {}
+        for k, record in enumerate((_saved(self.workspace, loop).get(ITEM_RESULTS) or [])[:len(items)]):
+            if record is not None and record[1] == "success" and _same(_map_marks(record[0], Table), items[k]):
+                result = _map_marks(record[2], Table)
+                if all(Path(path).exists() for path in _table_files(result, RESULT).values()):
+                    found[k] = result
+        return found
+
     def _run_one(self, block_id: str):
         if self.cancel.is_set():
             self.emit({"event": "block_finished", "block": block_id, "status": "cancelled"})
@@ -495,9 +675,15 @@ class _Runner:
             self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed, came=self.only_came)
             self.brought = {name: _by_edge(inputs[name], came) for name, came in self.only_came.items()}
         spec = self.flow.blocks[block_id]
-        status, produced = (self._fail(spec, 0, inputs, {}) if isinstance(inputs, Failed)  # (a Merger: a line failed)
-                            else self._run_block(spec, inputs))
-        self._keep_outputs(block_id, produced, status=status)
+        records = None  # a Loop's: each item's (item, status, result), for running from it again
+        if isinstance(inputs, Failed):  # (a Merger: a line failed)
+            status, produced = self._fail(spec, 0, inputs, {})
+        elif spec.type == LOOP:
+            status, produced, records = self._run_loop(spec, inputs)
+        else:
+            status, produced = self._run_block(spec, inputs)
+        self._keep_outputs(block_id, produced if records is None else {**produced, ITEM_RESULTS: records},
+                           status=status)
         if status == "failed":
             self.blocked.add(block_id)
             self.failures.add(block_id)
@@ -507,16 +693,21 @@ class _Runner:
     def _gather(self, block_id: str) -> dict | Failed | None:
         """The block's inputs from the blocks before it; None (and it is skipped) when it cannot run; for a Merger
         waiting for a line that failed, the failure it fails with."""
-        # A run-after connection from a block taking no part in the run does not hold it back.
-        incoming = [e for e in self.flow.edges
-                    if e.dst == block_id and not (e.dst_port == AFTER and e.src in self.outside)]
+        # A run-after connection from a block taking no part in the run does not hold it back. (A Loop's result is
+        # for each item, from the blocks inside it.)
+        incoming = [e for e in self.flow.edges if e.dst == block_id and not from_inside(self.flow, e)
+                    and not (e.dst_port == AFTER and e.src in self.outside)]
         merger = self.flow.blocks[block_id].type == MERGER
         if merger and (failed := self._failed_lines(block_id, incoming)):
             return Failed("; ".join(failed))
+        # What the blocks inside a Loop take from outside it holds the Loop back too.
+        around = [e for e in self.flow.edges if self.flow.blocks[block_id].type == LOOP and e.src in self.flow.blocks
+                  and block_id in containers(self.flow, e.dst)
+                  and block_id not in [e.src, *containers(self.flow, e.src)]]
         # Nothing downstream of a failure runs: an edge from a normal output of a failed block (or of
         # a block skipped because of a failure) stops this block. Error outputs are the way out.
-        if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming):
-            self.failures.update(f for e in incoming if e.src_port != ERROR_PORT
+        if any(e.src in self.blocked and e.src_port != ERROR_PORT for e in incoming + around):
+            self.failures.update(f for e in incoming + around if e.src_port != ERROR_PORT
                                  for f in self.before_unhandled.get(e.src, ()))
             self.blocked.add(block_id)
             self._keep_outputs(block_id, {}, status=BLOCKED)
@@ -620,8 +811,8 @@ class _Runner:
                 try:
                     inputs = copy.deepcopy(inputs)
                 except Exception as e:
-                    raise Failed(f"what it got cannot be copied ({type(e).__name__}: {e}); in a run with a Splitter's "
-                                 "lines each block gets its own copy of what it receives") from None
+                    raise Failed(f"what it got cannot be copied ({type(e).__name__}: {e}); inside a Loop, and in a run "
+                                 "with a Splitter's lines, each block gets its own copy of what it receives") from None
             config = block_config(cls, spec)
             in_ports, out_ports = cls.ports(config)
             connected = {e.dst_port for e in self.flow.edges if e.dst == spec.id}
@@ -684,7 +875,7 @@ class _Runner:
         tb = "" if isinstance(error, Failed) else redact(
             getattr(error, "details", None) or "".join(traceback.format_exception(error)))
         report = [f"{block_id} ({cls.title if cls else spec.type}) failed: {message}"]
-        incoming = [e for e in self.flow.edges if e.dst == block_id]
+        incoming = [e for e in self.flow.edges if e.dst == block_id and not from_inside(self.flow, e)]
         if incoming:
             report.append("Inputs:")
             for e in incoming:
@@ -750,6 +941,7 @@ class _Runner:
 
 
 KEPT_OUTPUTS = "outputs.pickle"
+ITEM_RESULTS = "__items__"  # with a Loop's outputs: each item's (item, status, result), None for one not run
 KEPT_INPUTS = "inputs.pickle"  # what a block run on its own got: its inputs then, not what came before it
 STATUS = "__status__"  # how the block ended: success | failed | BLOCKED
 BLOCKED = "blocked"  # skipped because something before it failed
@@ -813,6 +1005,26 @@ def _number(f, label: str, written: str, text: str):
         raise Failed(f"{label}: {written} gave {text!r}: {e}") from None
 
 
+def _items_of(value) -> list:
+    """A Loop's items: a list's elements, or a table's rows, each a dict of its columns. Anything else fails it (a text
+    is not run letter by letter)."""
+    if isinstance(value, Table):
+        return value.scan().collect().to_dicts()
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    got = "None" if value is None else f"a {'text' if isinstance(value, str) else type(value).__name__}"
+    raise Failed(f"items: a Loop runs once per item of a list (or per row of a table), but got {got}: "
+                 f"{inline(value, 80)}")
+
+
+def _same(a, b) -> bool:
+    """Whether two items are the same (two that cannot be compared are not)."""
+    try:
+        return bool(a == b)
+    except Exception:
+        return False
+
+
 def _holds_secret(value) -> bool:
     if isinstance(value, SecretStr):
         return True
@@ -854,7 +1066,7 @@ def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[d
     run_dir = home.runs_dir / str(run_id)
     if not run_dir.is_dir():
         raise ValueError(cleaned)
-    connected = list(dict.fromkeys(e.dst_port for e in flow.edges if e.dst == only))
+    connected = list(dict.fromkeys(e.dst_port for e in flow.edges if e.dst == only and not from_inside(flow, e)))
 
     def table(path: Path) -> Table:
         if not path.exists():
@@ -968,8 +1180,8 @@ class _Now:
     def inputs(self, block: str) -> tuple[str, object]:
         """(ready | skipped, {input: [(edge, saved outputs of its source)] or why it gets nothing}), or
         (blocked | unknown, why): the runner's rules for whether a block runs."""
-        incoming = [e for e in self.flow.edges
-                    if e.dst == block and not (e.dst_port == AFTER and self.state(e.src)[0] == "absent")]
+        incoming = [e for e in self.flow.edges if e.dst == block and not from_inside(self.flow, e)
+                    and not (e.dst_port == AFTER and self.state(e.src)[0] == "absent")]
         for edge in incoming:  # nothing downstream of a failure runs; error outputs are the way out
             kind = self.state(edge.src)[0]
             if kind in ("failed", BLOCKED) and edge.src_port != ERROR_PORT:
@@ -1001,14 +1213,16 @@ class _Now:
 
 
 def blocks_from(flow: Flow, registry, block: str) -> set[str]:
-    """What running from `block` on runs: it, and the blocks after it that are on (a block connected to no
-    start block is off)."""
+    """What running from `block` on runs: it, and the blocks after it (with the blocks inside a Loop among them) that
+    are on (a block connected to no start block is off)."""
     on = _taking_part(flow, registry, _start_blocks(flow, registry))
-    return {block} | {b for b in _after(flow, block) if on is None or b in on}
+    after = _after(flow, block)
+    after |= {b for b in flow.blocks if any(loop in after or loop == block for loop in containers(flow, b))}
+    return {block} | {b for b in after if on is None or b in on}
 
 
 def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, start: str) -> tuple[dict, set, dict, set]:
-    """For running the blocks in `part` (block `start` and the blocks after it): what the blocks before
+    """For running the blocks in `part` (block `start` and the blocks after or inside it): what the blocks before
     them, which do not run, hold in run `run_id` ({(block, output): value}); which of them failed (or did
     not run because something before them failed); for each of those, the failures behind it whose error
     reached no block that ran ({block: failures}); and the ones that took no part in that run. Refuses
@@ -1134,7 +1348,7 @@ def _after(flow: Flow, block: str) -> set[str]:
     found, todo = set(), [block]
     while todo:
         for edge in flow.edges:
-            if edge.src == todo[-1] and edge.dst not in found:
+            if edge.src == todo[-1] and edge.dst not in found and not from_inside(flow, edge):
                 found.add(edge.dst)
                 todo.insert(0, edge.dst)
         todo.pop()
@@ -1221,8 +1435,10 @@ def run_part(flow: Flow, registry, trigger: str | None = None, only: str | None 
              run_from: str | None = None) -> set[str]:
     """The blocks a run takes part in (its arguments as run_flow's): just `only`; `run_from` and the blocks after it;
     or the lines of the start blocks that start it."""
-    if only:
-        return {only}
+    if only:  # (a Loop runs with the blocks inside it)
+        if not (only in flow.blocks and flow.blocks[only].type == LOOP):
+            return {only}
+        return {only} | {b for b in blocks_from(flow, registry, only) if only in containers(flow, b)}
     if run_from:
         return blocks_from(flow, registry, run_from)
     return _line(flow, registry, _fired_triggers(flow, registry, trigger))

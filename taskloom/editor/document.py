@@ -133,6 +133,19 @@ class FlowDocument(QObject):
     def edges(self) -> list[tuple[str, str, str, str]]:
         return [e for e in (parse_edge(t) for t in self.data["edges"]) if e]
 
+    def containers(self, block_id: str) -> list[str]:
+        """The Loops a block is inside, the innermost first (as flow.containers; they end at a name that is no
+        block)."""
+        found, loop = [], (self.blocks.get(block_id) or {}).get("inside")
+        while isinstance(loop, str) and loop in self.blocks and loop not in found:
+            found.append(loop)
+            loop = self.blocks[loop].get("inside")
+        return found
+
+    def within(self, loop: str) -> list[str]:
+        """The blocks inside a Loop, also those inside a Loop inside it."""
+        return [b for b in self.blocks if loop in self.containers(b)]
+
     def lines(self, registry) -> dict[str, set[str]]:
         """Each start block's line as the flow is now: the blocks its runs take part in ({} while it cannot be read)."""
         try:
@@ -214,18 +227,20 @@ class FlowDocument(QObject):
             candidate, n = f"{base}_{n}", n + 1
         return candidate
 
-    def add_block(self, type_id: str, x: float, y: float, config: dict | None = None) -> str:
+    def add_block(self, type_id: str, x: float, y: float, config: dict | None = None, inside: str | None = None) -> str:
+        """Add a block (`inside`: the Loop it is added in)."""
         self._change()
         block_id = self.new_block_id(type_id)
-        self.blocks[block_id] = {"type": type_id, "config": dict(config or {}), "ui": {"x": round(x), "y": round(y)}}
+        self.blocks[block_id] = {"type": type_id, "config": dict(config or {}), "ui": {"x": round(x), "y": round(y)},
+                                 **({"inside": inside} if inside else {})}
         self._done()
         return block_id
 
     def paste_blocks(self, blocks: dict, edges: list[str], notes: dict, x: float,
                      y: float) -> tuple[list[str], list[str]]:
         """Add copies of blocks (new ids) and the edges between them, and of texts (new ids), in one step, in their
-        layout, with the group's top-left corner (its smallest x and y) at x, y. Returns the new block ids and note
-        ids."""
+        layout, with the group's top-left corner (its smallest x and y) at x, y; a copy is inside the copy of the Loop
+        it was inside (copied with it), or in none. Returns the new block ids and note ids."""
         spots = [(spec.get("ui") or {}) for spec in blocks.values()] + list(notes.values())
         dx, dy = x - min(s.get("x", 0) for s in spots), y - min(s.get("y", 0) for s in spots)
         self._change()
@@ -237,6 +252,13 @@ class FlowDocument(QObject):
             ui["x"], ui["y"] = round(ui.get("x", 0) + dx), round(ui.get("y", 0) + dy)
             self.blocks[new_id] = spec
             renamed[old_id] = new_id
+        for new_id in renamed.values():
+            spec = self.blocks[new_id]
+            if "inside" in spec:
+                if spec["inside"] in renamed:
+                    spec["inside"] = renamed[spec["inside"]]
+                else:
+                    del spec["inside"]
         moved = {}  # the copies' names of what is connected into them follow the copied blocks
         for text in edges:
             e = parse_edge(text)
@@ -257,8 +279,18 @@ class FlowDocument(QObject):
         return list(renamed.values()), new_notes
 
     def remove(self, block_ids=(), edges=(), notes=()):
+        """Remove blocks (with their connections), connections and texts, in one step. The blocks inside a Loop
+        removed stay, inside the Loop it was inside, or in none."""
         self._change()
         self._keep_names()
+        gone = set(block_ids)
+        for block_id, spec in self.blocks.items():
+            if block_id not in gone and spec.get("inside") in gone:
+                left = next((c for c in self.containers(block_id) if c not in gone), None)
+                if left is None:
+                    del spec["inside"]
+                else:
+                    spec["inside"] = left
         for block_id in block_ids:
             self.blocks.pop(block_id, None)
         for note_id in notes:
@@ -285,10 +317,27 @@ class FlowDocument(QObject):
         self._keep_names()
         self._done()
 
-    def move_blocks(self, positions: dict):
+    def move_blocks(self, positions: dict, inside: dict | None = None):
+        """Move blocks ({block: (x, y)}) and, in the same step, put some inside a Loop or in none ({block: the Loop,
+        or None})."""
         self._change()
         for block_id, (x, y) in positions.items():
             self.blocks[block_id].setdefault("ui", {}).update(x=round(x), y=round(y))
+        for block_id, loop in (inside or {}).items():
+            if loop:
+                self.blocks[block_id]["inside"] = loop
+            else:
+                self.blocks[block_id].pop("inside", None)
+        self._done()
+
+    def set_box(self, block_id: str, width: float, height: float):
+        """A Loop's box resized: its size from its top-left (as the flow file has it, ui x and y)."""
+        ui = self.blocks[block_id].setdefault("ui", {})
+        size = {"width": max(round(width), 1), "height": max(round(height), 1)}
+        if all(ui.get(k) == v for k, v in size.items()):
+            return
+        self._change()
+        ui.update(size)
         self._done()
 
     def rename_block(self, old: str, new: str):
@@ -303,6 +352,9 @@ class FlowDocument(QObject):
         moved = {f"{old}.{port}": f"{new}.{port}" for src, port, _, _ in self.edges() if src == old}
         self.renamed[old] = new  # (the canvas keeps it selected under its new name)
         self.data["blocks"] = {(new if k == old else k): v for k, v in self.blocks.items()}
+        for spec in self.blocks.values():  # (a Loop: the blocks inside it are inside it under its new name)
+            if spec.get("inside") == old:
+                spec["inside"] = new
         edges = []
         for text in self.data["edges"]:
             e = parse_edge(text)

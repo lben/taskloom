@@ -50,7 +50,7 @@ class fields:
         template = False
 
         def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = "",
-                     examples=(), only_if: dict | None = None):
+                     examples=(), only_if: dict | None = None, writes: bool = False):
             self.default = default
             self.required = default is None if required is None else required
             self.help = help  # what it is for, in plain words (the editor shows it when you hover over it)
@@ -60,6 +60,9 @@ class fields:
             # {another setting of the block: the values of it this one is for}, e.g. {"kind": ["choice"]}; empty: it
             # is for every value. See applies.
             self.only_if = dict(only_if or {})
+            # A path the block writes or copies to: Validate warns when one inside a Loop has no {placeholder} (every
+            # item would write to the same file).
+            self.writes = writes
 
         def coerce(self, value):
             return value

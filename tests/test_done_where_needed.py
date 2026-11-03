@@ -22,9 +22,9 @@ from tests.test_editor import drag_port_to_port  # noqa: E402
 from tests.test_paths_editor_editing import clean, error_shown, field, select_only, settle, type_in  # noqa: E402
 
 # Spec §4, written out rather than computed, so a wrong declaration on a block is caught.
-KEEP = ["logic.if", "logic.python"]
+KEEP = ["logic.if", "logic.python", "logic.loop"]  # (a Loop's done fires once every item has run)
 LOSE = ["data.duckdb_sql", "data.polars", "data.read_file", "data.write_file", "db.run_query", "files.copy",
-        "files.move", "files.delete", "logic.wait", "logic.ask_user", "logic.for_each", "logic.inspect",
+        "files.move", "files.delete", "logic.wait", "logic.ask_user", "logic.inspect",
         "logic.splitter", "logic.merger",
         "reports.chart", "reports.html_template", "reports.excel", "email.send",
         "servers.ssh_command", "servers.start_process", "servers.stop_process", "servers.health_check",

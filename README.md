@@ -474,7 +474,7 @@ edges:
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
 
 Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
-`logic.for_each`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
+`logic.loop`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
 `data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
 `servers.health_check`, `servers.remote_extract`, `reports.html_template`,
@@ -538,6 +538,72 @@ refuses it.
   about a Splitter with fewer than two lines and a Merger with fewer than two connections.
 - Next: the Merger's other mode, *as each finishes*, which runs the blocks after it once for
   each line, as soon as that line ends.
+
+### Loop: the blocks inside it, once per item
+
+A **Loop** (`logic.loop`) is a box on the canvas around a set of blocks: the blocks inside it
+run once for every item of the list arriving at its `items` input, as a small flow of their
+own, in the flow's order (a Splitter's lines inside it run as anywhere). Add it from the
+Blocks list (Logic) and drag blocks into its box; dragged out, they are no longer inside.
+Moving the box moves its blocks; drag its bottom-right corner to resize it (never smaller
+than its blocks). Deleting it keeps its blocks on the canvas; copying it copies them too. The
+flow file says which blocks are inside with `inside:` and the Loop's name. For example:
+
+```yaml
+blocks:
+  regions:
+    type: logic.python
+    config: {inputs: [], code: "output = ['north', 'south', 'east']"}
+  each:
+    type: logic.loop
+    config: {at_the_same_time: 2}
+  load:
+    type: logic.python
+    inside: each
+    config: {inputs: [region], code: "output = region.upper()"}
+  report:
+    type: logic.python
+    config: {inputs: [names], outputs: [], code: "print(names)"}
+edges:
+  - regions.output -> each.items
+  - each.item -> load.region
+  - load.output -> each.result
+  - each.results -> report.names
+```
+
+- **items**: a list, or a table (one item per row, as a dict of its columns); anything else
+  fails the Loop, saying it needs a list. An empty list runs nothing inside and gives `[]`.
+- Inside the box, **item** gives each run its item and **index** its position, 1 to N:
+  connect them to the blocks inside like any port. What reaches **result** is what the item
+  gives back, and **results** is every item's result in the items' order (not the order they
+  finished): above, `['NORTH', 'SOUTH', 'EAST']`. Its `done` fires once every item has run.
+- **At the same time** (a whole number, 1 or more; 1 as the Loop is added) is how many items
+  run at once: the next item starts as soon as one ends, in item order.
+- Blocks outside may connect into blocks inside: the Loop starts once they are done, and each
+  item gets its own copy of what they give. A block inside connects out of the Loop only
+  through `result`: Validate refuses any other connection from inside to outside, naming it.
+  A Loop may be inside another (Validate warns: its blocks run items × items times), and one
+  of a Splitter's lines may be a Loop.
+- While it runs, the box shows a progress bar and `done/N · k running`; the blocks inside
+  show as running while any item runs them, and each of their Log lines carries the item,
+  e.g. `[load] INFO: [item 2/3] …`. The Loop writes one Log line as it starts (`3 items, 2 at
+  the same time`) and one as it ends. Afterwards each block inside shows how its items ended
+  (`✓ 2 ✕ 1`), and hovering it shows the last item's result, saying which item it was. The
+  run history keeps every item's Log lines.
+- **A failed item**: an item fails when one of its blocks fails and no error output inside the
+  Loop handles it. Then no new item starts, the items running finish, and the Loop fails,
+  listing the failed items with their errors (`2 of 5 items failed: item 2 (load failed: …),
+  item 4 (load failed: …); 1 not run`), through its error output; the blocks after its results
+  are skipped, as after any failure. Stop cancels every running item at once.
+- **Running again**: once you have fixed the cause, right-click the Loop > **Run from this
+  block on, with the same inputs** (`taskloom run flow.yaml --from each --inputs-from 12`): it
+  runs again only the items that failed or did not run, the others keeping their results from
+  that run, then what follows the Loop (**Run only this block** on the Loop does the same,
+  without what follows). Run from here and Run only this block are not offered
+  on a block inside a Loop yet: right-click the Loop.
+- Validate also warns when a block inside writes or copies to a path with no `{placeholder}`
+  (every item would write the same file), and when the Loop's results is connected but its
+  result is not.
 
 ## Reports and email
 

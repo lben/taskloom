@@ -1,4 +1,4 @@
-"""Logic blocks: Python code, conditions and waiting."""
+"""Logic blocks: Python code, conditions, waiting, lines (Splitter, Merger) and the Loop."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ from rich.traceback import Traceback
 
 from ..block import Block, fields, has_placeholders, ports, setting_label
 from ..expr import evaluate
-from ..engine import Failed, SecretStr, _masked, inline, preview, run_flow
-from ..flow import (AT_MOST, LINES, LINES_RUN, MERGER, ONE_AFTER_ANOTHER, SAME_TIME, SPLITTER, load_flow,
-                    real_path)
+from ..engine import Failed, SecretStr, _masked, inline, preview
+from ..flow import (AT_MOST, AT_ONCE, INDEX, ITEM, ITEMS, LINES, LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, RESULT,
+                    RESULTS, SAME_TIME, SPLITTER)
 from ..table import Table
 
 
@@ -476,42 +476,32 @@ def as_number(value) -> int | float:
     raise ValueError(f"{value!r} is not a number")
 
 
-class ForEach(Block):
-    type_id = "logic.for_each"
-    title = "For Each"
-    description = 'Runs another flow once for every item in a list, for example once per server or once per region.'
-    category = "Logic"
-    inputs = {"items": ports.Any()}
-    outputs = {"results": ports.Any()}
-    config = {
-        "flow": fields.Path(help="The flow to run once per item",
-                            examples=["per-region.yaml", "flows/deploy-one.yaml"]),
-        "param": fields.Text(help="The parameter of that flow that receives the item", examples=["region", "server"]),
-        "stop_on_failure": fields.Bool(default=False, help="Ticked: the items after a run that did not succeed are "
-                                                           "not run. Either way the block fails if any run did not "
-                                                           "succeed."),
-    }
+class Loop(Block):
+    """Its items are run by the engine (engine._Runner._run_loop): this class says what it is, its ports and its
+    setting."""
 
-    def run(self, ctx, items):
-        if not isinstance(items, (list, tuple)):
-            raise TypeError(f"input 'items' must be a list, got {type(items).__name__}")
-        flow = load_flow(real_path(self.config.flow))  # recorded as runs of that flow, as when it is run itself
-        if self.config.param not in flow.params:
-            raise ValueError(f"{self.config.flow} has no parameter '{self.config.param}'")
-        results = []
-        for item in items:
-            ctx.check_cancelled()
-            result = run_flow(flow, ctx.registry, ctx.home, {self.config.param: item},
-                              cancel=ctx.cancel_event, as_of=ctx.as_of)
-            ctx.log(f"{self.config.param}={item}: run #{result.run_id} {result.status}")
-            results.append({"item": item, "run_id": result.run_id, "status": result.status})
-            if result.status != "success" and self.config.stop_on_failure:
-                break
-        failed = [r for r in results if r["status"] != "success"]
-        if failed:
-            raise RuntimeError(f"{len(failed)} of {len(results)} run(s) did not succeed: "
-                               + ", ".join(f"{r['item']} (run #{r['run_id']})" for r in failed[:10]))
-        return {"results": results}
+    type_id = LOOP
+    title = "Loop"
+    description = ("A box on the canvas around the blocks it runs: drag blocks into it. The blocks inside run once for "
+                   "every item of the list arriving at its items (a table: once per row, as a dict of its columns), "
+                   "as a small flow of their own. Inside the box, item gives each run its item and index its position "
+                   "(1 to N); what reaches result is what that item gives back, and results is every item's result, "
+                   "in the items' order (not the order they finished). At the same time sets how many items run at "
+                   "once; blocks outside may connect into blocks inside (each item gets its own copy), but blocks "
+                   "inside connect out of it only through result. If an item fails (a block inside fails and no error "
+                   "output inside handles it), no new item starts, the items running finish, and the Loop fails, "
+                   "listing the failed items. Right-click the Loop > Run from this block on runs again only the items "
+                   "that failed or did not run.")
+    inputs_help = ("items: a list, or a table (one item per row, as a dict of its columns). Inside the box, result: "
+                   "what each item gives back.")
+    category = "Logic"
+    has_done = True  # (its done fires once every item has run)
+    inputs = {ITEMS: ports.Any(), RESULT: ports.Any(required=False)}
+    outputs = {RESULTS: ports.Any(), ITEM: ports.Any(), INDEX: ports.Any()}
+    config = {AT_ONCE: fields.Int(default=1, minimum=1, label="At the same time",
+                                  help="How many items run at once: a whole number, 1 or more (1: one after another). "
+                                       "The next item starts as soon as one ends, in item order.",
+                                  examples=["1", "4", "8"])}
 
 
 PICTURE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}

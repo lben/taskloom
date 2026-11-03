@@ -689,39 +689,6 @@ def test_now_and_today_are_in_the_flows_time_zone(env):
     assert params["day"] == at.date().isoformat() and started == at  # one time for the whole run
 
 
-def test_a_flow_that_for_each_runs_in_the_same_time_zone_gets_the_time_of_the_outer_run(env):
-    from zoneinfo import ZoneInfo
-
-    zone = far_time_zone()
-    write(env, ZONED_FLOW.replace("ZONE", zone), "each.yaml")
-    flow = write(env, f"""
-        timezone: {zone}
-        params:
-          at: {{type: datetime, expr: "now()"}}
-        blocks:
-          items:
-            type: logic.python
-            config: {{inputs: [], code: "output = ['one']"}}
-          each:
-            type: logic.for_each
-            config: {{flow: each.yaml, param: item}}
-        edges:
-          - items.output -> each.items
-    """)
-    before = dt.datetime.now(ZoneInfo(zone)).replace(tzinfo=None)
-
-    result = env.taskloom("run", flow)
-
-    after = dt.datetime.now(ZoneInfo(zone)).replace(tzinfo=None)
-    assert result.returncode == 0, result.stderr
-    outer, inner = [json.loads(p) for (p,) in env.query("SELECT params FROM runs ORDER BY id")]
-    tolerance = dt.timedelta(minutes=1)
-    for at in (outer["at"], inner["at"]):
-        assert before - tolerance <= dt.datetime.fromisoformat(at) <= after + tolerance, (zone, before, outer, inner)
-    # Both flows are in the same time zone, and the flow it runs is worked out for the time of the outer run.
-    assert inner["at"] == outer["at"] and inner["day"] == outer["at"][:10]
-
-
 @pytest.mark.parametrize("regions, args", [
     ("{type: list, value: [EU]}", ["--param", "regions="]),
     ("""{type: list, expr: "['EU'] if is_business_day(today()) else []"}""", ["--as-of", "2026-01-31 09:00"]),
@@ -1208,7 +1175,7 @@ INVALID_FLOWS = {
     "connection into an unknown input": (WAIT_AB + "edges:\n  - a.value -> b.val\n", "'b' has no input 'val'"),
     "input connected twice": (WAIT_ABC + "edges:\n  - a.value -> c.value\n  - b.value -> c.value\n",
                               "input 'c.value' is already connected"),
-    "required input not connected": ("blocks:\n  each: {type: logic.for_each, config: {flow: x.yaml, param: p}}\n",
+    "required input not connected": ("blocks:\n  each: {type: logic.loop}\n",
                                      "required input 'items' is not connected"),
     "cycle": (WAIT_AB + "edges:\n  - a.value -> b.value\n  - b.value -> a.after\n", "cycle through: a, b"),
     "parameter name": ("params:\n  2day: {type: date, value: 2026-01-01}\nblocks: {}\n", "params.2day: not a valid name"),

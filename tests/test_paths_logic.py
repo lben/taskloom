@@ -1,9 +1,8 @@
-"""The Logic blocks (Python Code, If, Wait, Ask User, For Each, Inspect) through their real paths:
+"""The Logic blocks (Python Code, If, Wait, Ask User, Inspect) through their real paths:
 `taskloom run` on real flow files with the run history checked, `taskloom env`, and the offscreen editor."""
 
 import datetime as dt
 import json
-import signal
 import sqlite3
 import sys
 import textwrap
@@ -910,12 +909,8 @@ def test_wait_pauses_then_passes_its_input_on_unchanged(env):
     ("{type: logic.ask_user, config: {prompt: 'Go?', kind: choice, options: EU}}", "Options: expected a list"),
     ("{type: logic.ask_user, config: {prompt: 'Region for {country}?'}}",
      "{country} is neither a flow parameter nor an input of this block"),
-    ("{type: logic.for_each, config: {param: region}}", "Flow is required"),
-    ("{type: logic.for_each, config: {flow: inner.yaml}}", "Param is required"),
-    ("{type: logic.for_each, config: {flow: inner.yaml, param: region, stop_on_failure: maybe}}",
-     "Stop on failure: expected true or false"),
 ], ids=["if-no-condition", "wait-no-seconds", "wait-not-a-number", "ask-no-prompt", "ask-unknown-kind",
-        "ask-options-not-a-list", "ask-unknown-parameter", "each-no-flow", "each-no-param", "each-stop-not-bool"])
+        "ask-options-not-a-list", "ask-unknown-parameter"])
 def test_logic_block_config_that_cannot_work_is_refused_by_validate(env, block, problem):
     flow = env.write("flow.yaml", f"""
         blocks:
@@ -1283,185 +1278,6 @@ def test_a_name_no_input_can_have_is_refused_in_the_properties(win):
 
     assert shown and "this block already has these; choose other names" in error, error
     assert inputs in (None, ["input"])  # nothing changed
-
-
-# --- For Each --------------------------------------------------------------------------------
-
-
-INNER = """
-    params:
-      region: {type: text, value: ""}
-      day: {type: date, expr: "today()"}
-    blocks:
-      work:
-        type: logic.python
-        config:
-          inputs: []
-          outputs: []
-          code: |
-            if params["region"] == "bad":
-                raise RuntimeError("bad region")
-            open(f"done_{params['region']}.txt", "w").write(str(params["day"]))
-"""
-
-
-def each_flow(env, items, stop_on_failure=False, flow="per_item.yaml", param="region"):
-    env.write("flows/per_item.yaml", INNER)
-    return env.write("flows/outer.yaml", f"""
-        blocks:
-          regions:
-            type: logic.python
-            config: {{inputs: [], code: "output = {items}"}}
-          each:
-            type: logic.for_each
-            config: {{flow: {flow}, param: {param}, stop_on_failure: {str(stop_on_failure).lower()}}}
-          save:
-            type: logic.python
-            config: {{inputs: [results], outputs: [], code: "import json; open('results.json', 'w').write(json.dumps(results))"}}
-        edges:
-          - regions.output -> each.items
-          - each.results -> save.results
-    """)
-
-
-def test_for_each_runs_the_flow_once_per_item_at_the_same_time_and_lists_the_results(env):
-    # Run from another folder: the flow's path is relative to the flow file.
-    result = env.taskloom("run", each_flow(env, "['EU', 'US']"), "--as-of", "2026-10-02 08:00")
-
-    assert result.returncode == 0, result.stderr
-    folder = env.root / "flows"
-    assert json.loads((folder / "results.json").read_text()) == [
-        {"item": "EU", "run_id": 2, "status": "success"}, {"item": "US", "run_id": 3, "status": "success"}]
-    # Each run's parameters are computed for the outer run's time, not the time it happened to start.
-    assert (folder / "done_EU.txt").read_text() == (folder / "done_US.txt").read_text() == "2026-10-02"
-    assert env.query("SELECT id, status FROM runs ORDER BY id") == [(1, "success"), (2, "success"), (3, "success")]
-    assert [json.loads(p)["region"] for (p,) in env.query("SELECT params FROM runs WHERE id > 1 ORDER BY id")] == ["EU", "US"]
-    said = logs(env, 1, "each")
-    assert "region=EU: run #2 success" in said and "region=US: run #3 success" in said
-
-
-def test_for_each_with_no_items_runs_nothing_and_succeeds(env):
-    result = env.taskloom("run", each_flow(env, "[]"))
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads((env.root / "flows" / "results.json").read_text()) == []
-    assert env.query("SELECT count(*) FROM runs") == [(1,)]
-
-
-def test_for_each_over_a_flow_with_a_manual_start_runs_its_start_line_and_leaves_unconnected_blocks_off(env):
-    env.write("flows/started.yaml", """
-        params:
-          region: {type: text, value: ""}
-        blocks:
-          start:
-            type: trigger.manual
-          work:
-            type: logic.python
-            config:
-              inputs: []
-              outputs: []
-              code: |
-                open(f"done_{params['region']}.txt", "w").write("ran")
-          switched_off:
-            type: logic.python
-            config:
-              inputs: []
-              outputs: []
-              code: |
-                open(f"off_{params['region']}.txt", "w").write("ran")
-        edges:
-          - start.start -> work.after
-    """)
-    result = env.taskloom("run", each_flow(env, "['EU', 'US']", flow="started.yaml"))
-
-    assert result.returncode == 0, result.stderr
-    folder = env.root / "flows"
-    assert json.loads((folder / "results.json").read_text()) == [
-        {"item": "EU", "run_id": 2, "status": "success"}, {"item": "US", "run_id": 3, "status": "success"}]
-    assert sorted(p.name for p in folder.glob("*.txt")) == ["done_EU.txt", "done_US.txt"]
-    for run_id in (2, 3):
-        blocks = env.block_status(run_id)
-        assert blocks.get("work") == "success" and blocks.get("switched_off") != "success", blocks
-
-
-@pytest.mark.parametrize("stop_on_failure, runs, done", [
-    (False, [("bad", "failed"), ("US", "success")], {"EU", "US"}),
-    (True, [("bad", "failed")], {"EU"}),
-], ids=["goes-on", "stops"])
-def test_for_each_after_a_failed_item_goes_on_unless_told_to_stop(env, stop_on_failure, runs, done):
-    result = env.taskloom("run", each_flow(env, "['EU', 'bad', 'US']", stop_on_failure=stop_on_failure))
-
-    assert result.returncode == 1
-    inner = env.query("SELECT id, status FROM runs WHERE id > 1 ORDER BY id")
-    assert [s for _, s in inner] == ["success"] + [s for _, s in runs]
-    assert {p.stem.removeprefix("done_") for p in (env.root / "flows").glob("done_*.txt")} == done
-    error = row(env, 1, "each")["error"]
-    assert f"1 of {len(inner)} run(s) did not succeed: bad (run #3)" in error
-    assert row(env, 1, "save")["status"] == "skipped"
-
-
-@pytest.mark.parametrize("items, flow, param, problem", [
-    ("'EU,US'", "per_item.yaml", "region", "input 'items' must be a list, got str"),
-    ("['EU']", "per_item.yaml", "country", "per_item.yaml has no parameter 'country'"),
-    ("['EU']", "missing.yaml", "region", "missing.yaml"),
-    ("['EU']", "invalid.yaml", "region", "unknown block type 'logic.nothing'"),
-], ids=["not-a-list", "unknown-param", "missing-flow", "invalid-flow"])
-def test_for_each_that_cannot_run_its_flow_fails_clearly(env, items, flow, param, problem):
-    env.write("flows/invalid.yaml", """
-        params:
-          region: {type: text, value: ""}
-        blocks:
-          x: {type: logic.nothing}
-    """)
-    result = env.taskloom("run", each_flow(env, items, flow=flow, param=param), "--json-events")
-
-    assert result.returncode == 1 and result.stderr == ""
-    assert problem in row(env, 1, "each")["error"]
-    assert env.query("SELECT count(*) FROM runs") == [(1,)]
-
-
-def inner_wait_running(env) -> bool:
-    try:
-        return env.query("SELECT count(*) FROM blocks WHERE run_id=2 AND block='pause' AND status='running'") == [(1,)]
-    except sqlite3.OperationalError:  # the run history is not there yet
-        return False
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="sends SIGINT")
-def test_ctrl_c_during_for_each_cancels_the_item_running_and_starts_no_more(env):
-    env.write("flows/slow.yaml", """
-        params:
-          region: {type: text, value: ""}
-        blocks:
-          pause:
-            type: logic.wait
-            config: {seconds: 60}
-    """)
-    flow = env.write("flows/outer.yaml", """
-        blocks:
-          regions:
-            type: logic.python
-            config: {inputs: [], code: "output = ['EU', 'US']"}
-          each:
-            type: logic.for_each
-            config: {flow: slow.yaml, param: region}
-        edges:
-          - regions.output -> each.items
-    """)
-    proc = env.popen("run", flow, "--json-events")
-    try:
-        deadline = time.monotonic() + 30
-        while not inner_wait_running(env) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        started = time.monotonic()
-        proc.send_signal(signal.SIGINT)
-        assert proc.wait(timeout=30) == 130
-        assert time.monotonic() - started < 10  # not the 60 s the item would take
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-    assert env.query("SELECT id, status FROM runs ORDER BY id") == [(1, "cancelled"), (2, "cancelled")]
 
 
 # --- Inspect ---------------------------------------------------------------------------------

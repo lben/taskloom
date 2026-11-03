@@ -39,7 +39,7 @@ from ..blocks.logic import ReusableBlock
 from ..calendars import load_calendar
 from ..config import kept_runs
 from ..expr import functions
-from ..flow import BlockSpec, Retry, block_config, parse_duration, schedules_of
+from ..flow import LOOP, BlockSpec, Retry, block_config, parse_duration, schedules_of
 from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
 from . import docs
@@ -876,7 +876,8 @@ class PropertiesPanel(QScrollArea):
                 layout.addLayout(row)
         if keeps:
             layout.addWidget(self._keep_box(config, cls))
-        layout.addWidget(self._retry_box(spec))
+        if cls.type_id != LOOP:  # (a Loop's blocks have their own retry and timeout; it has none)
+            layout.addWidget(self._retry_box(spec))
         self._show_problems()
 
     # --- how a start block's runs are kept ---------------------------------------------------

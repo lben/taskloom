@@ -225,6 +225,7 @@ class ToExcel(Block):
     outputs = {"file": ports.Any()}
     config = {
         "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.xlsx", files=["Excel workbook (*.xlsx)"],
+                            writes=True,
                             examples=["reports/sales_{day:%Y-%m-%d}.xlsx", "out/report.xlsx"]),
         "sheets": fields.Names(default=["table"], help="One input and sheet per name",
                                examples=["table", "sales, totals"]),
@@ -320,7 +321,7 @@ class SendEmail(Block):
                                examples=["Daily sales {day:%Y-%m-%d}", "Nightly load finished"]),
         "message": fields.Text(required=False, help="Text shown above the body",
                                examples=["Good morning, here are yesterday's sales.", "The load finished."]),
-        "save_copy": fields.Path(required=False, help="Also save the email as a .eml file",
+        "save_copy": fields.Path(required=False, writes=True, help="Also save the email as a .eml file",
                                  examples=["out/email_{day:%Y-%m-%d}.eml", "sent/report.eml"]),
     }
 
