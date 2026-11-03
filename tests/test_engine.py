@@ -37,10 +37,14 @@ FLAKY_BLOCK = """
         config = {"fail_times": fields.Int(), "counter": fields.Path()}
 
         def run(self, ctx):
+            import time
             from pathlib import Path
+            started = time.monotonic()
             counter = Path(self.config.counter)
             n = int(counter.read_text()) if counter.exists() else 0
             counter.write_text(str(n + 1))
+            with open(f"{counter}.times", "a", encoding="utf-8") as times:  # when each attempt started and ended
+                times.write(f"{started} {time.monotonic()}\\n")
             if n < self.config.fail_times:
                 raise ConnectionError(f"failure {n + 1}")
             return {"value": n + 1}
@@ -60,12 +64,15 @@ def test_flaky_block_succeeds_after_retries_with_exponential_backoff(env):
     result = env.taskloom("run", flow, "--json-events")
 
     assert result.returncode == 0, result.stderr
-    starts = [dt.datetime.fromisoformat(e["ts"]) for e in events(result.stdout) if e["event"] == "block_started"]
-    assert len(starts) == 3
-    gaps = [(b - a).total_seconds() for a, b in zip(starts, starts[1:])]
-    # Waits of 0.3 s then 0.6 s. Each gap also includes overhead that a busy CI machine can stretch
-    # by a second, so only the minimums are checked: they show the wait grows.
-    assert gaps[0] >= 0.3 and gaps[1] >= 0.6 and gaps[1] - gaps[0] >= 0.2, gaps
+    assert len([e for e in events(result.stdout) if e["event"] == "block_started"]) == 3
+    attempts = [tuple(map(float, line.split()))
+                for line in (env.root / "counter.txt.times").read_text(encoding="utf-8").splitlines()]
+    assert len(attempts) == 3
+    # The waits between one attempt's end and the next one's start: 0.3 s then 0.6 s. Measured from each attempt's
+    # end, not its start, so a slower first attempt (a cold start on a busy CI machine) does not shrink the growth.
+    waits = [b[0] - a[1] for a, b in zip(attempts, attempts[1:])]
+    tick = 0.016  # a clock tick on Windows
+    assert waits[0] >= 0.3 - tick and waits[1] >= 0.6 - tick and waits[1] - waits[0] >= 0.2, waits
     run_id, status = env.last_run()
     assert status == "success"
     assert env.query("SELECT attempts, summary FROM blocks WHERE run_id=?", run_id) == [(3, "value: 3")]
