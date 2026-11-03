@@ -172,6 +172,8 @@ class NodeItem(QGraphicsItem):
         self.counts_down = spec.get("type") in ("trigger.schedule", "logic.wait")
         self.height = HEADER_H + 6 + rows * ROW_H + (COUNTDOWN_H if self.counts_down else 0) + FOOTER_H
         self.status, self.status_text = None, ""
+        # (done, of, running) in the run on screen: a Loop's items, a Merger's lines (set to each line as it finishes)
+        self.progress: tuple[int, int, int] | None = None
         self.countdown = ""
         seconds = (spec.get("config") or {}).get("seconds")
         self.resting = ("…" if spec.get("type") != "logic.wait" else "needs seconds" if seconds is None
@@ -210,6 +212,10 @@ class NodeItem(QGraphicsItem):
     def set_countdown(self, text: str, tip: str = ""):
         self.countdown = text
         self.countdown_area.setToolTip(tip)
+        self.update()
+
+    def set_progress(self, progress: tuple[int, int, int] | None):
+        self.progress = progress
         self.update()
 
     def paint(self, painter: QPainter, option, widget=None):
@@ -261,8 +267,10 @@ class NodeItem(QGraphicsItem):
             line = QRectF(10, self.height - FOOTER_H - COUNTDOWN_H, NODE_W - 20, COUNTDOWN_H)
             painter.drawText(line, Qt.AlignVCenter, painter.fontMetrics().elidedText(
                 "⏱ " + (self.countdown or self.resting), Qt.ElideRight, int(line.width())))
-        # footer: the run status, else the type
+        # footer: the run status (running its lines: its counter), else the type
         text = self.status_text if self.status else self.type_title
+        if self.status == "running" and self.progress is not None:
+            text = counter_text(self.progress)
         painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS and self.status != "skipped"
                        else muted)
         footer = QRectF(10, self.height - FOOTER_H, NODE_W - 20, FOOTER_H - 4)
@@ -273,6 +281,12 @@ class NodeItem(QGraphicsItem):
         if change == QGraphicsItem.ItemPositionHasChanged and self.scene():
             self.scene().update_edges(self.block_id)
         return super().itemChange(change, value)
+
+
+def counter_text(progress: tuple[int, int, int]) -> str:
+    """A Loop's or a Merger's counter while it runs: done/N · k running (none running: done/N done)."""
+    done, of, running = progress
+    return f"{done}/{of} · {running} running" if running else f"{done}/{of} done"
 
 
 def loop_colors() -> tuple[QColor, QColor]:
@@ -303,7 +317,6 @@ class LoopItem(NodeItem):
         super().__init__(block_id, spec, registry)
         ui = spec.get("ui") or {}
         self.stored = QRectF(0, 0, _size(ui.get("width"), LOOP_W), _size(ui.get("height"), LOOP_H))  # its own size
-        self.progress: tuple[int, int, int] | None = None  # (done, of, running) in the run on screen
         self.needed: QRectF | None = None  # what its blocks need of it
         self._resizing = None
         self._was = self.pos()
@@ -359,10 +372,6 @@ class LoopItem(NodeItem):
         path.addRect(self._grip())
         return path
 
-    def set_progress(self, progress: tuple[int, int, int] | None):
-        self.progress = progress
-        self.update()
-
     def paint(self, painter: QPainter, option, widget=None):
         pal = QApplication.palette()
         r, (fill, shade) = self.rect, loop_colors()
@@ -387,10 +396,7 @@ class LoopItem(NodeItem):
         font.setPointSizeF(max(font.pointSizeF(), 9) * 0.95)
         painter.setFont(font)
         painter.setPen(pal.text().color())
-        counter = ""
-        if self.progress is not None:
-            done, of, running = self.progress
-            counter = f"{done}/{of} · {running} running" if running else f"{done}/{of} done"
+        counter = counter_text(self.progress) if self.progress is not None else ""
         counter_w = painter.fontMetrics().horizontalAdvance(counter) if counter else 0
         name = QRectF(r.left() + 34, r.top(), max(r.width() - 48 - counter_w, 20), HEADER_H)
         painter.drawText(name, Qt.AlignVCenter, painter.fontMetrics().elidedText(
@@ -402,6 +408,7 @@ class LoopItem(NodeItem):
             painter.setPen(Qt.NoPen)
             painter.setBrush(shade)  # (its empty part: darker than the box in either theme)
             painter.drawRoundedRect(bar, 2, 2)
+            done, of, _ = self.progress
             if of:
                 painter.setBrush(QColor(STATUS_COLORS.get(self.status if self.status != "skipped" else "running",
                                                           STATUS_COLORS["running"])))
@@ -785,7 +792,8 @@ class FlowScene(QGraphicsScene):
         self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule or Wait block -> (text, tip)
         self.edge_items: list[EdgeItem] = []
         self.statuses: dict[str, tuple[str, str, str]] = {}  # block -> (status, text, tip)
-        self.progress: dict[str, tuple[int, int, int]] = {}  # Loop -> (items done, of, running), in the run on screen
+        # A Loop's items, a Merger's lines (set to each line as it finishes): (done, of, running), in the run on screen
+        self.progress: dict[str, tuple[int, int, int]] = {}
         self.off: set[str] = set()  # blocks connected to no start block (in a flow with start blocks)
         self.values: dict[str, dict[str, str]] = {}  # block -> port -> text, from the run on screen
         self._drag_from: PortItem | None = None
@@ -835,7 +843,7 @@ class FlowScene(QGraphicsScene):
             node.set_status(*self._shown_status(block_id))
             if block_id in self.countdowns:
                 node.set_countdown(*self.countdowns[block_id])
-            if block_id in self.progress and isinstance(node, LoopItem):
+            if block_id in self.progress:
                 node.set_progress(self.progress[block_id])
             node.setSelected(block_id in selected)
         # Each Loop's box round its blocks, the innermost first (a Loop inside it is one of them), drawn over the boxes
@@ -912,11 +920,12 @@ class FlowScene(QGraphicsScene):
                  if isinstance(item, LoopItem) and b not in leaving and item.drawn_rect().contains(at)]
         return min(found)[1] if found else None
 
-    def set_progress(self, loop: str, done: int, of: int, running: int):
-        """A Loop's items in the run on screen: how many are done, of how many, and how many run now."""
-        self.progress[loop] = (done, of, running)
-        if isinstance(self.nodes.get(loop), LoopItem):
-            self.nodes[loop].set_progress(self.progress[loop])
+    def set_progress(self, block_id: str, done: int, of: int, running: int):
+        """A Loop's items, or a Merger's lines (set to each line as it finishes), in the run on screen: how many are
+        done, of how many, and how many run now."""
+        self.progress[block_id] = (done, of, running)
+        if block_id in self.nodes:
+            self.nodes[block_id].set_progress(self.progress[block_id])
 
     def update_edges(self, block_id: str):
         for edge in self.edge_items:
@@ -927,7 +936,7 @@ class FlowScene(QGraphicsScene):
         """A block's result on the canvas: `text` under it (short), `tip` (HTML) when hovering that."""
         if status is None:
             self.statuses.pop(block_id, None)
-            if self.progress.pop(block_id, None) is not None and isinstance(self.nodes.get(block_id), LoopItem):
+            if self.progress.pop(block_id, None) is not None and block_id in self.nodes:
                 self.nodes[block_id].set_progress(None)
         else:
             self.statuses[block_id] = (status, text, tip or html.escape(text))
@@ -941,8 +950,9 @@ class FlowScene(QGraphicsScene):
 
     def show_result(self, block_id: str, info: dict):
         """A block's result in a run (an event of the run, or its row in the history), made at info["finished"]: under
-        it, and on its outputs when hovering them. A block inside a Loop, over its items (info["items"]): how they
-        ended (✓ 4 ✕ 1) under it; hovering it, what the last item to end gave, saying which item it was."""
+        it, and on its outputs when hovering them. A block inside a Loop, over its items (info["items"]; or after a
+        Merger set to each line as it finishes, over its lines' runs): how they ended (✓ 4 ✕ 1) under it; hovering
+        it, what the last item (or line) to end gave, saying which it was."""
         items = info.get("items")
         status = items["status"] if items else info.get("status")
         values = dict(info.get("previews") or {})
@@ -968,8 +978,9 @@ class FlowScene(QGraphicsScene):
             text = tip = status
         if items:
             text = items["ended"]
-            tip = (f"<p><b>{html.escape(items['ended'])}</b> · the last item to end: {html.escape(items['last'])}, "
-                   f"{html.escape(status)}</p>{tip}")
+            run_of = "line" if items["last"].startswith("[line ") else "item"  # (its tag: [line load], [item 2/5])
+            tip = (f"<p><b>{html.escape(items['ended'])}</b> · the last {run_of} to end: "
+                   f"{html.escape(items['last'])}, {html.escape(status)}</p>{tip}")
         if info.get("finished"):  # (not known if the run process died mid-block)
             tip += ('<p align="right" style="color:gray; font-size:small">results from '
                     f'{info["finished"].replace("T", " ")[:19]}</p>')

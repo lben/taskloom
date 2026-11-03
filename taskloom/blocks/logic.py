@@ -22,9 +22,10 @@ from rich.traceback import Traceback
 
 from ..block import Block, fields, has_placeholders, ports, setting_label
 from ..expr import evaluate
-from ..engine import Failed, SecretStr, _masked, inline, preview
-from ..flow import (AT_MOST, AT_ONCE, INDEX, ITEM, ITEMS, LINES, LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, RESULT,
-                    RESULTS, SAME_TIME, SPLITTER)
+from ..engine import Failed, SecretStr, _masked, inline, line_names, preview
+from ..flow import (ALL_LINES, AS_FINISHED, AT_MOST, AT_ONCE, EACH_LINE, INDEX, ITEM, ITEMS, LINE_ORDER, LINES,
+                    LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, PASSES_ON, RESULT, RESULTS, RUNS_AGAIN, SAME_TIME,
+                    SPLITTER)
 from ..table import Table
 
 
@@ -353,22 +354,49 @@ class Splitter(Block):
 
 
 class Merger(Block):
+    """Passes on all lines together here (run); each line as it finishes, the engine runs it
+    (engine._Runner._run_per_line)."""
+
     type_id = MERGER
     title = "Merger"
-    description = ("Joins the lines of a Splitter: waits until every line connected to it has delivered, then passes "
-                   "on one value, {line name: that line's output}, named as Python Code names inputs from several "
-                   "blocks (the block's name; block.output when a block connects several of its outputs). If a line "
-                   "failed, it fails, saying which; if a line delivered nothing (e.g. an If sent it nowhere), it is "
-                   "skipped, saying which.")
+    description = ("Joins the lines of a Splitter. Passes on all lines together (as it is added): it waits until every "
+                   "line connected to it has delivered, then passes on one value, {line name: that line's output}, "
+                   "named as Python Code names inputs from several blocks (the block's name; block.output when a "
+                   "block connects several of its outputs). If a line failed, it fails, saying which; if a line "
+                   "delivered nothing (e.g. an If sent it nowhere), it is skipped, saying which. Passes on each line "
+                   "as it finishes: it does not wait for every line; as each line finishes, it passes on that line's "
+                   "output (the value itself), and the blocks after it run once for that line, at the same time for "
+                   "as many lines as At the same time says, up to the end of the flow or up to a Merger set to all "
+                   "lines together, which waits for every one of those runs and passes on {line name: what that run "
+                   "gave it}. A line that failed, or delivered nothing, has no run; a failed run stops no other. Once "
+                   "every line has been dealt with, it fails if a line or a run failed, listing them. Right-click it > "
+                   "Run from this block on runs again only the runs that failed or did not run. It works inside a "
+                   "Loop's box, and in the runs of another Merger set to each line as it finishes.")
     inputs_help = "lines: the last block of each line (any number of connections)."
     category = "Logic"
     inputs = {LINES: ports.Any(many=True, by_source=True)}
     outputs = {"value": ports.Any()}
+    config = {
+        PASSES_ON: fields.Choice([ALL_LINES, EACH_LINE], default=ALL_LINES,
+                                 help="all lines together: it waits for every line, then passes on {line name: that "
+                                      "line's output} once; each line as it finishes: it passes on each line's output "
+                                      "as soon as that line has finished, and the blocks after it run once for that "
+                                      "line"),
+        AT_ONCE: fields.Int(default=1, minimum=1, label="At the same time", only_if={PASSES_ON: [EACH_LINE]},
+                            help="How many lines the blocks after it run for at once: a whole number, 1 or more (1: "
+                                 "one after another). The next run starts as soon as one ends, in the order the lines "
+                                 "finished.",
+                            examples=["1", "2", "4"]),
+        RUNS_AGAIN: fields.Choice([LINE_ORDER, AS_FINISHED], default=LINE_ORDER, label="Runs again in",
+                                  only_if={PASSES_ON: [EACH_LINE]},
+                                  help="Running again from it (Run from this block on, or Run only this block), the "
+                                       "runs it does again go in line order (top to bottom, as on the canvas) or in "
+                                       "the order the lines finished in the run it carries on from. A run from the "
+                                       "start always goes in the order the lines finish."),
+    }
 
     def run(self, ctx, lines):
-        blocks = [source.split(".")[0] for source in lines]  # (each "block.output")
-        return {"value": {(source if blocks.count(block) > 1 else block): value
-                          for (source, value), block in zip(lines.items(), blocks)}}
+        return {"value": dict(zip(line_names(list(lines)), lines.values()))}  # (each key "block.output")
 
 
 def written_seconds(seconds) -> str:

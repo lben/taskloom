@@ -30,8 +30,8 @@ from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
 from ..config import Home
 from ..engine import block_inputs, finished_text, input_ports, run_part
-from ..flow import (LOOP, RESULT, BlockSpec, FlowError, block_config, keep_source_names, load_flow, read_flow_file,
-                   real_path, run_clock, schedules_of, validate)
+from ..flow import (LOOP, RESULT, BlockSpec, FlowError, block_config, keep_source_names, load_flow, per_line_of,
+                   read_flow_file, real_path, run_clock, schedules_of, validate)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -366,9 +366,9 @@ class FlowTab(QWidget):
         if self.running:
             done = sum(1 for b in self.run_blocks if (self.block_info.get(b) or {}).get("status") not in (None, "running"))
             return "running", f"running · {done} of {len(self.run_blocks)} blocks done" if self.run_blocks else "running"
-        if self.line_results:  # one line per start block: how its line last ended
+        if self.line_results:  # one line per start block: how its line last ended (failed first, then stopped)
             ended = [run["status"] for _, run in self.line_results if run]
-            return ("failed" if "failed" in ended else "success" if ended else None), "\n".join(
+            return next((s for s in ("failed", "cancelled", "success") if s in ended), None), "\n".join(
                 f"{start}: {_ended(run) if run else 'not run yet'}" for start, run in self.line_results)
         if self.last:
             return self.last["status"], _ended(self.last)
@@ -1132,11 +1132,16 @@ class MainWindow(QMainWindow):
                      else "Run the flow from here")
             menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
             return menu
-        if around := tab.doc.containers(block_id):  # not offered yet: what to do instead, in each entry's tooltip
+        sections = tab.doc.per_line(self.registry)
+        around, merger = tab.doc.containers(block_id), per_line_of(sections, block_id)
+        if around or merger:  # not offered yet: what to do instead, in each entry's tooltip
             menu.setToolTipsVisible(True)
             why = (f"{block_id} is inside the loop {around[-1]}: running a block inside a loop on its own is not "
                    f"offered yet. Right-click the loop {around[-1]} and choose Run from this block on: it runs again "
-                   "the items that failed or did not run.")
+                   "the items that failed or did not run." if around else
+                   f"{block_id} runs once per line of the Merger {merger} (each line as it finishes): running it on "
+                   f"its own is not offered yet. Right-click the Merger {merger} and choose Run from this block on: it "
+                   "runs again the lines' runs that failed or did not run.")
             for text in ("Run only this block, with the same inputs", "Run only this block, with inputs I choose…",
                          "Run from this block on, with the same inputs",
                          "Run from this block on, with inputs I choose…"):
@@ -1155,7 +1160,9 @@ class MainWindow(QMainWindow):
             onwards = menu.addAction(f"Run from this block on, with the same inputs{shown}")
             onwards.setToolTip("This block and every block after it; the blocks before it are not run again"
                                + ("; of its items, only those that failed or did not run then"
-                                  if cls is not None and cls.type_id == LOOP else ""))
+                                  if cls is not None and cls.type_id == LOOP else
+                                  "; of its lines' runs, only those that failed or did not run then"
+                                  if block_id in sections else ""))
             onwards.setEnabled(run_id is not None and not tab.running)
             onwards.triggered.connect(lambda: self.rerun_block(tab, block_id, on=True))
             choose_on = menu.addAction("Run from this block on, with inputs I choose…")
@@ -1387,7 +1394,7 @@ class MainWindow(QMainWindow):
             self._apply_block_result(tab, block, {**e, "finished": e["ts"]})
             if e.get("tables") and not e.get("item"):  # (inside a Loop: once, over its items, as the history has it)
                 self._log(tab, _block_line(block, e["ts"], e))
-        elif kind == "progress":  # a Loop's items
+        elif kind == "progress":  # a Loop's items, a Merger's lines (set to each line as it finishes)
             tab.scene.set_progress(block, e["done"], e["of"], e["running"])
         elif kind == "run_finished":
             self._log(tab, _finished_line(e["run_id"], e["status"], e["ts"]))

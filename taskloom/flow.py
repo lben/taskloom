@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import itertools
 import os
 import random
 import re
@@ -46,6 +47,10 @@ SAME_TIME, ONE_AFTER_ANOTHER = "at the same time", "one after another"
 # `result` is each item's, collected, in the items' order, in its `results`. Its setting At the same time.
 LOOP, ITEMS, ITEM, INDEX, RESULT, RESULTS = "logic.loop", "items", "item", "index", "result", "results"
 AT_ONCE = "at_the_same_time"
+# The Merger's setting Passes on: all lines together (as it is added: it joins them) or each line as it finishes (the
+# blocks after it run once per line, see per_line; At the same time, AT_ONCE, of those runs at once).
+PASSES_ON, ALL_LINES, EACH_LINE = "passes_on", "all lines together", "each line as it finishes"
+RUNS_AGAIN, LINE_ORDER, AS_FINISHED = "runs_again_in", "line order", "the order the lines finished"
 
 
 class FlowError(Exception):
@@ -533,6 +538,9 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         never, few = _lines_problems(flow, registry, part)
         errors += never
         warnings += few
+        never, few = _per_line_problems(flow, registry, part)
+        errors += never
+        warnings += few
     return errors, warnings
 
 
@@ -702,9 +710,11 @@ def _lines_problems(flow: Flow, registry, part: set[str]) -> tuple[list[str], li
                 never.append(f"edge {e}: from line {src[1] + 1} of {splitter} into line {dst[1] + 1}, which would "
                              f"wait for it forever: {splitter} {how} (connect a line only into a later one, or run all "
                              "its lines at once)")
+    sections = per_line(flow, registry)
     for block_id, spec in flow.blocks.items():
         joined = [e for e in flow.edges if e.dst == block_id and e.dst_port == LINES]
-        if spec.type == MERGER and len(joined) < 2:
+        closes = any(e.src in blocks and block_id not in blocks for e in joined for blocks in sections.values())
+        if spec.type == MERGER and len(joined) < 2 and not closes:  # closing per-line runs, one joins them all
             few.append(f"{block_id}: a Merger with {len(joined)} connection{'s' if len(joined) != 1 else ''} into its "
                        "lines input (it joins two or more lines)")
     return never, few
@@ -803,6 +813,111 @@ def lines_run(flow: Flow, registry, splitter: str) -> tuple[str, int | None]:
     except Exception:
         return SAME_TIME, None
     return mode, at_most if isinstance(at_most, int) else None
+
+
+def passes_on(flow: Flow, registry, merger: str) -> str:
+    """How a Merger passes on its lines: all lines together, or each line as it finishes. All lines together while its
+    settings cannot be read (validate says what is wrong)."""
+    try:
+        return block_config(registry.get(MERGER), flow.blocks[merger])[PASSES_ON]
+    except Exception:
+        return ALL_LINES
+
+
+def per_line(flow: Flow, registry) -> dict[str, set[str]]:
+    """Each Merger set to each line as it finishes: the blocks it runs once for each of its lines. They are the blocks
+    after it (not after its error output; with the blocks inside a Loop among them), up to the end of the flow or up to
+    a Merger set to all lines together, which closes its runs, unless it joins the lines of a Splitter among them. Those
+    of one in the runs of another are also that one's."""
+    joins: dict[str, set[str]] = {}  # each block taking a line's output at its lines: those lines' Splitters
+    for splitter, its in splitter_lines(flow).items():
+        for e in flow.edges:
+            if e.dst_port == LINES and any(e.src in blocks for _, blocks in its):
+                joins.setdefault(e.dst, set()).add(splitter)
+    found = {}
+    for merger, spec in flow.blocks.items():
+        if spec.type != MERGER or passes_on(flow, registry, merger) != EACH_LINE:
+            continue
+
+        def after(block: str) -> list[str]:  # (at the Merger's level: into a block inside a Loop, the Loop)
+            return [at_level(flow, e.dst, spec.inside) for e in flow.edges
+                    if e.src in flow.blocks and e.dst in flow.blocks and at_level(flow, e.src, spec.inside) == block
+                    and not from_inside(flow, e) and not (block == merger and e.src_port == ERROR_PORT)]
+
+        section, todo = set(), after(merger)
+        while todo:
+            block = todo.pop()
+            if block is None or block in section or block == merger:
+                continue
+            if (flow.blocks[block].type == MERGER and passes_on(flow, registry, block) == ALL_LINES
+                    and not joins.get(block, set()) & section):
+                continue  # it closes the runs
+            section.add(block)
+            todo += after(block)
+        found[merger] = section | {b for b in flow.blocks if set(containers(flow, b)) & section}
+    return found
+
+
+def per_line_of(sections: dict[str, set[str]], block: str) -> str | None:
+    """The Merger set to each line as it finishes that runs `block` once per line (`sections`: per_line's): the
+    outermost, when its runs hold another's. None if none does."""
+    owners = [m for m, blocks in sections.items() if block in blocks]
+    return next((m for m in owners if not any(m in sections[o] for o in owners)), None)
+
+
+def _per_line_problems(flow: Flow, registry, part: set[str]) -> tuple[list[str], list[str]]:
+    """(a block run once per line by a Merger set to each line as it finishes that takes from one of its lines' last
+    blocks, which may not have ended as it runs; a file path such a block writes to without a {placeholder}, as each
+    line's run writes to it)."""
+    errors, warnings = [], []
+    sections = per_line(flow, registry)
+    for m1, m2 in itertools.combinations(sorted(m for m in sections if m in part), 2):
+        if m1 in sections[m2] or m2 in sections[m1]:
+            continue  # (one runs inside the other's runs)
+        level = flow.blocks[m1].inside
+        if flow.blocks[m2].inside != level:
+            continue
+        for block in sorted(b for b in sections[m1] & sections[m2] & part if flow.blocks[b].inside == level):
+            into = [e for e in flow.edges if e.src in flow.blocks and e.dst in flow.blocks and not from_inside(flow, e)
+                    and at_level(flow, e.dst, level) == block and at_level(flow, e.src, level) != block]
+            one, other = ([str(e) for e in into if at_level(flow, e.src, level) in (sections[a] | {a}) - sections[b]]
+                          for a, b in ((m1, m2), (m2, m1)))
+            if one and other:  # (where their runs meet: the blocks after it are in both only through it)
+                errors.append(f"{block} would run once per line of {m1} (edge {', '.join(one)}) and once per line of "
+                              f"{m2} (edge {', '.join(other)}), both set to each line as it finishes: a block runs once "
+                              "per line of one of them only (close one's runs with a Merger set to all lines together "
+                              "first)")
+    for merger, blocks in sections.items():
+        if merger not in part:
+            continue
+        # A block after a Merger closing the runs runs once, after them all: what one run has reaches it only through
+        # that Merger.
+        closers = {e.dst for e in flow.edges if e.src in blocks and e.dst in flow.blocks and e.dst not in blocks
+                   and flow.blocks[e.dst].type == MERGER and passes_on(flow, registry, e.dst) == ALL_LINES}
+        later, todo = set(), list(closers)
+        while todo:
+            block = todo.pop()
+            for e in flow.edges:
+                if e.src == block and e.dst in flow.blocks and e.dst not in later and not from_inside(flow, e):
+                    later.add(e.dst)
+                    todo.append(e.dst)
+        errors += [f"edge {e}: {e.dst} runs once, after {' and '.join(sorted(closers))}, which closes the runs "
+                   f"{merger} makes once per line, but takes from {e.src}, which has one line's run: what each run "
+                   f"has reaches it only through {' and '.join(sorted(closers))} (connect its output instead)"
+                   for e in flow.edges if e.dst in later & blocks & part and e.src in (blocks - later) | {merger}]
+        lasts = {e.src for e in flow.edges if e.dst == merger and e.dst_port == LINES}
+        errors += [f"edge {e}: {e.dst} runs once per line of {merger} (each line as it finishes), but takes from "
+                   f"{e.src}, the end of one of its lines, which may not have ended as it runs (take that line's "
+                   f"output from {merger} instead)" for e in flow.edges if e.dst in blocks & part and e.src in lasts]
+        for block in sorted(blocks & part):
+            spec, cls = flow.blocks[block], registry.get(flow.blocks[block].type)
+            for key, f in (cls.config.items() if cls else ()):
+                value = spec.config.get(key)
+                if (f.writes and isinstance(value, str) and value and not has_placeholders(value)
+                        and applies(cls, key, spec.config)):
+                    warnings.append(f"{block}: {setting_label(key, f)}: every line of {merger} writes to {value} (it "
+                                    "has no {placeholder}, so each line's run writes over what the one before wrote)")
+    return errors, warnings
 
 
 def unconnected_starts(flow: Flow, registry) -> list[str]:

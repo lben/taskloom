@@ -11,8 +11,8 @@ from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
 from ..engine import lines as start_lines
-from ..flow import (_EDGE, ONE_AFTER_ANOTHER, FlowError, flow_from_data, keep_source_names, lines_run, read_flow_file,
-                    splitter_lines)
+from ..flow import (_EDGE, ONE_AFTER_ANOTHER, FlowError, flow_from_data, keep_source_names, lines_run, per_line,
+                    read_flow_file, splitter_lines)
 
 UNDO_LIMIT = 200
 
@@ -163,6 +163,14 @@ class FlowDocument(QObject):
         return {splitter: {first: number for number, (first, _) in enumerate(its_lines, 1)}
                 for splitter, its_lines in splitter_lines(flow).items()
                 if lines_run(flow, registry, splitter)[0] == ONE_AFTER_ANOTHER}
+
+    def per_line(self, registry) -> dict[str, set[str]]:
+        """Each Merger set to each line as it finishes, with the blocks it runs once per line (flow.per_line), as the
+        flow is now ({} while it cannot be read)."""
+        try:
+            return per_line(flow_from_data(self.data, self.path or Path("flow.yaml")), registry)
+        except FlowError:
+            return {}
 
     # --- editing -----------------------------------------------------------------
 

@@ -90,7 +90,8 @@ def _slate() -> QColor:
 
 
 def status_icon(status: str | None, frame: int = 0, size: int = 14, clock: bool = False) -> QIcon:
-    """Spinner (running), green dot (success), red ✕ (failed), hollow dot (never run); plus a clock if scheduled."""
+    """Spinner (running), green dot (success), red ✕ (failed), grey ✕ (cancelled), hollow dot (never run); plus a
+    clock if scheduled."""
     pix = QPixmap(size * 2 + 2 if clock else size, size)
     pix.fill(Qt.transparent)
     p = QPainter(pix)

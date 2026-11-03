@@ -541,6 +541,7 @@ def card_problems(row: Row, card: QLabel, target, pages: Pages, drop=()) -> list
     if len(lines) < 4 or lines[-1] != LEARN_MORE:
         return out + [f"{where}: the card is not its label, what it is for, examples and {LEARN_MORE!r}: {lines}"]
     label, what, third = lines[0], lines[1], "\n".join(lines[2:-1])
+    third = third.split("\nOnly when ")[0]  # (a setting shown only for some values of another says so after it)
     if label != row.label:
         out.append(f"{where}: the card's label is {label!r}")
     if not label_is_bold(card):

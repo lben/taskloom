@@ -40,7 +40,7 @@ def _print_event(event: dict):
         return
     elif kind == "waiting":  # (for the editor's countdown; the Log line before it says how long and until when)
         return
-    elif kind == "progress":  # (a Loop's items done and running, for the editor's box; its Log lines say the rest)
+    elif kind == "progress":  # (a Loop's items, a Merger's lines, done and running, for the editor; the Log says it)
         return
     else:
         line = f"{ts} run #{event['run_id']} {event['status']}"

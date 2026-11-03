@@ -179,9 +179,9 @@ taskloom editor examples/daily-sales-report.yaml
   what they have.
 - The large **+** just right of the last tab (as tall as the tabs) opens a new flow (as File → New flow).
 - Each open flow's tab shows its last result (a coloured dot; a red ✕ while any line's last
-  run failed) and, when it is scheduled, a clock; hover the tab for how each start block's
-  line last ended (e.g. `manual: ok 2026-10-20 10:28:20`; re-running a block counts for the
-  lines it is in) and when it runs next. Bottom left, **N flows running**
+  run failed, else a grey ✕ while one was stopped) and, when it is scheduled, a clock; hover
+  the tab for how each start block's line last ended (e.g. `manual: ok 2026-10-20 10:28:20`;
+  re-running a block counts for the lines it is in) and when it runs next. Bottom left, **N flows running**
   lists the flows running now (also on schedule or from a terminal), with when each one's
   next scheduled run is: choose one to open it. While the scheduler service is off, the tabs
   and this list say so instead of a next run.
@@ -500,7 +500,10 @@ refuses it.
   the blocks.
 - The Log says once how the lines run, e.g. `3 lines at the same time, at most 2 at once:
   load_sales, load_costs, load_stock` or `3 lines one after another: 1 load_sales,
-  2 load_costs, 3 load_stock`. While lines run at the same time the canvas shows each of
+  2 load_costs, 3 load_stock`; when no line runs (**Run only this block** on the Splitter), it
+  says so: `no line runs: only split runs`. With nothing at its `value` input (connected by
+  run after only), its lines get `None` and it says under it `its lines start with nothing:
+  no value arrived`. While lines run at the same time the canvas shows each of
   their running blocks as running, each Log line keeps its block's tag, and the run history
   keeps every line, result and status as with one block at a time.
 - **Lines connecting across**: a block of one line may use what a block of another line
@@ -513,10 +516,12 @@ refuses it.
   a Splitter; a Splitter left at one line runs it so too. While one of them waits for the
   lines (the Merger), a block after it that need not wait runs meanwhile: a line may be
   waiting for it.
-- The **Merger** waits until every line connected to its `lines` input has delivered, then
-  passes on one value, `{line name: that line's output}`, named as Python Code names inputs
-  from several blocks: the block's name, or `block.output` when a block connects several of
-  its outputs (also with only one line connected).
+- The **Merger** passes on its lines as its **Passes on** says. *All lines together* (as the
+  block is added, and in a flow file that does not say) waits until every line connected to
+  its `lines` input has delivered, then passes on one value, `{line name: that line's
+  output}`, named as Python Code names inputs from several blocks: the block's name, or
+  `block.output` when a block connects several of its outputs (also with only one line
+  connected). *Each line as it finishes* is below.
 - **A failed line** stops no other line: the others run to their end, nothing is cancelled.
   The Merger then fails, saying which (`load_costs failed: …`, in the Log too), and what
   follows it does not run; its error output handles that as any block's. A line that delivered
@@ -535,9 +540,53 @@ refuses it.
   line 1, …`). In any mode it refuses a Splitter inside another Splitter's line, a block that
   takes from the lines of two Splitters side by side, and the lines of Splitters side by side
   that feed each other both ways. It warns
-  about a Splitter with fewer than two lines and a Merger with fewer than two connections.
-- Next: the Merger's other mode, *as each finishes*, which runs the blocks after it once for
-  each line, as soon as that line ends.
+  about a Splitter with fewer than two lines and a Merger with fewer than two connections
+  (except one that closes the runs of a Merger set to *each line as it finishes*: with one
+  connection it joins every one of those runs).
+- **A run that cannot go on** never waits forever, whatever its layout: once no block is
+  running and every block still to run waits for something no block can bring any more (a
+  line's turn that never comes, what a block that cannot start makes), the run ends within
+  about a second. The Log says which blocks wait for what (`the run cannot go on: load_sales
+  waits for load_stock (line 3 of split), load_costs waits for its turn (line 2 of split,
+  which runs its lines one after another), …`), each of them fails saying so, the blocks
+  after them end as after any failure, and the run fails (`taskloom run` exits 1); inside a
+  Loop, its item fails, and so the Loop. A run that is only slow is never ended so: a block
+  running however long (also a Wait block, Ask User waiting for an answer, a block waiting to
+  try again), and the lines waiting for it.
+- **Each line as it finishes**: the Merger does not wait for every line; it passes on the
+  lines' outputs one at a time, as each finishes (the value itself, not a dict), and the
+  blocks after it run once for that line, as a Loop runs the blocks inside it once per item:
+  up to the end of the flow, or up to a Merger set to *all lines together* further on, which
+  waits for every one of those runs and passes on `{line name: what that run gave it}`.
+  **At the same time** (shown for this mode: a whole number, 1 or more; 1 as the block is
+  added) sets how many of those runs go at once; the next starts as soon as one ends, in the
+  order the lines finished. Each run gets its own copy of what it receives.
+- The Log says as each line arrives (`load_sales arrived: its run starts`), each Log line of a
+  block run for a line carries that line (`[report] INFO: [line load_costs] …`), and the run
+  history keeps every run's lines. While it runs, the Merger shows `done/N · k running` under
+  it; after the run, each block after it shows how its runs ended (`✓ 2 ✕ 1`), and hovering
+  it shows the last one's result, saying which line.
+- A line that failed, or delivered nothing (`route has no run: it delivered nothing`), has
+  no run after the Merger; a run that fails stops no other line's run. Once every line has
+  been dealt with, the Merger fails if a line or a run failed, listing them (`load_costs
+  failed: …; report failed for line load_stock: …`), through its error output, and what
+  follows it does not run. After a fix, right-click the Merger > **Run from this block on,
+  with the same inputs** (`taskloom run flow.yaml --from merge --inputs-from 12`) runs again
+  only the runs that failed or did not run: the lines do not run again (their kept outputs
+  are used), the other runs keep their results. On a block run once per line, Run only this
+  block and Run from this block on are not offered yet: the menu says to right-click the
+  Merger. **Run only this block** on the Merger runs it with the blocks it runs once per
+  line (again only the runs that failed or did not run), not what comes after the Merger
+  that closes them. Its setting **Runs again in** says in which order those runs go: *line
+  order* (as it is added: top to bottom, where the lines reach the Merger on the canvas) or
+  *the order the lines finished* in the run it carries on from. A run from the start always
+  goes in the order the lines finish.
+- Validate warns about a file path a block run once per line writes or copies to without a
+  `{placeholder}` (each line's run would write over the one before), and refuses a block run
+  once per line that takes from the end of one of the Merger's lines (connect it to the
+  Merger's output instead). It works inside a Loop's box, and in the runs of another Merger
+  set to each line as it finishes: the blocks after the inner one then run once per line of
+  each.
 
 ### Loop: the blocks inside it, once per item
 
