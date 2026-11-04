@@ -47,6 +47,7 @@ BLOCK_ICONS = {
     "logic.splitter": ("arrows-split",), "logic.merger": ("arrows-join",),
     "data.duckdb_sql": ("duck",), "data.polars": ("polar-bear",), "data.read_file": ("file-export",),
     "data.write_file": ("file-pencil",), "data.statistics": ("report-analytics",),
+    "data.detect_anomalies": ("activity",),
     "checks.check_file": ("file-check",), "checks.check_table": ("list-check",), "db.run_query": ("database",),
     "files.copy": ("copy",), "files.move": ("move-files",), "files.delete": ("trash-x",),
     "servers.ssh_command": ("terminal-2",), "servers.start_process": ("satellite", "badge-player-play"),

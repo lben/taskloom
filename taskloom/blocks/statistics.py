@@ -400,7 +400,7 @@ class Statistics(Block):
 
 def _finite(con, floats: list[str]):
     """Fails the block, naming them, if these (float) columns hold a NaN or an infinite value: they have no mean,
-    spread or order, so the statistics of such a column would be wrong."""
+    spread or order, so the statistics of such a column (or what is usual for it) would be wrong."""
     if not floats:
         return
     found = con.execute("SELECT " + ", ".join(f"count_if(isnan({_q(n)})), count_if(isinf({_q(n)}))" for n in floats)
@@ -409,8 +409,8 @@ def _finite(con, floats: list[str]):
     if bad:
         x = _q(bad[0][0])
         raise Failed(f"{', '.join(f'{n} ({nan:,} NaN, {inf:,} infinite)' for n, nan, inf in bad)}: a number column "
-                     "holding NaN or an infinite value (e.g. from a division by 0) has no statistics; make them missing "
-                     "or drop them before this block, e.g. in a DuckDB SQL block: "
+                     "holding NaN or an infinite value (e.g. from a division by 0) has no mean, spread or order; make "
+                     "them missing or drop them before this block, e.g. in a DuckDB SQL block: "
                      f"select * replace (case when isfinite({x}) then {x} end as {x}) from input")
 
 

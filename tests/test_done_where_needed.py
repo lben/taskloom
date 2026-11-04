@@ -32,7 +32,8 @@ LOSE = ["data.duckdb_sql", "data.polars", "data.read_file", "data.write_file", "
         "servers.remote_extract",
         "checks.check_table",  # (Check Table: its table and results always arrive when it succeeds)
         "checks.check_file",  # (Check File: its files and results always arrive when it succeeds)
-        "data.statistics"]  # (Statistics: its stats, charts and custom always arrive when it succeeds)
+        "data.statistics",  # (Statistics: its stats, charts and custom always arrive when it succeeds)
+        "data.detect_anomalies"]  # (Detect Anomalies: its table, anomalies, count and charts always arrive)
 START = ["trigger.manual", "trigger.schedule"]
 BOXES = ["servers.api_session"]  # (a Session: a box on the canvas that does not run, with no ports at all)
 RUN_AFTER_TIP = ("Run after: connect an output of another block (or a start block's 'start') here to make this block "

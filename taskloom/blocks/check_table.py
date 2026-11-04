@@ -111,6 +111,25 @@ def _instants(*values, zone) -> list[dt.datetime]:
     return values
 
 
+def unread(con, source: str, column: str, wanted: str) -> tuple[str, str] | None:
+    """Whether every value of the text column `column` of `source` (an SQL table) reads as `wanted`, one of TYPES (or
+    several, joined by " or "), missing values aside: None when it does; else SQL true where a value does not, and what
+    does not read: how many rows, and up to EXAMPLES such values, each with how many rows have it and the first of
+    them, and how many more."""
+    q = _q(column)
+    where = f"{q} IS NOT NULL AND NOT ({' OR '.join(_reads(kind, q) for kind in wanted.split(' or '))})"
+    found = con.execute(
+        f"SELECT v, n, first, count(*) OVER (), sum(n) OVER () FROM (SELECT {q} AS v, count(*) AS n, "
+        f"min({ROW}) + 1 AS first FROM {source} WHERE {where} GROUP BY v) ORDER BY n DESC, first "
+        f"LIMIT {EXAMPLES}").fetchall()
+    if not found:
+        return None
+    values, n = found[0][3], int(found[0][4])
+    shown = ", ".join(f"{_shown(v)} ({_rows(k)}, the first row {first:,})" for v, k, first, *_ in found)
+    more = f", and {values - len(found):,} more" if values > len(found) else ""
+    return where, f"{column} is text, and {_rows(n)} have a value that does not read as {wanted}: {shown}{more}"
+
+
 def _duckdb_message(error: Exception) -> str:
     """DuckDB's message without the SQL it quotes."""
     return " ".join(str(error).split("\n\nLINE")[0].split())
@@ -393,7 +412,7 @@ class CheckTable(Block):
         return False, rows, f"{repeat} ({_rows(rows)}): {shown}"
 
     def _types(self):
-        wrong, right, unread = [], [], []
+        wrong, right, unread_rows = [], [], []
         for row in self.config.types_columns or []:
             if row.get("on") is False:
                 continue
@@ -409,21 +428,14 @@ class CheckTable(Block):
             elif has != "text" or wanted == "text":
                 wrong.append(f"{column} is {has}, not {wanted}")
             else:  # text that is to read as a number, a date or yes/no
-                where = f"{_q(column)} IS NOT NULL AND NOT {_reads(wanted, _q(column))}"
-                found = self.con.execute(
-                    f"SELECT v, n, first, count(*) OVER (), sum(n) OVER () FROM (SELECT {_q(column)} AS v, "
-                    f"count(*) AS n, min({ROW}) + 1 AS first FROM {self.source} WHERE {where} GROUP BY v) "
-                    f"ORDER BY n DESC, first LIMIT {EXAMPLES}").fetchall()
-                if not found:
+                found = unread(self.con, self.source, column, wanted)
+                if found is None:
                     right.append(f"{column} is text, and every value reads as {wanted}")
                     continue
-                values, n = found[0][3], int(found[0][4])
-                shown = ", ".join(f"{_shown(v)} ({_rows(k)}, the first row {first:,})" for v, k, first, *_ in found)
-                more = f", and {values - len(found):,} more" if values > len(found) else ""
-                wrong.append(f"{column} is text, and {_rows(n)} have a value that does not read as {wanted}: "
-                             f"{shown}{more}")
-                unread.append(where)
-        return not wrong, self._count(unread) if unread else 0, "; ".join(wrong or right)
+                where, details = found
+                wrong.append(details)
+                unread_rows.append(where)
+        return not wrong, self._count(unread_rows) if unread_rows else 0, "; ".join(wrong or right)
 
     def _values(self):
         wrong, right, broken = [], [], []

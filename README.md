@@ -476,8 +476,8 @@ edges:
 
 Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
 `logic.loop`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
-`data.write_file`, `data.statistics`, `checks.check_file`, `checks.check_table`, `db.run_query`, `files.copy`,
-`files.move`, `files.delete`,
+`data.write_file`, `data.statistics`, `data.detect_anomalies`, `checks.check_file`, `checks.check_table`,
+`db.run_query`, `files.copy`, `files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
 `servers.health_check`, `servers.remote_extract`, `servers.api_request`, `servers.api_session`,
 `reports.html_template`, `reports.chart`, `reports.excel`, `email.send`.
@@ -882,6 +882,104 @@ edges:
   - load.table -> summary.table
   - summary.stats -> body.data
   - summary.charts -> body.data
+  - body.html -> mail.body
+```
+
+## Detect Anomalies
+
+**Detect Anomalies** (`data.detect_anomalies`, in the Data group) answers "is today's number
+unusual?" for the numbers flows already produce: daily row counts, job durations, file sizes,
+error counts. It marks the values of a table of numbers over time that are unusual for their
+weekday or hour of day, each with a reason, e.g. `Mon 2026-11-02, server-a: rows 120,431; a
+usual Monday is 30,000 (26,664.15–33,335.85)`.
+
+What is usual for a point comes from the comparable earlier points of its series: by default
+the same weekday over the last 8 weeks. Their median is the expected value, and their typical
+spread is 1.4826 × their median absolute deviation from it (or, when that is 0, 1.2533 × their
+mean absolute deviation from it): both equal the standard deviation for normal data, but one
+past spike does not skew them as it would a mean. A value more than 4, 3 or 2 spreads from the
+expected value (**Sensitivity** low, medium or high) is unusual. When the earlier values were
+all the same, any other value is unusual, and its reason says they were all that value.
+
+- **Date column**: a date or date and time column, or a text column of `YYYY-MM-DD` or
+  `YYYY-MM-DD HH:MM[:SS]` values, read as such.
+- **Number columns**: one or more, each checked on its own. A text column whose values all
+  read as numbers is read as numbers.
+- **Group by** (optional): one series per group, e.g. per server, each judged against its own
+  history.
+- **Pattern**: weekday (the default) compares a point with the earlier points of its series
+  on the same day of the week; hour of day, with those at the same hour of the day (the dates
+  need times); none, with all of them. Earlier means at an earlier date (day, for daily
+  times): rows of the same date are never each other's history.
+- **Compare with the last**: how many of the latest comparable earlier points make what is
+  usual (8 by default, at least 4).
+- **Sensitivity**: low, medium (the default) or high: 4, 3 or 2 spreads.
+- **Only the latest** (ticked by default): only the points at the table's latest date are
+  judged; the other rows get their expected value and range, for the chart, but an empty
+  anomaly and reason. Unticked, every point with enough history is judged.
+
+Properties and Validate refuse a block without a Date column or Number columns, or with
+Compare with the last under 4. Nothing is guessed silently:
+
+- A point with fewer than 4 comparable earlier points is not flagged: its reason says `not
+  enough history: 2 earlier Mondays, 4 needed`, and the Log warns once per series, saying how
+  many points. A missing number is not judged nor used as history (its reason: `missing
+  value`), and the Log says how many there are.
+- The Log warns of repeated dates in a series (each such row is still judged on its own; if
+  one value per date is meant, add them up first, e.g. in a DuckDB SQL block), of gaps (dates
+  missing at the series' usual step, but for the days of the week, or hours of the day, on
+  which it never has a row, such as the weekends of a weekdays-only series) and, with Only the
+  latest, of a series with no row at the table's latest date (it is not judged). A series'
+  dates are taken in whole days (whole hours, minutes or seconds for dates mostly less than a
+  day apart) for these and for what is earlier, so two runs on the same day are a repeated
+  date, and run times that vary by some seconds or minutes are neither gaps nor behind; the
+  gaps of dates a month or more apart, or without a regular step (one shared by at least half
+  of the differences between consecutive dates), are not checked, and the Log says so.
+- A column that is not in the table, a row without a date, or a text value of the Date column
+  or a Number column that does not read fails the block, listing up to 5 such values with how
+  many rows have each.
+
+Its outputs: `table`, the input's rows and columns in the same order, plus for each number
+column `<column>_expected`, `<column>_low` and `<column>_high`, then `anomaly` (true, false,
+or empty when the row was not judged) and `reason`, shown in Data preview after a run (also
+after Run only this block); `anomalies`, only the rows whose anomaly is true; `count`, their
+number, for an If such as `value > 0`; and `charts`, a chart of each series (up to 12; the Log
+names any left without one): its values as a line over the dates, the usual range shaded and
+the unusual points marked in red, on a light background (also in the Dark theme: they are for
+emails too). The Log shows how many rows were judged and how many are unusual, per series,
+the reasons of the unusual points as a table, then each chart. It reads only the columns it
+needs, and a series of 100,000 points takes a few seconds.
+
+A Run Query of daily row counts per server, Detect Anomalies by weekday per server, then an
+email with the anomalies and their charts only when there are some:
+
+```yaml
+blocks:
+  counts:
+    type: db.run_query
+    config:
+      connection: warehouse
+      sql: select load_date as day, server, count(*) as row_count from loads group by load_date, server
+  detect:
+    type: data.detect_anomalies
+    config: {date_column: day, number_columns: [row_count], group_by: [server], pattern: weekday}
+  any:
+    type: logic.if
+    config: {condition: "value > 0"}
+  body:
+    type: reports.html_template
+    config:
+      names: {detect.anomalies: anomalies, detect.charts: charts}
+      template: "<h2>Unusual row counts</h2>{anomalies}<br>{charts}"
+  mail:
+    type: email.send
+    config: {connection: mailer, to: [team@example.com], subject: Unusual row counts}
+edges:
+  - counts.result -> detect.table
+  - detect.count -> any.value
+  - any.true -> body.after
+  - detect.anomalies -> body.data
+  - detect.charts -> body.data
   - body.html -> mail.body
 ```
 
