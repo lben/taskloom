@@ -40,9 +40,11 @@ from taskloom.editor.canvas import HEADER_H, NODE_W  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
-# The group colours, unchanged by this change (a non-goal): the icons are drawn on them.
-GROUP_COLORS = {"Start": "#1f8a4c", "Database": "#2c5d8f", "Data": "#2f7f7a", "Reports": "#9a6a1f",
-                "Email": "#a24d6b", "Servers": "#4d6a35", "Files": "#6d7682", "Logic": "#7a4f9e", "Debug": "#b7791f"}
+# The group colours, unchanged by this change (a non-goal): the icons are drawn on them. (Checks came later, with its
+# own colour.)
+GROUP_COLORS = {"Start": "#1f8a4c", "Database": "#2c5d8f", "Data": "#2f7f7a", "Checks": "#4a5ba8",
+                "Reports": "#9a6a1f", "Email": "#a24d6b", "Servers": "#4d6a35", "Files": "#6d7682", "Logic": "#7a4f9e",
+                "Debug": "#b7791f"}
 USER_CREATED = "#b0563a"
 NOTES = "#9aa5b1"  # the Notes group of the Blocks list (Text)
 

@@ -210,6 +210,13 @@ class History:
         return [result for _, result in self._block_results("r.flow_path=? AND b.block=? ORDER BY r.id DESC LIMIT ?",
                                                              (flow_path, block, limit))]
 
+    def last_success(self, flow_path: str, block: str, before: int) -> dict | None:
+        """The block's result in the latest run of the flow file before run `before` in which it succeeded, whatever
+        the run's own status: as block_results gives it (None: there is none)."""
+        found = self._block_results("r.flow_path=? AND b.block=? AND b.status='success' AND r.id<? ORDER BY r.id DESC "
+                                    "LIMIT 1", (flow_path, block, before))
+        return found[0][1] if found else None
+
     def finished_blocks(self, run_id: int) -> list[tuple[str, dict]]:
         """The blocks a run finished, in the order they finished: (block, result as block_results gives it)."""
         return self._block_results("b.run_id=? ORDER BY b.finished", (run_id,))

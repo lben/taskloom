@@ -29,7 +29,10 @@ LOSE = ["data.duckdb_sql", "data.polars", "data.read_file", "data.write_file", "
         "logic.splitter", "logic.merger",
         "reports.chart", "reports.html_template", "reports.excel", "email.send",
         "servers.ssh_command", "servers.start_process", "servers.stop_process", "servers.health_check",
-        "servers.remote_extract"]
+        "servers.remote_extract",
+        "checks.check_table",  # (Check Table: its table and results always arrive when it succeeds)
+        "checks.check_file",  # (Check File: its files and results always arrive when it succeeds)
+        "data.statistics"]  # (Statistics: its stats, charts and custom always arrive when it succeeds)
 START = ["trigger.manual", "trigger.schedule"]
 BOXES = ["servers.api_session"]  # (a Session: a box on the canvas that does not run, with no ports at all)
 RUN_AFTER_TIP = ("Run after: connect an output of another block (or a start block's 'start') here to make this block "

@@ -731,9 +731,13 @@ def _inputs(widget: QWidget) -> list:
     return [w for w in widget.children() if isinstance(w, (QLineEdit, QComboBox, QPlainTextEdit))]
 
 
-# An API Request's settings come in groups, as Postman's tabs (after its connection, method and URL): Params, Auth,
-# Headers, Body, then Response as and Settings (redirects, certificates). A line above each group's first setting.
-API_GROUPS = ("params", "auth", "headers", "body", "response_as", "follow_redirects")
+# Blocks whose settings come in groups, with a line above each group's first setting: an API Request's as Postman's
+# tabs (after its connection, method and URL): Params, Auth, Headers, Body, then Response as and Settings (redirects,
+# certificates); a Check File's checks (after its path), each with its own settings; a Check Table's checks.
+GROUP_LINES = {API_REQUEST: ("params", "auth", "headers", "body", "response_as", "follow_redirects"),
+               "checks.check_file": ("if_none", "not_empty", "modified", "size"),
+               "checks.check_table": ("row_count", "compared", "missing", "unique", "types", "values", "freshness",
+                                      "conditions")}
 
 
 class PropertiesPanel(QScrollArea):
@@ -880,7 +884,7 @@ class PropertiesPanel(QScrollArea):
                 layout.addWidget(self._source_names_box(cls, key, f, config.get(key)))
                 continue
             api = cls.type_id == API_REQUEST
-            if api and key in API_GROUPS:
+            if key in GROUP_LINES.get(cls.type_id, ()):
                 layout.addWidget(QFrame(frameShape=QFrame.HLine, frameShadow=QFrame.Sunken))
             widget = self._url_widget(config) if api and key == "url" else self._field_widget(key, f, config.get(key))
             label = QLabel(setting_label(key, f))
@@ -1243,6 +1247,12 @@ class PropertiesPanel(QScrollArea):
             return self._connection_widget(key, f, value)
         if isinstance(f, fields.KeyValues):
             return self._rows_widget(key, f, value)
+        if isinstance(f, fields.List) and f.lines:  # one item per line (an item may hold commas)
+            w = CodeEdit("\n".join(str(v) for v in value) if isinstance(value, list) else _to_text(value))
+            w.setPlaceholderText("one per line")
+            w.editing_finished.connect(lambda: self._set(key, [line.strip() for line in w.toPlainText().splitlines()
+                                                               if line.strip()] or None))
+            return w
         if isinstance(f, fields.Code):
             code = f.language in ("python", "sql")
             wrap = self.settings.value("wrap_code", False, type=bool)  # (as chosen in any code box)
@@ -1636,6 +1646,9 @@ class PropertiesPanel(QScrollArea):
             self.error.show()
             return
         problems = cls.problems(config, self._sources(), set(self.doc.data["params"]))
+        loops = [c for c in self.doc.containers(self.block_id) if self.doc.blocks[c].get("type") == LOOP]
+        if loops:
+            problems = [*problems, *cls.loop_problems(config, loops[0])]
         self.error.setText("\n".join(problems))
         self.error.setVisible(bool(problems))
 

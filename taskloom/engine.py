@@ -125,8 +125,10 @@ class Context:
     """What a block's run() receives as `ctx`."""
 
     def __init__(self, *, block_id, attempt, params, as_of, functions, workspace, home, emit, run_cancel,
-                 attempt_cancel, answers=None, registry=None, cookies=None):
+                 attempt_cancel, answers=None, registry=None, cookies=None, run_id=None, flow_path=None):
         self.block_id = block_id
+        # The run (its number in the run history) and the flow file it runs (as the run history keeps its path).
+        self.run_id, self.flow_path = run_id, flow_path
         self.attempt = attempt
         self.params = dict(params)
         # The time this run is for (its now()), with the flow's time zone if it has one: the as_of of runs started
@@ -375,6 +377,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
             emit({"event": "log", "level": "WARNING", "message": message})
         runner = _Runner(flow, registry, home, values, now, funcs, emit, cancel, home.runs_dir / str(run_id), answers)
         runner.taking_part, runner.outside, runner.inputs_from = part, set(flow.blocks) - part, inputs_from
+        runner.run_id = run_id
         if inputs_from is not None:
             runner.earlier_ends = {b: r["finished"] or "" for b, r in history.blocks(inputs_from).items()}
         try:
@@ -483,6 +486,7 @@ class _Runner:
     # the Log, e.g. [item 2/5] or [line load_sales]. None and "": the flow's own blocks.
     loop: str | None = None
     item: str = ""
+    run_id: int | None = None  # the run's number in the run history
     parent: "_Runner | None" = None  # the runner whose item or line this one runs (_item_runner)
     ordered: list | None = None  # the flow's blocks in order (order()), worked out once for the run
     sections: dict | None = None  # the blocks each Merger set to each line as it finishes runs (per_line), likewise
@@ -841,6 +845,7 @@ class _Runner:
                          self.workspace / block / ("items" if loop else "lines") / str(number), self.answers)
         runner.loop = block if loop else self.loop
         runner.item, runner.ordered, runner.sections, runner.watch = tag, self.ordered, self.sections, self.watch
+        runner.run_id = self.run_id
         runner.taking_part, runner.outside, runner.blocked, runner.parent = part, self.outside, set(self.blocked), self
         runner.outputs = {**self.outputs, **given}
         return runner
@@ -1222,7 +1227,7 @@ class _Runner:
                 block_id=spec.id, attempt=attempt, params=self.values, as_of=self.now, functions=self.funcs,
                 workspace=self.workspace / spec.id / f"attempt-{attempt}", home=self.home,
                 emit=self.emit, run_cancel=self.cancel, attempt_cancel=attempt_cancel, answers=self.answers,
-                registry=self.registry, cookies=jar,
+                registry=self.registry, cookies=jar, run_id=self.run_id, flow_path=str(self.flow.path),
             )
             started = time.monotonic()
             try:

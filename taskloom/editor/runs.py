@@ -19,7 +19,9 @@ KILL_AFTER_MS = 6000  # after asking a run to stop, kill it if it is still going
 
 
 class RunProcess(QObject):
-    event = Signal(dict)
+    # The event as it came (as a dict signal, Qt would sort its keys: e.g. a block's tables, which come in the order of
+    # its outputs, the first of them the one Data preview shows).
+    event = Signal(object)
     # Text printed outside of events, with its level: ERROR for Taskloom's own errors, OUTPUT for what other
     # programs print (e.g. a database driver's or a library's messages).
     output = Signal(str, str)

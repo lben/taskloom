@@ -453,12 +453,13 @@ edges:
   `{name:format}` formats it (`{value:.1f}`, `{day:%Y-%m-%d}`) and `{{` and `}}` are
   literal braces. A number setting reads the filled-in text as its number (spaces around it
   ignored), within its own limits, e.g. `count: "{value}0"`. SQL code takes flow
-  parameters only; other code (Python, Polars, If, and an HTML Template, which fills in its
-  own `{name}`), yes/no and choice settings, and a Splitter's At most at once (Validate
-  checks the lines with it before the run) take none. Validate (F7, `taskloom check`,
-  `taskloom validate`) refuses a name that is neither a parameter nor an input of the
-  block, and one that is both (`{value} could be the parameter value or the input value:
-  rename one`). Nothing is filled in silently: the
+  parameters only; other code (Python, Polars, If, Check File's Since and Check Table's Latest
+  at least, and an HTML Template, which fills in its own `{name}`), yes/no and choice
+  settings, and a Splitter's At most at once (Validate checks the lines with it before the
+  run) take none. Validate
+  (F7, `taskloom check`, `taskloom validate`) refuses a name that is neither a parameter
+  nor an input of the block, and one that is both (`{value} could be the parameter value or
+  the input value: rename one`). Nothing is filled in silently: the
   block fails before it does anything, naming the setting, the placeholder and why, when
   nothing is connected to that input or nothing arrived there, a table arrived (only a
   single value can be written into a setting: text, a number, a date or time, yes/no), or a
@@ -475,7 +476,8 @@ edges:
 
 Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
 `logic.loop`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
-`data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
+`data.write_file`, `data.statistics`, `checks.check_file`, `checks.check_table`, `db.run_query`, `files.copy`,
+`files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
 `servers.health_check`, `servers.remote_extract`, `servers.api_request`, `servers.api_session`,
 `reports.html_template`, `reports.chart`, `reports.excel`, `email.send`.
@@ -653,6 +655,235 @@ edges:
 - Validate also warns when a block inside writes or copies to a path with no `{placeholder}`
   (every item would write the same file), and when the Loop's results is connected but its
   result is not.
+
+## Checks
+
+The **Checks** blocks check that what a flow is about to use is as expected, so a surprise
+fails the flow clearly instead of flowing on. Each check is ticked to use it, and its **If it
+fails** either fails the block (the default) or only warns in the Log. A `results` table has
+a row per check (`check`, `outcome`: passed, failed or warned, and `details`), and the
+block's error output carries `results` too.
+
+### Check File: is the file there?
+
+**Check File** (`checks.check_file`) checks a file, or the files matching a pattern in the
+last part of its **Path** (`C:/inbox/sales_*.csv`, `~/exports/orders-*.parquet`), on this
+computer (also network folders) or on the server of an SSH connection (**Path on**), as Copy
+Files' paths are. A folder is not a file: it does not count as one found.
+
+- **It is there**, always checked: at least one file is found. **If none is there**: fail the
+  block (the default) or warn.
+- **Not empty** (ticked in a new block): every file found has more than 0 bytes.
+- **Modified since**: every file found was last changed at or after **Since**, an expression
+  as an If's condition is, with the flow parameters: `today()` (the default),
+  `now() - days(1)`, `today() - bdays(1)`. It is on the flow's clock (its time zone); a date
+  is its midnight.
+- **Size**: every file found is at least **Minimum** and/or at most **Maximum**, written with
+  a unit: B, KB, MB or GB (1 KB = 1024 bytes, as Windows shows sizes), e.g. `1 KB` or
+  `200 MB`. A size written another way is refused before the run (written with a
+  `{placeholder}`, as the block runs).
+
+With a pattern every check applies to each file found, and a failure names each file that
+breaks it, with its size or time. The Log lists each file found with its size and when it was
+last changed, then a line per check. Its outputs: `files`, the paths found (a list, as Copy
+Files gives), and `results`.
+
+To wait for a file that arrives late, set the block's **Retry** (its Retry and timeout box in
+Properties): a failed check is checked again later, e.g. every 10 minutes, 6 times, before the
+block fails. A check set to warn never retries.
+
+```yaml
+blocks:
+  arrived:
+    type: checks.check_file
+    config:
+      path: C:/inbox/sales.csv
+      modified: true                # last changed today
+      size: true
+      minimum: 1 KB
+    retry: {policy: fixed, delay: 10m, max_attempts: 6}   # waits up to 50 minutes
+  load:
+    type: data.read_file
+    config: {path: C:/inbox/sales.csv}
+edges:
+  - arrived.files -> load.after
+```
+
+### Check Table: is the table as expected?
+
+**Check Table** (`checks.check_table`) checks a table, e.g. the one a Read File just read, and
+passes it on unchanged (its `table` output) only when no check set to fail the block failed.
+DuckDB works each check out on the table's Parquet file, so the table is never read into
+memory and tables of millions of rows are fine. A new block has **Row count** ticked, at
+least 1 row.
+
+- **Row count**: at least **At least** and/or at most **At most** rows.
+- **Row count compared with the last successful run**: the rows differ by at most
+  **Within %** (30 by default) from the rows this block passed on in the latest earlier run of
+  the same flow in which it succeeded, as Run history shows (whatever that run's own status).
+  With no such run it passes, saying there is nothing to compare with yet; its details name
+  that run (`#12`) and its row count. Inside a Loop it is refused (Properties and Validate say
+  so): a Loop's items have no single earlier row count.
+- **No missing values**: in **In columns** (none listed: every column) a null is missing, and so
+  is an empty text or one of only spaces with **Count empty text as missing** ticked.
+  **Allowed**: at most a number of missing values (0 by default) or a percentage of the rows
+  (`5%`), per column. Its details name each column over the limit, with its count.
+- **Unique**: no value of **Key columns** repeats (several columns: together, e.g. `day, region`);
+  a row missing one of them is left out. Its details say how many values repeat, with
+  examples and their rows.
+- **Columns and types**: each column of **Column types** (rows `Column: type`) is in the table, with
+  its type: `text`, `int`, `float` (any number: an int column passes), `bool`, `date` or
+  `datetime`, or no type for any. A missing column fails it, naming it; one stored with another
+  type fails it, saying the type it has. A text column whose type is to be a number, a date
+  or yes/no passes only if every value reads as one (missing values aside): numbers as Python
+  and SQL write them (`1234.5`), dates `YYYY-MM-DD`, dates and times `YYYY-MM-DD HH:MM[:SS]`,
+  yes/no `true`, `false`, `yes`, `no`, `1` or `0`. Otherwise it lists the values that do not,
+  with how many rows have each, e.g. `'N/A' (12 rows, the first row 2), '1,234.5' (3 rows,
+  the first row 3)`: at most 5 of them, saying how many more.
+- **Values within a range or a list**: rows `Column=min..max` (an end may be left empty:
+  `0..`, `..100`) or `Column=a, b, c`. Missing values are not counted here (No missing values
+  counts them). A range on a number or date column compares numbers or dates; on a text
+  column a range of numbers or dates reads its values as numbers or dates, and a value that
+  does not read is not within it.
+- **Freshness**: the latest value of **Date column** (a date or datetime column, or a text
+  column of `YYYY-MM-DD` dates, read as dates) is at least **Latest at least**, an expression
+  as an If's condition is, with the flow parameters: `today() - days(1)` (the default),
+  `today() - bdays(1)`, `now() - days(2)`. Its details say the latest value found and the one
+  expected.
+- **Conditions every row must meet**: SQL conditions as DuckDB writes them, one per line (e.g.
+  `amount >= 0` and `end_date >= start_date`), each checked on its own. A row where one is not
+  true breaks it: false, or unknown because of a missing value (write
+  `amount is null or amount >= 0` to allow missing ones). A condition that is not valid SQL,
+  or names a column the table does not have, fails the block, naming it.
+
+Each check's **If it fails**: fail the block (the default) or warn (a WARNING line in the Log;
+the block succeeds and the table goes on). Every ticked check runs, also after one failed. A
+failing check's details say how many rows break it and show up to 5 example rows: their row
+numbers (from 1, in the table's order) and the values of the columns concerned. When checks
+set to fail the block fail, the block fails with a message naming each of them with its
+details. A check that cannot be checked as it is set up (a column not in the table, a
+condition that is not valid SQL, a range end that is not a number or a date) fails the block
+also when it is set to warn, as nothing was checked. The Log has a line per check: passed,
+failed or warned, with its details. `results` has a row per ticked check: `check`, `outcome`,
+`rows` (how many rows break it; empty for Row count, the comparison and Freshness) and
+`details`; the error output carries it too.
+
+```yaml
+blocks:
+  load:
+    type: data.read_file
+    config: {path: data/orders.csv}
+  check:
+    type: checks.check_table
+    config:
+      row_count: true
+      at_least: 1
+      compared: true                # within 30% of the rows of the last successful run
+      missing: true
+      missing_columns: [order_id, amount]
+      unique: true
+      unique_columns: [order_id]
+      types: true
+      types_columns:
+        - {key: amount, value: float}
+        - {key: day, value: date}
+      values: true
+      allowed_values:
+        - {key: region, value: "north, south, east, west"}
+      values_fails: warn            # only a warning in the Log
+      conditions: true
+      rules: [amount >= 0]
+  totals:
+    type: data.duckdb_sql
+    config:
+      inputs: [orders]
+      sql: select region, sum(amount) as total from orders group by region
+edges:
+  - load.table -> check.table
+  - check.table -> totals.orders
+```
+
+## Statistics
+
+**Statistics** (`data.statistics`, in the Data group) shows the most useful statistics of a
+table, as numbers and as charts. DuckDB works them out on the table's Parquet file, so the
+table is never held in memory and millions of rows are fine. Missing values are counted,
+never dropped: each statistic is over the values present, with the count of the missing ones
+next to it.
+
+- Tick the groups of statistics you want (all ticked in a new block); an unticked group's
+  statistics and charts are left out:
+  - **Overview**: the table's rows and columns, each column's type and missing values, the
+    missing cells and the fully repeated rows (each the same as an earlier row in every column).
+  - **Numbers**: mean, std (the sample standard deviation), min, 25%, median, 75%, max, sum,
+    zeros and negatives; a histogram of each number column.
+  - **Text**: the shortest and longest length and the 5 most common values with their counts;
+    a chart of the 10 most common values.
+  - **Dates** (dates, and dates with a time): the first and the last; a chart of the rows per
+    day (per month or year over a longer span).
+  - **Correlations**: Pearson's r between each two number columns, over the rows where both
+    have a value; a heatmap of them with 2 or more number columns.
+- **Columns**: the columns to describe and chart (none listed: every column but the Group by
+  ones). **Group by**: optional columns to work the statistics out per group of: the report
+  has a section per group, `stats` a row per group and column (the group columns first) and
+  there is a chart of the rows per group. Rows whose group value is missing are a group too. A
+  column that is not in the table fails the block, naming it, and so does a Group by column
+  named as a column of `stats` (`column`, `type`, `count`, ...): rename it before the block.
+  A number column holding NaN or an infinite value (e.g. from a division by 0) has no mean,
+  spread or order: it fails the block, naming the column and how many it holds; make them
+  missing or drop them before the block, e.g. in a DuckDB SQL block.
+- **Custom statistics**: rows of a name = an SQL aggregate over the table, worked out by
+  DuckDB (per group with Group by), e.g. `p95 = quantile_cont(amount, 0.95)` or
+  `north_share = avg(case when region = 'north' then 1 else 0 end)`. One that is not valid
+  SQL, or no aggregate (`amount * 2`), fails the block, naming it. For a statistic SQL does
+  not say easily, work it out in a **Python Code** block and connect its output to the
+  optional `extra` input: a dict (each key and value shown as a row) or a table, shown in the
+  report under its own heading as it is.
+- **Exact** (ticked by default): every statistic is exact. Unticked, distinct counts (also the
+  overview's fully repeated rows) and percentiles are estimated, faster and with less memory
+  on very big tables: the report shows each estimated value with ≈, and `stats` says in its
+  `estimated` column which statistics of the row were.
+
+The Log shows the report as Markdown: the overview, a section per ticked group with its numbers
+as tables (per group with Group by), the custom statistics and the extra input, then each chart
+as a picture. A column left without a chart is named, with why (only numbers, text and dates
+get one, and a column with no values gets none). The charts are drawn on a light background,
+also in the Dark theme: they are for emails too.
+
+Its outputs: `stats`, a table with a row per column: its name and type, then the statistics as
+columns (`count`, `missing`, `missing %`, `distinct`, `mean`, `std`, `min`, `25%`, `median`,
+`75%`, `max`, `sum`, `zeros`, `negatives`, `shortest`, `longest`, `most common`, `first`,
+`last`; min and max readable for every type, e.g. a duration as `48:00:00`), shown in Data
+preview after a run (also after Run only this block); `charts`, the charts' PNG files, which
+an HTML Template and Send Email show as pictures; and `custom`, a table of the custom
+statistics (one row, or a row per group).
+
+```yaml
+blocks:
+  load:
+    type: data.read_file
+    config: {path: data/sales.csv}
+  summary:
+    type: data.statistics
+    config:
+      group_by: [region]
+      custom:
+        - {key: p95, value: "quantile_cont(amount, 0.95)"}
+        - {key: big_orders, value: "count_if(amount > 1000)"}
+  body:
+    type: reports.html_template
+    config:
+      names: {summary.stats: stats, summary.charts: charts}
+      template: "<h2>Sales statistics</h2>{stats}<br>{charts}"
+  mail:
+    type: email.send
+    config: {connection: mailer, to: [team@example.com], subject: Sales statistics}
+edges:
+  - load.table -> summary.table
+  - summary.stats -> body.data
+  - summary.charts -> body.data
+  - body.html -> mail.body
+```
 
 ## Reports and email
 

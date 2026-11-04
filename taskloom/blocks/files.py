@@ -39,6 +39,13 @@ class LocalFiles:
         """The path to compare locations by: in full, with links resolved (and in lower case on Windows)."""
         return os.path.normcase(os.path.realpath(path))
 
+    def stat(self, path: str):
+        """What is at path (a link: what it points to); None: nothing."""
+        try:
+            return os.stat(path)
+        except FileNotFoundError:
+            return None
+
     def is_dir(self, path: str) -> bool:
         return os.path.isdir(path)
 
@@ -82,7 +89,7 @@ class ServerFiles:
     def norm(self, path: str) -> str:
         return ssh.sftp_path(self.sftp, path)
 
-    def _stat(self, path):
+    def stat(self, path):
         try:
             return self.sftp.stat(path)
         except FileNotFoundError:
@@ -90,7 +97,7 @@ class ServerFiles:
 
     def expand(self, path: str) -> list[str]:
         path = self.norm(path)
-        if self._stat(path):  # an existing name such as report[1].csv is that file, not a pattern
+        if self.stat(path):  # an existing name such as report[1].csv is that file, not a pattern
             return [path]
         folder, name = posixpath.split(path)
         if not glob.has_magic(name):
@@ -110,11 +117,11 @@ class ServerFiles:
         return posixpath.normpath(posixpath.join(self._home, path))
 
     def is_dir(self, path: str) -> bool:
-        st = self._stat(path)
+        st = self.stat(path)
         return bool(st and stat.S_ISDIR(st.st_mode))
 
     def exists(self, path: str) -> bool:
-        return self._stat(path) is not None
+        return self.stat(path) is not None
 
     def walk(self, root: str):
         """(path, path relative to root, is a folder) for every folder and file under root."""

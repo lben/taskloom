@@ -33,7 +33,7 @@ COUNTDOWN_H = 18  # the line under a Schedule block saying when it starts the fl
 LOOP_W, LOOP_H, LOOP_MIN_W, LOOP_MIN_H = 520, 280, 260, 170
 LOOP_SIDE, LOOP_TOP, LOOP_BOTTOM, INNER_X, SHADOW, GRIP = 70, 44, 30, 50, 6, 14
 CATEGORY_COLORS = {
-    "Start": "#1f8a4c", "Database": "#2c5d8f", "Data": "#2f7f7a", "Reports": "#9a6a1f",
+    "Start": "#1f8a4c", "Database": "#2c5d8f", "Data": "#2f7f7a", "Checks": "#4a5ba8", "Reports": "#9a6a1f",
     "Email": "#a24d6b", "Servers": "#4d6a35", "Files": "#6d7682", "Logic": "#7a4f9e", "Debug": "#b7791f",
 }
 USER_COLOR = "#b0563a"
@@ -46,7 +46,8 @@ BLOCK_ICONS = {
     "logic.ask_user": ("user-question",), LOOP: ("list", "badge-repeat"), "logic.inspect": ("inspect",),
     "logic.splitter": ("arrows-split",), "logic.merger": ("arrows-join",),
     "data.duckdb_sql": ("duck",), "data.polars": ("polar-bear",), "data.read_file": ("file-export",),
-    "data.write_file": ("file-pencil",), "db.run_query": ("database",),
+    "data.write_file": ("file-pencil",), "data.statistics": ("report-analytics",),
+    "checks.check_file": ("file-check",), "checks.check_table": ("list-check",), "db.run_query": ("database",),
     "files.copy": ("copy",), "files.move": ("move-files",), "files.delete": ("trash-x",),
     "servers.ssh_command": ("terminal-2",), "servers.start_process": ("satellite", "badge-player-play"),
     "servers.stop_process": ("satellite", "badge-player-stop"), "servers.health_check": ("stethoscope",),

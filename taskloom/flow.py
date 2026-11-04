@@ -502,6 +502,9 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
             if edge.dst == block_id:
                 sources.setdefault(edge.dst_port, []).append(f"{edge.src}.{edge.src_port}")
         found += [f"{block_id}: {problem}" for problem in cls.problems(config, sources, set(flow.params))]
+        loops = [c for c in containers(flow, block_id) if flow.blocks[c].type == LOOP]
+        if loops:
+            found += [f"{block_id}: {problem}" for problem in cls.loop_problems(config, loops[0])]
         has_params_input = any(e.dst == block_id and e.dst_port == "params" for e in flow.edges)
         for name, f in cls.config.items():
             value = config.get(name)

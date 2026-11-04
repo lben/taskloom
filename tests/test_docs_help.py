@@ -363,13 +363,16 @@ def source_names_box(cls, box: str) -> bool:
                                    for k, f in cls.config.items())
 
 
-def field_for(cls, box: str, text: str):
+def field_for(cls, box: str, text: str, shown=()):
+    """The setting of the row labelled `text`. Several settings of a block may have one label (a Check File's If it
+    fails, one per check): each row is then the first of them not on a row before it (`shown`: their keys)."""
     if cls is None or box in ("When", "Retry and timeout"):
         return None
     hidden = WHEN_FIELDS if cls.type_id == "trigger.schedule" else ()
     keys = [k for k, f in cls.config.items() if k not in hidden and setting_label(k, f) == text]
     if box == "Keep runs":
         keys = [k for k in keys if k in ("keep", "keep_failed")]
+    keys = [k for k in keys if k not in shown] or keys
     return (cls, keys[0], cls.config[keys[0]]) if keys else None
 
 
@@ -396,7 +399,8 @@ def property_rows(win, title: str, cls=None) -> list[Row]:
             label = label if isinstance(label, QLabel) and label.text() else None
             text = (box if source_names_box(cls, box) else label.text() if label else
                     widget.text() if isinstance(widget, QCheckBox) else box)
-            rows.append(Row(f"{title} › {text}", text, label, inputs, top, field_for(cls, box, text)))
+            rows.append(Row(f"{title} › {text}", text, label, inputs, top,
+                            field_for(cls, box, text, {r.field[1] for r in rows if r.field})))
     layout = body.layout()
     for i in range(1, layout.count()):  # code boxes: a label, then the box under it
         widget = layout.itemAt(i).widget()

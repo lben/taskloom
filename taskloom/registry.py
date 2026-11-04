@@ -14,8 +14,10 @@ from pathlib import Path
 
 from .block import Block
 
-BUILTIN_MODULES = ("taskloom.blocks.triggers", "taskloom.blocks.logic", "taskloom.blocks.data", "taskloom.blocks.database",
-                   "taskloom.blocks.files", "taskloom.blocks.servers", "taskloom.blocks.reports")
+BUILTIN_MODULES = ("taskloom.blocks.triggers", "taskloom.blocks.logic", "taskloom.blocks.data",
+                   "taskloom.blocks.statistics", "taskloom.blocks.checks", "taskloom.blocks.check_table",
+                   "taskloom.blocks.database", "taskloom.blocks.files", "taskloom.blocks.servers",
+                   "taskloom.blocks.reports")
 ENTRY_POINT_GROUP = "taskloom.blocks"
 
 

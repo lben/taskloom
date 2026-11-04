@@ -150,9 +150,14 @@ class fields:
             super().__init__("ssh", required=False, **kw)
 
     class List(Field):
-        """A list of text values."""
+        """A list of text values. `lines`: Properties shows it one item per line, for items that may hold commas (e.g.
+        SQL conditions); otherwise comma-separated."""
 
         template = True  # in each item
+
+        def __init__(self, default=None, lines: bool = False, **kw):
+            super().__init__(default=default, **kw)
+            self.lines = lines
 
         def coerce(self, value):
             if not isinstance(value, list):
@@ -307,6 +312,12 @@ class Block:
         """What stops the block from running as it is set up and connected, beyond a setting it cannot take: shown in
         Properties, and Validate and runs refuse the flow. `config`: its config as block_config gives it; `sources`:
         {input port: ["block.port", ...] connected there, in edge order}; `params`: the flow parameters' names."""
+        return []
+
+    @classmethod
+    def loop_problems(cls, config: dict, loop: str) -> list[str]:
+        """What stops the block from running inside the Loop `loop` (once per item) as it is set up, as problems does:
+        shown in Properties, and Validate and runs refuse the flow."""
         return []
 
     def run(self, ctx, **inputs) -> dict:

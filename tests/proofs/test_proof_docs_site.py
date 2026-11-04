@@ -552,26 +552,26 @@ def test_the_documentation_website(proof, win, qtbot, tmp_path, monkeypatch):
                 first["text"] == ["Remote Extract", "Servers"]
                 and first["href"] == "blocks-servers.html#servers.remote_extract")
 
-        p.step("Type histogram instead: a word only the help of a setting has.")
+        p.step("Type horizontal instead: a word only the help of a setting has.")
         chart = win.registry.get("reports.chart")
         kind = chart.config["kind"]
-        found, path = with_chrome("histogram", "schedules.html", steps=[("type", "histogram")])
+        found, path = with_chrome("horizontal", "schedules.html", steps=[("type", "horizontal")])
         shown = picture(qtbot, path)
         hit = next((r for r in found["results"] if r["href"] == "blocks-reports.html#reports.chart.kind"), None)
         p.check("A result links to the entry of Chart's Kind, on the Reports page: "
                 "blocks-reports.html#reports.chart.kind", hit is not None)
-        p.shot(shown, "① histogram in the search box; ② the one section that has it: Kind, on the Reports page, the "
-                      "setting of the Chart block whose help says “… or a histogram (hist)”.",
+        p.shot(shown, "① horizontal in the search box; ② the one section that has it: Kind, on the Reports page, the "
+                      "setting of the Chart block whose help says “… bars, horizontal bars (barh) …”.",
                highlight=[rect(found["search"]), rect(hit["box"])], badges=True,
                zoom=[rect(found["brand"]), rect(hit["box"])])
         shown.close()
         p.check("② It is the one section found, and by its text: the word is in Kind's help, not in its name or in "
                 "Chart's", found["results"] == [hit] and hit["text"] == ["Kind", "Reports"]
-                and "histogram" in kind.help and "histogram" not in f"kind {chart.title}".lower())
+                and "horizontal" in kind.help and "horizontal" not in f"kind {chart.title}".lower())
 
         p.step("Click Kind, in the results.")
         landed, path = with_chrome("kind", "schedules.html", steps=[
-            ("type", "histogram"), ("click", '#docs-results a[href="blocks-reports.html#reports.chart.kind"]')])
+            ("type", "horizontal"), ("click", '#docs-results a[href="blocks-reports.html#reports.chart.kind"]')])
         shown = picture(qtbot, path)
         whole = shown.rect()
         on_site = rect(landed["target"]["box"], whole)
