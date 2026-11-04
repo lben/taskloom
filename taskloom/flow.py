@@ -26,8 +26,8 @@ FORMAT_VERSION = 1
 FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone", "triggers", "overlap", "notify",
              "blocks", "edges", "notes"}  # notes: text on the canvas; only the editor uses them
 OVERLAP_POLICIES = ("skip", "queue", "allow")
-# inside: the Loop (logic.loop) a block is inside, which runs it once per item; ui: where the canvas draws it (a Loop's
-# box: also its width and height, once you resized it).
+# inside: the Loop (logic.loop) a block is inside, which runs it once per item, or the Session (servers.api_session);
+# ui: where the canvas draws it (a Loop's or a Session's box: also its width and height, once you resized it).
 BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui", "inside"}
 ERROR_PORT = "error"
 _EDGE = re.compile(r"^\s*(\w+)\.(\w+)\s*->\s*(\w+)\.(\w+)\s*$")
@@ -51,6 +51,10 @@ AT_ONCE = "at_the_same_time"
 # blocks after it run once per line, see per_line; At the same time, AT_ONCE, of those runs at once).
 PASSES_ON, ALL_LINES, EACH_LINE = "passes_on", "all lines together", "each line as it finishes"
 RUNS_AGAIN, LINE_ORDER, AS_FINISHED = "runs_again_in", "line order", "the order the lines finished"
+# The Session (blocks/servers.py): a box on the canvas around blocks (those whose `inside` names it) that does not run
+# itself: in a run they are where the Session is (flow_from_data), and the API Request blocks among them share one set
+# of cookies (engine._Runner._session_cookies).
+SESSION, API_REQUEST = "servers.api_session", "servers.api_request"
 
 
 class FlowError(Exception):
@@ -126,6 +130,7 @@ class BlockSpec:
     timeout: float | None = None
     ui: dict = field(default_factory=dict)
     inside: str | None = None  # the Loop it is inside
+    session: str | None = None  # the Session it is inside (also through a Loop inside it), see flow_from_data
 
 
 @dataclass
@@ -152,6 +157,7 @@ class Flow:
     blocks: dict[str, BlockSpec]
     edges: list[Edge]
     version: str | None = None  # the Git blob id of the bytes it was loaded from (load_flow)
+    sessions: dict = field(default_factory=dict)  # each Session: the Loop it is inside (None: in none)
 
 
 class _FlowLoader(yaml.SafeLoader):
@@ -268,7 +274,7 @@ def flow_from_data(data, path: Path) -> Flow:
             continue
         inside = spec.get("inside")
         if inside is not None and not (isinstance(inside, str) and IDENTIFIER.match(inside)):
-            errors.append(f"{where}: inside must be the name of the Loop it is inside, got {inside!r}")
+            errors.append(f"{where}: inside must be the name of the Loop or Session it is inside, got {inside!r}")
             continue
         try:
             blocks[block_id] = BlockSpec(
@@ -281,6 +287,19 @@ def flow_from_data(data, path: Path) -> Flow:
         except (ValueError, TypeError) as e:
             errors.append(f"{where}: {e}")
 
+    # A Session is no block of the run: a block inside it is inside what the Session is inside (a Loop, or none) and
+    # knows its Session, as does a block inside a Loop inside it (the innermost Session around it).
+    written = {b: spec.inside for b, spec in blocks.items()}
+    for spec in blocks.values():
+        up, seen = written[spec.id], set()
+        while up in blocks and up not in seen:  # (one inside itself: Validate refuses it)
+            seen.add(up)
+            if blocks[up].type == SESSION:
+                spec.session = spec.session or up
+                if spec.inside == up:
+                    spec.inside = written[up]
+            up = written[up]
+    sessions = {b: blocks.pop(b).inside for b in [b for b, spec in blocks.items() if spec.type == SESSION]}
     triggers, trigger_errors = schedules_of(data)
     errors += trigger_errors
     notify = data.get("notify")
@@ -306,7 +325,7 @@ def flow_from_data(data, path: Path) -> Flow:
     return Flow(
         name=str(data.get("name") or path.stem), path=path, params=flow_params,
         calendar=data.get("calendar"), timezone=data.get("timezone"),
-        triggers=triggers, overlap=overlap, notify=notify, blocks=blocks, edges=edges,
+        triggers=triggers, overlap=overlap, notify=notify, blocks=blocks, edges=edges, sessions=sessions,
     )
 
 
@@ -381,7 +400,7 @@ def placeholder_problems(f: fields.Field, text: str, params, inputs) -> list[str
         names = P.template_names(text)
     except ValueError as e:
         return [f"{e} (write {{{{ and }}}} for literal braces)"]
-    if isinstance(f, fields.Code):  # SQL: flow parameters only
+    if isinstance(f, fields.Code) and f.language == "sql":  # flow parameters only
         return [f"unknown parameter {{{n}}}" for n in sorted(names - set(params))]
     data = set(inputs) - {AFTER}
     return [f"{{{n}}} could be the parameter {n} or the input {n}: rename one" if n in params
@@ -487,8 +506,10 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         for name, f in cls.config.items():
             value = config.get(name)
             setting = f"{block_id}: {setting_label(name, f)}"
-            if f.template:
-                found += [f"{setting}: {problem}" for text in (value if isinstance(value, list) else [value])
+            if f.template:  # (in each item of a list; a table's rows, fields.KeyValues: in each key and value)
+                texts = [text for item in (value if isinstance(value, list) else [value])
+                         for text in ((item.get("key"), item.get("value")) if isinstance(item, dict) else (item,))]
+                found += [f"{setting}: {problem}" for text in texts
                           if isinstance(text, str) for problem in placeholder_problems(f, text, flow.params, inputs)]
             if not isinstance(value, str):
                 continue
@@ -595,7 +616,7 @@ def _loop_problems(flow: Flow, registry) -> tuple[list[str], list[str]]:
     loops = {b for b, spec in flow.blocks.items() if spec.type == LOOP}
     for block_id, spec in flow.blocks.items():
         if spec.inside is not None and spec.inside not in loops:
-            errors.append(f"{block_id}: inside: {spec.inside} is not a Loop of this flow")
+            errors.append(f"{block_id}: inside: {spec.inside} is not a Loop or Session of this flow")
         elif block_id in containers(flow, block_id):
             errors.append(f"{block_id}: inside: it is inside itself (through {', '.join(containers(flow, block_id))})")
     if errors:

@@ -47,6 +47,7 @@ class fields:
     class Field:
         # Templated fields get `{name}` / `{name:format}` placeholders filled in as the block runs (engine._filled):
         # with the flow parameter `name` or, but in SQL code, the value arriving at the block's own input `name`.
+        # Code is templated in SQL and in text (e.g. a web request's body).
         template = False
 
         def __init__(self, default=None, required: bool | None = None, help: str = "", label: str = "",
@@ -120,7 +121,7 @@ class fields:
         def __init__(self, language: str, default=None, script: bool = False, **kw):
             super().__init__(default=default, **kw)
             self.language = language
-            self.template = language == "sql"
+            self.template = language in ("sql", "text")  # (text: e.g. a web request's body)
             # A script (Python Code's code) runs as it is, also when it is only comments; any other required code
             # that is only comments is as if left empty (flow.only_comments).
             self.script = script
@@ -157,6 +158,34 @@ class fields:
             if not isinstance(value, list):
                 raise ValueError(f"expected a list, got {value!r}")
             return [str(v) for v in value]
+
+    class KeyValues(Field):
+        """A table of rows, each a key and a value (e.g. a web request's headers), ticked when used: in the flow file
+        a list of {key: ..., value: ...}, with on: false for a row not ticked. `files`: a row can be a file instead,
+        with file: true and the file's path as its value. `sep`: what is typed between a key and its value to add a
+        row in Properties (key=value; a header, Name: value)."""
+
+        template = True  # in each key and value
+
+        def __init__(self, default=None, files: bool = False, sep: str = "=", **kw):
+            super().__init__(default=default, **kw)
+            self.files, self.sep = files, sep
+
+        def coerce(self, value):
+            allowed = {"key", "value", "on"} | ({"file"} if self.files else set())
+            if not isinstance(value, list):
+                raise ValueError(f"expected a list of rows, each {{key: ..., value: ...}}, got {value!r}")
+            rows = []
+            for row in value:
+                if not isinstance(row, dict) or "key" not in row or set(row) - allowed:
+                    raise ValueError(f"each row is {{key: ..., value: ...}} (with on: false when it is not ticked"
+                                     f"{', file: true for a file' if self.files else ''}), got {row!r}")
+                for flag in {"on", "file"} & set(row):
+                    if not isinstance(row[flag], bool):
+                        raise ValueError(f"{flag} is true or false, got {row[flag]!r} in {row!r}")
+                text = row.get("value")
+                rows.append({**row, "key": str(row["key"]), "value": "" if text is None else str(text)})
+            return rows
 
     class Names(Field):
         """A list of identifiers, e.g. the input names of a code block (the names of its ports)."""

@@ -154,7 +154,7 @@ def field_card(f) -> tuple[str, str]:
     if line is None:
         examples = tuple(f.examples)
         line = examples_line(examples, isinstance(f, fields.Code)) if examples else NO_EXAMPLES
-        if f.template and not isinstance(f, fields.Code):
+        if f.template and getattr(f, "language", None) != "sql":
             line += f"<br>{html.escape(PLACEHOLDERS)}"
     return f.help or NO_HELP, line
 

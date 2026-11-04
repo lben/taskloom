@@ -1,4 +1,5 @@
-"""Trying a connection: does it connect and log in? Used by `taskloom connection test NAME`."""
+"""Trying a connection: does it connect and log in (an API connection: does its base URL answer)? Used by
+`taskloom connection test NAME`."""
 
 from __future__ import annotations
 
@@ -13,6 +14,10 @@ def test_connection(home, name: str) -> str:
     conns = home.connections()
     if name not in conns:
         raise KeyError(f"no connection named '{name}'")
+    if conns[name].get("kind") == "api":  # (its secret by name: API Request reads it as it sends)
+        from .blocks.servers import try_connection
+
+        return try_connection(home, name)
     conn = home.resolve_secrets(conns[name])
     kind = conn.get("kind")
     if kind == "ssh":

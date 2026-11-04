@@ -28,18 +28,19 @@ from PySide6.QtGui import (QAction, QColor, QDrag, QFont, QFontDatabase, QFontMe
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QCheckBox,
                                QComboBox, QDateEdit, QDateTimeEdit, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QPlainTextEdit,
-                               QPushButton, QScrollArea, QSpinBox, QStyledItemDelegate, QTableView, QTableWidget,
-                               QTableWidgetItem, QTextBrowser, QTextEdit, QTimeEdit, QToolButton, QToolTip, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStyledItemDelegate, QTableView,
+                               QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QTimeEdit, QToolButton,
+                               QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, applies, fields, has_placeholders, setting_label
 from ..blocks.logic import ReusableBlock
+from ..blocks.servers import REQUEST, connection_note, from_curl, shown_url, url_and_params
 from ..calendars import load_calendar
-from ..config import kept_runs
+from ..config import SECRET_PREFIX, kept_runs
 from ..expr import functions
-from ..flow import LOOP, BlockSpec, Retry, block_config, parse_duration, schedules_of
+from ..flow import API_REQUEST, LOOP, SESSION, BlockSpec, Retry, block_config, parse_duration, schedules_of
 from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
 from . import docs
@@ -423,19 +424,27 @@ SQL_TOKENS = _tokens("--.*", r"/\*", "'(?:[^']|'')*'?", """select from where and
     right inner outer full cross using group by order having limit offset distinct union all except intersect case when
     then else end between like ilike exists insert into values update set delete create replace table view drop alter
     with asc desc true false cast over partition qualify""".split(), re.IGNORECASE)
-LONG_ENDS = ["'''", '"""', "*/"]  # how a string or comment over several lines ends (its index + 1: the line's state)
-# Keyword, string, comment and number colours (as in JetBrains' light and dark themes), on a light and a dark background.
+# A curl command (Import from cURL): its options (as keywords), quoted strings and URLs.
+CURL_TOKENS = re.compile("|".join([r"""(?P<string>'[^']*'|\$'(?:\\.|[^\\'])*'|"(?:\\.|[^"\\])*")""",
+                                   r"""(?P<long>\$?'|")""", r"(?P<keyword>(?<!\S)--?[A-Za-z0-9][\w.-]*)",
+                                   r"""(?P<url>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s'"^]+)""", r"(?P<word>\S)"]))
+# Each language's tokens, and what its `long` starts (a string or a comment).
+LANGUAGES = {"python": (PYTHON_TOKENS, "string"), "sql": (SQL_TOKENS, "comment"), "curl": (CURL_TOKENS, "string")}
+# How a string or comment over several lines ends (its index + 1: the line's state).
+LONG_ENDS = ["'''", '"""', "*/", "'", '"']
+# Keyword, string, comment, number and URL colours (as in JetBrains' light and dark themes), on a light and a dark
+# background.
 CODE_COLORS = {"keyword": ("#0033b3", "#cf8e6d"), "string": ("#067d17", "#6aab73"), "comment": ("#808080", "#7a7e85"),
-               "number": ("#1750eb", "#2aacb8")}
+               "number": ("#1750eb", "#2aacb8"), "url": ("#871094", "#c77dbb")}
 
 
 class CodeHighlighter(QSyntaxHighlighter):
-    """Colours a Python or SQL code box's keywords, strings, comments and numbers: only on the screen."""
+    """Colours a Python or SQL code box's keywords, strings, comments and numbers, and a curl command's options,
+    strings and URLs: only on the screen."""
 
     def __init__(self, document, language: str):
         super().__init__(document)
-        self.tokens = PYTHON_TOKENS if language == "python" else SQL_TOKENS
-        self.long = "string" if language == "python" else "comment"
+        self.tokens, self.long = LANGUAGES[language]
         self.formats = {kind: QTextCharFormat() for kind in CODE_COLORS}
         self.recolour()
 
@@ -453,7 +462,7 @@ class CodeHighlighter(QSyntaxHighlighter):
             position = self._long(text, 0, 0, LONG_ENDS[self.previousBlockState() - 1])
         while (token := self.tokens.search(text, position)) is not None:
             if token.lastgroup == "long":
-                start = token.group().lstrip("rRbBfFuU")
+                start = token.group().lstrip("rRbBfFuU$")
                 position = self._long(text, token.start(), token.end(), "*/" if start == "/*" else start)
             else:
                 if token.lastgroup != "word":
@@ -722,6 +731,11 @@ def _inputs(widget: QWidget) -> list:
     return [w for w in widget.children() if isinstance(w, (QLineEdit, QComboBox, QPlainTextEdit))]
 
 
+# An API Request's settings come in groups, as Postman's tabs (after its connection, method and URL): Params, Auth,
+# Headers, Body, then Response as and Settings (redirects, certificates). A line above each group's first setting.
+API_GROUPS = ("params", "auth", "headers", "body", "response_as", "follow_redirects")
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -851,6 +865,8 @@ class PropertiesPanel(QScrollArea):
                     layout.addWidget(QLabel(f"<b>{heading}</b>"))
                     layout.addWidget(QLabel(text, wordWrap=True, textFormat=Qt.PlainText))
         config = spec.get("config") or {}
+        if cls.type_id == API_REQUEST:
+            layout.addWidget(self._curl_box())
         when = cls.type_id == "trigger.schedule"
         keeps = cls.type_id in ("trigger.manual", "trigger.schedule")
         if when:
@@ -863,7 +879,10 @@ class PropertiesPanel(QScrollArea):
             if isinstance(f, fields.SourceNames):
                 layout.addWidget(self._source_names_box(cls, key, f, config.get(key)))
                 continue
-            widget = self._field_widget(key, f, config.get(key))
+            api = cls.type_id == API_REQUEST
+            if api and key in API_GROUPS:
+                layout.addWidget(QFrame(frameShape=QFrame.HLine, frameShadow=QFrame.Sunken))
+            widget = self._url_widget(config) if api and key == "url" else self._field_widget(key, f, config.get(key))
             label = QLabel(setting_label(key, f))
             widget.setToolTip(_as_written(docs.field_card(f)[0]))  # (also its buttons': …, Edit…, New…)
             self._field_help(cls, key, label, *_inputs(widget))
@@ -873,11 +892,18 @@ class PropertiesPanel(QScrollArea):
             else:
                 row = QFormLayout()
                 row.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+                if isinstance(f, fields.KeyValues):
+                    row.setRowWrapPolicy(QFormLayout.WrapAllRows)  # (its table under its name, as wide as the panel)
                 row.addRow(label, widget)
                 layout.addLayout(row)
+            note = self._api_note(key, config) if api else ""
+            if note:
+                note = QLabel(note, wordWrap=True, textFormat=Qt.PlainText)
+                note.setStyleSheet("color: palette(placeholder-text);")
+                layout.addWidget(note)
         if keeps:
             layout.addWidget(self._keep_box(config, cls))
-        if cls.type_id != LOOP:  # (a Loop's blocks have their own retry and timeout; it has none)
+        if cls.type_id not in (LOOP, SESSION):  # (the blocks inside them have their own retry and timeout)
             layout.addWidget(self._retry_box(spec))
         self._show_problems()
 
@@ -1215,6 +1241,8 @@ class PropertiesPanel(QScrollArea):
             return w
         if isinstance(f, fields.Connection):
             return self._connection_widget(key, f, value)
+        if isinstance(f, fields.KeyValues):
+            return self._rows_widget(key, f, value)
         if isinstance(f, fields.Code):
             code = f.language in ("python", "sql")
             wrap = self.settings.value("wrap_code", False, type=bool)  # (as chosen in any code box)
@@ -1275,6 +1303,183 @@ class PropertiesPanel(QScrollArea):
             return box
         return w
 
+    def _rows_widget(self, key, f, value):
+        """A key/value table (fields.KeyValues): a row per key and value, ticked when it is sent (with f.files, ticked
+        File when its value is a file's path), each cell changed where it is; a row whose key is emptied goes. Under it,
+        a line to add a row: key=value (f.sep), then Enter."""
+        rows = [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []  # (by hand: Properties says)
+        table = QTableWidget(len(rows), 4 if f.files else 3)
+        table.setHorizontalHeaderLabels(["", "Name", "Value"] + ["File"] * f.files)
+        table.verticalHeader().hide()
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # (as tall as its rows, as wide as Properties)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)  # (the ticks)
+        for column in (1, 2):
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Stretch)
+
+        def tick(on: bool) -> QTableWidgetItem:
+            item = QTableWidgetItem()
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if on else Qt.Unchecked)
+            return item
+
+        for r, row in enumerate(rows):
+            table.setItem(r, 0, tick(row.get("on", True) is not False))
+            table.setItem(r, 1, QTableWidgetItem(str(row.get("key", ""))))
+            table.setItem(r, 2, QTableWidgetItem(str(row.get("value", ""))))
+            if f.files:
+                table.setItem(r, 3, tick(row.get("file") is True))
+        table.setFixedHeight(table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
+                             + sum(table.rowHeight(r) for r in range(len(rows))))
+
+        def changed(_):
+            new = []
+            for r in range(table.rowCount()):
+                name = table.item(r, 1).text().strip()
+                if name:
+                    new.append({"key": name, "value": table.item(r, 2).text(),
+                                **({} if table.item(r, 0).checkState() == Qt.Checked else {"on": False}),
+                                **({"file": True} if f.files and table.item(r, 3).checkState() == Qt.Checked else {})})
+            self._set_rows(key, new)
+
+        table.itemChanged.connect(changed)
+        sep = f.sep.strip()
+        add = QLineEdit(placeholderText=f"add a row: name{f.sep}value, then Enter")
+
+        def added():
+            name, _, text = add.text().partition(sep)
+            if name.strip():
+                self._set_rows(key, rows + [{"key": name.strip(), "value": text.strip()}])
+
+        add.editingFinished.connect(added)
+        box = QWidget()
+        column = QVBoxLayout(box)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.addWidget(table)
+        column.addWidget(add)
+        return box
+
+    def _set_rows(self, key, rows: list):
+        """A key/value table's rows changed: saved, and Properties shown again (e.g. an API Request's URL shows its
+        Params)."""
+        self._set(key, rows or None)
+        self.refresh()
+
+    def _url_widget(self, config: dict) -> QLineEdit:
+        """An API Request's URL with its ticked Params as its query, kept in step: a query typed in it becomes its
+        Params (each ticked; those not ticked stay), the URL being what is before its ?."""
+        shown = shown_url(config.get("url"), config.get("params"))
+        edit = QLineEdit(shown, placeholderText="relative to the connection's base URL, e.g. /orders/{id}, or whole"
+                         if config.get("connection") else "e.g. https://api.example.com/v1/orders")
+
+        def commit():
+            if self.doc is None or self.block_id not in self.doc.blocks or edit.text().strip() == shown:
+                return  # (left as it was: nothing to save)
+            url, params = url_and_params(edit.text().strip(), (self.doc.blocks[self.block_id].get("config") or {})
+                                         .get("params"))
+            self._commit(lambda: self.doc.set_block_values(self.block_id, {"url": url or None,
+                                                                           "params": params or None}))
+            self.refresh()
+
+        edit.editingFinished.connect(commit)
+        return edit
+
+    def _curl_box(self) -> QGroupBox:
+        """Import from cURL, at the top of an API Request's Properties: a curl command pasted into its code box, then
+        Fill in fills the block's request from it (_fill_from_curl)."""
+        box = QGroupBox("Import from cURL")
+        column = QVBoxLayout(box)
+        hint = QLabel("Paste a curl command, as an API's documentation or a browser's Copy as cURL writes it (bash or "
+                      "Windows cmd), then Fill in: it fills this block's request, each secret in it kept as a stored "
+                      "secret.", wordWrap=True, textFormat=Qt.PlainText)
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        command = CodeEditor("", "curl", True)
+        command.setPlaceholderText("curl https://api.example.com/v1/orders -H 'Accept: application/json'")
+        fill = QPushButton("Fill in")
+        fill.clicked.connect(lambda: self._fill_from_curl(command.toPlainText()))
+        column.addWidget(hint)
+        column.addWidget(command)
+        column.addWidget(fill, 0, Qt.AlignLeft)
+        return box
+
+    def _fill_from_curl(self, text: str):
+        """Fill in: the block's request replaced by the one the curl command sends (once you approve, if it has one),
+        its secrets stored as stored secrets under the names you give, in one step for Undo; then it says what it filled
+        and what it could not use. Text that is not a curl command changes nothing, saying why."""
+        window, block, title = self.window(), self.block_id, "Import from cURL"
+        try:
+            found = from_curl(text)
+        except ValueError as e:
+            QMessageBox.warning(window, title, str(e))
+            return
+        cls, config = self.registry.get(API_REQUEST), self.doc.blocks[block].get("config") or {}
+        replaced = [setting_label(k, cls.config[k]) for k in REQUEST
+                    if applies(cls, k, config) and config.get(k) not in (None, "", [], cls.config[k].default)]
+        if replaced:
+            ask = QMessageBox(QMessageBox.Question, title, f"The request of {block} is filled in already. Fill in "
+                              f"replaces its {', '.join(replaced)} with what the curl command sends (what the command "
+                              "does not give is left empty).", parent=window)
+            approve = ask.addButton("Approve", QMessageBox.AcceptRole)
+            ask.addButton(QMessageBox.Cancel)
+            ask.exec()
+            if ask.clickedButton() is not approve:
+                return
+        names = []
+        for what, value, suggested, _ in found.secrets:
+            name = self._secret_name(window, what, value, suggested, names)
+            if name is None:
+                return  # (nothing stored, nothing changed)
+            names.append(name)
+        for (_, value, _, row), name in zip(found.secrets, names):
+            self.home.set_secret(name, value)
+            if row is None:
+                found.config["secret"] = name
+            else:
+                found.config["headers"][row]["value"] = SECRET_PREFIX + name
+        self.doc.set_block_values(block, found.config, {"timeout": found.timeout} if found.timeout else None)
+        said = ["Filled in from the curl command:", *found.filled]
+        if names:
+            said.append("Stored as stored secrets, never written in the flow: "
+                        + ", ".join(f"{what} as {name}" for (what, *_), name in zip(found.secrets, names)))
+        if found.unused:
+            said += ["", "Not used (Fill in does not read it, or the block has no setting for it):", *found.unused]
+        QMessageBox.information(window, title, "\n".join(said))
+
+    def _secret_name(self, window, what: str, value: str, suggested: str, taken: list) -> str | None:
+        """The name to store a secret of a curl command under, asked with `suggested` (or, if a stored secret holds
+        another value under it, suggested_2, ...) filled in; None: cancelled. A name typed twice is asked again."""
+        name, n = suggested, 1
+        while name in taken or self._stored(name) not in (None, value):
+            n += 1
+            name = f"{suggested}_{n}"
+        while True:
+            name, ok = QInputDialog.getText(
+                window, "Import from cURL", f"{what[0].upper()}{what[1:]} goes into a stored secret, never into the "
+                "flow. Store it under the name (letters, digits, _ . and -; a stored secret of that name is "
+                "replaced):", QLineEdit.Normal, name)
+            if not ok:
+                return None
+            name = name.strip()
+            if re.fullmatch(r"[\w.-]+", name) and name not in taken:
+                return name
+
+    def _stored(self, name: str) -> str | None:
+        """The stored secret `name`, None if there is none."""
+        try:
+            return self.home.get_secret(name)
+        except (KeyError, OSError):
+            return None
+
+    def _api_note(self, key: str, config: dict) -> str:
+        """Under an API Request's Connection, what its API connection gives it (shown here, changed there); under its
+        Body, with its body input connected, that the body comes from that input."""
+        if key == "connection" and config.get("connection"):
+            return connection_note(self.home, config["connection"], config.get("headers"))
+        if key == "body" and self._sources().get("body"):
+            return (f"The body comes from the body input ({', '.join(self._sources()['body'])}): a dict or list is "
+                    "sent as JSON, a table as JSON records, text as it is.")
+        return ""
+
     def _connection_widget(self, key, f, value):
         """A list of the connections of the right kind, with buttons to edit one or create one."""
         try:
@@ -1282,8 +1487,8 @@ class PropertiesPanel(QScrollArea):
         except ValueError:
             names = []
         combo = QComboBox()
-        combo.addItem("This computer" if isinstance(f, fields.Server) else
-                      "" if names else "(no connections yet: click New…)", "")
+        combo.addItem("This computer" if isinstance(f, fields.Server) else  # (one that is optional: none chosen)
+                      ("" if f.required else "none") if names else "(no connections yet: click New…)", "")
         for name in names:
             combo.addItem(name, name)
         if value and value not in names:

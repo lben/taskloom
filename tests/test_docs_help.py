@@ -748,8 +748,9 @@ CONNECTIONS = """\
 warehouse: {kind: jdbc, driver: org.h2.Driver, url: "jdbc:h2:mem:test"}
 mailer: {kind: smtp, host: 127.0.0.1, port: 2525}
 appserver: {kind: ssh, host: 127.0.0.1, user: report}
+shop: {kind: api, base_url: "https://api.example.com/v1"}
 """
-CONNECTION_OF_KIND = {"jdbc": "warehouse", "smtp": "mailer", "ssh": "appserver"}
+CONNECTION_OF_KIND = {"jdbc": "warehouse", "smtp": "mailer", "ssh": "appserver", "api": "shop"}
 
 
 def params_used(f, examples) -> dict:

@@ -22,7 +22,8 @@ from tests.test_editor import drag_port_to_port  # noqa: E402
 from tests.test_paths_editor_editing import clean, error_shown, field, select_only, settle, type_in  # noqa: E402
 
 # Spec §4, written out rather than computed, so a wrong declaration on a block is caught.
-KEEP = ["logic.if", "logic.python", "logic.loop"]  # (a Loop's done fires once every item has run)
+KEEP = ["logic.if", "logic.python", "logic.loop",  # (a Loop's done fires once every item has run)
+        "servers.api_request"]  # (API Request: its done, as its specification asks)
 LOSE = ["data.duckdb_sql", "data.polars", "data.read_file", "data.write_file", "db.run_query", "files.copy",
         "files.move", "files.delete", "logic.wait", "logic.ask_user", "logic.inspect",
         "logic.splitter", "logic.merger",
@@ -30,6 +31,7 @@ LOSE = ["data.duckdb_sql", "data.polars", "data.read_file", "data.write_file", "
         "servers.ssh_command", "servers.start_process", "servers.stop_process", "servers.health_check",
         "servers.remote_extract"]
 START = ["trigger.manual", "trigger.schedule"]
+BOXES = ["servers.api_session"]  # (a Session: a box on the canvas that does not run, with no ports at all)
 RUN_AFTER_TIP = ("Run after: connect an output of another block (or a start block's 'start') here to make this block "
                  "wait for it. Its value is not used.")
 DONE_TIP = ("Done: fires when this block has finished successfully, even if it produced none of its other outputs. "
@@ -103,9 +105,9 @@ def test_on_the_canvas_only_if_and_python_code_of_the_built_in_blocks_show_done(
     """Spec §4 and §7 (T1): blocks that lose done show no done row; If and Python Code show it as their first output.
     The lists above name every built-in block."""
     builtin = sorted(t for t, source in win.registry.sources.items() if source == "built-in")
-    assert builtin == sorted(KEEP + LOSE + START)
+    assert builtin == sorted(KEEP + LOSE + START + BOXES)
     tab = win.new_flow()
-    added = {type_id: tab.doc.add_block(type_id, 0, 0) for type_id in KEEP + LOSE + START}
+    added = {type_id: tab.doc.add_block(type_id, 0, 0) for type_id in KEEP + LOSE + START + BOXES}
     settle()
     clean(win)  # nothing to save when the window closes
 
@@ -113,6 +115,8 @@ def test_on_the_canvas_only_if_and_python_code_of_the_built_in_blocks_show_done(
         node = tab.scene.nodes[block]
         if type_id in START:
             assert "done" not in node.outputs and "after" not in node.inputs, (type_id, node.inputs, node.outputs)
+        elif type_id in BOXES:
+            assert not node.inputs and not node.outputs and not node.ports, (type_id, node.inputs, node.outputs)
         elif type_id in KEEP:
             assert node.outputs[0] == "done" and node.inputs[0] == "after", (type_id, node.outputs)
         else:

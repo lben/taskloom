@@ -28,10 +28,12 @@ from .. import __version__, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
+from ..blocks.servers import api_connection, curl_command
 from ..config import Home
-from ..engine import block_inputs, finished_text, input_ports, run_part
-from ..flow import (LOOP, RESULT, BlockSpec, FlowError, block_config, keep_source_names, load_flow, per_line_of,
-                   read_flow_file, real_path, run_clock, schedules_of, validate)
+from ..engine import Failed, _filled, block_inputs, finished_text, input_ports, run_part
+from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, block_config, flow_from_data,
+                   keep_source_names, load_flow, per_line_of, read_flow_file, real_path, run_clock, schedules_of,
+                   validate)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
@@ -1132,8 +1134,11 @@ class MainWindow(QMainWindow):
                      else "Run the flow from here")
             menu.addAction(label, lambda: self.run_flow(tab, start=block_id))
             return menu
+        if cls is not None and cls.type_id == SESSION:  # a box that does not run (its blocks run as anywhere)
+            return menu
         sections = tab.doc.per_line(self.registry)
-        around, merger = tab.doc.containers(block_id), per_line_of(sections, block_id)
+        around = [c for c in tab.doc.containers(block_id) if tab.doc.blocks[c].get("type") == LOOP]
+        merger = per_line_of(sections, block_id)
         if around or merger:  # not offered yet: what to do instead, in each entry's tooltip
             menu.setToolTipsVisible(True)
             why = (f"{block_id} is inside the loop {around[-1]}: running a block inside a loop on its own is not "
@@ -1174,7 +1179,29 @@ class MainWindow(QMainWindow):
         results.triggered.connect(lambda: self.show_block_results(tab, block_id))
         if cls is not None and cls.type_id == "logic.python":
             menu.addAction("Create Reusable block…", lambda: self.create_reusable_block(tab, block_id))
+        if cls is not None and cls.type_id == API_REQUEST:
+            menu.addAction("Copy as cURL", lambda: self.copy_as_curl(tab, block_id))
         return menu
+
+    def copy_as_curl(self, tab: FlowTab, block_id: str):
+        """Copy an API Request's request as a curl command (bash), as it would send it now: its placeholders filled in
+        with the flow's parameters, its connection's base URL, auth and headers, each stored secret shown as <hidden:
+        secret NAME>."""
+        self._finish_editing(tab)
+        try:
+            flow = flow_from_data(deepcopy(tab.doc.data), tab.doc.path or Path("flow.yaml"))
+            spec, cls = flow.blocks[block_id], self.registry.get(API_REQUEST)
+            _, funcs = run_clock(flow, self.home)
+            connected = {e.dst_port for e in flow.edges if e.dst == block_id}
+            config = _filled(cls, block_config(cls, spec), P.resolve(flow.params, {}, funcs), {}, set(), connected)
+            command = curl_command(config, api_connection(self.home, config["connection"]), "body" in connected)
+        except (FlowError, Failed, ValueError) as e:
+            QMessageBox.warning(self, "Copy as cURL", f"{block_id} cannot be copied as a curl command: {e}")
+            return
+        QApplication.clipboard().setText(command)
+        self.statusBar().showMessage(f"Copied {block_id} as a curl command, its secrets hidden"
+                                     + (" (without its body: it comes from the body input)" if "body" in connected
+                                        else ""), 10000)
 
     def create_reusable_block(self, tab: FlowTab, block_id: str):
         """Save a Python Code block as a block of your own: a file in your blocks folder that runs its code, listed

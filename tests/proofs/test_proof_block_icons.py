@@ -45,7 +45,7 @@ PARTS = {
               [("split_regions", "logic.splitter"), ("join_regions", "logic.merger")]],  # (below: your own, later)
     "Servers": [[("run_script", "servers.ssh_command"), ("check_server", "servers.health_check")],
                 [("start_server", "servers.start_process"), ("stop_server", "servers.stop_process")],
-                [("fetch_logs", "servers.remote_extract")]],
+                [("fetch_logs", "servers.remote_extract"), ("call_orders", "servers.api_request")]],
     "Files and Reports": [[("copy_backup", "files.copy"), ("sales_chart", "reports.chart")],
                           [("move_old_files", "files.move"), ("report_page", "reports.html_template")],
                           [("delete_temp", "files.delete"), ("to_excel", "reports.excel")]],
@@ -77,7 +77,8 @@ LOOKS = {  # what each part's blocks show
     "Servers": (
         "Servers (olive): run_script, an SSH Command, shows a terminal; check_server, a Health Check, a stethoscope. "
         "① start_server, stop_server and fetch_logs (Start Remote Process, Stop Remote Process, Remote Extract) share "
-        "a satellite, told apart by the badge at its bottom right: play, stop, download."),
+        "a satellite, told apart by the badge at its bottom right: play, stop, download. call_orders, an API "
+        "Request, shows the letters API."),
     "Files and Reports": (
         "Files (grey): copy_backup, a Copy Files, shows two pages; move_old_files, a Move Files, a dashed page, an "
         "arrow and a page (the file leaves where it was), Taskloom's own; delete_temp, a Delete Files, a bin with an "
@@ -269,7 +270,7 @@ def sheet(cells, columns: int, footer: str) -> tuple[QWidget, list[list[QWidget]
 def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch):
     p = proof("Every block shows its own icon", ASKED)
     p.idea("Each block now shows a small white icon left of its name, on its group's colour: on the canvas, in the "
-           "block's header, and in the Blocks list, next to its name. Each of the 27 blocks that come with Taskloom "
+           "block's header, and in the Blocks list, next to its name. Each of the 29 blocks that come with Taskloom "
            "has its own; a block of your own (User Created) shows a puzzle piece, and Text, in the Blocks list, "
            "shows Tt.")
     p.idea("The icon takes the place of the small coloured square that was left of each name. On the canvas the "
@@ -318,24 +319,26 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
            "(README's License section names it too). Splitter and Merger, which came later, show Tabler's "
            "arrows-split and arrows-join. The Loop is a box around blocks, not one: its own proof shows its icon.")
     registry = win.registry
-    # (but the Loop: a box drawn around blocks, which its own proof shows)
-    built_in = sorted(t for t, source in registry.sources.items() if source == "built-in" and t != "logic.loop")
+    # (but the Loop and the Session: boxes drawn around blocks, which their own proofs show)
+    built_in = sorted(t for t, source in registry.sources.items()
+                      if source == "built-in" and t not in ("logic.loop", "servers.api_session"))
     flow = tmp_path / "every-block.yaml"
     parts, free = write_every_block(flow, registry)
     titles = list(parts)
 
     # --- one block of each kind ---------------------------------------------------------------------------------------
-    p.step("Open the flow every-block.yaml (File > Open…). It has one block of each of the 26 kinds that come with "
-           "Taskloom but the Loop, in five parts. They are not connected: the flow is only to look at them.")
+    p.step("Open the flow every-block.yaml (File > Open…). It has one block of each of the 27 kinds that come with "
+           "Taskloom but the Loop and the Session, in five parts. They are not connected: the flow is only to look "
+           "at them.")
     tab = open_flow(win, monkeypatch, flow)
     tab.scene.clearSelection()
     blocks = [b for part in parts.values() for b in part]
     kind = {b: tab.doc.blocks[b]["type"] for b in blocks}
     colors = {b: group_color(registry, kind[b]) for b in blocks}
-    p.check("The flow opens, with one block of each of the 26 kinds that come with Taskloom but the Loop",
-            tab.doc.path == flow.resolve() and len(built_in) == 26 and sorted(kind.values()) == built_in)
+    p.check("The flow opens, with one block of each of the 27 kinds that come with Taskloom but the Loop and the "
+            "Session", tab.doc.path == flow.resolve() and len(built_in) == 27 and sorted(kind.values()) == built_in)
     canvas = tab.view.viewport().rect()
-    p.check("The canvas shows the whole flow: all 26 blocks are in view", all(
+    p.check("The canvas shows the whole flow: all 27 blocks are in view", all(
         canvas.contains(tab.view.mapFromScene(tab.scene.nodes[b].sceneBoundingRect()).boundingRect()) for b in blocks))
     p.shot(win, "The canvas zooms out to show the whole flow: ① Start, Database, Debug and Email; ② Data; ③ Logic; "
                 "④ Servers; ⑤ Files and Reports. Each block shows an icon left of its name, on its group's colour; "
@@ -343,11 +346,11 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
            highlight=[parts[t] for t in titles], badges=True)
     icons = {b: icon(tab, b, colors[b]) for b in blocks}  # as the canvas paints them at 200%, to compare
     missing = [b for b in blocks if not left_of_its_name(tab, b, colors[b])]
-    p.check("Each of the 26 blocks shows a white icon on its group's colour, left of its name, and the name stays "
+    p.check("Each of the 27 blocks shows a white icon on its group's colour, left of its name, and the name stays "
             "inside the block" + (f" (not: {', '.join(missing)})" if missing else ""), missing == [])
     alike = [f"{a} and {b}" for i, a in enumerate(blocks) for b in blocks[i + 1:]
              if differing(icons[a], icons[b]) < DIFFERENT]
-    p.check("No two of the 26 show the same icon" + (f" (alike: {'; '.join(alike)})" if alike else ""), alike == [])
+    p.check("No two of the 27 show the same icon" + (f" (alike: {'; '.join(alike)})" if alike else ""), alike == [])
 
     # --- each part, closer --------------------------------------------------------------------------------------------
     for title in titles:
@@ -410,11 +413,11 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
     by_kind = {kind[b]: a for b, a in icons.items()}
     unlike_own = [t for t, body in OUR_DRAWINGS.items()
                   if min(by_kind, key=lambda k: unlike(by_kind[k], drawing(body))) != t]
-    p.check("① Of the 26 icons, the one most like each drawing you approved (the duck, the polar bear, the pages "
+    p.check("① Of the 27 icons, the one most like each drawing you approved (the duck, the polar bear, the pages "
             "with an arrow, the play button with ×1, the magnifying glass with [ ]) is that block's"
             + (f" (not: {unlike_own})" if unlike_own else ""), unlike_own == [])
     written = text_drawing("== ?")
-    p.check("① Of the 26, If's icon is the one most like “== ?” written out",
+    p.check("① Of the 27, If's icon is the one most like “== ?” written out",
             min(by_kind, key=lambda k: unlike(by_kind[k], written)) == "logic.if")
 
     # --- a block of your own ------------------------------------------------------------------------------------------
@@ -461,7 +464,7 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
     p.check(f"① {MINE} shows a white icon on the User Created colour, left of its name",
             left_of_its_name(tab, MINE, USER_CREATED))
     like = [b for b in blocks if differing(icons[MINE], icons[b]) < DIFFERENT]
-    p.check("① It is none of the 26 icons of the blocks in the flow" + (f" (like: {like})" if like else ""),
+    p.check("① It is none of the 27 icons of the blocks in the flow" + (f" (like: {like})" if like else ""),
             like == [])
 
     # --- the Blocks list ----------------------------------------------------------------------------------------------
@@ -491,8 +494,8 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
                     wrong.append(child.text(0))
     p.check(f"① Each of the {len(folders)} groups shows a plain square of its colour, with no drawing on it"
             + (f" (not: {plain})" if plain else ""), plain == [])
-    p.check("② Each of the 26 blocks in the flow shows, in the list, the icon it shows on the canvas"
-            + (f" (not: {wrong})" if wrong else ""), len(listed) == 29 and wrong == [])
+    p.check("② Each of the 27 blocks in the flow shows, in the list, the icon it shows on the canvas"
+            + (f" (not: {wrong})" if wrong else ""), len(listed) == 31 and wrong == [])
 
     p.step("Scroll the Blocks list down to its end.")
     tree.scrollToBottom()
@@ -527,11 +530,11 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
         p.check("The editor is dark", win.palette().color(QPalette.Window).lightness() < 128
                 and tab.view.palette().color(QPalette.Base).lightness() < 128)
         changed = [b for b in icons if differing(icons[b], icon(tab, b, colors[b])) > 2]
-        p.check("On the canvas, each of the 28 icons is the same white drawing on the same colour as in Light"
+        p.check("On the canvas, each of the 29 icons is the same white drawing on the same colour as in Light"
                 + (f" (not: {changed})" if changed else ""), changed == [])
         changed = [c.text(0) for f in folders for c in [f.child(j) for j in range(f.childCount())]
                    if differing(listed[c.text(0)], ink(row(win.palette_panel, c), folder_color(f))) > 2]
-        p.check("In the Blocks list, each of the 29 icons, Text's too, is the same as in Light"
+        p.check("In the Blocks list, each of the 31 icons, Text's too, is the same as in Light"
                 + (f" (not: {changed})" if changed else ""), changed == [])
     finally:  # Theme back to System, and the application's look as it was, for what comes next
         win.settings.setValue("theme", "System")
@@ -582,7 +585,7 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
             fine = ink(row(win.palette_panel, child, 2.0), folder_color(folder))
             if not blur(fine) < 0.85 * as_bitmaps(small, fine, 2.0):
                 blurred.append(child.text(0))
-    p.check("In the Blocks list, each of the 29 icons, Text's too, is sharper drawn for 200% than drawn at 100% and "
+    p.check("In the Blocks list, each of the 31 icons, Text's too, is sharper drawn for 200% than drawn at 100% and "
             "enlarged" + (f" (not: {blurred})" if blurred else ""), blurred == [])
 
     # --- in the wheel and the Windows build ---------------------------------------------------------------------------

@@ -134,8 +134,8 @@ class FlowDocument(QObject):
         return [e for e in (parse_edge(t) for t in self.data["edges"]) if e]
 
     def containers(self, block_id: str) -> list[str]:
-        """The Loops a block is inside, the innermost first (as flow.containers; they end at a name that is no
-        block)."""
+        """The Loops (and Sessions) a block is inside, the innermost first (as flow.containers; they end at a name that
+        is no block)."""
         found, loop = [], (self.blocks.get(block_id) or {}).get("inside")
         while isinstance(loop, str) and loop in self.blocks and loop not in found:
             found.append(loop)
@@ -429,17 +429,20 @@ class FlowDocument(QObject):
         self._done()
         return name
 
-    def set_block_values(self, block_id: str, values: dict):
-        """Set several config values of a block in one step (None or "" removes one)."""
-        config = self.blocks[block_id].setdefault("config", {})
-        if all(config.get(k) == v or (v in (None, "") and k not in config) for k, v in values.items()):
+    def set_block_values(self, block_id: str, values: dict, top: dict | None = None):
+        """Set several config values of a block in one step (None or "" removes one), and in the same step the
+        top-level block keys in `top` (e.g. timeout)."""
+        spec = self.blocks[block_id]
+        config = spec.setdefault("config", {})
+        changes = [(config, k, v) for k, v in values.items()] + [(spec, k, v) for k, v in (top or {}).items()]
+        if all(target.get(k) == v or (v in (None, "") and k not in target) for target, k, v in changes):
             return
         self._change()
-        for key, value in values.items():
+        for target, key, value in changes:
             if value in (None, ""):
-                config.pop(key, None)
+                target.pop(key, None)
             else:
-                config[key] = value
+                target[key] = value
         self._done()
 
     def set_flow_value(self, key: str, value):

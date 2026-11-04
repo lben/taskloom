@@ -1,4 +1,5 @@
-"""The canvas: blocks as nodes with ports, Loops as boxes around their blocks, edges as curves, live run status."""
+"""The canvas: blocks as nodes with ports, Loops and Sessions as boxes around their blocks, edges as curves, live run
+status."""
 
 from __future__ import annotations
 
@@ -17,7 +18,8 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPat
 
 from ..block import AFTER, DONE, all_ports
 from ..blocks.logic import written_seconds
-from ..flow import ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, RESULT, RESULTS, BlockSpec, block_config
+from ..flow import (API_REQUEST, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, RESULT, RESULTS, SESSION, BlockSpec,
+                    block_config)
 from .document import FlowDocument, edge_text
 
 BLOCK_MIME = "application/x-taskloom-block"
@@ -48,7 +50,7 @@ BLOCK_ICONS = {
     "files.copy": ("copy",), "files.move": ("move-files",), "files.delete": ("trash-x",),
     "servers.ssh_command": ("terminal-2",), "servers.start_process": ("satellite", "badge-player-play"),
     "servers.stop_process": ("satellite", "badge-player-stop"), "servers.health_check": ("stethoscope",),
-    "servers.remote_extract": ("satellite", "badge-download"),
+    "servers.remote_extract": ("satellite", "badge-download"), SESSION: ("cookie",), API_REQUEST: ("api",),
     "reports.chart": ("chart-pie",), "reports.html_template": ("file-code",), "reports.excel": ("file-spreadsheet",),
     "email.send": ("mail-forward",),
 }
@@ -146,6 +148,8 @@ class PortItem(QGraphicsItem):
 
 
 class NodeItem(QGraphicsItem):
+    has_ports = True  # (a Session's box has none: nothing is connected to it)
+
     def __init__(self, block_id: str, spec: dict, registry):
         super().__init__()
         self.block_id = block_id
@@ -159,13 +163,13 @@ class NodeItem(QGraphicsItem):
         self.color = QColor(CATEGORY_COLORS.get(cls.category, USER_COLOR) if cls and source == "built-in" else USER_COLOR)
         # (an unknown type shows its colour with no icon: nothing is known about it)
         self.icon = () if cls is None else BLOCK_ICONS[cls.type_id] if source == "built-in" else USER_ICON
-        inputs, outputs = block_ports(registry, spec)
+        inputs, outputs = block_ports(registry, spec) if self.has_ports else ({}, {})
         self.input_ports = inputs
         # `after` is the first row, drawn differently (it only sets when the block runs);
         # start blocks have neither it nor an error output.
         self.inputs = ([AFTER] if AFTER in inputs else []) + [n for n in inputs if n != AFTER]
         self.outputs = ([DONE] if DONE in outputs else []) + [n for n in outputs if n != DONE] + \
-            ([] if cls is not None and cls.is_trigger else [ERROR_PORT])
+            ([] if (cls is not None and cls.is_trigger) or not self.has_ports else [ERROR_PORT])
         rows = max(len(self.inputs), len(self.outputs), 1)
         # A Schedule block has a line of its own for when it starts the flow next, a Wait block for how long it waits
         # (while it waits: the time left), above its result.
@@ -497,8 +501,15 @@ class LoopItem(NodeItem):
         return super().itemChange(change, value)
 
 
+class SessionItem(LoopItem):
+    """A Session on the canvas: a box drawn as a Loop's, around the blocks inside it, its icon and name at its top; it
+    has no ports, counter nor progress bar (it does not run: the API Request blocks inside it share its cookies)."""
+
+    has_ports = False
+
+
 def _size(value, default: float) -> float:
-    """A Loop's width or height as its flow file has it (not a number there: as it is added)."""
+    """A Loop's or a Session's width or height as its flow file has it (not a number there: as it is added)."""
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else default
 
 
@@ -830,14 +841,15 @@ class FlowScene(QGraphicsScene):
         self.clear()
         self.nodes, self.edge_items, self.note_items = {}, [], {}
         lines = self.doc.lines(self.registry)
-        self.off = set(self.doc.blocks) - set().union(*lines.values()) if lines else set()
+        self.off = ({b for b, spec in self.doc.blocks.items() if spec.get("type") != SESSION}  # (a Session runs in none)
+                    - set().union(*lines.values()) if lines else set())
         for note_id, note in self.doc.notes.items():
             item = NoteItem(note_id, note)
             self.addItem(item)
             self.note_items[note_id] = item
             item.setSelected(note_id in selected_notes)
         for block_id, spec in self.doc.blocks.items():
-            node = (LoopItem if spec.get("type") == LOOP else NodeItem)(block_id, spec, self.registry)
+            node = {LOOP: LoopItem, SESSION: SessionItem}.get(spec.get("type"), NodeItem)(block_id, spec, self.registry)
             self.addItem(node)
             self.nodes[block_id] = node
             node.set_status(*self._shown_status(block_id))
@@ -911,11 +923,11 @@ class FlowScene(QGraphicsScene):
         return head + "<br>" + "<br>".join(parts)
 
     def inside(self, loop: str) -> list[NodeItem]:
-        """The blocks (and Loops) directly inside a Loop."""
+        """The blocks (and Loops, Sessions) directly inside a Loop or a Session."""
         return [self.nodes[b] for b, spec in self.doc.blocks.items() if spec.get("inside") == loop and b in self.nodes]
 
     def loop_at(self, at: QPointF, leaving=()) -> str | None:
-        """The innermost Loop whose box holds the point `at` (none of `leaving`)."""
+        """The innermost Loop or Session whose box holds the point `at` (none of `leaving`)."""
         found = [(item.rect.width() * item.rect.height(), b) for b, item in self.nodes.items()
                  if isinstance(item, LoopItem) and b not in leaving and item.drawn_rect().contains(at)]
         return min(found)[1] if found else None
@@ -1326,7 +1338,7 @@ class FlowView(QGraphicsView):
             self.scene().add_note_at(at)
         else:
             cls = self.scene().registry.get(type_id)
-            width = LOOP_W if type_id == LOOP else NODE_W
+            width = LOOP_W if type_id in (LOOP, SESSION) else NODE_W
             self.scene().doc.add_block(type_id, at.x() - width / 2, at.y() - HEADER_H / 2,
                                        cls.new_config if cls else None,
                                        inside=self.scene().loop_at(at) if dropped else None)

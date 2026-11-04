@@ -206,7 +206,7 @@ def _portable(value, table_type, secret_type):
 
 def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, dict]:
     """Run a Python Code block's code in the environment: (its outputs, {variable left out of output: why})."""
-    from .engine import Cancelled, Failed, SecretStr, _map_marks, secret_forms
+    from .engine import HIDDEN, Cancelled, Failed, HiddenStr, SecretStr, _map_marks, secret_forms
     from .table import Table
 
     python = env_python(ctx.home)
@@ -260,9 +260,9 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, di
         result_file.unlink(missing_ok=True)  # outputs can hold passwords too
     secrets = _secret_values(inputs) | _secret_values(ctx.params)
 
-    def restore(value):  # a password that comes back out is still a password
+    def restore(value):  # a password that comes back out is still a password (a hidden cookie still hidden)
         if isinstance(value, str) and value in secrets:
-            return SecretStr(value)
+            return HiddenStr(value) if value in HIDDEN else SecretStr(value)
         if isinstance(value, dict):
             return {k: restore(v) for k, v in value.items()}
         if isinstance(value, list):

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 
 from ..block import IDENTIFIER
 from ..blocks.logic import as_number, as_yes_no
+from ..blocks.servers import AUTH_NEEDS, AUTHS, BASIC, BEARER, DIGEST, NO_AUTH
 from ..config import SETTINGS_DEFAULTS, keep_runs_for
 from ..launch import ARGS_VARIABLE, runner_command
 from ..table import Table
@@ -176,9 +177,10 @@ class AskDialog(QDialog):
 class ConnectionsDialog(QDialog):
     """Edit connections.yaml. Passwords go to the secret store, never into the file."""
 
-    KINDS = {"jdbc": "Database (JDBC)", "ssh": "Server (SSH)", "smtp": "Email server (SMTP)"}
+    KINDS = {"jdbc": "Database (JDBC)", "ssh": "Server (SSH)", "smtp": "Email server (SMTP)", "api": "Web API (HTTP)"}
     FIELDS = {"jdbc": ("driver", "url", "jars", "username"), "ssh": ("host", "port", "username", "key_file"),
-              "smtp": ("host", "port", "security", "username", "sender")}
+              "smtp": ("host", "port", "security", "username", "sender"),
+              "api": ("base_url", "username", "key_name", "ca_file")}
     HELP = {
         "jdbc": "A database you query with Run Query. Ask your database team for the driver .jar file and the "
                 "JDBC URL; choosing the jar fills in the driver class. Extra settings (timeouts, …) go in the "
@@ -188,9 +190,15 @@ class ConnectionsDialog(QDialog):
                "password.",
         "smtp": "The mail server Send Email and notifications use. Inside a company this is often a relay "
                 "on port 25 that needs no login; ask your IT team.",
+        "api": "A web API that API Request blocks call: its base URL (their URL may be relative to it, e.g. "
+               "/orders/7), its auth, the headers every request sends (a block's own header of the same name wins) "
+               "and its certificate settings.",
     }
     LABELS = {"jars": "Driver .jar file(s)", "driver": "Driver class", "url": "URL", "host": "Host", "port": "Port",
-              "security": "Security", "username": "User name", "key_file": "Key file", "sender": "Send as"}
+              "security": "Security", "username": "User name", "key_file": "Key file", "sender": "Send as",
+              "base_url": "Base URL", "key_name": "Key name", "ca_file": "CA certificate file"}
+    # An API connection's secret: what it is, by its Auth.
+    SECRET_LABELS = {BASIC: "Password", DIGEST: "Password", BEARER: "Token"}
 
     def __init__(self, home, parent=None, select: str | None = None, new_kind: str | None = None):
         super().__init__(parent)
@@ -227,7 +235,9 @@ class ConnectionsDialog(QDialog):
         placeholders = {"driver": "e.g. com.example.jdbc.Driver", "url": "jdbc:…",
                         "jars": "separate several files with ;", "port": "SSH: 22 · email: 25, 587 or 465",
                         "security": "none, starttls or ssl", "key_file": "optional, e.g. ~/.ssh/id_ed25519",
-                        "sender": "the From address, e.g. reports@example.com", "host": "e.g. server01.example.com"}
+                        "sender": "the From address, e.g. reports@example.com", "host": "e.g. server01.example.com",
+                        "base_url": "e.g. https://api.example.com/v1", "key_name": "the header or query parameter, "
+                        "e.g. X-Api-Key", "ca_file": "optional: a PEM file of an authority to trust"}
         for key, text in placeholders.items():
             self.edits[key].setPlaceholderText(text)
         self.jar_row = QWidget()
@@ -245,6 +255,9 @@ class ConnectionsDialog(QDialog):
         self.borrowed_note.setStyleSheet(f"color: {STATUS_COLORS['running']};")
         for note in (self.jar_note, self.driver_note, self.borrowed_note):
             note.setWordWrap(True)
+        self.auth = QComboBox()  # an API connection's
+        self.auth.addItems(list(AUTHS))
+        self.dont_verify = QCheckBox("Don't verify certificates")
         for key, edit in self.edits.items():
             self.form.addRow(self.LABELS[key], self.jar_row if key == "jars" else edit)
             if key == "jars":
@@ -252,6 +265,10 @@ class ConnectionsDialog(QDialog):
             if key == "driver":
                 self.form.addRow("", self.driver_note)
                 self.form.addRow("", self.borrowed_note)
+            if key == "base_url":
+                self.form.addRow("Auth", self.auth)
+            if key == "ca_file":
+                self.form.addRow("", self.dont_verify)
         self.password = QLineEdit(echoMode=QLineEdit.Password)
         self.password_status = QLabel()
         self.form.addRow("Password", self.password)
@@ -280,12 +297,13 @@ class ConnectionsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         right.addWidget(buttons)
         layout.addLayout(right, 5)
-        self.editor_widgets = [self.kind, *self.edits.values(), self.password, self.props, self.add_prop,
-                               self.remove_prop, self.test_button, browse]
+        self.editor_widgets = [self.kind, *self.edits.values(), self.auth, self.dont_verify, self.password, self.props,
+                               self.add_prop, self.remove_prop, self.test_button, browse]
 
         self.names.addItems(list(self.conns))
         self.names.currentTextChanged.connect(self._select)
         self.kind.currentIndexChanged.connect(lambda _: self._show_kind())
+        self.auth.currentIndexChanged.connect(lambda _: self._show_kind())
         add.clicked.connect(lambda: self._add(None))
         rename.clicked.connect(self._rename)
         remove.clicked.connect(self._remove)
@@ -319,16 +337,26 @@ class ConnectionsDialog(QDialog):
         text = self.HELP.get(kind, f"A connection of a kind for blocks of your own ({kind}): its settings are kept "
                                    "as they are in connections.yaml; change them there.")
         self.help.setText(text if enabled else "Click New… to add a connection.")
-        for key, edit in self.edits.items():
-            self.form.setRowVisible(self.jar_row if key == "jars" else edit,
-                                    enabled and key in self.FIELDS.get(kind, ()))
+        auth = self.auth.currentText() if kind == "api" else None
+        for key, edit in self.edits.items():  # (an API connection's user name and key name: for its Auth)
+            self.form.setRowVisible(self.jar_row if key == "jars" else edit, enabled and key in self.FIELDS.get(kind, ())
+                                    and (auth is None or auth in AUTH_NEEDS.get(key, AUTHS)))
+        self.form.setRowVisible(self.auth, enabled and kind == "api")
+        self.form.setRowVisible(self.dont_verify, enabled and kind == "api")
         self.edits["port"].setPlaceholderText({"ssh": "22", "smtp": "25 (or 587 with starttls, 465 with ssl)"}.get(kind, ""))
         self.form.setRowVisible(self.jar_note, False)  # until you type jars that do not exist
         self.form.setRowVisible(self.driver_note, False)  # until you give jars that name no driver class
         for w in (self.props, self.props_label, self.add_prop, self.remove_prop):
-            w.setVisible(enabled and kind == "jdbc")
-        self.form.setRowVisible(self.password, enabled)
-        self.form.setRowVisible(self.password_status, enabled)
+            w.setVisible(enabled and kind in ("jdbc", "api"))
+        api = kind == "api"  # (its headers in the table of a database's driver settings)
+        self.props_label.setText("Headers every request sends (name and value)" if api else
+                                 "Extra driver settings (name and value)")
+        self.props.setHorizontalHeaderLabels(["Header" if api else "Setting", "Value"])
+        self.add_prop.setText("Add header" if api else "Add setting")
+        self.remove_prop.setText("Remove header" if api else "Remove setting")
+        self.form.labelForField(self.password).setText(self.SECRET_LABELS.get(auth, "Key" if auth else "Password"))
+        self.form.setRowVisible(self.password, enabled and auth != NO_AUTH)
+        self.form.setRowVisible(self.password_status, enabled and auth != NO_AUTH)
         self._show_password_status()
         self._show_borrowed()
 
@@ -347,7 +375,8 @@ class ConnectionsDialog(QDialog):
         self.form.setRowVisible(self.borrowed_note, bool(text))
 
     def _password_ref(self, conn: dict):
-        return (conn.get("properties") or {}).get("password") if conn.get("kind") == "jdbc" else conn.get("password")
+        return ((conn.get("properties") or {}).get("password") if conn.get("kind") == "jdbc" else
+                conn.get("secret") if conn.get("kind") == "api" else conn.get("password"))
 
     def _show_password_status(self):
         if self.current is None:
@@ -398,6 +427,23 @@ class ConnectionsDialog(QDialog):
             if self._password_ref(old):
                 props["password"] = self._password_ref(old)
             conn["properties"] = props
+        elif kind == "api":  # its user name and key name only for its Auth (_show_kind); no secret without one
+            for key in [k for k in ("username", "key_name") if self.auth.currentText() not in AUTH_NEEDS[k]]:
+                conn.pop(key, None)
+            if self.auth.currentText() != NO_AUTH:
+                conn["auth"] = self.auth.currentText()
+                if self._password_ref(old):
+                    conn["secret"] = self._password_ref(old)
+            elif self.password.text():
+                self.password.clear()
+            if self.dont_verify.isChecked():
+                conn["dont_verify"] = True
+            rows = [{"key": self.props.item(r, 0).text().strip(),
+                     "value": self.props.item(r, 1).text() if self.props.item(r, 1) else ""}
+                    for r in range(self.props.rowCount()) if self.props.item(r, 0) and self.props.item(r, 0).text().strip()]
+            rows += [r for r in old.get("headers") or [] if isinstance(r, dict) and r.get("on") is False]  # (kept)
+            if rows:
+                conn["headers"] = rows
         elif self._password_ref(old) and old.get("kind") != "jdbc":
             conn["password"] = self._password_ref(old)
         if self.password.text():
@@ -416,6 +462,13 @@ class ConnectionsDialog(QDialog):
         self.kind.setCurrentIndex(self.kind.findData(kind))
         self.kind.blockSignals(False)
         props = dict(conn.get("properties") or {})
+        if kind == "api":  # its headers in the same table (those not ticked, on: false, are kept as they are)
+            props = {r.get("key"): r.get("value") for r in conn.get("headers") or []
+                     if isinstance(r, dict) and r.get("on") is not False}
+        self.auth.blockSignals(True)
+        self.auth.setCurrentText(conn.get("auth") or NO_AUTH)
+        self.auth.blockSignals(False)
+        self.dont_verify.setChecked(conn.get("dont_verify") is True)
         jars = conn.get("jars") or []
         for key, edit in self.edits.items():
             if key == "jars":
@@ -532,13 +585,15 @@ class ConnectionsDialog(QDialog):
         for name, value in self.passwords.items():
             if name not in self.conns:
                 continue
-            secret = f"{name}_password"
-            self.home.set_secret(secret, value)
             conn = self.conns[name]
+            # (an API connection's: named for what it is, e.g. shop_token)
+            secret = f"{name}_{self.SECRET_LABELS.get(conn.get('auth'), 'key').lower()}" if conn["kind"] == "api" \
+                else f"{name}_password"
+            self.home.set_secret(secret, value)
             if conn["kind"] == "jdbc":
                 conn.setdefault("properties", {})["password"] = f"secret:{secret}"
             else:
-                conn["password"] = f"secret:{secret}"
+                conn["secret" if conn["kind"] == "api" else "password"] = f"secret:{secret}"
         self.passwords.clear()
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "connections.yaml").write_text(yaml.safe_dump(self.conns, sort_keys=False), encoding="utf-8")

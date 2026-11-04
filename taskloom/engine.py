@@ -7,6 +7,7 @@ import contextlib
 import copy
 import datetime as dt
 import decimal
+import http.cookiejar
 import os
 import pickle
 import shutil
@@ -21,7 +22,7 @@ import polars as pl
 
 from . import params as P
 from .block import AFTER, DONE, all_ports, fields, has_done_output, setting_label
-from .flow import (AS_FINISHED, AT_ONCE, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, MERGER, ONE_AFTER_ANOTHER,
+from .flow import (API_REQUEST, AS_FINISHED, AT_ONCE, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, MERGER, ONE_AFTER_ANOTHER,
                    RESULT, RESULTS, RUNS_AGAIN, SPLITTER, Flow, FlowError, _start_blocks, _taking_part, at_level, block_config, containers,
                    from_inside, line_runs, lines_run, order, per_line, per_line_of, run_clock, splitter_lines,
                    validate)
@@ -34,6 +35,9 @@ STOP_GRACE_SECONDS = 2.0
 # How long none of a run's threads may be at work, each waiting for something, before the run cannot go on (_watch):
 # well over the 0.1 s within which a waiting thread looks again whether what it waits for has come.
 STUCK_SECONDS = 0.5
+# Held while a Session's cookie jar is made (and filled from the run a run carries on from): lines running at the same
+# time get the same one (_Runner._session_cookies).
+_SESSIONS = threading.Lock()
 
 
 class Cancelled(Exception):
@@ -43,7 +47,12 @@ class Cancelled(Exception):
 class Failed(Exception):
     """A failure the block expects, which its message says all about (e.g. no answer was given): told by that
     message alone, without the Python traceback an unexpected error (a bug) keeps. Otherwise an ordinary failure:
-    retried, and out the block's error output."""
+    retried, and out the block's error output, which also carries `carried` (e.g. an API Request's status, headers
+    and body)."""
+
+    def __init__(self, message: str, **carried):
+        super().__init__(message)
+        self.carried = carried
 
 
 def _told(error: BaseException) -> str:
@@ -65,15 +74,35 @@ class SecretStr(str):
         return "'***'"
 
 
+HIDDEN: set[str] = set()  # every HiddenStr's value this process has seen
+
+
+class HiddenStr(SecretStr):
+    """A SecretStr that is no password, such as a cookie a server set: shown as *** like a secret, but kept with the
+    run's outputs (as a Session's cookies are), so a block after it can be run again."""
+
+    def __new__(cls, value):
+        HIDDEN.add(str.__str__(value))
+        return str.__new__(cls, value)
+
+
+_forms: tuple = ((0, 0), [])  # secret_forms' last list, and the sizes of REVEALED and HIDDEN it was made for
+
+
 def secret_forms() -> list[str]:
-    """Every secret seen in this process (of 4 characters or more), also as repr() and JSON write it inside
-    a quoted text (a \\ or quote escaped, ä as \\u00e4); longest first."""
+    """Every secret and HiddenStr seen in this process (of 4 characters or more), also as repr() and JSON write it
+    inside a quoted text (a \\ or quote escaped, ä as \\u00e4); longest first. Made again only when one was added
+    (both sets only grow): a Loop whose calls each get a new cookie would otherwise make it for every text logged."""
     import json
 
-    forms = {form for s in list(REVEALED) if len(s) >= 4
-             for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
-                          json.dumps(s, ensure_ascii=False)[1:-1])}
-    return sorted(forms, key=len, reverse=True)
+    global _forms
+    sizes = (len(REVEALED), len(HIDDEN))  # before reading them: one added meanwhile makes it again next time
+    if _forms[0] != sizes:
+        forms = {form for s in list(REVEALED | HIDDEN) if len(s) >= 4
+                 for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
+                              json.dumps(s, ensure_ascii=False)[1:-1])}
+        _forms = (sizes, sorted(forms, key=len, reverse=True))
+    return _forms[1]
 
 
 def redact(value):
@@ -96,7 +125,7 @@ class Context:
     """What a block's run() receives as `ctx`."""
 
     def __init__(self, *, block_id, attempt, params, as_of, functions, workspace, home, emit, run_cancel,
-                 attempt_cancel, answers=None, registry=None):
+                 attempt_cancel, answers=None, registry=None, cookies=None):
         self.block_id = block_id
         self.attempt = attempt
         self.params = dict(params)
@@ -111,6 +140,9 @@ class Context:
         self._attempt_cancel = attempt_cancel
         self._answers = answers
         self.registry = registry  # for blocks that run other flows
+        # An API Request inside a Session: the Session's cookie jar (http.cookiejar.CookieJar, for urllib's
+        # HTTPCookieProcessor), whose cookies its requests send and to which the responses add theirs; else None.
+        self.cookies = cookies
         self._saw_stop = False  # it found out it was told to stop (so what it returns may be part of its work)
 
     def log(self, message: str, level: str = "INFO", show: str | None = None):
@@ -433,6 +465,7 @@ class _Runner:
         # one of its blocks (see before_unhandled).
         self.failures: set[str] = set()
         self.errors: dict[str, str] = {}  # the blocks that failed in this run: what their failure says
+        self.jars: dict = {}  # the cookie jar of each Session at its level (see _session_cookies)
 
     only: str | None = None  # run just this block, with only_inputs
     only_inputs: dict = {}
@@ -450,6 +483,7 @@ class _Runner:
     # the Log, e.g. [item 2/5] or [line load_sales]. None and "": the flow's own blocks.
     loop: str | None = None
     item: str = ""
+    parent: "_Runner | None" = None  # the runner whose item or line this one runs (_item_runner)
     ordered: list | None = None  # the flow's blocks in order (order()), worked out once for the run
     sections: dict | None = None  # the blocks each Merger set to each line as it finishes runs (per_line), likewise
 
@@ -807,7 +841,7 @@ class _Runner:
                          self.workspace / block / ("items" if loop else "lines") / str(number), self.answers)
         runner.loop = block if loop else self.loop
         runner.item, runner.ordered, runner.sections, runner.watch = tag, self.ordered, self.sections, self.watch
-        runner.taking_part, runner.outside, runner.blocked = part, self.outside, set(self.blocked)
+        runner.taking_part, runner.outside, runner.blocked, runner.parent = part, self.outside, set(self.blocked), self
         runner.outputs = {**self.outputs, **given}
         return runner
 
@@ -1179,6 +1213,7 @@ class _Runner:
         except Exception as e:
             return self._fail(spec, 0, e, inputs)
 
+        jar = self._session_cookies(spec) if spec.session and spec.type == API_REQUEST else None
         retry = spec.retry
         for attempt in range(1, retry.max_attempts + 1):
             self.emit({"event": "block_started", "block": spec.id, "attempt": attempt})
@@ -1187,12 +1222,17 @@ class _Runner:
                 block_id=spec.id, attempt=attempt, params=self.values, as_of=self.now, functions=self.funcs,
                 workspace=self.workspace / spec.id / f"attempt-{attempt}", home=self.home,
                 emit=self.emit, run_cancel=self.cancel, attempt_cancel=attempt_cancel, answers=self.answers,
-                registry=self.registry,
+                registry=self.registry, cookies=jar,
             )
             started = time.monotonic()
             try:
                 own = inputs if AFTER in in_ports else {k: v for k, v in inputs.items() if k != AFTER}
-                result = self._attempt(cls(config), ctx, own, spec.timeout, attempt_cancel)
+                try:
+                    result = self._attempt(cls(config), ctx, own, spec.timeout, attempt_cancel)
+                finally:
+                    if jar is not None:  # (after each request: the cookies' names and domains, never their values)
+                        self.emit({"event": "log", "block": spec.id, "level": "INFO",
+                                   "message": f"session {spec.session}'s cookies: {_cookie_names(_held(jar))}"})
                 produced = self._check_outputs(result, out_ports, ctx)
                 # A Splitter given no value passes None on to its lines: not a value to show as if it were one.
                 summary = ("its lines start with nothing: no value arrived" if spec.type == SPLITTER
@@ -1223,6 +1263,35 @@ class _Runner:
             return "success", produced
         raise AssertionError("unreachable")
 
+    def _session_cookies(self, spec) -> http.cookiejar.CookieJar:
+        """The cookie jar of the Session the API Request `spec` is inside: one for the run (for each item of a Loop the
+        Session is inside), which the lines running at the same time share (it has a lock of its own). What it holds
+        just before the block runs is kept with the block's outputs (KEPT_COOKIES), for running again from it: a run
+        that carries on from another starts it with the cookies the Session held just before the first of its blocks
+        to send a request did there, and the Log says so."""
+        level, owner = self.flow.sessions.get(spec.session), self
+        while owner.parent is not None and (owner.loop != level or owner.parent.loop == owner.loop):
+            owner = owner.parent  # (a line's: the runner's whose line it is)
+        with _SESSIONS:
+            jar = owner.jars.get(spec.session)
+            if jar is None:
+                jar = owner.jars[spec.session] = http.cookiejar.CookieJar()
+                if owner.inputs_from is not None:
+                    kept, run = owner.workspace / spec.id / KEPT_COOKIES, f"run #{owner.inputs_from}"  # (carried over)
+                    if kept.exists():
+                        for cookie in pickle.loads(kept.read_bytes()):
+                            jar.set_cookie(cookie)
+                        said = (f"session {spec.session}'s cookies come from {run}, as they were just before {spec.id} "
+                                f"there: {_cookie_names(_held(jar))}")
+                    else:
+                        said = f"session {spec.session} starts with no cookies: {run} kept none for {spec.id}"
+                    self.emit({"event": "log", "block": spec.id, "level": "INFO", "message": said})
+            held = _held(jar)
+        folder = self.workspace / spec.id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / KEPT_COOKIES).write_bytes(pickle.dumps(held))
+        return jar
+
     def _fail(self, spec, attempts, error, inputs) -> tuple[str, dict]:
         block_id = spec.id
         cls = self.registry.get(spec.type)
@@ -1249,7 +1318,8 @@ class _Runner:
         self.errors[block_id] = message
         self.emit({"event": "log", "block": block_id, "level": "ERROR", "message": redact("\n".join(report))})
         self.emit({"event": "block_finished", "block": block_id, "status": "failed", "attempts": attempts, "error": message})
-        return "failed", {ERROR_PORT: {"block": block_id, "error": message, "traceback": tb, "attempts": attempts}}
+        return "failed", {ERROR_PORT: {"block": block_id, "error": message, "traceback": tb, "attempts": attempts,
+                                       **redact(getattr(error, "carried", {}))}}
 
     def _attempt(self, block, ctx, inputs, timeout, attempt_cancel):
         """Run block.run in a worker thread so timeouts and cancellation stay responsive."""
@@ -1301,6 +1371,7 @@ class _Runner:
 KEPT_OUTPUTS = "outputs.pickle"
 ITEM_RESULTS = "__items__"  # with a Loop's outputs: each item's (item, status, result), None for one not run
 KEPT_INPUTS = "inputs.pickle"  # what a block run on its own got: its inputs then, not what came before it
+KEPT_COOKIES = "cookies.pickle"  # an API Request inside a Session: the Session's cookies just before it ran
 STATUS = "__status__"  # how the block ended: success | failed | BLOCKED
 BLOCKED = "blocked"  # skipped because something before it failed
 SKIPPED = "skipped"  # skipped for another reason (e.g. a path not taken)
@@ -1340,9 +1411,11 @@ def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, con
         if not f.template:
             continue
         value, label = config[key], setting_label(key, f)
-        own = set() if isinstance(f, fields.Code) else data_inputs  # SQL code: flow parameters only
-        if isinstance(value, list):
-            filled[key] = [fill(label, item, own) for item in value]
+        sql = isinstance(f, fields.Code) and f.language == "sql"
+        own = set() if sql else data_inputs  # SQL code: flow parameters only
+        if isinstance(value, list):  # (a table's rows, fields.KeyValues: in each key and value)
+            filled[key] = [{k: fill(label, v, own) if k in ("key", "value") else v for k, v in item.items()}
+                           if isinstance(item, dict) else fill(label, item, own) for item in value]
         elif isinstance(value, str):
             filled[key] = fill(label, value, own)
             if isinstance(f, (fields.Int, fields.Float)):  # (one written without placeholders is a number already)
@@ -1385,7 +1458,7 @@ def _same(a, b) -> bool:
 
 def _holds_secret(value) -> bool:
     if isinstance(value, SecretStr):
-        return True
+        return not isinstance(value, HiddenStr)
     if isinstance(value, dict):
         return any(_holds_secret(v) for v in value.values())
     if isinstance(value, (list, tuple)):
@@ -1394,6 +1467,17 @@ def _holds_secret(value) -> bool:
 
 
 NO_VALUE = object()  # an input you left empty: the block gets no value for it
+
+
+def _held(jar: http.cookiejar.CookieJar) -> list:
+    """The cookies in a Session's jar, read while no request of a line running meanwhile changes them."""
+    with jar._cookies_lock:  # (the lock http.cookiejar takes itself as requests send cookies and responses set them)
+        return list(jar)
+
+
+def _cookie_names(cookies: list) -> str:
+    """Cookies as the Log tells them: their names and domains, never their values."""
+    return ", ".join(f"{c.name} ({c.domain})" for c in cookies) or "none"
 
 
 def input_ports(flow: Flow, registry, only: str) -> dict:
@@ -1790,10 +1874,10 @@ def _map_marks(value, fn):
 
 
 def _carry_over(old: Path, new: Path, after_only: set[str]):
-    """Copy the saved outputs (and inputs) of every block of an earlier run into a new run's folder.
-    Table files are hard-linked (no extra space; they outlive the old run's folder), or copied.
+    """Copy the saved outputs (and inputs, and a Session's cookies) of every block of an earlier run into a new run's
+    folder. Table files are hard-linked (no extra space; they outlive the old run's folder), or copied.
     Saved inputs of blocks after the one that runs are left behind: its new outputs replace them."""
-    kept_files = [*old.glob(f"*/{KEPT_OUTPUTS}"),
+    kept_files = [*old.glob(f"*/{KEPT_OUTPUTS}"), *old.glob(f"*/{KEPT_COOKIES}"),
                   *(f for f in old.glob(f"*/{KEPT_INPUTS}") if f.parent.name not in after_only)]
     for kept_file in sorted(kept_files):
         block, copies = kept_file.parent.name, iter(range(1_000_000))

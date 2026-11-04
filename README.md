@@ -477,8 +477,8 @@ Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
 `logic.loop`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,
 `data.write_file`, `db.run_query`, `files.copy`, `files.move`, `files.delete`,
 `servers.ssh_command`, `servers.start_process`, `servers.stop_process`,
-`servers.health_check`, `servers.remote_extract`, `reports.html_template`,
-`reports.chart`, `reports.excel`, `email.send`.
+`servers.health_check`, `servers.remote_extract`, `servers.api_request`, `servers.api_session`,
+`reports.html_template`, `reports.chart`, `reports.excel`, `email.send`.
 
 ### Splitter and Merger: lines that run at the same time
 
@@ -809,6 +809,196 @@ it once it has hung (stopped checking): it stops the process that holds that Tas
 folder's `scheduler.lock`, found through `/proc` or `lsof` on the server, and no other. If
 it cannot, it tells you why.
 
+### API Request: a call to a web API
+
+**API Request** (`servers.api_request`) calls a web API as Postman's Send does (with Python's own
+HTTP library: nothing else to install). Its settings come in groups in the order of Postman's
+tabs, a line above each group in Properties:
+
+- **Method** (GET unless you choose POST, PUT, PATCH, DELETE, HEAD or OPTIONS) and **URL**,
+  with its `?query` if it has one.
+- **Params**: a table of names and values, each with a tick; the ticked rows are added to the
+  URL's query in their order, encoded as a URL needs. Typing a query into the URL fills Params,
+  and changing Params changes the URL Properties shows. Add a row by typing `name=value` in the
+  line under the table; empty a name to remove its row. The flow file keeps the URL without its
+  query and each row as `{key: page, value: "2"}`, with `on: false` for a row not ticked.
+- **Auth**: none, **Basic** (a user name and password, sent with the request), a **Bearer
+  token**, an **API key** in a header or in the query (its **Key name** is the header's or the
+  parameter's), or **Digest** (in answer to the server's challenge). The password, token or key
+  is a stored secret: **Stored secret (name)** names it (store it with `taskloom secret set
+  orders_token`); its value is never in the flow file, the Log or the run history. A run whose
+  secret is not stored fails before it sends anything, saying how to store it. Auth's header
+  replaces one of the same name in Headers.
+- **Headers**: a table as Params (add a row as `Name: value`). A value `secret:NAME` sends the
+  stored secret NAME, e.g. `X-Api-Key: secret:orders_key`: the key itself is never in the flow.
+- **Body**: none, **JSON**, **text** or **XML** (written in **Content**; JSON is checked before it
+  is sent), a **form (url-encoded)** (its **Form** table), **multipart form-data** (its
+  **Parts**: a part ticked **File** sends the file its value names) or a **file** sent as it is.
+  Each sets its Content-Type, unless Headers has one. Placeholders work in Content as in every
+  setting, so the braces of JSON are written `{{` and `}}`: `{{"region": "{region}"}}`.
+- **Response as**: **automatic** (JSON read into dicts and lists when the server says it is
+  JSON, text otherwise, as its charset says), **text**, **table** (the answer must be a JSON
+  list of records, an object per row; anything else fails it, saying so) or **file** (saved
+  as it came to **Save to**; the output is that path).
+- **Statuses that count as success**: `200-299` unless you write others, e.g. `200-299, 404`.
+  One that is not a status nor a range of them is refused before the run starts.
+- **Follow redirects** (ticked unless you untick it): unticked, the redirect is the answer. A
+  redirect to another host (or scheme or port) is followed without the Authorization header
+  and the headers that carry a stored secret (an API key, a header written `secret:NAME`), as
+  curl and Postman do.
+- **Certificates** are checked against the system's store; **CA certificate file** adds an
+  authority to trust (e.g. your company's), and **Don't verify certificates** checks none, which
+  the Log warns about on every run. Requests go through the proxy `HTTPS_PROXY` or `HTTP_PROXY`
+  names (but to the hosts `NO_PROXY` lists), or else through the system's proxy settings.
+- **Retry and timeout** as for every block, e.g. a Timeout of `30s` for a server that does not
+  answer.
+
+`{name}` placeholders work in the URL, Params, Headers and Content. Its outputs are `response`
+(as Response as says), `status` (a number), `headers` (a dict; a `Set-Cookie` header shows as
+`***` in the Log, the results and Data preview, as a stored secret does, while the blocks after it
+get its value) and `done`. Its `body` input, when
+connected, is what it sends instead of its Body (which is then none; Properties says so): a dict
+or list as JSON, a table as JSON records (an object per row), text as it is.
+
+A status that does not count as success fails the block, and its `error` output carries `error`,
+`status`, `headers` (its `Set-Cookie` as `***`, as the error output's values hide every secret)
+and `body` (the answer's text) for the blocks that handle it; so do a server
+that cannot be reached (naming it, e.g. `could not reach api.example.com:443: …`), a Timeout and
+an answer that says it is JSON but is not. The Log says what was sent and what came back, never
+a secret: `GET https://api.example.com/v1/orders?status=open`, then `200 OK: 5120 bytes in 84 ms`.
+
+**Run only this block** (right-click it) is Postman's Send: its response shows in Data preview.
+**Copy as cURL** (right-click it) copies the request as a curl command (as bash reads it), its
+placeholders filled in with the flow's parameters and each stored secret shown as `<hidden:
+secret NAME>`: put the secret there to run it in a terminal.
+
+**Import from cURL**, at the top of its Properties, does the reverse: paste a curl command into
+its box (coloured as code: options, quoted strings, the URL), as an API's documentation or a
+browser's Copy as cURL writes it, for bash (`\` at a line's end, `'…'`, `"…"`, `$'…'`) or for
+Windows cmd (`^` at a line's end, `^"`, `\"`), and click **Fill in**. It fills the request:
+
+- the Method from `-X`/`--request` (else POST when it sends data, HEAD with `-I`/`--head`, GET);
+  the URL (also `--url`), its query into Params;
+- Headers from `-H`/`--header`, a Cookie header from `-b`/`--cookie`, User-Agent and Referer from
+  `-A`/`--user-agent` and `-e`/`--referer`;
+- the Body from `-d`/`--data`/`--data-raw`/`--data-binary`/`--json`: JSON (shown pretty-printed)
+  when it is JSON, else text (with curl's `Content-Type: application/x-www-form-urlencoded` unless
+  a header gives one), or a file with `@path`; `--json` also adds its two JSON headers.
+  `--data-urlencode` makes a url-encoded form, `-F`/`--form` multipart Parts (`name=@path`: a
+  file); with `-G`/`--get` the data goes into Params instead;
+- Auth from `-u`/`--user` (Basic) or an `Authorization: Bearer` header (Bearer token);
+- Don't verify certificates from `-k`/`--insecure`, Follow redirects from `-L`/`--location`, the
+  Timeout from `-m`/`--max-time` (in seconds); `--compressed` needs nothing.
+
+Its secrets never go into the flow: for a `-u` password, a Bearer token and each header named
+like a secret (Authorization, or with token, key, secret or password in its name, e.g.
+`X-API-Key`), Fill in asks the name of a stored secret, suggesting one, and stores the value
+there; the block uses it by that name (a header as `secret:NAME`). When the block's request is
+filled in already, a box says what Fill in replaces and asks: **Approve**, or **Cancel**, which
+changes nothing. The request is replaced as a whole, Connection included (what the command does
+not give is left empty; Follow redirects, Don't verify certificates and the Timeout change only
+with `-L`, `-k` and `-m`), in one step for Undo. Then it says what it filled and lists what it could not use (an
+option it does not read, a second URL); text that is not a curl command is refused, saying so.
+Braces are written `{{` and `}}`, so they are sent as they are.
+
+**Connection**: none (everything is set in the block), or an API connection (Tools →
+Connections, New…, Kind Web API): its **Base URL**, **Auth** with its stored secret, the headers
+every request sends and its certificate settings. With one chosen, Properties shows what it gives
+(change it in the Connections window); the block's URL is then whole, or relative to the base URL
+(with `https://api.example.com/v1`, `/orders/{id}` calls `https://api.example.com/v1/orders/7`), and
+the block's own Headers are added to the connection's, the block's winning on the same name
+(Properties says which of the connection's it replaces). For example, today's open orders saved as
+a file, then a report of them sent:
+
+```yaml
+# orders-report.yaml
+params:
+  day: {type: date, expr: "today()"}
+blocks:
+  start: {type: trigger.manual}
+  orders:
+    type: servers.api_request
+    config:
+      connection: shop
+      url: /orders
+      params: [{key: status, value: open}, {key: day, value: "{day:%Y-%m-%d}"}]
+      response_as: table
+  save:
+    type: data.write_file
+    config: {path: "out/orders_{day:%Y-%m-%d}.csv"}
+  report:
+    type: servers.api_request
+    config:
+      method: POST
+      url: https://reports.example.com/api/uploads
+      auth: Bearer token
+      secret: reports_token
+      body: JSON
+      content: '{{"day": "{day:%Y-%m-%d}", "file": "orders_{day:%Y-%m-%d}.csv"}}'
+edges:
+  - start.start -> orders.after
+  - orders.response -> save.table
+  - save.file -> report.after
+```
+
+```yaml
+# in connections.yaml
+shop:
+  kind: api
+  base_url: https://api.example.com/v1
+  auth: Bearer token
+  secret: "secret:shop_token"
+  headers: [{key: Accept, value: application/json}]
+```
+
+### Session: API Request blocks that share cookies
+
+A **Session** (`servers.api_session`) is a box on the canvas, drawn as a Loop's, around API
+Request blocks: like a `requests.Session`, the API Request blocks inside it share one set of
+cookies during a run. The cookies a response sets (a login's, say) go with the requests after
+it inside the Session, by the domain and path rules of cookies: a cookie set for `/account`
+goes with the calls to `/account/...` on that host, not with other paths nor other hosts, and
+one a response sets for another domain is not taken. API Request blocks outside any Session
+keep no cookies from one block to the next. Add it from the Blocks list (Servers) and drag
+blocks into its box, as for a Loop; the flow file says which blocks are inside with
+`inside:` and the Session's name. Nothing is connected to the Session itself: the blocks
+inside are connected to each other and to blocks outside as anywhere, and other blocks may be
+inside too (they run as usual). For example, a login, then a call that needs its cookie:
+
+```yaml
+blocks:
+  start: {type: trigger.manual}
+  shop: {type: servers.api_session}
+  login:
+    type: servers.api_request
+    inside: shop
+    config: {method: POST, url: "https://api.example.com/login"}
+  orders:
+    type: servers.api_request
+    inside: shop
+    config: {url: "https://api.example.com/orders"}
+edges:
+  - start.start -> login.after
+  - login.status -> orders.after
+```
+
+- After each request inside it, the Log lists the cookies the session holds, by name and
+  domain, never their values: `session shop's cookies: sessionid (api.example.com)`. The run
+  history keeps those lines.
+- Every run starts its session with no cookies: they are not kept from one run to the next.
+  A Session inside a Loop gives each item a session of its own (the items of a Loop inside a
+  Session share its cookies). A Splitter's lines inside a Session share its cookies, also when
+  they run at the same time.
+- **Running again**: Run only this block and Run from this block on, on an API Request inside
+  a Session (`taskloom run flow.yaml --only orders --inputs-from 12`), start with the cookies
+  the session held just before that block in the run they carry on from, kept with that run's
+  results (as its outputs are, in the Taskloom folder's runs, never in a file next to the
+  flow): a later call runs again without logging in again, and the Log says the cookies come
+  from run #12. If the server has ended the session since, that call fails with what the
+  server answered (e.g. 401): run the flow again from the login.
+- A Session shares cookies only: the base URL and the authentication belong to an API
+  connection.
+
 ## Checking flows after an update
 
 Each version can check your flows for what it can fix and what needs you: **Tools → Check
@@ -827,7 +1017,7 @@ Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
 
 | File | Purpose |
 |---|---|
-| `connections.yaml` | Database connections, e.g. a JDBC driver, URL, jar and properties |
+| `connections.yaml` | Connections: databases (a JDBC driver, URL, jar and properties), servers (SSH), mail (SMTP), web APIs |
 | `settings.yaml` | `calendar`, `keep_runs_for`, `java_home`, `max_concurrent_runs`, `keeper`, notifications |
 | `calendars/<name>.yaml` | Holidays: `base: US`, `add: [...]`, `remove: [...]`, `weekend: [sat, sun]` |
 | `blocks/*.py` | Your own blocks, listed under **User Created** in the blocks tree; same `type_id` as a built-in replaces it |
