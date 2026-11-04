@@ -136,6 +136,8 @@ def spans(folder: Path, n: int) -> dict[int, tuple[float, float]]:
     return {k: tuple(read_json(folder / f"span_{k}.json")) for k in range(1, n + 1)}
 
 
+TICK = 0.016  # a clock tick on Windows: two times taken in a row may differ by this much
+
 # Writes when it started and ended (span_<index>.json), sleeping {seconds}[index] between.
 TIMED = ("import json, time\nstart = time.perf_counter()\ntime.sleep({seconds}[index])\n"
          "open(f'span_{{index}}.json', 'w', encoding='utf-8').write(json.dumps([start, time.perf_counter()]))\n"
@@ -224,7 +226,9 @@ def test_at_the_same_time_runs_that_many_items_and_the_next_starts_as_soon_as_on
 
     assert result.returncode == 0, result.stderr[-3000:]
     t = spans(env.root, 4)
-    assert sorted(t, key=lambda k: t[k][0]) == [1, 2, 3, 4], t  # they started in item order
+    # They started in item order (items 1 and 2 start together: each takes its own start time, which may come first by
+    # up to a clock tick).
+    assert all(t[k + 1][0] >= t[k][0] - TICK for k in (1, 2, 3)), t
     at_once = max(sum(1 for s, e in t.values() if s <= start < e) for start, _ in t.values())
     assert at_once == 2, t
     assert t[3][0] >= t[2][1] and t[3][0] - t[2][1] < 0.5, t  # item 3 started as soon as item 2 ended ...
