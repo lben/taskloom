@@ -1390,8 +1390,9 @@ class PropertiesPanel(QScrollArea):
         box = QGroupBox("Import from cURL")
         column = QVBoxLayout(box)
         hint = QLabel("Paste a curl command, as an API's documentation or a browser's Copy as cURL writes it (bash or "
-                      "Windows cmd), then Fill in: it fills this block's request, each secret in it kept as a stored "
-                      "secret.", wordWrap=True, textFormat=Qt.PlainText)
+                      "Windows cmd), then Fill in: it fills this block's request, keeping a -u password, a Bearer "
+                      "token and each header named like a secret (e.g. X-API-Key) as stored secrets.", wordWrap=True,
+                      textFormat=Qt.PlainText)
         hint.setStyleSheet("color: palette(placeholder-text);")
         command = CodeEditor("", "curl", True)
         command.setPlaceholderText("curl https://api.example.com/v1/orders -H 'Accept: application/json'")

@@ -890,10 +890,11 @@ Windows cmd (`^` at a line's end, `^"`, `\"`), and click **Fill in**. It fills t
 - Don't verify certificates from `-k`/`--insecure`, Follow redirects from `-L`/`--location`, the
   Timeout from `-m`/`--max-time` (in seconds); `--compressed` needs nothing.
 
-Its secrets never go into the flow: for a `-u` password, a Bearer token and each header named
-like a secret (Authorization, or with token, key, secret or password in its name, e.g.
-`X-API-Key`), Fill in asks the name of a stored secret, suggesting one, and stores the value
-there; the block uses it by that name (a header as `secret:NAME`). When the block's request is
+The secrets it recognises never go into the flow: for a `-u` password, a Bearer token and each
+header named like a secret (Authorization, or with token, key, secret or password in its name,
+e.g. `X-API-Key`), Fill in asks the name of a stored secret, suggesting one, and stores the value
+there; the block uses it by that name (a header as `secret:NAME`). Anything else in the command,
+such as a key in the URL's query or in the data, is filled in as written. When the block's request is
 filled in already, a box says what Fill in replaces and asks: **Approve**, or **Cancel**, which
 changes nothing. The request is replaced as a whole, Connection included (what the command does
 not give is left empty; Follow redirects, Don't verify certificates and the Timeout change only
