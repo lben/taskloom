@@ -3,6 +3,9 @@
 The user's case: a 1-minute schedule switched on at second 14 runs at second 14 (a run cannot be prepared ahead,
 so it may begin a second or two late), then every minute at second 14. Switched on is the moment the scheduler
 service first sees the schedule as it is now. Clock-based plans (and any cron line) stay on the clock.
+
+The tests that have the service check at chosen clock times replace each run's process by a stand-in that reaches
+its time on that clock (FakeRuns); the test in real time uses the real service and real runs.
 """
 
 import datetime as dt
@@ -23,6 +26,7 @@ from taskloom.history import History
 from taskloom.scheduler import Scheduler, acquire_lock
 from tests.test_editor import write_flow
 from tests.test_paths_editor_editing import clean, field, save_as, saved, select_only, settle
+from tests.test_scheduler_new_promises import FakeRun, FakeRuns
 from tests.test_scheduler_start_at import (assert_began_at, record_process_starts, start_at_clock, start_service,
                                            stop_service, wait_until_finished)
 from tests.test_scheduler_start_at import runs as history_runs
@@ -65,20 +69,13 @@ def scheduled(env, text: str) -> tuple[Path, Home]:
     return flow, home
 
 
-def record_runs(monkeypatch) -> list[tuple[str | None, dt.datetime]]:
-    """(Schedule block, the time the run begins: its --start-at) of each run process the scheduler starts, in the
-    order it starts them."""
-    started = []
-
-    class Recorded(subprocess.Popen):
-        def __init__(self, args, *rest, **kwargs):
-            if isinstance(args, list) and "--start-at" in args:
-                block = args[args.index("--trigger") + 1] if "--trigger" in args else None
-                started.append((block, start_at_clock(args[args.index("--start-at") + 1])))
-            super().__init__(args, *rest, **kwargs)
-
-    monkeypatch.setattr(subprocess, "Popen", Recorded)
-    return started
+def record_runs(monkeypatch) -> list[FakeRun]:
+    """The run processes the scheduler starts, in the order it starts them, each replaced by a stand-in (FakeRuns):
+    the service checks at the test's clock times, so a run it starts early reaches its time and claims it on that
+    clock, as `taskloom run --if-scheduled` does, with the service on."""
+    runs = FakeRuns()
+    monkeypatch.setattr(subprocess, "Popen", runs.popen)
+    return runs.started
 
 
 def service(home: Home) -> Scheduler:
@@ -95,12 +92,14 @@ def tick(scheduler: Scheduler, clock: str):
     scheduler.wait_for_runs()
 
 
-def clocks(started) -> list[str]:
-    return [f"{when:%H:%M:%S}" for _, when in started]
+def clocks(started: list[FakeRun]) -> list[str]:
+    """The time each run begins (its --start-at), on this PC's clock."""
+    return [f"{start_at_clock(run.start_at):%H:%M:%S}" for run in started]
 
 
-def statuses(env) -> list[str]:
-    return [status for (status,) in env.query("SELECT status FROM runs ORDER BY id")]
+def outcomes(started: list[FakeRun]) -> list[str]:
+    """Whether each run began, or why it did not."""
+    return [f"not begun: {run.not_begun}" if run.not_begun else "began" for run in started]
 
 
 # --- 1, 2: every N minutes or hours, from the moment the service first sees it ------------------------------------
@@ -123,7 +122,7 @@ def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(
         tick(scheduler, clock)
 
     assert clocks(started) == expected, scheduler.told  # the later ones requested early, to begin at their time
-    assert statuses(env) == ["success"] * len(expected)
+    assert outcomes(started) == ["began"] * len(expected)
 
 
 @pytest.mark.invariant("SCH-7")
@@ -134,10 +133,10 @@ def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes
     for clock in ("10:02:14", "10:04:56", "10:07:10", "10:09:56"):
         tick(scheduler, clock)
 
-    assert [(block, f"{when:%H:%M:%S}") for block, when in started] == [
+    assert [(run.block, f"{start_at_clock(run.start_at):%H:%M:%S}") for run in started] == [
         ("every_five", "10:02:14"), ("on_the_clock", "10:05:00"), ("every_five", "10:07:14"),
         ("on_the_clock", "10:10:00")], scheduler.told
-    assert statuses(env) == ["success"] * 4
+    assert outcomes(started) == ["began"] * 4
 
 
 # --- 4: off and on again keeps the starting point; a change starts it again ---------------------------------------
@@ -163,7 +162,7 @@ def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_mis
         tick(after, clock)
 
     assert clocks(started) == ["10:00:14", "10:05:14"] + after_restart + ["10:25:14"], after.told  # from 10:00:14
-    assert statuses(env) == ["success"] * len(started)
+    assert outcomes(started) == ["began"] * len(started)
 
 
 @pytest.mark.parametrize("change", ["every changed", "active unticked and ticked again",
@@ -191,7 +190,7 @@ def test_changing_n_or_turning_the_schedule_off_and_on_starts_it_again_from_then
         tick(scheduler, clock)
 
     assert clocks(started) == ["10:00:14", "10:03:40", next_run], scheduler.told
-    assert statuses(env) == ["success"] * 3
+    assert outcomes(started) == ["began"] * 3
 
 
 # --- 2, 3: in real time, saved while the service is on --------------------------------------------------------------

@@ -12,7 +12,7 @@ import pytest
 
 from taskloom.config import Home
 from taskloom.history import History
-from taskloom.scheduler import EARLY_START, Scheduler
+from taskloom.scheduler import EARLY_START, Scheduler, acquire_lock
 
 DAY = dt.date(2026, 1, 5)
 
@@ -455,9 +455,9 @@ def _hold_until_released(misfire: str) -> str:
 
 
 @pytest.mark.parametrize("misfire, expected, skipped", [
-    ("run_once", ["06:33"], None),
-    ("skip", ["06:33"], 2),  # 06:31 and 06:32 were missed; 06:33 is the on-time run, started early
-    ("catch_up", ["06:31", "06:32", "06:33"], None),
+    ("run_once", [0], None),
+    ("skip", [0], 2),  # the two minutes before it were missed; the on-time run is started early
+    ("catch_up", [-2, -1, 0], None),
 ])
 @pytest.mark.invariant("SCH-9")
 def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expected, skipped):
@@ -465,15 +465,25 @@ def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expecte
 
     The previous run had just been requested, overlap skip (the default) refused the on-time run, and `last`
     had already moved past it, so that minute never ran.
+
+    The service is on (this test holds its lock, as `taskloom scheduler` does) and first saw the schedule 3 minutes
+    before the minute ahead (`expected`: the minutes that run, counted from that one); its check comes 4 s before that
+    minute, at this PC's time, so the run it starts early reaches its time as such a run does.
     """
     notes = []
     home = schedule(env, every_minute(misfire))
+    due = next_minute(dt.datetime.now() + dt.timedelta(seconds=6))  # (room for the check before it)
     scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    scheduler.tick(at("06:30:00"))  # first sight: nothing is due yet
-    scheduler.tick(at("06:32:56"))  # 5 s early window reaches 06:33; 06:31 and 06:32 are already due
-    scheduler.wait_for_runs()
+    lock = acquire_lock(home)
+    try:
+        scheduler.tick(due - dt.timedelta(minutes=3))  # first sight: nothing is due yet
+        time.sleep(max(0.0, (due - dt.timedelta(seconds=4) - dt.datetime.now()).total_seconds()))
+        scheduler.tick(dt.datetime.now())  # 5 s early window reaches the minute; the two before it are already due
+        scheduler.wait_for_runs()
+    finally:
+        lock.close()
 
-    assert whens(env) == expected, notes
+    assert whens(env) == [f"{due + dt.timedelta(minutes=k):%H:%M}" for k in expected], notes
     if skipped:
         (message,) = missed_notes(notes)
         assert re.search(rf"\b{skipped}\b", message), message

@@ -5,12 +5,13 @@ their turn surviving a stop (SCH-16), and the README explaining where the schedu
 Turning the service off, a crash and the server's log use the real service and real runs. Where a test counts
 hundreds of runs or drives the clock across a clock change, the run processes are replaced at the process boundary:
 subprocess.Popen, for `taskloom run` commands only, gives a stand-in that records the command and has finished by the
-service's next check (FakeRuns)."""
+service's next check; one started early has claimed its time by then, as the real run does (FakeRuns)."""
 
 import contextlib
 import copy
 import datetime as dt
 import gc
+import inspect
 import io
 import json
 import os
@@ -19,6 +20,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import types
 from pathlib import Path
@@ -35,8 +37,10 @@ from PySide6.QtWidgets import (QApplication, QDialog, QGroupBox, QLabel, QMessag
 
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor.safety import pid_alive  # noqa: E402
+from taskloom.flow import real_path  # noqa: E402
 from taskloom.history import History  # noqa: E402
-from taskloom.scheduler import Scheduler, paused  # noqa: E402
+from taskloom.scheduler import NOT_DUE, Scheduler, acquire_lock, claim_time, paused  # noqa: E402
+from taskloom.scheduler import _unlock as unlock  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
 from tests.test_scheduler_start_at import start_at_clock, start_service, stop_service  # noqa: E402
 from tests.test_service_off import stays_off_at_login  # noqa: E402
@@ -315,12 +319,100 @@ def tray_service(monkeypatch, home: Path, drive) -> dict:
 
 # --- stand-ins for run processes -------------------------------------------------------------------------------------
 
+FINISHED = json.dumps({"event": "run_finished", "status": "success"}) + "\n"
+
+
+class Said:
+    """What a stand-in run process prints, as the service reads it (line by line, on the thread that reads each run's
+    output): the lines it has printed so far, then its end once the process has ended."""
+
+    def __init__(self):
+        self.lines, self.ended, self.waiting, self.read = [], False, False, False
+        self.turn = threading.Condition()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        with self.turn:
+            while not self.lines and not self.ended:
+                self.waiting = True  # (it has taken in every line before)
+                self.turn.notify_all()
+                self.turn.wait()
+            self.waiting = False
+            if self.lines:
+                return self.lines.pop(0)
+            self.read = True
+            self.turn.notify_all()
+        raise StopIteration
+
+    def say(self, *lines: str):
+        """It prints these lines; this returns once the service has taken in what they say."""
+        with self.turn:
+            self.lines += lines
+            self.turn.notify_all()
+            self.turn.wait_for(lambda: not self.lines and (self.waiting or self.read), timeout=30)
+
+    def end(self):
+        with self.turn:
+            self.ended = True
+            self.turn.notify_all()
+
+
+@contextlib.contextmanager
+def clock_shows(moment: dt.datetime):
+    """Meanwhile this PC's clock, as the scheduler service's code reads it (datetime.now), shows `moment`: a stand-in
+    run's clock is the test's clock."""
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment.astimezone(tz) if tz is not None else moment.astimezone().replace(tzinfo=None)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("taskloom.scheduler.dt", types.SimpleNamespace(**{**vars(dt), "datetime": Clock}))
+        yield
+
+
+def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | None:
+    """What `taskloom run FLOW --trigger BLOCK --start-at T --if-scheduled SCHEDULE` (its command line: `args`) does
+    when it reaches T, with this PC's clock showing `clock`: the claim of T the real run makes (claim_time), started
+    before T as the scheduler service starts such a run. Whether a service is on is told by the Taskloom folder
+    `home`, as the real run tells it. None: T is its own, and it begins; else why it does not begin."""
+    def option(name: str) -> str | None:
+        return args[args.index(name) + 1] if name in args else None
+
+    # (started before its time: where claim_time is told so, it is)
+    early = {"early": True} if "early" in inspect.signature(claim_time).parameters else {}
+    with clock_shows(clock):
+        return claim_time(Home(home), real_path(Path(option("run"))), option("--trigger"), option("--if-scheduled"),
+                          dt.datetime.fromisoformat(option("--start-at")), **early)
+
+
+@contextlib.contextmanager
+def service_on(home: Path):
+    """The scheduler service is on: it holds the Taskloom folder's lock, as `taskloom scheduler` does. Here the
+    service is the Scheduler a test checks with, in this process, which takes no lock: meanwhile it is taken for it
+    (unless a service holds it already)."""
+    try:
+        lock = acquire_lock(Home(home))
+    except RuntimeError:  # (a service holds it)
+        lock = None
+    try:
+        yield
+    finally:
+        if lock is not None:
+            unlock(lock)
+
+
 class FakeRun:
     """A stand-in for one `taskloom run` process the scheduler starts: it records the command, and has finished by
-    the service's next check (unless its flow is held)."""
+    the service's next check (unless its flow is held). One started early, to claim its time (--if-scheduled), has
+    reached that time by then too (unless it `waits` for the test to say so: reach_its_time): it claims it as the real
+    run does (claim_its_time), with the service on (unless you turned it off), and begins only if it has it; else it
+    prints why, records nothing and ends with the exit code NOT_DUE."""
 
-    def __init__(self, args: list[str], runs: "FakeRuns"):
-        self.args, self._runs = args, runs
+    def __init__(self, args: list[str], runs: "FakeRuns", home: Path):
+        self.args, self._runs, self.home = args, runs, home
         self.flow = Path(args[args.index("run") + 1]).stem
         self.block = args[args.index("--trigger") + 1] if "--trigger" in args else None
         self.start_at = args[args.index("--start-at") + 1]
@@ -328,19 +420,43 @@ class FakeRun:
         self.pid = 2 ** 30 + len(runs.started)  # (no process has it)
         self.returncode = None
         self.stdin = io.StringIO()
-        self.stdout = io.StringIO(json.dumps({"event": "run_finished", "status": "success"}) + "\n")
+        self.claims = "--if-scheduled" in args
+        self.waits = False  # (started early: it reaches its time only when the test says so)
+        self.not_begun: str | None = None  # why it did not begin
+        self.beginning = [FINISHED]  # what it prints once it has begun
+        self.stdout = Said() if self.claims else io.StringIO(FINISHED)
+        self.reached = not self.claims
+
+    def reach_its_time(self) -> bool:
+        """Started early, it reaches its time (its --start-at) and claims it; whether it began."""
+        self.reached = True
+        with service_on(self.home):
+            self.not_begun = claim_its_time(self.args, self.home, instant(self.start_at)[0])
+        if self.not_begun:
+            self.stdout.say(f"not begun: {self.not_begun}\n")
+            self.end(NOT_DUE)
+            return False
+        self.stdout.say(*self.beginning)
+        return True
 
     def poll(self):
+        if not self.reached and not self.waits:
+            self.reach_its_time()
         if self.returncode is None and self.flow not in self._runs.holding:
-            self.returncode = 0
+            self.end(0)
         return self.returncode
+
+    def end(self, code: int):
+        if self.returncode is None:
+            self.returncode = code
+            if isinstance(self.stdout, Said):
+                self.stdout.end()
 
     def wait(self, timeout=None):
         return self.poll()
 
     def kill(self):
-        if self.returncode is None:
-            self.returncode = -9
+        self.end(-9)
 
     terminate = kill
 
@@ -356,19 +472,26 @@ class FakeRuns:
     def popen(self, args, *rest, **kwargs):
         if not (isinstance(args, list) and "run" in map(str, args) and "--start-at" in map(str, args)):
             return REAL_POPEN(args, *rest, **kwargs)
-        run = FakeRun([str(a) for a in args], self)
+        home = Path((kwargs.get("env") or os.environ)["TASKLOOM_HOME"])
+        run = FakeRun([str(a) for a in args], self, home)
         self.started.append(run)
         return run
 
     def of(self, flow: str) -> list[FakeRun]:
         return [r for r in self.started if r.flow == flow]
 
+    def end(self):
+        """The stand-ins still going end (nothing reads them any more)."""
+        for run in self.started:
+            run.end(-9)
+
 
 @pytest.fixture
-def fake_runs(monkeypatch) -> FakeRuns:
+def fake_runs(monkeypatch):
     runs = FakeRuns()
     monkeypatch.setattr(subprocess, "Popen", runs.popen)
-    return runs
+    yield runs
+    runs.end()
 
 
 def drain(scheduler: Scheduler, now: dt.datetime, runs: FakeRuns, checks: int = 500):
@@ -394,8 +517,9 @@ def instant(text: str) -> tuple[dt.datetime, str | None]:
 
 
 def begins(runs: list[FakeRun]) -> list[str]:
-    """When each run begins (its --start-at), as a moment in UTC."""
-    return [f"{instant(r.start_at)[0]:%Y-%m-%d %H:%M:%S}" for r in runs]
+    """When each run begins (its --start-at), as a moment in UTC; one started early that did not begin (it could not
+    claim its time) is not among them."""
+    return [f"{instant(r.start_at)[0]:%Y-%m-%d %H:%M:%S}" for r in runs if r.not_begun is None]
 
 
 def utc(local_times: list[dt.datetime]) -> list[str]:

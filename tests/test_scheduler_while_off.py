@@ -16,7 +16,6 @@ with."""
 
 import contextlib
 import datetime as dt
-import io
 import json
 import os
 import sqlite3
@@ -34,7 +33,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox  # noqa
 
 from taskloom.config import Home  # noqa: E402
 from taskloom.history import History  # noqa: E402
-from taskloom.scheduler import (NOT_DUE, RUNS_FILE, Scheduler, acquire_lock, paused, request_turn_off,  # noqa: E402
+from taskloom.scheduler import (RUNS_FILE, Scheduler, acquire_lock, paused, request_turn_off,  # noqa: E402
                                 set_paused)
 from tests.test_scheduler_mistakes_and_counts import (ASKED_AT, ON_TIME, catch_up_service, headless,  # noqa: E402
                                                       printed)
@@ -48,44 +47,44 @@ from tests.test_scheduler_turn_off_and_restart import EVERY_MINUTE, block_errors
 
 # --- stand-ins for run processes -------------------------------------------------------------------------------------
 
-NOT_BEGUN = "not begun: the scheduler service is off\n"  # what `taskloom run --if-scheduled` prints then
-
-
 class Runs(FakeRuns):
-    """FakeRuns, where the test says how the next run of a flow started early goes (`early`: {flow: "begins" | "not
-    begun"}): its process waits for its time (its flow is held) and, then, begins (it says run_started, then
-    run_finished) or does not begin, as `taskloom run --if-scheduled` does when the service was turned off before its
-    time: it prints why, records nothing, and ends with the exit code NOT_DUE (at_its_time)."""
+    """FakeRuns, where the next run of a flow in `early` started early waits for its time until the test says it has
+    come (at_its_time): its process waits meanwhile (its flow is held), then claims its time as `taskloom run
+    --if-scheduled` does (FakeRun.reach_its_time). It begins (it says run_started, then run_finished, and goes on until
+    its flow is let go), or it does not, e.g. as the service was turned off before its time: it prints why, records
+    nothing, and ends with the exit code NOT_DUE."""
 
     def __init__(self):
         super().__init__()
-        self.early: dict[str, str] = {}
+        self.early: set[str] = set()
 
     def popen(self, args, *rest, **kwargs):
         run = super().popen(args, *rest, **kwargs)
-        outcome = self.early.pop(run.flow, None) if isinstance(run, FakeRun) else None
-        if outcome is not None:
+        if isinstance(run, FakeRun) and run.claims and run.flow in self.early:
+            self.early.discard(run.flow)
             self.holding.add(run.flow)
-            run.stdout = io.StringIO(NOT_BEGUN if outcome == "not begun" else "".join(
-                json.dumps(event) + "\n" for event in ({"event": "run_started", "run_id": 10 ** 6},
-                                                       {"event": "run_finished", "status": "success"})))
+            run.waits = True
+            run.beginning = [json.dumps(event) + "\n" for event in ({"event": "run_started", "run_id": 10 ** 6},
+                                                                    {"event": "run_finished", "status": "success"})]
         return run
 
 
-def at_its_time(runs: Runs, run: FakeRun, began: bool):
-    """The run started early reaches its time: it began (it goes on until its flow is let go: here, it finishes), or
-    it did not, as the service was off (it ends with NOT_DUE)."""
+def at_its_time(runs: Runs, run: FakeRun) -> bool:
+    """The run started early reaches its time: whether it began (it goes on until its flow is let go: here, it
+    finishes); one that did not has ended."""
+    began = run.reach_its_time()
     if not began:
-        run.returncode = NOT_DUE
         runs.holding.discard(run.flow)
+    return began
 
 
 @pytest.fixture
-def fake_runs(monkeypatch) -> Runs:
+def fake_runs(monkeypatch):
     """`taskloom run` processes replaced by stand-ins (see Runs)."""
     runs = Runs()
     monkeypatch.setattr(subprocess, "Popen", runs.popen)
-    return runs
+    yield runs
+    runs.end()
 
 
 # --- SCH-9: more missed Catch up times found before you answer -------------------------------------------------------
@@ -154,24 +153,27 @@ def gone_process() -> int:
 
 def pc_restarted(home: Path, folder: Path):
     """Before the PC restarted, the scheduler service had started a run of nightly (its flow asks for failure emails)
-    and the editor a run of adhoc (it has no schedule; started with its Manual block): the run history says both are
-    running, and the service's list of runs going (scheduler.runs) lists nightly's, as they were left. The PC
-    restarted: their processes are gone."""
+    and the editor a run of adhoc (it has no schedule; started with its Manual block), both 10 minutes ago: the run
+    history says both are running, as each run recorded itself (its process, the moment it began, and for nightly's
+    that the service started it), and the service's list of runs going (scheduler.runs) lists nightly's, as they were
+    left. The PC restarted: their processes are gone."""
     write(home / "settings.yaml", "smtp_connection: mailer\n")
     nightly = schedule(home, folder, {"nightly": flow_yaml(YEARLY, notify=FAILURE_MAILS)})["nightly"]
     adhoc = write(folder / "adhoc.yaml", ADHOC).resolve()
-    began = (dt.datetime.now() - dt.timedelta(minutes=10)).isoformat(timespec="milliseconds")
+    began = dt.datetime.now() - dt.timedelta(minutes=10)
+    started = began.isoformat(timespec="milliseconds")
     record = History(home / "history.db")
     try:
-        runs = {"nightly": record.start_run("nightly", str(nightly), {}, began, started_by="s1"),
-                "adhoc": record.start_run("adhoc", str(adhoc), {}, began, started_by="manual")}
+        runs = {"nightly": record.start_run("nightly", str(nightly), {}, started, started_by="s1", scheduled=True),
+                "adhoc": record.start_run("adhoc", str(adhoc), {}, started, started_by="manual")}
         for name, block in (("nightly", "work1"), ("adhoc", "work")):
-            record({"event": "block_started", "run_id": runs[name], "ts": began, "block": block, "attempt": 1})
+            record({"event": "block_started", "run_id": runs[name], "ts": started, "block": block, "attempt": 1})
     finally:
         record.close()
     gone = gone_process()
-    with contextlib.closing(sqlite3.connect(home / "history.db", timeout=30)) as db:
-        db.executemany("UPDATE runs SET pid=? WHERE id=?", [(gone, run) for run in runs.values()])
+    with contextlib.closing(sqlite3.connect(home / "history.db", timeout=30)) as db:  # (as their own processes had it)
+        db.executemany("UPDATE runs SET pid=?, began=? WHERE id=?",
+                       [(gone, began.timestamp(), run) for run in runs.values()])
         db.commit()
     write(home / RUNS_FILE, json.dumps([{"flow": str(nightly), "name": "nightly", "run": runs["nightly"],
                                          "block": "s1", "schedule": "cron 0 2 1 1 *"}]))
@@ -298,14 +300,15 @@ def turned_off_before_its_time(env, runs: Runs, schedule_config: dict, began: bo
     told = []
     service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
     service.tick(clock("06:59:30"))
-    runs.early["report"] = "begins" if began else "not begun"
+    runs.early.add("report")
     service.tick(clock("06:59:56"))
     (early,) = runs.of("report")
     assert begins([early]) == utc([clock("07:00")]), "the run for 07:00 was not started early"
     if not began:
         request_turn_off(Home(env.home), {})  # Proceed (no runs going: it only asked to confirm)
         service.tick(clock("06:59:58"))
-    at_its_time(runs, early, began)
+    assert at_its_time(runs, early) == began, \
+        f"at its time, the run for 07:00 {'did not begin' if began else 'began'}: {early.not_begun}"
     service.tick(clock("07:00:01"))
     if began:
         request_turn_off(Home(env.home), {str(path): "finish"})  # Proceed, Let it finish (the default)
