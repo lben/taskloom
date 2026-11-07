@@ -877,6 +877,8 @@ def test_runs_waiting_their_turn_start_once_each_in_order_after_the_service_stop
     assert first == [("backlog", "s1", "10:01"), ("queued", "s1", "10:05")], first
 
     fake_runs.holding.clear()  # (the runs going are gone with it)
+    for run in fake_runs.started:
+        run.poll()
     after = Scheduler(Home(env.home))  # the service started again (`before` is never checked again)
     drain(after, dt.datetime(2026, 1, 5, 10, 5, 20), fake_runs)
 

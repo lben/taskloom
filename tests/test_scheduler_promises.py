@@ -531,8 +531,8 @@ def test_skip_still_runs_a_time_less_than_2_minutes_late(env, late, ran, missed)
 @pytest.mark.invariant("SCH-13")
 def test_a_crashed_run_is_emailed_about_only_when_its_flow_asks_for_failure_emails(env, smtp):
     """Two scheduled flows whose run's process dies: one's notify asks for failure emails (to the team), the other's
-    only for success. Both are recorded as stopped unexpectedly and told on the desktop; only the first is emailed,
-    to the address its flow names."""
+    only for success. Both are recorded as crashed (a failed run whose error says so) and told on the desktop as
+    crashed; only the first is emailed, to the address its flow names."""
     write(env.home / "settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
     crash = "import os\nos._exit(3)"
     scheduler, notes = service(env, {
@@ -544,9 +544,9 @@ def test_a_crashed_run_is_emailed_about_only_when_its_flow_asks_for_failure_emai
 
     assert sorted((r["flow"], r["status"], r["finished"] is not None) for r in runs(env)) == [
         ("asks", "failed", True), ("does_not", "failed", True)]
-    assert env.query("SELECT DISTINCT error FROM blocks WHERE block='work'") == [
-        ("the run process stopped unexpectedly",)]
-    assert sorted(title for title, _ in notes) == ["asks failed", "does_not failed"], notes
+    [(error,)] = env.query("SELECT DISTINCT error FROM blocks WHERE block='work'")
+    assert "crashed" in error, error
+    assert sorted(title for title, _ in notes) == ["asks crashed", "does_not crashed"], notes
     assert [(str(m["Subject"]), str(m["To"])) for m in smtp.messages] == [("[Taskloom] asks crashed",
                                                                           "team@example.com")]
 

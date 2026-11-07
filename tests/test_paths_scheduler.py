@@ -532,9 +532,10 @@ def test_a_run_whose_process_dies_is_recorded_failed_told_and_does_not_hold_up_t
     (run,) = runs(env)
     assert run["status"] == "failed" and run["finished"] is not None
     error = env.query("SELECT status, error FROM blocks WHERE run_id=? AND block='work'", run["id"])
-    assert error == [("failed", "the run process stopped unexpectedly")]
+    [(status, text)] = error
+    assert status == "failed" and "crashed" in text, error
     (title, message), = notes
-    assert "flow" in title and "3" in message, notes
+    assert "flow" in title and "crashed" in title and "3" in message, notes
     (subject, to), = emails(smtp)
     assert to == "me@example.com" and "flow" in subject and "crashed" in subject, subject
 
