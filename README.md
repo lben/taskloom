@@ -1054,7 +1054,9 @@ A schedule repeats in one of two ways:
   service has seen it, it says it starts when the service picks it up. Turning the service
   off and on again does not move it: the times while it was off were missed (see `misfire`).
 - **On the clock**: every hour at :MM, every day, weekday, chosen days or month at a time,
-  and a cron line (`*/5 * * * *` runs at :00, :05, :10, ...), plus one time (`at`).
+  and a cron line (`*/5 * * * *` runs at :00, :05, :10, ...), plus one time (`at`), to the
+  minute or to the second (`2026-10-08 15:30:07`): a run begins on a whole second, so a time
+  with a fraction of a second is refused.
 
 The **scheduler service** runs scheduled flows at their times. It is a program of its own
 that keeps running in the background (its icon is in the tray), also while the editor is

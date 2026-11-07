@@ -149,6 +149,9 @@ class At:
 
     def __init__(self, when):
         self.when = when if isinstance(when, dt.datetime) else dt.datetime.fromisoformat(str(when))
+        if self.when.microsecond:  # (a run begins on a whole second: it would begin before it or after it)
+            raise ValueError(f"a one-off time is to the second, got '{when}': write it without the fraction of a "
+                             "second")
 
     @property
     def wall(self) -> dt.datetime:
@@ -210,7 +213,8 @@ class Trigger:
             self.text = f"every {self.timing.text}"
         else:
             self.timing = At(spec["at"])
-            self.text = f"at {self.timing.when.isoformat(' ', 'minutes')}"  # (with its UTC offset, if written with one)
+            # (to the second, with its UTC offset if written with one: a time changed in either is a new schedule)
+            self.text = f"at {self.timing.when.isoformat(' ', 'seconds')}"
         self.every = self.timing.interval if isinstance(self.timing, Every) else None
         self.misfire = spec.get("misfire", "run_once")
         if self.misfire not in MISFIRE_POLICIES:
