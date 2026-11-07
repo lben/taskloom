@@ -21,6 +21,7 @@ from hypothesis import strategies as st
 
 from taskloom.config import Home
 from taskloom.editor.docs import EVERY_CHOICES
+from taskloom.launch import run_alive
 from taskloom.schedule import Every, Trigger, plan_cron
 from taskloom.scheduler import NOT_DUE, Scheduler, acquire_lock
 from taskloom.scheduler import _unlock as unlock
@@ -211,17 +212,17 @@ def test_an_every_n_schedule_has_its_times_every_n_from_when_first_seen_through_
 # --- SCH-6, SCH-7, SCH-9, SCH-11, SCH-12: generated schedules, settings and check times --------------------------------
 # The service's loop (Scheduler.tick at a given clock time, as `taskloom scheduler` runs it) over generated scheduled
 # flows, Max concurrent runs, and check times with gaps: a second or so apart while it is on, minutes while the PC
-# sleeps or the service is off. Each run's process is replaced at the process boundary by a FakeRun (real processes
-# are too slow for hundreds of examples): it says it began and succeeded, and has finished when the service checks on
-# it for the n-th time after its run began. One the service starts early, for a time to come (--if-scheduled), waits
-# for that time and then claims it as `taskloom run` does (claim_its_time: the real claim, on the simulation's clock,
-# a service being on while it holds the folder's lock); it begins only if it has it, else it records nothing and ends
-# with NOT_DUE. Its time has come by the service's first check at or after it (the PC may have slept meanwhile: it
-# then wakes with the service). The service turned off and on again is a new Scheduler for the same Taskloom folder:
-# the old one stops just after its last check, the new one starts at its first. The runs going finish while it is off;
-# a run started early whose time comes before the new one starts finds no service on, and one whose time comes later
-# reaches it with the new service on, which may have started a run for that time too: both claim it, the new
-# service's run first (one of the two orders that can happen).
+# sleeps or the service is off. Each run's process is replaced at the process boundary by a FakeRun (real processes are
+# too slow for hundreds of examples): it says it began and succeeded, and has finished when the service checks on it for
+# the n-th time after its run began; as the system tells it (run_alive), its process is going until then. One the
+# service starts early, for a time to come (--if-scheduled), waits for that time and then claims it as `taskloom run`
+# does (claim_its_time: the real claim, on the simulation's clock, a service being on while it holds the folder's lock);
+# it begins only if it has it, else it records nothing and ends with NOT_DUE. Its time has come by the service's first
+# check at or after it (the PC may have slept meanwhile: it then wakes with the service). The service turned off and on
+# again is a new Scheduler for the same Taskloom folder: the old one stops just after its last check, the new one starts
+# at its first. The runs going finish while it is off; a run started early whose time comes before the new one starts
+# finds no service on, and one whose time comes later reaches it with the new service on, which may have started a run
+# for that time too: both claim it, in the order the scenario draws (either can happen).
 
 @dataclass
 class Started:
@@ -238,9 +239,9 @@ class Started:
     ended: int | None = None
 
     def going_at(self, other: "Started") -> bool:
-        """Going when the process of `other` started. A process the same service started counts from its start (the
-        service counts it as going from then); one an earlier service started, from when its run began (until then it
-        is no run of its flow, and the service cannot know of it)."""
+        """Going when the process of `other` started. A process counts from its start for the service that started it
+        (it counts it as going from then); for a later service, from when its run began (an early run that has not
+        begun is no run of its flow yet)."""
         start = self.began if self.life == other.life else self.begun
         return start is not None and start < other.began and (self.ended is None or self.ended > other.began)
 
@@ -256,6 +257,7 @@ class FakeRun:
                               claims="--if-scheduled" in args)
         simulation.started.append(self.record)
         simulation.fakes.append(self)
+        self.pid = 2 ** 30 + len(simulation.started)  # (no process has it)
         self.checks_left = simulation.lasts[flow]
         self.saying = [json.dumps({"event": "run_started", "run_id": len(simulation.started)}) + "\n",
                        json.dumps({"event": "run_finished", "status": "success"}) + "\n"]
@@ -293,34 +295,49 @@ class FakeRun:
 class Simulation:
     home: Path  # the Taskloom folder
     lasts: dict  # flow -> how many of the service's checks its runs last
+    older_first: bool = False  # (see reach_times)
     life: int = 0
     moments: itertools.count = field(default_factory=itertools.count)
     started: list = field(default_factory=list)
     fakes: list = field(default_factory=list)
     checks: list = field(default_factory=list)  # (life, clock time, moment) of each check
 
-    def came(self, run: Started) -> dt.datetime:
+    def came(self, run: Started, latest: bool = False) -> dt.datetime:
         """The check at which the run's time came: the first that starts runs due by 5 s after it (SCH-8), which for
         a time missed is the first after it. A run still waiting its turn when the service stops is saved and started
-        by the service after it (SCH-16): it came at that check of the earlier one. A time whose run started early
-        did not begin (it could not claim it, e.g. as the PC slept past it) is left to the service: it comes again at
-        the first check after the service has seen that run end, or, for a later service, which cannot know of it,
-        at its first check."""
+        by the service after it (SCH-16): it came at that check of the earlier one. A time for which an early run did
+        not begin comes again: at the earliest at the first check after that run ended, or at a later service's first
+        check; at the latest (`latest`), at the first check after every such run ended."""
         tried = [r for r in self.started if (r.flow, r.block, r.as_of) == (run.flow, run.block, run.as_of)
                  and r.begun is None and r.began < run.began]
-        last = max(tried, key=lambda r: r.began) if tried else None
-        return min(t for life, t, moment in self.checks if t + EARLY >= run.as_of and (
-            last is None or life > last.life or (life == last.life and last.ended is not None and moment > last.ended)))
+        checks = self.checks
+        if tried and latest:
+            if any(r.ended is None for r in tried):
+                return dt.datetime.max
+            end = max(r.ended for r in tried)
+            checks = [check for check in checks if check[2] > end]
+        elif tried:
+            last = max(tried, key=lambda r: r.began)
+            checks = [(life, t, moment) for life, t, moment in checks if life > last.life
+                      or (life == last.life and last.ended is not None and moment > last.ended)]
+        return min((t for _, t, _ in checks if t + EARLY >= run.as_of), default=dt.datetime.max)
 
     def reach_times(self, now: dt.datetime | None, before: bool = False):
         """The runs started early whose time has come by `now` (before it, with `before`; None: each one, as time goes
-        on) reach it and claim it, in the order of their times; of two for the same time, the one the service now on
-        started claims first."""
+        on) reach it and claim it, in the order of their times; of two for the same time, the one an earlier service
+        started claims first if `older_first`, else the one the service now on started."""
         come = [fake for fake in self.fakes if fake.record.claims and fake.record.begun is None
                 and fake.returncode is None and (now is None or fake.record.as_of < now
                                                  or (fake.record.as_of == now and not before))]
-        for fake in sorted(come, key=lambda f: (f.record.as_of, f.record.life != self.life, f.record.began)):
+        order = (lambda f: f.record.life) if self.older_first else (lambda f: f.record.life != self.life)
+        for fake in sorted(come, key=lambda f: (f.record.as_of, order(f), f.record.began)):
             fake.reach_its_time(fake.record.as_of if now is None else now)
+
+    def alive(self, pid: int, began: float | None) -> bool:
+        """Whether a run's process is still going, as the system tells it (launch.run_alive): a stand-in's, until it
+        has ended."""
+        fakes = [fake for fake in self.fakes if fake.pid == pid]
+        return fakes[0].returncode is None if fakes else run_alive(pid, began)
 
     def earlier(self) -> list:
         """The processes an earlier service started that are still going: none of this service's checks polls them."""
@@ -340,8 +357,10 @@ STEPS = st.lists(st.tuples(st.one_of(st.integers(200, 75_000), st.integers(120_0
 
 
 def scenarios(limits=(None, 1, 2, 3)):
+    """Also `older_first`: whether, of two runs started early for the same time, one by a service since turned off
+    and on again and one by the service now on, the older one claims it first (either can happen)."""
     return st.fixed_dictionaries({"flows": FLOWS, "limit": st.sampled_from(limits), "steps": STEPS,
-                                  "first_check": st.integers(0, 3_599_999)})
+                                  "first_check": st.integers(0, 3_599_999), "older_first": st.booleans()})
 
 
 GENERATED = settings(max_examples=200, deadline=None, database=None, suppress_health_check=[HealthCheck.too_slow])
@@ -362,7 +381,7 @@ def simulate(root: Path, scenario: dict) -> Simulation:
     home.root.mkdir(parents=True)
     if scenario["limit"]:
         (home.root / "settings.yaml").write_text(f"max_concurrent_runs: {scenario['limit']}\n", encoding="utf-8")
-    simulation = Simulation(home.root, lasts={})
+    simulation = Simulation(home.root, lasts={}, older_first=scenario["older_first"])
     for i, spec in enumerate(scenario["flows"]):
         path = root / f"flow{i}.yaml"
         path.write_text(flow_file(spec), encoding="utf-8")
@@ -371,6 +390,7 @@ def simulate(root: Path, scenario: dict) -> Simulation:
     now = at("06:00:00") + dt.timedelta(milliseconds=scenario["first_check"])
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(subprocess, "Popen", lambda args, *rest, **kwargs: FakeRun(simulation, args))
+        patch.setattr("taskloom.scheduler.run_alive", simulation.alive)
         lock = acquire_lock(home)  # the service is on: it holds the folder's lock, as `taskloom scheduler` does
         try:
             service = Scheduler(home)
@@ -419,13 +439,23 @@ def described(run: Started) -> str:
 
 
 # The service turned off and on again in the seconds before a time whose run's process it had started early: the new
-# one starts a run for that time too, and both reach it (a cron time; an Every N time, counted from first sight).
+# one starts a run for that time too, and both reach it (a cron time; an Every N time, counted from first sight); the
+# new service's run claims it first, or the old one's.
 RESTARTED_JUST_BEFORE = [
     {"flows": [{"schedules": [(("cron", "* * * * *"), "run_once")], "overlap": "skip", "lasts": 1}], "limit": None,
      "first_check": 57_000, "steps": [(1_000, True), (5_000, False)]},  # 06:00:57; 06:00:58 (06:01 to come); 06:01:03
     {"flows": [{"schedules": [(("every", "1 minute"), "catch_up")], "overlap": "allow", "lasts": 1}], "limit": None,
      "first_check": 0, "steps": [(57_000, False), (1_000, True), (5_000, False)]},  # 06:00, 06:00:57, :58, 06:01:03
 ]
+RESTARTED_JUST_BEFORE = [{**scenario, "older_first": older_first} for scenario in RESTARTED_JUST_BEFORE
+                         for older_first in (False, True)]
+# As the first of those, with the older run claiming 06:01 first, that run lasting 4 checks and a check at 06:02:03
+# (the flow's next time comes while it may still go), and Max concurrent runs 1.
+STILL_GOING = {"flows": [{"schedules": [(("cron", "* * * * *"), "run_once")], "overlap": "skip", "lasts": 4}],
+               "limit": 1, "first_check": 57_000, "steps": [(1_000, True), (5_000, False), (60_000, False)],
+               "older_first": True}
+CAUGHT_UP_STILL_GOING = {**STILL_GOING, "flows": [{"schedules": [(("cron", "* * * * *"), "catch_up")],
+                                                   "overlap": "skip", "lasts": 4}]}  # (the same, Catch up)
 
 
 @pytest.mark.invariant("SCH-6")
@@ -433,6 +463,8 @@ RESTARTED_JUST_BEFORE = [
 @given(scenario=scenarios())
 @example(scenario=RESTARTED_JUST_BEFORE[0])
 @example(scenario=RESTARTED_JUST_BEFORE[1])
+@example(scenario=RESTARTED_JUST_BEFORE[2])
+@example(scenario=RESTARTED_JUST_BEFORE[3])
 def test_generated_each_due_time_starts_at_most_once(tmp_path_factory, scenario):
     """No two runs begin for the same time of a schedule (a run's process started early that did not begin, as it
     could not claim its time, is not a run)."""
@@ -444,6 +476,8 @@ def test_generated_each_due_time_starts_at_most_once(tmp_path_factory, scenario)
 @pytest.mark.invariant("SCH-11")
 @GENERATED
 @given(scenario=scenarios())
+@example(scenario=STILL_GOING)
+@example(scenario={**STILL_GOING, "older_first": False})
 def test_generated_two_runs_of_a_flow_go_at_once_only_if_its_overlap_is_allow(tmp_path_factory, scenario):
     started = simulate(tmp_path_factory.mktemp("service"), scenario).started
     for run in started:
@@ -455,6 +489,8 @@ def test_generated_two_runs_of_a_flow_go_at_once_only_if_its_overlap_is_allow(tm
 @pytest.mark.invariant("SCH-12")
 @GENERATED
 @given(scenario=scenarios(limits=(1, 2, 3)))
+@example(scenario=STILL_GOING)
+@example(scenario={**STILL_GOING, "older_first": False})
 def test_generated_no_more_runs_go_at_once_than_max_concurrent_runs(tmp_path_factory, scenario):
     started = simulate(tmp_path_factory.mktemp("service"), scenario).started
     for run in started:
@@ -467,24 +503,28 @@ def test_generated_no_more_runs_go_at_once_than_max_concurrent_runs(tmp_path_fac
 @given(scenario=scenarios(limits=(1, 2, 3)))
 def test_generated_runs_waiting_for_a_free_slot_start_in_the_order_they_came(tmp_path_factory, scenario):
     """A run whose time came at an earlier check starts before one whose time came later, unless it waits for its
-    own flow's run going (Overlap queue, or a catch-up one at a time) rather than for a free slot."""
+    own flow's run going (Overlap queue, or a catch-up one at a time) rather than for a free slot. (When a time came
+    again, as an early run did not begin for it, is known only within bounds: the earlier run is taken at its latest,
+    the later at its earliest.)"""
     simulation = simulate(tmp_path_factory.mktemp("service"), scenario)
     started = simulation.started
     for later in started:
         for earlier in started:
             if (earlier.life == later.life and later.began < earlier.began
-                    and simulation.came(earlier) < simulation.came(later)):
+                    and simulation.came(earlier, latest=True) < simulation.came(later)):
                 overlap, _, misfire = setting(scenario, earlier)
                 waits_for_its_flow = (overlap != "allow" or misfire == "catch_up") and any(
                     r.flow == earlier.flow and r.going_at(later) for r in started)
                 assert waits_for_its_flow, (
-                    f"{described(earlier)} (came at {simulation.came(earlier):%H:%M:%S}) waited for a free slot, "
-                    f"and {described(later)} (came at {simulation.came(later):%H:%M:%S}) started before it")
+                    f"{described(earlier)} (came by {simulation.came(earlier, latest=True):%H:%M:%S}) waited for a "
+                    f"free slot, and {described(later)} (came at {simulation.came(later):%H:%M:%S}) started before it")
 
 
 @pytest.mark.invariant("SCH-9")
 @GENERATED
 @given(scenario=scenarios())
+@example(scenario=CAUGHT_UP_STILL_GOING)
+@example(scenario={**CAUGHT_UP_STILL_GOING, "older_first": False})
 def test_generated_catch_up_runs_go_oldest_first_one_at_a_time(tmp_path_factory, scenario):
     """Catch up's runs of a schedule start oldest first and never two at once. With Overlap allow (a new time may go
     alongside a run going), this holds for the times missed: those that came together at one check, already past."""
