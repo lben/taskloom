@@ -1061,10 +1061,10 @@ that keeps running in the background (its icon is in the tray), also while the e
 closed, and notifies you about failed or skipped runs. It starts by itself when you save a
 scheduled flow and when the editor opens with flows scheduled. The **Scheduler service**
 button at the top right shows whether it is on or off; click it to turn it off (or **Turn
-off the scheduler service** on its tray icon): then no scheduled flow runs, and it does not
-start by itself (also not at login), until you turn it on again. While it is off, a Schedule
-block says **scheduler service off** instead of its countdown. On Windows, **Tools →
-Settings → Start the scheduler service when I log in** (or
+off the scheduler service** on its tray icon; see **Turning the service off** below): then
+nothing new starts, and it does not start by itself (also not at login), until you turn it on
+again. While it is off, a Schedule block says **scheduler service off** instead of its
+countdown. On Windows, **Tools → Settings → Start the scheduler service when I log in** (or
 `taskloom scheduler --at-login on`) adds it to your Startup folder; no admin needed. From
 a terminal or on a server: `taskloom scheduler`.
 
@@ -1083,14 +1083,71 @@ from that moment (nothing before it counts as missed).
 
 At each check, of the times that came since the previous check only the most recent can be
 on time, and only if it is at most 2 minutes old; the others were missed (the scheduler
-service was off, the computer asleep, ...). `misfire` says what runs:
+service was off, the computer asleep, ...). `misfire` (**Misfire** on the Schedule block)
+says what runs:
 
 - `run_once` (the default): one run, for the most recent time, on time or missed;
 - `skip`: only the on-time run, if there is one; one **Missed runs skipped** notification
   says how many were missed;
-- `catch_up`: one run for each time, oldest first, one after another (at most 100).
+- `catch_up`: a run for every missed time, oldest first, one at a time.
 
 A run's parameters are computed for the time it was due (that is what `now()` means).
+
+The rest of this section is about the cases where the scheduler might surprise you.
+
+**More than 100 missed.** When a `catch_up` schedule has missed more than 100 times, the
+scheduler service asks you first. A **Catch up missed runs?** window says how many times were
+missed. Choose **Run all of them**, or **Run only the latest** with a number (100 unless you
+change it), and click **Proceed**. With only the latest, the older times are not run: they
+count as missed, and a **Missed runs skipped** notification says how many (plus an email, if
+the flow's notifications include skipped runs). The window shows even when the editor is
+closed. Until you answer, that schedule's missed runs wait, and so do its new times; other
+flows run as usual. If the service stops before you answer, it asks again when it is back.
+On a server, with no screen to ask on (`taskloom scheduler --headless`), the latest 100 run,
+oldest first. The service's log says how many were missed (the log is what the service
+prints: `scheduler.log` in its Taskloom folder when your PC's keeper started it), and so does
+an email if the flow's notifications include skipped runs.
+
+**Overlaps.** If a flow's time comes while its previous run is still going, its `overlap`
+decides what happens (in the editor: Flow settings, **If a scheduled run starts while the
+last one is still going**). `skip`, the default, does not start the new run, and a **Run
+skipped** notification tells you. `queue` makes the new run wait; it starts once the run
+going has finished. `allow` runs both at the same time. A catch-up is the exception: the
+missed runs of a `catch_up` schedule always go one at a time, even with `allow`.
+
+**Runs at once.** **Scheduled runs at once** in Tools → Settings (`max_concurrent_runs` in
+`settings.yaml`) limits how many scheduled runs go at the same time; unlimited by default.
+When that many are going, the next runs wait until one ends, and they start in the order
+they came: a flow whose run has just finished does not jump the line.
+
+**Turning the service off.** If no runs are going, you are only asked to confirm. If some
+are, a **Turn off the scheduler service?** window lists each flow with runs going, and you
+choose for each one. **Let it finish** (the default): its runs going finish, and its runs
+waiting their turn still run. **Stop now**: its runs going stop and are recorded as
+cancelled, and its waiting runs are dropped. Once you click **Proceed**, nothing new starts,
+and the service turns off when the last run you let finish is done. **Cancel** keeps it on
+and changes nothing. Flows not in the list keep their waiting runs: they are saved, and start
+when you turn the service on again. The tray icon's **Turn off the scheduler service** shows
+the same window.
+
+**Waiting runs are saved.** Runs waiting their turn are saved in the run history: behind
+their flow's run going, until fewer runs go than **Scheduled runs at once** allows, in a
+catch-up, or for your answer about missed times. However the service stops (the PC restarts,
+the service crashes or is ended), they are not lost: when it is back, each starts once, in
+the order they came. If only the service stops, the runs it started go on by themselves
+(each run is a program of its own), and they count as going once it is back.
+
+**A run that crashes.** If a run's program stops unexpectedly (it crashed, or something
+ended it), the run is recorded as crashed: it counts as failed, and its error says "crashed:
+the run process stopped unexpectedly". You get a desktop message (for a flow named nightly:
+**nightly crashed**), and an email if the flow's notifications include failures.
+
+**Clock changes.** Twice a year, daylight saving time (summer time) moves the clock. The
+service counts in real time, so: an **Every N minutes or hours** schedule keeps its rhythm
+(every 5 minutes stays 5 real minutes apart while the clock jumps); a time the clock skips
+(02:30, the night 02:00 jumps to 03:00) runs right after the jump; and a time the clock
+shows twice (the night it goes back) runs once, the first time. The jump forward does not
+count as time the service was off: no run is called missed because of it.
 
 ## Servers
 

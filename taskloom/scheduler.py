@@ -494,8 +494,9 @@ class Scheduler:
         self.turn_off(choices if isinstance(choices, dict) else {})
 
     def _ended(self, run: _Run):
-        """A run's process has ended: one that died without finishing is recorded so (as cancelled if you stopped it),
-        and you are told what did not succeed (a crash also by email, as the flow asks)."""
+        """A run's process has ended: one that died without finishing is recorded as crashed (a failed run whose error
+        says so; as cancelled if you stopped it), and you are told what did not succeed (a crash also by email, as the
+        flow asks)."""
         if run.reader is not None:
             run.reader.join(5)  # it has read the last lines once the process has exited
         if run.status is None and run.run_id is not None:
@@ -510,9 +511,11 @@ class Scheduler:
             return
         name = Path(run.flow).stem
         detail = (run.errors or run.output or [f"exit code {run.proc.returncode}"])[-1]
-        self.notify(f"{name} {run.status or 'failed'}", detail)
-        if run.status is None:  # it crashed, so it could not email about itself
-            self._tell(self._load(Path(run.flow)), "failure", f"{name} crashed", detail, desktop=False)
+        if run.status is None:  # it could not email about itself: it crashed, or was refused before it began
+            title = f"{name} crashed" if run.run_id is not None else f"{name} failed"
+            self._tell(self._load(Path(run.flow)), "failure", title, detail)
+        else:
+            self.notify(f"{name} {run.status}", detail)
 
     def _next_in_line(self):
         """Runs waiting their turn start in the order they came: a flow's next one waiting for its runs joins the line
@@ -550,11 +553,10 @@ class Scheduler:
                 return
             self._runs_told = going
 
-    def _tell(self, flow, event: str, title: str, message: str, desktop: bool = True):
+    def _tell(self, flow, event: str, title: str, message: str):
         """A desktop notification, plus an email if the flow's notify settings ask for this event. The email is
         sent on a thread of its own, so a mail server slow to answer holds up no run (a problem is told after)."""
-        if desktop:
-            self.notify(title, message)
+        self.notify(title, message)
         flow_notify = flow.notify if flow else None
 
         def send():
@@ -886,6 +888,8 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+    from .editor.dialogs import CatchUpDialog, ask_turn_off
+
     app = QApplication.instance()
     pix = QPixmap(32, 32)
     pix.fill(QColor(0, 0, 0, 0))
@@ -897,13 +901,26 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     painter.end()
     tray = QSystemTrayIcon(QIcon(pix))
     tray.setToolTip("Taskloom scheduler service: runs your scheduled flows at their times")
-    scheduler = Scheduler(home, lambda title, message: tray.showMessage(title, message))
+    questions = []  # the catch-up questions shown (kept: Python would free one still open)
+
+    def ask(flow_name, count, answer):  # (it returns at once: the service goes on while the question is open)
+        questions.append(CatchUpDialog(flow_name, count, answer))
+        questions[-1].show()
+        questions[-1].activateWindow()
+
+    scheduler = Scheduler(home, lambda title, message: tray.showMessage(title, message), ask)
     menu = QMenu()
     open_editor = QAction("Open editor", menu)
     open_editor.triggered.connect(lambda: subprocess.Popen(windowed_command() + ["editor"],
                                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
+
+    def turn_off():  # the editor's question, applied as the editor does at the next check (check() then ends it)
+        choices = ask_turn_off(runs_going(home))
+        if choices is not None:  # (not scheduler.turn_off: the menu would keep the service and its tray icon alive)
+            request_turn_off(home, choices)
+
     quit_action = QAction("Turn off the scheduler service", menu)
-    quit_action.triggered.connect(lambda: (set_paused(home, True), app.quit()))  # you turned it off: it stays off
+    quit_action.triggered.connect(turn_off)
     menu.addAction(open_editor)
     menu.addAction(quit_action)
     tray.setContextMenu(menu)

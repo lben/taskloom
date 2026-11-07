@@ -37,8 +37,8 @@ from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, bl
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, runner_command
-from ..scheduler import (acquire_lock, counted_from, paused, running_scheduler_version, set_paused,
-                         set_start_at_login, startup_file, startup_script_outdated, version_tuple)
+from ..scheduler import (acquire_lock, counted_from, paused, request_turn_off, running_scheduler_version, runs_going,
+                         set_paused, set_start_at_login, startup_file, startup_script_outdated, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
@@ -1721,25 +1721,24 @@ class MainWindow(QMainWindow):
         if not self.scheduler_running():
             self.start_scheduler(by_you=True)
             return
-        answer = QMessageBox.question(self, "Turn off the scheduler service?",
-                                      "No scheduled flow runs until you turn it on again (it does not start by "
-                                      "itself meanwhile). Runs already going continue.")
-        if answer == QMessageBox.Yes:
-            self.pause_scheduler()
+        choices = dialogs.ask_turn_off(runs_going(self.home), self)
+        if choices is not None:
+            self.pause_scheduler(choices)
 
-    def pause_scheduler(self):
-        """Turn the scheduler service off, and keep it off until you turn it on."""
+    def pause_scheduler(self, choices: dict[str, str] | None = None):
+        """Turn the scheduler service off, and keep it off until you turn it on. `choices`: what happens to each flow's
+        runs going (see dialogs.ask_turn_off)."""
         set_paused(self.home, True)
-        self.stop_scheduler()
+        if self.scheduler_running():  # (a starting service deletes a request it finds: one left for none is no use)
+            self.stop_scheduler(choices or {})
 
-    def stop_scheduler(self):
-        try:
-            os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
-        except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Cannot stop the scheduler service", str(e))
-            return
-        QTimer.singleShot(1500, self, lambda: self._show_scheduler_state(self.scheduler_running()))
-        self.statusBar().showMessage("Scheduler service off", 5000)
+    def stop_scheduler(self, choices: dict[str, str]):
+        """The running service applies `choices` within a second and ends once the runs you let finish are done; the
+        button shows it off then."""
+        request_turn_off(self.home, choices)
+        self.statusBar().showMessage(
+            "Scheduler service turning off: it ends once the runs you let finish are done"
+            if "finish" in choices.values() else "Scheduler service off", 8000)
 
     def start_scheduler(self, by_you: bool = False):
         if by_you:

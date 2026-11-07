@@ -1,4 +1,5 @@
-"""Dialogs: run with parameters, overlapping runs, Ask User, connections, settings."""
+"""Dialogs: run with parameters, overlapping runs, Ask User, connections, settings, turning the scheduler service off
+and its missed runs."""
 
 from __future__ import annotations
 
@@ -12,15 +13,16 @@ import yaml
 from PySide6.QtCore import QLocale, QProcess, QProcessEnvironment, Qt, QTimer
 
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-                               QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTableWidget,
-                               QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+                               QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+                               QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QSpinBox,
+                               QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from ..block import IDENTIFIER
 from ..blocks.logic import as_number, as_yes_no
 from ..blocks.servers import AUTH_NEEDS, AUTHS, BASIC, BEARER, DIGEST, NO_AUTH
 from ..config import SETTINGS_DEFAULTS, keep_runs_for
 from ..launch import ARGS_VARIABLE, runner_command
+from ..scheduler import ASK_OVER
 from ..table import Table
 from .canvas import STATUS_COLORS
 from .panels import MONO
@@ -803,6 +805,99 @@ def confirm_run_now(parent, flow_name: str, what: str, starts=(), chosen: str | 
     box.setCheckBox(never)
     go = answered(box) == QMessageBox.Yes
     return go, go and never.isChecked()
+
+
+TURN_OFF = "Turn off the scheduler service?"
+
+
+def ask_turn_off(going: list[tuple[str, str]], parent=None) -> dict[str, str] | None:
+    """Turn off the scheduler service? Asked by the editor's button and the tray icon's Turn off alike. `going`: the
+    flows with runs going, (flow file, name) as runs_going gives them. The answer, as Scheduler.turn_off takes it: for
+    each of them "finish" (Let it finish) or "stop" (Stop now); {} once you confirm, with none going. None: you keep it
+    on."""
+    if not going:
+        answer = QMessageBox.question(parent, TURN_OFF, "No scheduled flow runs until you turn it on again (it does not "
+                                      "start by itself meanwhile).")
+        return {} if answer == QMessageBox.Yes else None
+    dialog = TurnOffDialog(going, parent)
+    return dialog.choices() if answered(dialog) else None
+
+
+class TurnOffDialog(QDialog):
+    """A row for each flow with runs going: Let it finish (the default) or Stop now; Proceed or Cancel."""
+
+    def __init__(self, going: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(TURN_OFF)
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "These flows have runs going. Choose for each one:<br>"
+            "<b>Let it finish</b>: its runs going finish, and its runs waiting their turn still run.<br>"
+            "<b>Stop now</b>: its runs going stop (they are recorded as cancelled), and its waiting runs are dropped."
+            "<br><br>Once you click Proceed, nothing new starts, and the service turns off when the last run you let "
+            "finish is done. Other flows keep their waiting runs: they start when you turn the service on again.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.stop: dict[str, QRadioButton] = {}
+        for path, name in going:
+            row = QGroupBox(name.replace("&", "&&"), toolTip=path)  # (its radio buttons go together)
+            line = QHBoxLayout(row)
+            line.addWidget(QRadioButton("Let it finish", checked=True))
+            line.addWidget(stop := QRadioButton("Stop now"))
+            line.addStretch()
+            layout.addWidget(row)
+            self.stop[path] = stop
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.addButton("Proceed", QDialogButtonBox.AcceptRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def choices(self) -> dict[str, str]:
+        return {path: "stop" if stop.isChecked() else "finish" for path, stop in self.stop.items()}
+
+
+class CatchUpDialog(QDialog):
+    """More than ASK_OVER times of a flow's Catch up schedule were missed: Run all of them, or Run only the latest N.
+    Shown without holding anything up (the scheduler service goes on while it is open); Proceed calls answer(None)
+    (all) or answer(N). Only Proceed closes it: until you answer, those runs wait."""
+
+    def __init__(self, flow_name: str, count: int, answer, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Catch up missed runs?")
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            f"{flow_name} missed {count} of its scheduled times while the scheduler service was off or the computer "
+            "was asleep. Its schedule's Misfire is catch_up: it runs each missed time, oldest first, one at a time. "
+            "They wait for your answer; other flows run as usual.", textFormat=Qt.PlainText, wordWrap=True))
+        # (answer kept here and called by accept: in a slot's lambda, it would keep the service and this window
+        # alive through Qt, after the service has ended)
+        self.answer = answer
+        everything = QRadioButton("Run all of them", checked=True)
+        self.latest = QRadioButton("Run only the latest")
+        self.number = QSpinBox(enabled=False)
+        self.number.setRange(1, count)
+        self.number.setValue(ASK_OVER)
+        self.latest.toggled.connect(self.number.setEnabled)
+        row = QHBoxLayout()
+        row.addWidget(self.latest)
+        row.addWidget(self.number)
+        row.addStretch()
+        layout.addWidget(everything)
+        layout.addLayout(row)
+        layout.addWidget(QLabel("The older ones are not run: they count as missed, and you are told how many.",
+                                wordWrap=True))
+        proceed = QPushButton("Proceed", default=True)
+        proceed.clicked.connect(self.accept)
+        layout.addWidget(proceed, alignment=Qt.AlignRight)
+
+    def accept(self):  # Proceed
+        self.answer(self.number.value() if self.latest.isChecked() else None)
+        super().accept()
+
+    def reject(self):  # (Escape, closing the window): only Proceed answers
+        pass
 
 
 class CheckFlowsDialog(QDialog):

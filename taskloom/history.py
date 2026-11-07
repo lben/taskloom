@@ -252,7 +252,7 @@ class History:
     def mark_crashed(self, run_id: int, ts: str, cancelled: bool = False):
         """Record a run whose process died without finishing (e.g. it was killed); `cancelled`: you stopped it, and
         it had to be forced to end."""
-        status, error = ("cancelled", None) if cancelled else ("failed", "the run process stopped unexpectedly")
+        status, error = ("cancelled", None) if cancelled else ("failed", "crashed: the run process stopped unexpectedly")
         self._exec("UPDATE runs SET status=?, finished=? WHERE id=? AND status='running'", (status, ts, run_id))
         self._exec("UPDATE blocks SET status=?, error=? WHERE run_id=? AND status='running'", (status, error, run_id))
 
