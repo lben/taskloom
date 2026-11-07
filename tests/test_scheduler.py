@@ -15,6 +15,7 @@ from taskloom.schedule import Cron, Trigger
 T0 = dt.datetime(2026, 1, 5, 6, 30)  # a Monday
 
 
+@pytest.mark.invariant("SCH-5")
 def test_cron_next_times():
     friday_evening = dt.datetime(2026, 10, 9, 18, 0)
     assert Cron("0 7 * * MON-FRI").next_after(friday_evening) == dt.datetime(2026, 10, 12, 7, 0)
@@ -56,6 +57,7 @@ HOURLY = """
     ("run_once", ["2026-01-05 09:00:00"]),
     ("catch_up", ["2026-01-05 07:00:00", "2026-01-05 08:00:00", "2026-01-05 09:00:00"]),
 ])
+@pytest.mark.invariant("SCH-9")
 def test_missed_runs_follow_the_misfire_policy(env, misfire, expected):
     notes = []
     scheduler, _ = _scheduler(env, HOURLY.format(misfire=misfire), notes)
@@ -69,6 +71,7 @@ def test_missed_runs_follow_the_misfire_policy(env, misfire, expected):
         assert notes == [("Missed runs skipped", "flow: 3 run(s) were due while the scheduler was off")]
 
 
+@pytest.mark.invariant("SCH-11")
 def test_on_time_runs_and_overlap_skip(env):
     notes = []
     scheduler, _ = _scheduler(env, """
@@ -110,6 +113,7 @@ def test_failed_scheduled_run_is_notified(env):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")
+@pytest.mark.invariant("SCH-1")
 def test_only_one_scheduler_runs_per_home(env):
     first = env.popen("scheduler", "--headless")
     try:
@@ -217,6 +221,7 @@ def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
     assert f"this scheduler is Taskloom {__version__}" in message and "restart the scheduler from it" in message
 
 
+@pytest.mark.invariant("SCH-2")
 def test_starting_at_login_keeps_a_paused_scheduler_service_off(env):
     from taskloom.scheduler import set_paused
 

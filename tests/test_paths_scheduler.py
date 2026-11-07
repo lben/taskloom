@@ -263,6 +263,7 @@ def end(proc: subprocess.Popen, root: Path | None = None):
 # --- overlap: a run due while the previous one is still going -------------------------------------------------------
 
 @pytest.mark.parametrize("overlap", ["queue", "allow"])
+@pytest.mark.invariant("SCH-11")
 def test_a_run_due_while_the_last_one_is_going_follows_the_flows_overlap_setting(env, overlap):
     # README: "overlap: skip  # if the previous run is still going: skip | queue | allow"; the Flow tab says
     # queue = "run it after the current one", allow = "run both at the same time". (skip: test_scheduler.py)
@@ -301,6 +302,8 @@ def test_the_overlap_chosen_in_the_flow_tab_is_saved_for_the_scheduler(win, tmp_
 
 # --- max_concurrent_runs ---------------------------------------------------------------------------------------------
 
+@pytest.mark.invariant("SCH-9")
+@pytest.mark.invariant("SCH-12")
 def test_catch_up_runs_that_wait_for_a_free_slot_still_go_one_after_another(env):
     # README: "catch_up: one run for each time, oldest first, one after another"; settings.yaml:
     # max_concurrent_runs ("Scheduled runs at once" in Tools -> Settings).
@@ -323,6 +326,7 @@ def test_catch_up_runs_that_wait_for_a_free_slot_still_go_one_after_another(env)
 
 
 @pytest.mark.parametrize("overlap", ["skip", "queue"])
+@pytest.mark.invariant("SCH-11")
 def test_a_flow_whose_run_waits_for_a_free_slot_never_runs_twice_at_once(env, overlap):
     # README: "overlap: skip  # if the previous run is still going: skip | queue | allow": only allow runs two of
     # a flow's runs at the same time.
@@ -343,6 +347,7 @@ def test_a_flow_whose_run_waits_for_a_free_slot_never_runs_twice_at_once(env, ov
 
 # --- scheduled.yaml and the flow files it lists ------------------------------------------------------------------------
 
+@pytest.mark.invariant("SCH-10")
 def test_flows_added_to_or_taken_off_scheduled_yaml_count_from_the_next_check(env):
     # README: saved flows with a Schedule block are listed in scheduled.yaml ("removing the block takes the flow
     # off"); the service rereads at its checks, and "a new or changed schedule counts from that moment".
@@ -363,6 +368,7 @@ def test_flows_added_to_or_taken_off_scheduled_yaml_count_from_the_next_check(en
 
 
 @pytest.mark.parametrize("change", ["deleted", "renamed", "not YAML", "a wrong overlap", "its schedule removed"])
+@pytest.mark.invariant("SCH-14")
 def test_a_scheduled_flow_file_that_goes_wrong_is_told_once_and_the_other_flows_still_run(env, change):
     # README: scheduled.yaml lists the flows the scheduler runs; "the scheduler service ... notifies you"; the
     # scheduler rereads changed flow files at its checks.
@@ -412,6 +418,7 @@ def test_a_scheduled_flow_file_that_goes_wrong_is_told_once_and_the_other_flows_
 
 @pytest.mark.parametrize("misfire", ["run_once", "catch_up", "skip"])
 @pytest.mark.parametrize("way", ["Active unticked", "taken off the schedule"])
+@pytest.mark.invariant("SCH-10")
 def test_a_schedule_turned_back_on_counts_from_that_moment(env, way, misfire):
     # README: "a new or changed schedule counts from that moment (nothing before it counts as missed)"; the
     # Schedule block's Active: "Untick it and this schedule does not start the flow"; saving a flow without a
@@ -442,6 +449,7 @@ def test_a_schedule_turned_back_on_counts_from_that_moment(env, way, misfire):
     assert [r["when"] for r in runs(env)] == ["12:00"]
 
 
+@pytest.mark.invariant("SCH-14")
 def test_a_scheduled_yaml_taskloom_cannot_read_is_told_and_the_service_goes_on(env):
     # README "Your files": scheduled.yaml, the flows the scheduler runs (a file you may edit). As for a mistake in
     # settings.yaml (scheduler._at_limit: "you are told, and the service goes on"), the loop of
@@ -471,6 +479,8 @@ def test_a_scheduled_yaml_taskloom_cannot_read_is_told_and_the_service_goes_on(e
     (["failure"], None, None),
     (["failure"], {"when": ["skipped"], "to": ["team@example.com"]}, "team@example.com"),
 ], ids=["settings ask for skipped runs", "settings do not", "the flow's notify asks"])
+@pytest.mark.invariant("SCH-9")
+@pytest.mark.invariant("SCH-11")
 def test_skipped_runs_are_told_on_the_desktop_and_emailed_as_the_notify_settings_say(env, smtp, notify_on, flow_notify,
                                                                                      emailed_to):
     # README: "Scheduled runs then email you on failure (or success / skipped runs). A flow can override this";
@@ -509,6 +519,7 @@ def test_a_scheduled_run_that_fails_is_told_once_on_the_desktop_and_emailed_once
     assert "flow" in title and "failed" in title and "disk full" in message, notes
 
 
+@pytest.mark.invariant("SCH-13")
 def test_a_run_whose_process_dies_is_recorded_failed_told_and_does_not_hold_up_the_next_run(env, smtp):
     # history.mark_crashed: "Record a run whose process died without finishing"; scheduler._poll: "it crashed, so
     # it could not email about itself".
@@ -557,6 +568,7 @@ def test_a_run_that_prints_bytes_that_are_not_text_is_still_reported_as_it_ended
 
 
 @pytest.mark.parametrize("problem", ["mail server down", "no such connection"])
+@pytest.mark.invariant("SCH-14")
 def test_a_notification_email_that_cannot_be_sent_is_told_and_the_service_goes_on(env, problem):
     # scheduler._tell: "A desktop notification, plus an email if the flow's notify settings ask for this event";
     # elsewhere Taskloom names a missing connection: "no connection named 'X' in connections.yaml".
@@ -580,6 +592,7 @@ def test_a_notification_email_that_cannot_be_sent_is_told_and_the_service_goes_o
         assert "nosuch" in cannot[0] and "connection" in cannot[0].lower(), cannot
 
 
+@pytest.mark.invariant("SCH-14")
 def test_an_email_the_mail_server_never_answers_does_not_hold_up_the_other_flows(env):
     # README: "Each run starts at its time (within a second)". A mail server that takes the connection and never
     # answers (e.g. the wrong port, behind a firewall) must not keep the other scheduled flows from starting.
@@ -640,6 +653,7 @@ def test_a_scheduled_run_taskloom_refuses_is_told_emailed_and_tried_again_at_its
     assert [(r["flow"], r["when"]) for r in runs(env)] == [("other", "06:31"), ("other", "06:32")], notes
 
 
+@pytest.mark.invariant("SCH-9")
 def test_the_tray_service_shows_failed_and_skipped_runs_as_tray_messages(env):
     # README: the scheduler service "keeps running in the background (its icon is in the tray) ... and notifies
     # you about failed or skipped runs"; scheduler.py: "`taskloom scheduler` shows a tray icon with notifications".
@@ -687,6 +701,7 @@ def test_runs_already_going_finish_when_the_scheduler_service_is_turned_off(env)
 
 # --- one scheduler per Taskloom folder; scheduler.pid, scheduler.version, the heartbeat ---------------------------------
 
+@pytest.mark.invariant("SCH-1")
 def test_one_scheduler_service_runs_per_taskloom_folder(env):
     # scheduler.acquire_lock: "only one scheduler runs per home"; README: one scheduler service runs every scheduled
     # flow (of its Taskloom folder).
@@ -716,6 +731,7 @@ def test_one_scheduler_service_runs_per_taskloom_folder(env):
         stop_service(env.home, after)
 
 
+@pytest.mark.invariant("SCH-3")
 def test_a_scheduler_started_at_login_while_on_runs_and_says_which_taskloom_it_is(env):
     # README: starting at login runs `taskloom scheduler --unless-paused`; scheduler.serve: the keeper checks
     # scheduler.pid, the editor scheduler.version; the keeper counts a heartbeat older than 2 minutes as hung.
@@ -944,6 +960,7 @@ def test_a_server_the_keeper_cannot_check_is_told_clearly(env, problem):
         assert "connection" in message.lower(), message
 
 
+@pytest.mark.invariant("SCH-14")
 def test_a_mistake_in_settings_does_not_stop_the_keeper_for_good(env):
     # The keeper thread of `taskloom scheduler` (scheduler._keeper_loop) ends for good if a check raises; as for
     # the other mistakes in settings (scheduler._at_limit: "you are told, and the service goes on").
@@ -1013,6 +1030,7 @@ def test_opening_the_editor_switches_starting_at_login_to_this_version(win, qtbo
         assert after == text
 
 
+@pytest.mark.invariant("SCH-3")
 def test_the_settings_box_start_at_login_adds_and_removes_this_folders_startup_script(win, monkeypatch, tmp_path):
     # README: "On Windows, Tools -> Settings -> Start the scheduler service when I log in (or `taskloom scheduler
     # --at-login on`) adds it to your Startup folder". Elsewhere the box is disabled ("Windows only"), so the
@@ -1048,6 +1066,7 @@ os.replace(os.environ["STARTED_WITH"] + ".part", os.environ["STARTED_WITH"])
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the Startup folder, and cmd.exe that runs its scripts, are Windows'")
+@pytest.mark.invariant("SCH-3")
 def test_start_at_login_starts_the_scheduler_from_a_folder_whose_name_has_an_ampersand(env):
     # README: unzip Taskloom "anywhere you can write"; `taskloom scheduler --at-login on` adds the scheduler to your
     # Startup folder. A folder such as C:\Tools\R&D\Taskloom: cmd.exe reads an unquoted & as "then run".
@@ -1093,6 +1112,9 @@ def test_start_at_login_starts_the_scheduler_from_a_folder_whose_name_has_an_amp
     ("nothing scheduled", []),
     ("scheduled.yaml unreadable", []),
 ], ids=["flows scheduled", "turned off", "already on", "nothing scheduled", "scheduled.yaml unreadable"])
+@pytest.mark.invariant("SCH-1")
+@pytest.mark.invariant("SCH-2")
+@pytest.mark.invariant("SCH-3")
 def test_the_editor_starts_the_service_by_itself_when_it_opens_with_flows_scheduled(win, qtbot, tmp_path, monkeypatch,
                                                                                     state, starts):
     # README: "It starts by itself when you save a scheduled flow and when the editor opens with flows scheduled";
@@ -1166,6 +1188,7 @@ def test_turning_the_service_off_asks_first_and_no_keeps_it_on(win, qtbot, monke
         end(proc, win.home.root)
 
 
+@pytest.mark.invariant("SCH-2")
 def test_turning_the_service_on_starts_it_and_it_starts_by_itself_again(win, qtbot, monkeypatch):
     # README: turned off, "it does not start by itself (also not at login), until you turn it on again"; the
     # button shows whether it is on or off.

@@ -112,6 +112,8 @@ def statuses(env) -> list[str]:
     ("2 hours", ["09:30:40", "10:00:00", "11:00:00", "11:30:36", "11:30:50", "13:30:36"],
      ["09:30:40", "11:30:40", "13:30:40"]),
 ], ids=["1 minute", "2 hours"])
+@pytest.mark.invariant("SCH-6")
+@pytest.mark.invariant("SCH-7")
 def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(env, monkeypatch, every, checks,
                                                                                  expected):
     started = record_runs(monkeypatch)
@@ -124,6 +126,7 @@ def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(
     assert statuses(env) == ["success"] * len(expected)
 
 
+@pytest.mark.invariant("SCH-7")
 def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes_schedule(env, monkeypatch):
     started = record_runs(monkeypatch)
     scheduled(env, flow_with(every_five={"every": "5 minutes"}, on_the_clock={"cron": "*/5 * * * *"}))
@@ -144,6 +147,8 @@ def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes
     ("skip", []),  # none (the most recent was more than 2 minutes before it was on again)
     ("catch_up", ["10:10:14", "10:15:14", "10:20:14"]),  # each, in order
 ])
+@pytest.mark.invariant("SCH-7")
+@pytest.mark.invariant("SCH-9")
 def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_misfire(env, monkeypatch, misfire,
                                                                                      after_restart):
     started = record_runs(monkeypatch)
@@ -163,6 +168,8 @@ def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_mis
 
 @pytest.mark.parametrize("change", ["every changed", "active unticked and ticked again",
                                     "taken off the scheduler and scheduled again"])
+@pytest.mark.invariant("SCH-7")
+@pytest.mark.invariant("SCH-10")
 def test_changing_n_or_turning_the_schedule_off_and_on_starts_it_again_from_then(env, monkeypatch, change):
     started = record_runs(monkeypatch)
     flow, home = scheduled(env, flow_with(check={"every": "5 minutes"}))
@@ -209,6 +216,8 @@ def finished_runs(env, count: int, until: float) -> list[dict]:
         time.sleep(0.1)
 
 
+@pytest.mark.invariant("SCH-5")
+@pytest.mark.invariant("SCH-7")
 def test_saved_while_the_service_is_on_every_minute_runs_at_once_then_each_minute_at_that_second(env):
     """The user's case, with the tray service (as on Windows): a scheduled flow's Schedule block changed to every
     1 minute and saved. The service notices within about a second (it used to take up to 15 s), the first run
@@ -305,6 +314,7 @@ def test_a_cron_line_like_every_5_minutes_typed_by_hand_stays_a_custom_cron_line
     ("5 minutes", dt.timedelta(minutes=5), dt.timedelta(seconds=168)),  # next in 00:02:12
     ("2 hours", dt.timedelta(hours=2), dt.timedelta(minutes=30)),  # next in 01:30:00
 ])
+@pytest.mark.invariant("SCH-7")
 def test_the_countdown_counts_to_the_next_run_as_the_service_runs_it(win, qtbot, tmp_path, every, interval, seen_ago):
     flow = write_flow(tmp_path / "check.yaml", flow_with(check={"every": every}))
     win.home.set_scheduled(flow.resolve(), True)

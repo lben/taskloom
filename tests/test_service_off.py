@@ -75,6 +75,8 @@ def plain(tip: str) -> str:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")
+@pytest.mark.invariant("SCH-2")
+@pytest.mark.invariant("SCH-3")
 def test_off_no_schedule_runs_and_on_shows_the_countdown(win, qtbot, tmp_path, monkeypatch):
     """The user's case: off, a Schedule block shows no next time; turned on, the countdown to the next run."""
     started, starts, read = [], [], []
@@ -178,6 +180,7 @@ def test_an_unticked_schedule_block_is_not_active(win, qtbot, tmp_path):
     assert "paus" not in tip.lower(), tip
 
 
+@pytest.mark.invariant("SCH-2")
 def test_turning_the_service_off_from_its_tray_icon_keeps_it_off(qapp, env, monkeypatch):
     import gc
 
@@ -185,6 +188,8 @@ def test_turning_the_service_off_from_its_tray_icon_keeps_it_off(qapp, env, monk
 
     monkeypatch.setenv("TASKLOOM_HOME", str(env.home))
     monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))  # (none offscreen)
+    # With no runs going it asks you to confirm first, as the editor does (SCH-4): yes.
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
     shown = {}
 
     def exec_():  # the tray icon is up: read it, then choose its item that turns the service off

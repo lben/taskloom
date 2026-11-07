@@ -79,6 +79,7 @@ def test_random_flows_never_run_anything_downstream_of_a_failure(tmp_path, seed)
             assert status[name] in ("success", "failed"), (name, status, incoming)
 
 
+@pytest.mark.invariant("SCH-6")
 def test_a_busy_scheduler_runs_every_due_run_exactly_once(tmp_path):
     home = Home(tmp_path / "home")
     home.root.mkdir(parents=True)

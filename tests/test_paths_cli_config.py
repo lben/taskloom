@@ -267,6 +267,7 @@ def test_check_without_names_checks_the_scheduled_flows(env):
     assert "Traceback" not in result.stderr
 
 
+@pytest.mark.invariant("SCH-3")
 def test_scheduler_at_login_on_and_off_from_the_command_line(env):
     env.env["APPDATA"] = str(env.root / "AppData")  # where Windows keeps the Startup folder (never the real one)
 
@@ -304,6 +305,7 @@ os.replace(os.environ["STARTED_WITH"] + ".part", os.environ["STARTED_WITH"])
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the Startup folder, and cmd.exe that runs its scripts, are Windows'")
 @pytest.mark.parametrize("accented", ["Taskloom folder", "install folder"])
+@pytest.mark.invariant("SCH-3")
 def test_start_at_login_starts_the_scheduler_also_when_a_folder_name_has_an_accent(env, accented):
     # README: `taskloom scheduler --at-login on` adds the scheduler to your Startup folder; unzip Taskloom anywhere
     # you can write. E.g. for a user José: C:\Users\José\.taskloom, or Taskloom unzipped in his Downloads.
@@ -454,6 +456,7 @@ WAIT_FLOW = """
 
 
 @pytest.mark.parametrize("limit, overlap", [(None, True), (1, False)], ids=["no limit", "one at a time"])
+@pytest.mark.invariant("SCH-12")
 def test_max_concurrent_runs_limits_how_many_scheduled_runs_go_at_once(env, monkeypatch, limit, overlap):
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")  # the runs it starts
     if limit is not None:
@@ -475,6 +478,7 @@ def test_max_concurrent_runs_limits_how_many_scheduled_runs_go_at_once(env, monk
     ("keep_run: 5\n", "keep_run"),
     ("keep_runs: [5\n", "settings.yaml"),
 ], ids=["max_concurrent_runs not a number", "an unknown setting", "not YAML"])
+@pytest.mark.invariant("SCH-14")
 def test_a_mistake_in_settings_does_not_stop_the_scheduler_service(env, monkeypatch, settings, named):
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     service, notes = scheduler(env, {"flow.yaml": WAIT_FLOW.replace("seconds: 3", "seconds: 0")})

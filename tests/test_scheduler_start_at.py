@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 
 from taskloom.config import Home
@@ -234,6 +235,7 @@ def assert_began_at(env, run: dict, due: dt.datetime):
 
 # --- 2: taskloom run --start-at ------------------------------------------------------------------------------------
 
+@pytest.mark.invariant("SCH-5")
 def test_run_start_at_loads_first_then_records_and_begins_the_run_at_that_moment(env):
     write(env.home / "blocks" / "slow_import.py", SLOW_IMPORT)  # loading takes over a second
     flow = write(env.root / "report.yaml", NOTE_FLOW)
@@ -290,6 +292,8 @@ def test_run_start_at_refuses_a_flow_with_a_mistake_once_loaded_not_at_that_mome
 
 # --- 1 and 3: the scheduler service, in real time -------------------------------------------------------------------
 
+@pytest.mark.invariant("SCH-5")
+@pytest.mark.invariant("SCH-8")
 def test_the_tray_service_begins_a_run_at_its_time_and_not_one_whose_schedule_went_off_before_it(env):
     """1, the reported case: the countdown reached 0 at hh:mm:00 and the Log said 'run #N started' at hh:mm:02, as
     the run's process loaded before it recorded the run. 3: a schedule made inactive or taken off scheduled.yaml
@@ -324,6 +328,8 @@ def test_the_tray_service_begins_a_run_at_its_time_and_not_one_whose_schedule_we
     assert tray_messages(env) == []
 
 
+@pytest.mark.invariant("SCH-5")
+@pytest.mark.invariant("SCH-12")
 def test_the_headless_service_begins_a_run_at_its_time_and_its_early_process_counts_against_the_limit(env):
     """1: also `taskloom scheduler --headless`. 3: max_concurrent_runs, "a run counts against the limit from when its
     process starts": of two runs due at once with a limit of 1, the second starts once the first has finished."""
@@ -345,6 +351,7 @@ def test_the_headless_service_begins_a_run_at_its_time_and_its_early_process_cou
     assert first["finished"] <= second["started"], f"two runs at once with max_concurrent_runs: 1: {done}"
 
 
+@pytest.mark.invariant("SCH-8")
 def test_turning_the_service_off_before_a_runs_time_means_that_run_does_not_happen(env):
     """3, README: turn the scheduler service off (as the editor does) "then no scheduled flow runs"; a run whose
     process it started early has not begun yet, so it does not happen."""

@@ -1559,6 +1559,8 @@ def test_run_from_a_block_on_with_inputs_you_choose_from_the_canvas(win, qtbot, 
     assert tab.scene.nodes["report"].status == "success"
 
 
+@pytest.mark.invariant("SCH-2")
+@pytest.mark.invariant("SCH-3")
 def test_the_scheduler_service_starts_by_itself_unless_you_paused_it(win, tmp_path, monkeypatch):
     from taskloom.scheduler import paused
 

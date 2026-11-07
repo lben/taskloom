@@ -81,6 +81,8 @@ def missed_notes(notes) -> list[str]:
     ("skip", ["10:48"], 3),  # 10:45, 10:46 and 10:47 were missed; 10:48 is on time
     ("catch_up", ["10:45", "10:46", "10:47", "10:48"], None),
 ], ids=["run_once", "skip", "catch_up"])
+@pytest.mark.invariant("SCH-6")
+@pytest.mark.invariant("SCH-9")
 def test_after_a_restart_the_misfire_setting_is_followed_exactly(env, source, misfire, after_restart, skipped):
     """The reported case: per-minute schedule, checks every 15 s, off after 10:44:52, on again at 10:48:07."""
     notes = []
@@ -116,6 +118,7 @@ def test_after_a_restart_the_misfire_setting_is_followed_exactly(env, source, mi
             assert following["started"] >= previous["finished"]
 
 
+@pytest.mark.invariant("SCH-5")
 def test_each_schedule_block_starts_its_own_runs_at_its_own_times(env):
     home = schedule(env, """
         params:
@@ -149,6 +152,7 @@ def test_each_schedule_block_starts_its_own_runs_at_its_own_times(env):
     assert started_by == [("07:00", ["hourly"]), ("07:30", ["half_past"]), ("08:00", ["hourly"])]
 
 
+@pytest.mark.invariant("SCH-10")
 def test_a_paused_schedule_block_never_starts_a_run(env):
     notes = []
     home = schedule(env, """
@@ -175,6 +179,7 @@ def test_a_paused_schedule_block_never_starts_a_run(env):
     ("catch_up", ["08:00"], None),
     ("skip", [], 1),
 ], ids=["run_once", "catch_up", "skip"])
+@pytest.mark.invariant("SCH-9")
 def test_a_one_off_time_missed_while_the_scheduler_was_off(env, misfire, expected, skipped):
     notes = []
     home = schedule(env, f"""
@@ -204,6 +209,7 @@ def test_a_one_off_time_missed_while_the_scheduler_was_off(env, misfire, expecte
         assert missed_notes(notes) == []
 
 
+@pytest.mark.invariant("SCH-10")
 def test_an_edited_schedule_starts_from_now(env):
     home = schedule(env, every_minute("catch_up").replace('"* * * * *"', '"0 * * * *"'))
     Scheduler(home).tick(at("10:00:30"))
@@ -453,6 +459,7 @@ def _hold_until_released(misfire: str) -> str:
     ("skip", ["06:33"], 2),  # 06:31 and 06:32 were missed; 06:33 is the on-time run, started early
     ("catch_up", ["06:31", "06:32", "06:33"], None),
 ])
+@pytest.mark.invariant("SCH-9")
 def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expected, skipped):
     """A check a few seconds before the minute used to start the previous minute and then skip this one.
 
@@ -475,6 +482,7 @@ def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expecte
     assert [n for n in notes if n[0] == "Run skipped"] == []
 
 
+@pytest.mark.invariant("SCH-9")
 def test_catch_up_while_a_run_is_going_does_not_drop_the_oldest_time(env):
     """catch_up queues every time but the first behind the run it just started. The first still used overlap
     skip, so with a run already going the oldest missed time was skipped and only the later ones ran."""
@@ -497,6 +505,7 @@ def test_catch_up_while_a_run_is_going_does_not_drop_the_oldest_time(env):
     assert [n for n in notes if n[0] == "Run skipped"] == []
 
 
+@pytest.mark.invariant("SCH-11")
 def test_one_catch_up_time_while_a_run_is_going_still_follows_overlap_skip(env):
     """overlap skip still applies when a single new time comes due. catch_up queues a backlog, not every tick."""
     notes = []
