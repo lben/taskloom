@@ -9,7 +9,8 @@ is never read half-written (SCH-6, SCH-7); and the README explains these cases (
 What crosses processes at a run's time uses the real service (`taskloom scheduler --headless`) and real run processes,
 in real time. Where a test needs chosen clock times, it drives the service's checks (Scheduler.tick) on that clock, with
 each run's process replaced at the process boundary by a stand-in that claims its time as the real run does
-(test_scheduler_new_promises.FakeRuns); turning a schedule off and on is done in the real editor window."""
+(test_scheduler_new_promises.FakeRuns), and each service made as `taskloom scheduler` makes it: the Taskloom folder's
+lock first, held while it lives (FakeRuns.service); turning a schedule off and on is done in the real editor window."""
 
 import datetime as dt
 import os
@@ -24,7 +25,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from sshserver import free_port  # noqa: E402
 from taskloom.config import Home  # noqa: E402
-from taskloom.scheduler import Scheduler, request_turn_off, set_paused  # noqa: E402
+from taskloom.scheduler import request_turn_off, set_paused  # noqa: E402
 from tests.test_paths_editor_editing import field, select_only  # noqa: E402
 from tests.test_paths_scheduler import keeper  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import headless, printed, python_words  # noqa: E402
@@ -43,7 +44,8 @@ LATER = dt.timedelta(minutes=3)  # turned on again this long after a time: more 
 
 @pytest.fixture
 def fake_runs(monkeypatch) -> FakeRuns:
-    """`taskloom run` processes replaced by stand-ins (see FakeRuns)."""
+    """`taskloom run` processes replaced by stand-ins (see FakeRuns); the service made last with them stops at the
+    end."""
     runs = FakeRuns()
     monkeypatch.setattr(subprocess, "Popen", runs.popen)
     yield runs
@@ -145,8 +147,7 @@ def test_a_run_from_the_waiting_line_started_before_its_time_begins_only_if_its_
         set_paused(Home(env.home), False)  # you turn the service on again, 3 minutes after T
         told = []
         try:
-            drain(Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}")), due + LATER,
-                  runs)
+            drain(runs.service(env.home, lambda title, message: told.append(f"{title}: {message}")), due + LATER, runs)
         finally:
             runs.end()
         assert begins(runs.of("beta")) == utc([due]), (
@@ -171,7 +172,7 @@ def test_a_run_waiting_for_its_flows_run_and_started_before_its_time_does_not_be
     schedule(env.home, env.root, {"report": flow_yaml(one_off(clock("07:00")), one_off(clock("07:02"), misfire="skip"),
                                                       overlap="queue")})
     told = []
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     fake_runs.holding.add("report")  # its runs go on until let go
     for moment in ("06:59:30", "06:59:57", "07:00:00", "07:01:56"):
         service.tick(clock(moment))
@@ -192,8 +193,8 @@ def test_a_run_waiting_for_its_flows_run_and_started_before_its_time_does_not_be
     if turned_off:
         assert service.off, "the service did not turn off"
         set_paused(Home(env.home), False)  # you turn the service on again
-        drain(Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}")), clock("07:05"),
-              fake_runs)
+        back = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
+        drain(back, clock("07:05"), fake_runs)
         assert begins(fake_runs.of("report")) == utc([clock("07:00"), clock("07:02")]), (
             f"turned on again at 07:05, the saved 07:02 run did not start once: the runs that began are for "
             f"{[r.start_at for r in fake_runs.of('report') if r.not_begun is None]}; told: {told}")
@@ -219,11 +220,12 @@ def test_a_schedule_turned_off_and_on_again_while_the_service_is_off_starts_afre
                                                                 *([other] if other else []))})["minutely"]
     told = []
     seen = (dt.datetime.now() - dt.timedelta(minutes=5, seconds=30)).replace(microsecond=0)
-    before = Scheduler(home, lambda title, message: told.append(f"{title}: {message}"))
+    before = fake_runs.service(home.root, lambda title, message: told.append(f"{title}: {message}"))
     before.tick(seen)  # the service first sees it: its first run is then
     request_turn_off(home, {})  # you turn the service off (no runs going: it only asked to confirm)
     before.tick(seen + SECONDS)
     assert before.off and begins(fake_runs.of("minutely")) == utc([seen]), told
+    fake_runs.stop()  # (off, it has ended)
 
     tab = win.open_flow(path)
     for active in (False, True):  # Active unticked and saved, then ticked again and saved
@@ -233,7 +235,8 @@ def test_a_schedule_turned_off_and_on_again_while_the_service_is_off_starts_afre
         assert yaml.safe_load(path.read_text(encoding="utf-8"))["blocks"]["s1"]["config"].get("active", True) is active
     set_paused(home, False)  # you turn the service on
     on = dt.datetime.now().replace(microsecond=0)
-    drain(Scheduler(home, lambda title, message: told.append(f"{title}: {message}")), on, fake_runs)
+    drain(fake_runs.service(home.root, lambda title, message: told.append(f"{title}: {message}")), on, fake_runs)
+    fake_runs.stop()
 
     ran = begins(fake_runs.of("minutely"))[1:]
     assert ran == utc([on]), (f"turned off and on again while the service was off, minutely did not start afresh: "
@@ -298,8 +301,8 @@ def test_a_time_less_than_2_minutes_late_still_runs_when_the_next_time_is_a_few_
     latest missed time, 10:01. Either way 10:02 runs at its time too (it is not missed)."""
     schedule(env.home, env.root, {"minutely": flow_yaml({"cron": "* * * * *", "misfire": misfire})})
     told = []
-    Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}")).tick(clock("10:00:30"))
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))  # back on
+    fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}")).tick(clock("10:00:30"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))  # back on
     for moment in ("10:01:56", "10:01:57", "10:01:59", "10:02:00", "10:02:01", "10:02:03"):
         service.tick(clock(moment))
 
@@ -313,7 +316,8 @@ def test_a_time_less_than_2_minutes_late_still_runs_when_the_next_time_is_a_few_
 # --- SCH-14: a mistake in the settings ------------------------------------------------------------------------------
 
 @pytest.mark.invariant("SCH-14")
-def test_a_keeper_setting_that_is_not_a_list_is_told_as_a_mistake_in_the_settings_and_the_keeper_goes_on(env):
+def test_a_keeper_setting_that_is_not_a_list_is_told_as_a_mistake_in_the_settings_and_the_keeper_goes_on(env,
+                                                                                                         fake_runs):
     """settings.yaml says `keeper: yes`. The keeper's check (its thread repeats it every 5 minutes) tells you, in plain
     words, that the keeper setting in the settings is a mistake, and does not end: once the setting is put right (as
     Tools → Settings writes it), its next check checks the server listed."""
@@ -321,7 +325,7 @@ def test_a_keeper_setting_that_is_not_a_list_is_told_as_a_mistake_in_the_setting
                                          "username: tester, password: not-needed}\n")
     write(env.home / "settings.yaml", "keeper: yes\n")
     told = []
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     try:
         service.check_servers()
     except Exception as e:
@@ -362,7 +366,7 @@ def test_a_mistake_in_the_settings_is_told_once_until_settings_yaml_changes_sayi
     schedule(env.home, env.root, {name: flow_yaml(HOURLY) for name in ("first", "second", "third")})
     fake_runs.holding.update({"first", "second", "third", "fourth", "fifth"})  # their runs go on until let go
     told = []
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     service.check_servers()  # (the keeper's first check, as the service starts)
     for moment in ("10:00:00", "10:00:01", "10:00:02"):
         service.tick(clock(moment))
@@ -421,7 +425,7 @@ def test_the_service_never_reads_the_list_of_scheduled_flows_half_written(env, f
     paths = schedule(env.home, env.root, {"hourly": flow_yaml({"every": "1 hour"}), "other": flow_yaml(YEARLY)})
     Home(env.home).set_scheduled(paths["other"], False)
     told = []
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     service.tick(dt.datetime.now())
     times, checks = 4000, 0
     saver = subprocess.Popen([sys.executable, "-c", SAVES, str(env.home), str(paths["other"]), str(times)],

@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from taskloom.config import Home  # noqa: E402
 from taskloom.scheduler import Scheduler  # noqa: E402
+from tests.test_scheduler_promises import on  # noqa: E402
 from tests.test_lines import shown, tab_icon_is, wait_runs  # noqa: E402
 
 MANUAL = {"type": "trigger.manual"}
@@ -233,16 +234,17 @@ def test_a_scheduled_run_whose_failure_skips_its_error_handler_is_told_and_email
     home = Home(env.home)
     home.set_scheduled(flow, True)
     notes = []
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    try:
-        scheduler.tick(t0)
-        scheduler.tick(t0 + dt.timedelta(minutes=1))  # its time: the run starts
-        scheduler.wait_for_runs()
-    finally:
-        for started in scheduler.runs:  # (none, unless it never finished)
-            started.proc.kill()
-            started.proc.wait(timeout=15)
+    with on(env):
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        try:
+            scheduler.tick(t0)
+            scheduler.tick(t0 + dt.timedelta(minutes=1))  # its time: the run starts
+            scheduler.wait_for_runs()
+        finally:
+            for started in scheduler.runs:  # (none, unless it never finished)
+                started.proc.kill()
+                started.proc.wait(timeout=15)
 
     run_id, status = env.last_run()
     assert env.block_status(run_id) == {"nightly": "success", "check": "failed", "handler": "skipped"}

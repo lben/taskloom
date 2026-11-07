@@ -11,6 +11,7 @@ from sshserver import PASSWORD, SSHTestServer, free_port
 from taskloom import ssh
 from taskloom.config import Home
 from taskloom.scheduler import Scheduler
+from tests.test_scheduler_promises import on
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the test server runs commands in /bin/sh")
 
@@ -84,28 +85,29 @@ def test_keeper_starts_and_restarts_the_server_scheduler(env, server):
             command: "{sys.executable} -m taskloom.cli"
             home: "~/.taskloom"
     """)
-    scheduler = Scheduler(Home(env.home))
-    heartbeat, pid_file = remote_home / "scheduler.heartbeat", remote_home / "scheduler.pid"
-    try:
-        scheduler.check_servers()
-        assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
-        deadline = time.monotonic() + 30
-        while not heartbeat.exists() and time.monotonic() < deadline:
-            time.sleep(0.2)
-        assert heartbeat.exists()
+    with on(env):
+        scheduler = Scheduler(Home(env.home))
+        heartbeat, pid_file = remote_home / "scheduler.heartbeat", remote_home / "scheduler.pid"
+        try:
+            scheduler.check_servers()
+            assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
+            deadline = time.monotonic() + 30
+            while not heartbeat.exists() and time.monotonic() < deadline:
+                time.sleep(0.2)
+            assert heartbeat.exists()
 
-        scheduler.check_servers()  # running: nothing to do
-        assert scheduler.messages.empty()
+            scheduler.check_servers()  # running: nothing to do
+            assert scheduler.messages.empty()
 
-        first_pid = pid_file.read_text().strip()
-        _kill_from_pid_file(pid_file)
-        time.sleep(0.5)
-        scheduler.check_servers()
+            first_pid = pid_file.read_text().strip()
+            _kill_from_pid_file(pid_file)
+            time.sleep(0.5)
+            scheduler.check_servers()
 
-        assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
-        assert pid_file.read_text().strip() != first_pid
-    finally:
-        _kill_from_pid_file(pid_file)
+            assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
+            assert pid_file.read_text().strip() != first_pid
+        finally:
+            _kill_from_pid_file(pid_file)
 
 
 def test_ssh_command_output_and_failure(env, server):
@@ -232,9 +234,10 @@ def test_servers_that_allow_one_command_per_connection(env, server, monkeypatch)
 
         # The keeper also runs two commands per server: it must cope too.
         env.write("home/settings.yaml", f"keeper:\n  - {{connection: appserver, command: '{sys.executable} -m taskloom.cli', home: '~/.taskloom'}}\n")
-        scheduler = Scheduler(home)
-        scheduler.check_servers()
-        assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
+        with on(env):
+            scheduler = Scheduler(home)
+            scheduler.check_servers()
+            assert scheduler.messages.get_nowait()[0] == "Server scheduler restarted"
     finally:
         _kill_from_pid_file(pid_file)
         _kill_from_pid_file(server.home_path / ".taskloom" / "scheduler.pid")

@@ -5,15 +5,15 @@ early (SCH-8, SCH-4), the editor's view of a service turning off (SCH-2, SCH-4),
 Each test goes through the real service (`taskloom scheduler`, started from the editor's button or as a server's
 `--headless` service), real run processes, and turning off as the dialog's Proceed sends it (request_turn_off) or
 through the editor's button itself. Only what cannot happen in a test is arranged: where a schedule's next time must
-come within seconds, a service before this one first saw it (and ran it) about a minute earlier (next_time_in); and
-the run going before a PC restart, whose process id now belongs to another program, is written into the run history
-and the service's list of runs going as the service before the restart left them."""
+come within seconds, a service before this one first saw it (and ran it) about a minute earlier (next_time_in); and a
+PC restart, as the run going then ending at once (killed) while no service is on, and its process id, as its run
+history has it, given to another program started since."""
 
 import contextlib
 import datetime as dt
 import gc
-import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -29,8 +29,7 @@ from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from taskloom.config import Home  # noqa: E402
-from taskloom.history import History  # noqa: E402
-from taskloom.scheduler import RUNS_FILE, Scheduler, request_turn_off, runs_going  # noqa: E402
+from taskloom.scheduler import request_turn_off, runs_going  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
 from tests.test_paths_scheduler import start_service as start_headless  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, TURN_OFF, FakeRuns, answer_when_shown, end_runs,  # noqa: E402
@@ -49,11 +48,14 @@ NO_KEYRING = "keyring.backends.fail.Keyring"
 def next_time_in(home: Path, seconds: int) -> dt.datetime:
     """The scheduled flows' Every 1 minute schedules were first seen (and run) a minute minus `seconds` ago by a
     service before this one, so their next time comes `seconds` from now; that time (on this PC's clock, to the
-    second). Only the schedules' state is kept: that service's runs were stand-ins (FakeRuns), and it is gone."""
+    second). Only the schedules' state is kept: that service's runs were stand-ins (FakeRuns), and it is gone (it was
+    made as `taskloom scheduler` makes one: FakeRuns.service, the folder's lock first, let go of as it stopped)."""
     seen = (dt.datetime.now() + dt.timedelta(seconds=seconds) - MINUTE).replace(microsecond=0)
+    runs = FakeRuns()
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(subprocess, "Popen", FakeRuns().popen)
-        Scheduler(Home(home)).tick(seen)
+        patch.setattr(subprocess, "Popen", runs.popen)
+        runs.service(home).tick(seen)
+    runs.end()  # (that service stops)
     gc.collect()  # (that service's hold on the history file goes with it)
     return seen + MINUTE
 
@@ -86,13 +88,12 @@ def block_errors(home: Path, flow: str) -> list[tuple[str, str, str | None]]:
                           "WHERE r.flow = ? ORDER BY b.run_id", (flow,)).fetchall()
 
 
-def said_going(home: Path) -> list[dict]:
-    """The runs going, with their run numbers, as the service last said them (for the next service, scheduler.runs)."""
-    try:
-        told = json.loads((home / RUNS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    return [run for run in told if isinstance(run, dict) and run.get("run")] if isinstance(told, list) else []
+def checked_since_it_began(env, flow: str, seconds: float = 10) -> bool:
+    """Whether the service has checked a second or more after `flow`'s latest run began, as its run history says (by
+    then the service has taken in that the run began); waits for it at most `seconds`."""
+    began = [r["started"] for r in history(env.home) if r["flow"] == flow]
+    return bool(began) and checked_after(env, max(began) + dt.timedelta(seconds=1),
+                                         until=dt.datetime.now() + dt.timedelta(seconds=seconds))
 
 
 def on_screen(win, tab) -> tuple[str, str]:
@@ -290,24 +291,27 @@ def test_after_a_pc_restart_a_run_whose_process_id_is_now_another_programs_is_no
     a run going, and turning the service off with Stop now for nightly never ends that program. The old run is
     recorded as crashed, and you are told (a server's service tells in its log)."""
     write(env.home / "settings.yaml", "max_concurrent_runs: 1\n")
-    nightly = schedule(env.home, env.root, {"nightly": flow_yaml(EVERY_MINUTE, overlap="skip")})["nightly"]
-    due = next_time_in(env.home, 8)  # the time of the run that was going was a minute before
-    began = due - MINUTE
-    schedule(env.home, env.root, {"other": flow_yaml(HOURLY)})  # its first time is as soon as the service sees it
-    history_db = History(env.home / "history.db")
+    began = (dt.datetime.now() + dt.timedelta(seconds=10)).replace(microsecond=0)  # the time of the run that was going
+    due = began + dt.timedelta(seconds=16)  # nightly's next time
+    times = [{"at": f"{t:%Y-%m-%d %H:%M:%S}"} for t in (began, due)]
+    nightly = schedule(env.home, env.root, {"nightly": flow_yaml(*times, work=hold_until("nightly"),
+                                                                 overlap="skip")})["nightly"]
+    before = start_headless(env.home)  # the service before the PC restarted: it runs nightly at `began`
     try:
-        old = history_db.start_run("nightly", str(nightly), {"when": f"{began:%Y-%m-%d %H:%M:%S}"},
-                                   began.isoformat(timespec="milliseconds"), started_by="s1")
-        history_db({"event": "block_started", "run_id": old, "ts": began.isoformat(timespec="milliseconds"),
-                    "block": "work1", "attempt": 1})
+        assert wait_until(lambda: statuses(env.home, "nightly") == ["running"], 30), \
+            f"nightly's run did not begin and go on: {history(env.home)}"
+        assert checked_since_it_began(env, "nightly"), "the service did not check after nightly's run began"
     finally:
-        history_db.close()
+        stop_service(env, before)
+    (old,) = history(env.home)
+    os.kill(old["pid"], getattr(signal, "SIGKILL", signal.SIGTERM))  # the PC restarted: the run has gone
+    assert wait_until(lambda: ended(old["pid"]), 15), "the run going did not end"
     unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])  # started after it began
     with contextlib.closing(sqlite3.connect(env.home / "history.db", timeout=30)) as db:
-        db.execute("UPDATE runs SET pid=? WHERE id=?", (unrelated.pid, old))
+        db.execute("UPDATE runs SET pid=? WHERE flow='nightly'", (unrelated.pid,))
         db.commit()
-    write(env.home / RUNS_FILE, json.dumps([{"flow": str(nightly), "name": "nightly", "run": old, "block": "s1",
-                                             "schedule": "every 1 minute"}]))
+    write(env.root / "nightly.go", "go")  # (its next run does not wait)
+    schedule(env.home, env.root, {"other": flow_yaml(HOURLY)})  # its first time is as soon as the service sees it
     log = env.root / "service.log"
     with open(log, "w", encoding="utf-8") as out:
         service = start_headless(env.home, stdout=out)
@@ -357,7 +361,7 @@ def test_a_run_going_when_the_service_restarted_that_then_crashes_is_told_on_the
     service = start_service(env, tray=True)
     try:
         assert wait_until(lambda: going(env.home) == {"fragile"}, 30), history(env.home)
-        assert wait_until(lambda: said_going(env.home), 10), "the service did not say which runs go"
+        assert checked_since_it_began(env, "fragile"), "the service did not check after the run began"
         (run,) = history(env.home)
         stop_service(env, service)  # the service stops; the run goes on
         assert not ended(run["pid"]), "the run ended with the service"

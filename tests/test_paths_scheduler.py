@@ -35,6 +35,7 @@ from taskloom.editor.safety import pid_alive  # noqa: E402
 from taskloom.editor.window import MainWindow  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.scheduler import Scheduler, acquire_lock, paused, running_scheduler_version, set_paused  # noqa: E402
+from taskloom.scheduler import _unlock as unlock  # noqa: E402
 
 T0 = dt.datetime(2026, 1, 5, 6, 30)  # a Monday
 NO_KEYRING = "keyring.backends.fail.Keyring"
@@ -48,6 +49,21 @@ def no_credential_store(monkeypatch):
 
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", NO_KEYRING)
     monkeypatch.setattr(config, "_keyring", lambda: None)
+
+
+SERVICE_LOCKS = []  # the Taskloom folders' locks held by the services made here (see service)
+
+
+def stop_services():
+    """The services made here stop: they let go of their folders' locks."""
+    while SERVICE_LOCKS:
+        unlock(SERVICE_LOCKS.pop())
+
+
+@pytest.fixture(autouse=True)
+def services_stop_at_the_end():
+    yield
+    stop_services()
 
 
 # --- helpers ---------------------------------------------------------------------------------------------------
@@ -102,10 +118,17 @@ YEARLY = """
 
 def service(env, flows: dict[str, str]) -> tuple[Scheduler, list]:
     """The scheduler service's loop (what `taskloom scheduler` runs) over these scheduled flows ({file: text});
-    the notifications it shows are recorded as (title, message)."""
+    the notifications it shows are recorded as (title, message). Made as `taskloom scheduler` makes it: it takes the
+    Taskloom folder's lock first (unless the test holds it already: on(env) in test_scheduler_promises), then makes its
+    Scheduler, and holds the lock while it lives: until the next one is made here, or the test ends."""
+    stop_services()
     home = Home(env.home)
     for name, text in flows.items():
         home.set_scheduled(write(env.root / name, text), True)
+    try:
+        SERVICE_LOCKS.append(acquire_lock(home))
+    except RuntimeError:  # (the test holds it: the service is on)
+        pass
     notes = []
     return Scheduler(home, lambda title, message: notes.append((title, message))), notes
 
@@ -664,7 +687,11 @@ def test_the_tray_service_shows_failed_and_skipped_runs_as_tray_messages(env):
     broken = flow(f"{(now.minute + 30) % 60} * * * *", code="raise RuntimeError('disk full')")
     home.set_scheduled(write(env.root / "broken.yaml", broken), True)
     home.set_scheduled(write(env.root / "report.yaml", flow(f"0 {(now.hour + 12) % 24} * * *", misfire="skip")), True)
-    Scheduler(home).tick(now - dt.timedelta(days=2))  # on since then: their times came while it was off
+    lock = acquire_lock(home)  # (a service before this one, made as `taskloom scheduler` makes it: the lock first)
+    try:
+        Scheduler(home).tick(now - dt.timedelta(days=2))  # on since then: their times came while it was off
+    finally:
+        unlock(lock)  # (it stopped)
     shown = env.root / "tray-messages.jsonl"
     proc = start_tray_service(env.home, shown)
     try:
@@ -686,7 +713,11 @@ def test_runs_already_going_finish_when_the_scheduler_service_is_turned_off(env)
     path = write(env.root / "flow.yaml", flow("0 * * * *", wait=5, code="open('finished.txt', 'w').write('x')"))
     home = Home(env.home)
     home.set_scheduled(path, True)
-    Scheduler(home).tick(dt.datetime.now() - dt.timedelta(hours=2))  # on since then: on start, its latest time runs
+    lock = acquire_lock(home)  # (a service before this one, made as `taskloom scheduler` makes it: the lock first)
+    try:
+        Scheduler(home).tick(dt.datetime.now() - dt.timedelta(hours=2))  # on since then: on start, its latest time runs
+    finally:
+        unlock(lock)  # (it stopped)
     proc = start_service(env.home)
     try:
         assert wait_for(lambda: runs(env) and env.query(

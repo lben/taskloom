@@ -11,6 +11,7 @@ from taskloom.config import Home
 from taskloom.history import History
 from taskloom.scheduler import Scheduler, set_start_at_login, startup_script
 from taskloom.schedule import Cron, Trigger
+from tests.test_scheduler_promises import on
 
 T0 = dt.datetime(2026, 1, 5, 6, 30)  # a Monday
 
@@ -27,6 +28,7 @@ def test_cron_next_times():
 
 
 def _scheduler(env, flow_text, notes):
+    """The scheduler service over this flow; made inside on(env), as `taskloom scheduler` makes it: the lock first."""
     flow = env.write("flow.yaml", flow_text)
     home = Home(env.home)
     home.set_scheduled(flow, True)
@@ -60,11 +62,12 @@ HOURLY = """
 @pytest.mark.invariant("SCH-9")
 def test_missed_runs_follow_the_misfire_policy(env, misfire, expected):
     notes = []
-    scheduler, _ = _scheduler(env, HOURLY.format(misfire=misfire), notes)
-    scheduler.tick(T0)  # first sight of the schedule: nothing is missed yet
-    scheduler.tick(T0 + dt.timedelta(hours=3))  # 07:00, 08:00 and 09:00 were missed
+    with on(env):
+        scheduler, _ = _scheduler(env, HOURLY.format(misfire=misfire), notes)
+        scheduler.tick(T0)  # first sight of the schedule: nothing is missed yet
+        scheduler.tick(T0 + dt.timedelta(hours=3))  # 07:00, 08:00 and 09:00 were missed
 
-    scheduler.wait_for_runs()
+        scheduler.wait_for_runs()
 
     assert _runs(env) == [(when, "success") for when in expected]
     if misfire == "skip":
@@ -74,21 +77,22 @@ def test_missed_runs_follow_the_misfire_policy(env, misfire, expected):
 @pytest.mark.invariant("SCH-11")
 def test_on_time_runs_and_overlap_skip(env):
     notes = []
-    scheduler, _ = _scheduler(env, """
-        params:
-          when: {type: datetime, expr: "now()"}
-        triggers:
-          - schedule: {cron: "* * * * *"}
-        blocks:
-          pause:
-            type: logic.wait
-            config: {seconds: 3}
-    """, notes)
-    scheduler.tick(T0)
-    scheduler.tick(T0 + dt.timedelta(minutes=1))  # due now: starts
-    scheduler.tick(T0 + dt.timedelta(minutes=2))  # due again while still running: skipped (overlap: skip)
+    with on(env):
+        scheduler, _ = _scheduler(env, """
+            params:
+              when: {type: datetime, expr: "now()"}
+            triggers:
+              - schedule: {cron: "* * * * *"}
+            blocks:
+              pause:
+                type: logic.wait
+                config: {seconds: 3}
+        """, notes)
+        scheduler.tick(T0)
+        scheduler.tick(T0 + dt.timedelta(minutes=1))  # due now: starts
+        scheduler.tick(T0 + dt.timedelta(minutes=2))  # due again while still running: skipped (overlap: skip)
 
-    scheduler.wait_for_runs()
+        scheduler.wait_for_runs()
 
     assert _runs(env) == [("2026-01-05 06:31:00", "success")]
     assert notes == [("Run skipped", "flow: the previous run is still going")]
@@ -96,18 +100,19 @@ def test_on_time_runs_and_overlap_skip(env):
 
 def test_failed_scheduled_run_is_notified(env):
     notes = []
-    scheduler, _ = _scheduler(env, """
-        triggers:
-          - schedule: {cron: "* * * * *"}
-        blocks:
-          boom:
-            type: logic.python
-            config: {inputs: [], code: "raise RuntimeError('disk full')"}
-    """, notes)
-    scheduler.tick(T0)
-    scheduler.tick(T0 + dt.timedelta(minutes=1))
-    scheduler.wait_for_runs()
-    scheduler.tick(T0 + dt.timedelta(minutes=1, seconds=30))  # reports finished runs
+    with on(env):
+        scheduler, _ = _scheduler(env, """
+            triggers:
+              - schedule: {cron: "* * * * *"}
+            blocks:
+              boom:
+                type: logic.python
+                config: {inputs: [], code: "raise RuntimeError('disk full')"}
+        """, notes)
+        scheduler.tick(T0)
+        scheduler.tick(T0 + dt.timedelta(minutes=1))
+        scheduler.wait_for_runs()
+        scheduler.tick(T0 + dt.timedelta(minutes=1, seconds=30))  # reports finished runs
 
     assert notes == [("flow failed", "boom: RuntimeError: disk full (line 1)")]
 
@@ -214,7 +219,8 @@ def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
     home = Home(env.home)
     home.set_scheduled(flow, True)
     told = []
-    Scheduler(home, lambda title, message: told.append((title, message))).tick(T0)
+    with on(env):  # (made as `taskloom scheduler` makes it: the lock first)
+        Scheduler(home, lambda title, message: told.append((title, message))).tick(T0)
 
     (title, message), = told
     assert title == "Scheduled flow cannot be read"

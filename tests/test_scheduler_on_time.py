@@ -13,6 +13,7 @@ import pytest
 from taskloom.config import Home
 from taskloom.history import History
 from taskloom.scheduler import EARLY_START, Scheduler, acquire_lock
+from tests.test_scheduler_promises import on
 
 DAY = dt.date(2026, 1, 5)
 
@@ -87,24 +88,26 @@ def test_after_a_restart_the_misfire_setting_is_followed_exactly(env, source, mi
     """The reported case: per-minute schedule, checks every 15 s, off after 10:44:52, on again at 10:48:07."""
     notes = []
     home = schedule(env, every_minute(misfire, source))
-    before = Scheduler(home, lambda title, message: notes.append((title, message)))
-    for clock in ("10:43:52", "10:44:07", "10:44:22", "10:44:37", "10:44:52"):
-        before.tick(at(clock))
-    before.wait_for_runs()
+    with on(env):  # (each service made as `taskloom scheduler` makes it: the lock first, held while it lives)
+        before = Scheduler(home, lambda title, message: notes.append((title, message)))
+        for clock in ("10:43:52", "10:44:07", "10:44:22", "10:44:37", "10:44:52"):
+            before.tick(at(clock))
+        before.wait_for_runs()
     assert whens(env) == ["10:44"]
 
-    after = Scheduler(home, lambda title, message: notes.append((title, message)))  # turned on again
-    after.tick(at("10:48:07"))
-    after.wait_for_runs()
-    assert whens(env) == ["10:44"] + after_restart
-
-    for clock in ("10:48:22", "10:48:37", "10:48:52"):
-        after.tick(at(clock))
+    with on(env):
+        after = Scheduler(home, lambda title, message: notes.append((title, message)))  # turned on again
+        after.tick(at("10:48:07"))
         after.wait_for_runs()
-    assert whens(env) == ["10:44"] + after_restart  # nothing more at the following checks
+        assert whens(env) == ["10:44"] + after_restart
 
-    after.tick(at("10:49:00"))
-    after.wait_for_runs()
+        for clock in ("10:48:22", "10:48:37", "10:48:52"):
+            after.tick(at(clock))
+            after.wait_for_runs()
+        assert whens(env) == ["10:44"] + after_restart  # nothing more at the following checks
+
+        after.tick(at("10:49:00"))
+        after.wait_for_runs()
     assert whens(env) == ["10:44"] + after_restart + ["10:49"]
     assert {r["status"] for r in runs(env)} == {"success"}
     if skipped:
@@ -140,10 +143,11 @@ def test_each_schedule_block_starts_its_own_runs_at_its_own_times(env):
           - hourly.start -> load.after
           - half_past.start -> report.after
     """)
-    scheduler = Scheduler(home)
-    for clock in ("06:30:10", "07:00:05", "07:30:05", "08:00:05"):
-        scheduler.tick(at(clock))
-        scheduler.wait_for_runs()
+    with on(env):
+        scheduler = Scheduler(home)
+        for clock in ("06:30:10", "07:00:05", "07:30:05", "08:00:05"):
+            scheduler.tick(at(clock))
+            scheduler.wait_for_runs()
 
     started_by = []
     for run in runs(env):
@@ -166,10 +170,12 @@ def test_a_paused_schedule_block_never_starts_a_run(env):
         edges:
           - every_minute.start -> note.after
     """)
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    for clock in ("10:00:00", "10:01:00", "10:05:30"):
-        scheduler.tick(at(clock))
-    Scheduler(home, lambda title, message: notes.append((title, message))).tick(at("11:00:00"))  # after a restart
+    with on(env):
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+        for clock in ("10:00:00", "10:01:00", "10:05:30"):
+            scheduler.tick(at(clock))
+    with on(env):
+        Scheduler(home, lambda title, message: notes.append((title, message))).tick(at("11:00:00"))  # after a restart
 
     assert runs(env) == [] and notes == []
 
@@ -195,11 +201,13 @@ def test_a_one_off_time_missed_while_the_scheduler_was_off(env, misfire, expecte
         edges:
           - once.start -> note.after
     """)
-    Scheduler(home, lambda title, message: notes.append((title, message))).tick(at("06:30:00"))
-    after = Scheduler(home, lambda title, message: notes.append((title, message)))  # on again after 08:00
-    for clock in ("09:30:00", "09:30:15", "10:00:00"):
-        after.tick(at(clock))
-        after.wait_for_runs()
+    with on(env):
+        Scheduler(home, lambda title, message: notes.append((title, message))).tick(at("06:30:00"))
+    with on(env):
+        after = Scheduler(home, lambda title, message: notes.append((title, message)))  # on again after 08:00
+        for clock in ("09:30:00", "09:30:15", "10:00:00"):
+            after.tick(at(clock))
+            after.wait_for_runs()
 
     assert whens(env) == expected
     if skipped:
@@ -212,15 +220,17 @@ def test_a_one_off_time_missed_while_the_scheduler_was_off(env, misfire, expecte
 @pytest.mark.invariant("SCH-10")
 def test_an_edited_schedule_starts_from_now(env):
     home = schedule(env, every_minute("catch_up").replace('"* * * * *"', '"0 * * * *"'))
-    Scheduler(home).tick(at("10:00:30"))
+    with on(env):
+        Scheduler(home).tick(at("10:00:30"))
     env.write("flow.yaml", every_minute("catch_up"))  # edited while the scheduler was off
 
-    after = Scheduler(home)
-    after.tick(at("10:30:10"))  # the edited schedule is seen for the first time: nothing was missed
-    after.wait_for_runs()
-    assert runs(env) == []
-    after.tick(at("10:31:00"))
-    after.wait_for_runs()
+    with on(env):
+        after = Scheduler(home)
+        after.tick(at("10:30:10"))  # the edited schedule is seen for the first time: nothing was missed
+        after.wait_for_runs()
+        assert runs(env) == []
+        after.tick(at("10:31:00"))
+        after.wait_for_runs()
     assert whens(env) == ["10:31"]
 
 
@@ -230,57 +240,58 @@ def test_an_edited_schedule_starts_from_now(env):
 def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_a_second(env):
     """It wakes EARLY_START before a due time: that run's process starts then, to begin at its time."""
     home = Home(env.home)
-    scheduler = Scheduler(home)
-    assert scheduler.seconds_to_next_check(at("10:00:00")) == pytest.approx(1)  # nothing is scheduled
+    with on(env):
+        scheduler = Scheduler(home)
+        assert scheduler.seconds_to_next_check(at("10:00:00")) == pytest.approx(1)  # nothing is scheduled
 
-    blocks = env.write("blocks.yaml", """
-        blocks:
-          report:
-            type: trigger.schedule
-            config: {cron: "30 * * * *"}
-          paused:
-            type: trigger.schedule
-            config: {cron: "14 * * * *", active: false}
-          note:
-            type: logic.python
-            config: {inputs: [], outputs: [], code: "pass"}
-        edges:
-          - report.start -> note.after
-          - paused.start -> note.after
-    """)
-    flow_level = env.write("flow_level.yaml", """
-        triggers:
-          - schedule: {cron: "15 * * * *"}
-        blocks:
-          note:
-            type: logic.python
-            config: {inputs: [], outputs: [], code: "pass"}
-    """)
-    env.write("not_scheduled.yaml", """
-        triggers:
-          - schedule: {cron: "13 * * * *"}
-        blocks:
-          note:
-            type: logic.python
-            config: {inputs: [], outputs: [], code: "pass"}
-    """)
-    home.set_scheduled(blocks, True)
-    home.set_scheduled(flow_level, True)
+        blocks = env.write("blocks.yaml", """
+            blocks:
+              report:
+                type: trigger.schedule
+                config: {cron: "30 * * * *"}
+              paused:
+                type: trigger.schedule
+                config: {cron: "14 * * * *", active: false}
+              note:
+                type: logic.python
+                config: {inputs: [], outputs: [], code: "pass"}
+            edges:
+              - report.start -> note.after
+              - paused.start -> note.after
+        """)
+        flow_level = env.write("flow_level.yaml", """
+            triggers:
+              - schedule: {cron: "15 * * * *"}
+            blocks:
+              note:
+                type: logic.python
+                config: {inputs: [], outputs: [], code: "pass"}
+        """)
+        env.write("not_scheduled.yaml", """
+            triggers:
+              - schedule: {cron: "13 * * * *"}
+            blocks:
+              note:
+                type: logic.python
+                config: {inputs: [], outputs: [], code: "pass"}
+        """)
+        home.set_scheduled(blocks, True)
+        home.set_scheduled(flow_level, True)
 
-    for clock, seconds in [
-        ("10:00:00", 1),  # the next due time is more than a second away
-        ("10:12:59.500", 1),  # 10:13 is the time of a flow that is not scheduled
-        ("10:13:59.500", 1),  # 10:14 is the time of a paused Schedule block
-        ("10:14:59.250", 0.75),  # the flow-level trigger at 10:15
-        ("10:15:00", 1),
-        ("10:29:59.400", 0.6),  # the Schedule block at 10:30
-        ("10:29:59.999", 0.001),
-    ]:
-        now = at(clock) - EARLY_START  # each clock as long before as its runs' processes start early
-        scheduler.tick(now)
-        waited = scheduler.seconds_to_next_check(now)
-        assert seconds <= waited + 1e-6 and waited <= min(seconds + 0.01, 1), (clock, waited)  # never before
-    scheduler.wait_for_runs()
+        for clock, seconds in [
+            ("10:00:00", 1),  # the next due time is more than a second away
+            ("10:12:59.500", 1),  # 10:13 is the time of a flow that is not scheduled
+            ("10:13:59.500", 1),  # 10:14 is the time of a paused Schedule block
+            ("10:14:59.250", 0.75),  # the flow-level trigger at 10:15
+            ("10:15:00", 1),
+            ("10:29:59.400", 0.6),  # the Schedule block at 10:30
+            ("10:29:59.999", 0.001),
+        ]:
+            now = at(clock) - EARLY_START  # each clock as long before as its runs' processes start early
+            scheduler.tick(now)
+            waited = scheduler.seconds_to_next_check(now)
+            assert seconds <= waited + 1e-6 and waited <= min(seconds + 0.01, 1), (clock, waited)  # never before
+        scheduler.wait_for_runs()
 
 
 # --- 1: real time, in the tray scheduler and in `taskloom scheduler --headless` ---------------------
@@ -498,18 +509,19 @@ def test_catch_up_while_a_run_is_going_does_not_drop_the_oldest_time(env):
     skip, so with a run already going the oldest missed time was skipped and only the later ones ran."""
     notes = []
     home = schedule(env, _hold_until_released("catch_up"))
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    try:
-        scheduler.tick(at("06:30:00"))
-        scheduler.tick(at("06:31:00"))  # 06:31 starts and holds
-        scheduler.tick(at("06:33:00"))  # 06:32 and 06:33 are due while 06:31 is still going
-        _release(env)
-        scheduler.wait_for_runs(timeout=30)
-    finally:
-        _release(env)
-        for run in list(scheduler.runs):
-            if run.proc.poll() is None:
-                run.proc.kill()
+    with on(env):
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+        try:
+            scheduler.tick(at("06:30:00"))
+            scheduler.tick(at("06:31:00"))  # 06:31 starts and holds
+            scheduler.tick(at("06:33:00"))  # 06:32 and 06:33 are due while 06:31 is still going
+            _release(env)
+            scheduler.wait_for_runs(timeout=30)
+        finally:
+            _release(env)
+            for run in list(scheduler.runs):
+                if run.proc.poll() is None:
+                    run.proc.kill()
 
     assert whens(env) == ["06:31", "06:32", "06:33"], notes
     assert [n for n in notes if n[0] == "Run skipped"] == []
@@ -520,18 +532,19 @@ def test_one_catch_up_time_while_a_run_is_going_still_follows_overlap_skip(env):
     """overlap skip still applies when a single new time comes due. catch_up queues a backlog, not every tick."""
     notes = []
     home = schedule(env, _hold_until_released("catch_up"))
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    try:
-        scheduler.tick(at("06:30:00"))
-        scheduler.tick(at("06:31:00"))
-        scheduler.tick(at("06:32:00"))  # only 06:32, and 06:31 has not finished
-        assert any(title == "Run skipped" for title, _ in notes), notes
-        _release(env)
-        scheduler.wait_for_runs(timeout=30)
-    finally:
-        _release(env)
-        for run in list(scheduler.runs):
-            if run.proc.poll() is None:
-                run.proc.kill()
+    with on(env):
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+        try:
+            scheduler.tick(at("06:30:00"))
+            scheduler.tick(at("06:31:00"))
+            scheduler.tick(at("06:32:00"))  # only 06:32, and 06:31 has not finished
+            assert any(title == "Run skipped" for title, _ in notes), notes
+            _release(env)
+            scheduler.wait_for_runs(timeout=30)
+        finally:
+            _release(env)
+            for run in list(scheduler.runs):
+                if run.proc.poll() is None:
+                    run.proc.kill()
 
     assert whens(env) == ["06:31"], notes

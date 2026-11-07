@@ -141,6 +141,7 @@ def test_scheduler_emails_skipped_runs_when_asked(env, smtp):
 
     from taskloom.config import Home
     from taskloom.scheduler import Scheduler
+    from tests.test_scheduler_promises import on
 
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
     flow = env.write("flow.yaml", """
@@ -155,12 +156,13 @@ def test_scheduler_emails_skipped_runs_when_asked(env, smtp):
     """)
     home = Home(env.home)
     home.set_scheduled(flow, True)
-    scheduler = Scheduler(home)
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    scheduler.tick(t0)
-    scheduler.tick(t0 + dt.timedelta(minutes=1))
-    scheduler.tick(t0 + dt.timedelta(minutes=2))  # still running: skipped
-    scheduler.wait_for_runs()
+    with on(env):
+        scheduler = Scheduler(home)
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        scheduler.tick(t0)
+        scheduler.tick(t0 + dt.timedelta(minutes=1))
+        scheduler.tick(t0 + dt.timedelta(minutes=2))  # still running: skipped
+        scheduler.wait_for_runs()
 
     [msg] = smtp.messages
     assert msg["Subject"] == "[Taskloom] Run skipped" and msg["To"] == "me@example.com"

@@ -17,6 +17,7 @@ import polars as pl
 import yaml
 
 from conftest import REPO
+from tests.test_scheduler_promises import on
 
 DAY = "params:\n      day: {type: date, value: 2026-10-02}\n    "
 
@@ -1463,12 +1464,13 @@ def _scheduled(env, monkeypatch, name, text):
 
 def test_a_failed_scheduled_run_is_emailed(env, smtp, monkeypatch):
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
-    scheduler = _scheduled(env, monkeypatch, "nightly.yaml", FAILING_FLOW.replace(
-        "blocks:", 'triggers:\n      - schedule: {cron: "* * * * *"}\n    blocks:', 1))
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    scheduler.tick(t0)
-    scheduler.tick(t0 + dt.timedelta(minutes=1))
-    scheduler.wait_for_runs()
+    with on(env):
+        scheduler = _scheduled(env, monkeypatch, "nightly.yaml", FAILING_FLOW.replace(
+            "blocks:", 'triggers:\n      - schedule: {cron: "* * * * *"}\n    blocks:', 1))
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        scheduler.tick(t0)
+        scheduler.tick(t0 + dt.timedelta(minutes=1))
+        scheduler.wait_for_runs()
 
     [msg] = smtp.messages
     assert msg["Subject"] == "[Taskloom] nightly failed" and msg["To"] == "me@example.com"
@@ -1477,19 +1479,20 @@ def test_a_failed_scheduled_run_is_emailed(env, smtp, monkeypatch):
 
 def test_a_scheduled_run_that_crashes_is_emailed(env, smtp, monkeypatch):
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
-    scheduler = _scheduled(env, monkeypatch, "nightly.yaml", """
-        name: nightly
-        triggers:
-          - schedule: {cron: "* * * * *"}
-        blocks:
-          die:
-            type: logic.python
-            config: {inputs: [], code: "import os; os._exit(3)"}
-    """)
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    scheduler.tick(t0)
-    scheduler.tick(t0 + dt.timedelta(minutes=1))
-    scheduler.wait_for_runs()
+    with on(env):
+        scheduler = _scheduled(env, monkeypatch, "nightly.yaml", """
+            name: nightly
+            triggers:
+              - schedule: {cron: "* * * * *"}
+            blocks:
+              die:
+                type: logic.python
+                config: {inputs: [], code: "import os; os._exit(3)"}
+        """)
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        scheduler.tick(t0)
+        scheduler.tick(t0 + dt.timedelta(minutes=1))
+        scheduler.wait_for_runs()
 
     [msg] = smtp.messages
     assert msg["Subject"] == "[Taskloom] nightly crashed" and msg["To"] == "me@example.com"
@@ -1497,20 +1500,21 @@ def test_a_scheduled_run_that_crashes_is_emailed(env, smtp, monkeypatch):
 
 def test_missed_runs_skipped_are_emailed_once_with_how_many(env, smtp, monkeypatch):
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
-    scheduler = _scheduled(env, monkeypatch, "every-minute.yaml", """
-        name: every-minute
-        notify: {when: [skipped, failure]}
-        triggers:
-          - schedule: {cron: "* * * * *", misfire: skip}
-        blocks:
-          fine:
-            type: logic.python
-            config: {inputs: [], code: "output = 1"}
-    """)
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    scheduler.tick(t0)
-    scheduler.tick(t0 + dt.timedelta(minutes=5))  # 06:31 … 06:34 were missed, 06:35 is on time
-    scheduler.wait_for_runs()
+    with on(env):
+        scheduler = _scheduled(env, monkeypatch, "every-minute.yaml", """
+            name: every-minute
+            notify: {when: [skipped, failure]}
+            triggers:
+              - schedule: {cron: "* * * * *", misfire: skip}
+            blocks:
+              fine:
+                type: logic.python
+                config: {inputs: [], code: "output = 1"}
+        """)
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        scheduler.tick(t0)
+        scheduler.tick(t0 + dt.timedelta(minutes=5))  # 06:31 … 06:34 were missed, 06:35 is on time
+        scheduler.wait_for_runs()
 
     [msg] = smtp.messages
     assert msg["Subject"] == "[Taskloom] Missed runs skipped"

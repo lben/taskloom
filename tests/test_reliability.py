@@ -13,7 +13,8 @@ from taskloom.engine import run_flow
 from taskloom.flow import load_flow
 from taskloom.history import History
 from taskloom.registry import discover
-from taskloom.scheduler import Scheduler
+from taskloom.scheduler import Scheduler, acquire_lock
+from taskloom.scheduler import _unlock as unlock
 
 HERE = Path(__file__).parent
 
@@ -105,11 +106,15 @@ edges:
         home.set_scheduled(path, True)
         flows.append(path)
     notes = []
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    for minute in range(5):
-        scheduler.tick(t0 + dt.timedelta(minutes=minute))
-    scheduler.wait_for_runs(timeout=300)
+    lock = acquire_lock(home)  # the service is on: as `taskloom scheduler`, the lock first, then its Scheduler
+    try:
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        for minute in range(5):
+            scheduler.tick(t0 + dt.timedelta(minutes=minute))
+        scheduler.wait_for_runs(timeout=300)
+    finally:
+        unlock(lock)
 
     history = History(home.history_db)
     runs = history.runs(limit=1000)

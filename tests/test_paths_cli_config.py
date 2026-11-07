@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from conftest import REPO, events
+from tests.test_scheduler_promises import on
 
 T0 = dt.datetime(2026, 1, 5, 6, 30)  # a Monday
 
@@ -461,11 +462,12 @@ def test_max_concurrent_runs_limits_how_many_scheduled_runs_go_at_once(env, monk
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")  # the runs it starts
     if limit is not None:
         env.write("home/settings.yaml", f"max_concurrent_runs: {limit}\n")
-    service, notes = scheduler(env, {"first.yaml": WAIT_FLOW, "second.yaml": WAIT_FLOW})
+    with on(env):
+        service, notes = scheduler(env, {"first.yaml": WAIT_FLOW, "second.yaml": WAIT_FLOW})
 
-    service.tick(T0)
-    service.tick(T0 + dt.timedelta(minutes=1))  # both are due
-    service.wait_for_runs()
+        service.tick(T0)
+        service.tick(T0 + dt.timedelta(minutes=1))  # both are due
+        service.wait_for_runs()
 
     runs = env.query("SELECT started, finished, status FROM runs ORDER BY started")
     assert [status for _, _, status in runs] == ["success", "success"], notes
@@ -481,16 +483,17 @@ def test_max_concurrent_runs_limits_how_many_scheduled_runs_go_at_once(env, monk
 @pytest.mark.invariant("SCH-14")
 def test_a_mistake_in_settings_does_not_stop_the_scheduler_service(env, monkeypatch, settings, named):
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
-    service, notes = scheduler(env, {"flow.yaml": WAIT_FLOW.replace("seconds: 3", "seconds: 0")})
-    service.tick(T0)
-    env.write("home/settings.yaml", settings)  # e.g. edited by hand while the service runs
+    with on(env):
+        service, notes = scheduler(env, {"flow.yaml": WAIT_FLOW.replace("seconds: 3", "seconds: 0")})
+        service.tick(T0)
+        env.write("home/settings.yaml", settings)  # e.g. edited by hand while the service runs
 
-    try:
-        service.tick(T0 + dt.timedelta(minutes=1))  # due: the loop of `taskloom scheduler` ends if this raises
-        service.wait_for_runs()
-        service.tick(T0 + dt.timedelta(minutes=1, seconds=30))  # reports finished runs
-    except Exception as e:
-        pytest.fail(f"the scheduler service stops: {type(e).__name__}: {e}")
+        try:
+            service.tick(T0 + dt.timedelta(minutes=1))  # due: the loop of `taskloom scheduler` ends if this raises
+            service.wait_for_runs()
+            service.tick(T0 + dt.timedelta(minutes=1, seconds=30))  # reports finished runs
+        except Exception as e:
+            pytest.fail(f"the scheduler service stops: {type(e).__name__}: {e}")
     assert runs_recorded(env) == 1 or any(named in message for _, message in notes), notes
 
 
@@ -507,10 +510,11 @@ def test_the_keeper_starts_the_scheduler_on_a_server_where_it_is_not_running(env
     fake.write_text(KEEPER_TASKLOOM, encoding="utf-8")
     fake.chmod(0o755)
     env.write("home/settings.yaml", "keeper:\n- {connection: appserver, command: ~/taskloom/taskloom, home: ~/.taskloom}\n")
-    service, notes = scheduler(env, {})
+    with on(env):
+        service, notes = scheduler(env, {})
 
-    service.check_servers()  # the keeper thread's check
-    service.tick(T0)  # the scheduler's loop tells you what the keeper found
+        service.check_servers()  # the keeper thread's check
+        service.tick(T0)  # the scheduler's loop tells you what the keeper found
 
     started = server.home_path / "keeper-started.txt"
     deadline = time.monotonic() + 20
@@ -522,13 +526,14 @@ def test_the_keeper_starts_the_scheduler_on_a_server_where_it_is_not_running(env
 
 def test_a_keeper_entry_written_as_just_a_connection_name_is_reported_not_a_crash(env):
     env.write("home/settings.yaml", "keeper: [appserver]\n")  # "list the server in the keeper setting"
-    service, notes = scheduler(env, {})
+    with on(env):
+        service, notes = scheduler(env, {})
 
-    try:
-        service.check_servers()  # the keeper thread of `taskloom scheduler` ends for good if this raises
-    except Exception as e:
-        pytest.fail(f"the keeper stops checking servers: {type(e).__name__}: {e}")
-    service.tick(T0)  # the scheduler's loop tells you what the keeper found
+        try:
+            service.check_servers()  # the keeper thread of `taskloom scheduler` ends for good if this raises
+        except Exception as e:
+            pytest.fail(f"the keeper stops checking servers: {type(e).__name__}: {e}")
+        service.tick(T0)  # the scheduler's loop tells you what the keeper found
 
     assert [n for n in notes if "appserver" in " ".join(n)], notes
 

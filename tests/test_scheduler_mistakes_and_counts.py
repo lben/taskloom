@@ -37,10 +37,12 @@ MISTAKES = {
 
 @pytest.fixture
 def fake_runs(monkeypatch) -> FakeRuns:
-    """`taskloom run` processes replaced by stand-ins (see FakeRuns)."""
+    """`taskloom run` processes replaced by stand-ins (see FakeRuns); a service made with them (FakeRuns.service)
+    stops at the end."""
     runs = FakeRuns()
     monkeypatch.setattr(subprocess, "Popen", runs.popen)
-    return runs
+    yield runs
+    runs.end()
 
 
 def headless(env, log: Path, **extra) -> subprocess.Popen:
@@ -169,8 +171,8 @@ def test_a_flow_listed_next_to_the_mistake_still_begins_at_its_time_when_its_run
     paths = schedule(env.home, env.root, {"listed": flow_yaml({"every": "1 minute"}, overlap="allow")})
     write(env.home / "scheduled.yaml", MISTAKES[mistake].format(listed=json.dumps(str(paths["listed"]))))
     told = []
+    lock = acquire_lock(Home(env.home))  # the scheduler service is on: as `taskloom scheduler`, the lock first
     scheduler = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
-    lock = acquire_lock(Home(env.home))  # the scheduler service is on
     seen = dt.datetime.now().replace(microsecond=0) - dt.timedelta(seconds=57)
     try:
         scheduler.tick(seen)  # first seen then: its run for that time begins at once
@@ -250,13 +252,15 @@ ON_TIME = missed_times(151)[-1]  # 2026-01-06 01:10, the time after the 150 miss
 ASKED_AT = ON_TIME - dt.timedelta(seconds=3)  # the check that finds them: ON_TIME is within its 5 s early start
 
 
-def catch_up_service(env, someone_to_ask: bool) -> tuple[Scheduler, list, list]:
-    """The service's checks over a Catch up schedule every 10 minutes (the flow `backlog`), first seen at FIRST_SIGHT:
-    (the service, what it told, what it asked: (flow, count, answer))."""
+def catch_up_service(env, runs: FakeRuns, someone_to_ask: bool) -> tuple[Scheduler, list, list]:
+    """The service's checks over a Catch up schedule every 10 minutes (the flow `backlog`), first seen at FIRST_SIGHT,
+    its runs stood in for by `runs` (made as `taskloom scheduler` makes it: FakeRuns.service): (the service, what it
+    told, what it asked: (flow, count, answer))."""
     schedule(env.home, env.root, {"backlog": flow_yaml(EVERY_TEN)})
     told, asked = [], []
-    scheduler = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"),
-                          (lambda flow, count, answer: asked.append((flow, count, answer))) if someone_to_ask else None)
+    scheduler = runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"),
+                             (lambda flow, count, answer: asked.append((flow, count, answer))) if someone_to_ask
+                             else None)
     scheduler.tick(FIRST_SIGHT)
     return scheduler, told, asked
 
@@ -269,7 +273,7 @@ def test_150_missed_and_one_on_time_the_latest_100_missed_run_and_the_on_time_on
     were missed; Run only the latest 100. The latest 100 missed times run, oldest first, one at a time, and 01:10 runs
     too, after them (it is not missed); you are told 50 were not run. With no one to ask (a server): the same runs
     without a question, and its log says 150 were missed and 50 not run."""
-    scheduler, told, asked = catch_up_service(env, someone_to_ask)
+    scheduler, told, asked = catch_up_service(env, fake_runs, someone_to_ask)
     drain(scheduler, ASKED_AT, fake_runs)
     if someone_to_ask:
         assert [(flow, count) for flow, count, _ in asked] == [("backlog", 150)], told
@@ -299,7 +303,7 @@ def test_times_that_come_while_you_are_asked_are_not_missed_and_run_after_the_ch
     and 01:30 come (checks a few seconds before and at each). Then Run only the latest 100: the latest 100 missed times
     run, oldest first, then 01:10, 01:20 and 01:30, one at a time; you are told 50 were not run (the times that came
     while you were asked are neither counted as missed nor dropped)."""
-    scheduler, told, asked = catch_up_service(env, someone_to_ask=True)
+    scheduler, told, asked = catch_up_service(env, fake_runs, someone_to_ask=True)
     later = [ON_TIME + dt.timedelta(minutes=10), ON_TIME + dt.timedelta(minutes=20)]
     for moment in [ASKED_AT, ON_TIME] + [m for t in later for m in (t - dt.timedelta(seconds=3), t)]:
         drain(scheduler, moment, fake_runs)

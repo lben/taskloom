@@ -14,6 +14,7 @@ service's check falling between the editor's two steps, by the editor's own run 
 service check once the editor has recorded the crash and closed it; and the PC's time zone, as the TZ each process
 starts with (or this process is set to)."""
 
+import contextlib
 import datetime as dt
 import json
 import os
@@ -29,17 +30,19 @@ import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from taskloom import __version__  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.history import History  # noqa: E402
-from taskloom.scheduler import Scheduler, runs_listed  # noqa: E402
+from taskloom.scheduler import Scheduler, runs_going  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import STAMP, headless, printed, told  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, FakeRuns, begins, drain, end_runs, flow_yaml,  # noqa: E402
                                                going, history, hold_until, one_at_a_time, pump, says, schedule,
                                                statuses, utc, wait_until, write)
 from tests.test_scheduler_start_at import (checked_after, record_process_starts, run_processes,  # noqa: E402
                                            start_service, stop_service)
-from tests.test_scheduler_turn_off_and_restart import (EVERY_MINUTE, MINUTE, block_errors, crashes_when,  # noqa: E402
-                                                       next_time_in, said_going)
+from tests.test_scheduler_promises import on  # noqa: E402
+from tests.test_scheduler_turn_off_and_restart import (EVERY_MINUTE, MINUTE, block_errors,  # noqa: E402
+                                                       checked_since_it_began, crashes_when, next_time_in)
 from tests.test_scheduler_while_off import EAST, FAILURE_MAILS, WEST, Told, crash_mails, utc_offset  # noqa: E402
 
 
@@ -53,6 +56,17 @@ def sleep_until(moment: dt.datetime):
 def service_pid(env) -> int:
     """The scheduler service's own process (on Windows, a venv's python.exe is a launcher: not that one)."""
     return int((env.home / "scheduler.pid").read_text(encoding="utf-8"))
+
+
+@contextlib.contextmanager
+def service_here(env):
+    """The scheduler service is on in this process, made as `taskloom scheduler` makes it: it takes the Taskloom
+    folder's lock first (on), says which process and Taskloom it is (scheduler.pid, scheduler.version: the editor
+    reads them), then makes its Scheduler (inside this), and holds the lock while it lives (to the end of this)."""
+    with on(env):
+        (env.home / "scheduler.pid").write_text(str(os.getpid()), encoding="utf-8")
+        (env.home / "scheduler.version").write_text(f"{__version__} {os.getpid()}", encoding="utf-8")
+        yield
 
 
 def end_service(env, service: subprocess.Popen, killed: bool):
@@ -152,8 +166,11 @@ def test_a_time_whose_run_did_not_begin_as_the_service_was_killed_is_missed_when
     told_back, runs = [], FakeRuns()
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(subprocess, "Popen", runs.popen)
-        back = Scheduler(Home(env.home), lambda title, message: told_back.append(f"{title}: {message}"))
-        drain(back, due + dt.timedelta(seconds=150), runs)
+        back = runs.service(env.home, lambda title, message: told_back.append(f"{title}: {message}"))  # the lock first
+        try:
+            drain(back, due + dt.timedelta(seconds=150), runs)
+        finally:
+            runs.end()  # (the service stops)
 
     assert not_begun == [], f"T's run began with no service on: {not_begun}"
     expected = utc([due + k * MINUTE for k in ran_k])
@@ -344,11 +361,11 @@ def test_a_run_started_early_whose_time_the_pc_slept_across_does_not_begin_and_i
 
 @pytest.mark.invariant("SCH-13")
 def test_a_crash_the_editor_records_just_before_the_service_checks_is_told_exactly_once(env, smtp, win, monkeypatch):
-    """nightly's scheduled run is going, the service has listed it as going (scheduler.runs), and its flow asks for
-    failure emails (to the team). Its process crashes. The editor's check finds it first and records it as crashed;
-    right then, before the editor decides whether to tell you, the service checks (it finds the run recorded already,
-    and rewrites its list of runs going without it); then the editor goes on. You are told exactly once all the same:
-    one message "nightly crashed" (from the editor or the service) and one email to the team.
+    """nightly's scheduled run is going, the service counts it as going (the turn-off dialog lists it), and its flow
+    asks for failure emails (to the team). Its process crashes. The editor's check finds it first and records it as
+    crashed; right then, before the editor decides whether to tell you, the service checks (it finds the run recorded
+    already, and rewrites its list of runs going without it); then the editor goes on. You are told exactly once all
+    the same: one message "nightly crashed" (from the editor or the service) and one email to the team.
 
     The order is forced through the real code: the editor's run history connection (MainWindow._history) is one whose
     close, once the editor has recorded a crash through it, first lets the service (a Scheduler in this process,
@@ -356,45 +373,47 @@ def test_a_crash_the_editor_records_just_before_the_service_checks_is_told_exact
     write(env.home / "settings.yaml", "smtp_connection: mailer\n")
     schedule(env.home, env.root, {"nightly": flow_yaml(HOURLY, work=crashes_when("nightly"), notify=FAILURE_MAILS)})
     by_service = []
-    service = Scheduler(Home(env.home), lambda title, message: by_service.append(f"{title}: {message}"))
-    order = []
+    with service_here(env):  # the service is on, in this process
+        service = Scheduler(Home(env.home), lambda title, message: by_service.append(f"{title}: {message}"))
+        order = []
 
-    class EditorHistory(History):
-        marked = False
+        class EditorHistory(History):
+            marked = False
 
-        def mark_crashed(self, *args, **kwargs):
-            marked = super().mark_crashed(*args, **kwargs)
-            self.marked = self.marked or marked
-            return marked
+            def mark_crashed(self, *args, **kwargs):
+                marked = super().mark_crashed(*args, **kwargs)
+                self.marked = self.marked or marked
+                return marked
 
-        def close(self):
-            super().close()
-            if self.marked and not order:
-                order.append("the editor recorded it")
+            def close(self):
+                super().close()
+                if self.marked and not order:
+                    order.append("the editor recorded it")
+                    service.tick()
+                    order.append("the service checked")
+
+        told_in_editor = Told(win, ("nightly",))
+        try:
+            service.tick()  # its first time is now
+            assert wait_until(lambda: service.runs and service.runs[0].run_id is not None, 30), history(env.home)
+            service.tick()  # it counts the run as going
+            (run,) = service.runs
+            assert "nightly" in [name for _, name in runs_going(Home(env.home))], \
+                "the service does not count nightly's run as going: the turn-off dialog would not list it"
+            write(env.root / "nightly.crash", "now")  # the run crashes
+            assert wait_until(lambda: run.proc.poll() is not None, 15), "the run did not crash"
+            monkeypatch.setattr(win, "_history", lambda: EditorHistory(env.home / "history.db"))
+            win._refresh_statuses()  # the editor's check (every 2 s)
+            for _ in range(3):  # the later checks of the service, and of the editor
                 service.tick()
-                order.append("the service checked")
-
-    told_in_editor = Told(win, ("nightly",))
-    try:
-        service.tick()  # its first time is now
-        assert wait_until(lambda: service.runs and service.runs[0].run_id is not None, 30), history(env.home)
-        service.tick()  # it lists the run as going
-        (run,) = service.runs
-        assert run.run_id in runs_listed(Home(env.home)), "the service did not list the run as going"
-        write(env.root / "nightly.crash", "now")  # the run crashes
-        assert wait_until(lambda: run.proc.poll() is not None, 15), "the run did not crash"
-        monkeypatch.setattr(win, "_history", lambda: EditorHistory(env.home / "history.db"))
-        win._refresh_statuses()  # the editor's check (every 2 s)
-        for _ in range(3):  # the later checks of the service, and of the editor
-            service.tick()
-        service.wait_for_runs(10)
-        pump(lambda: told_in_editor.messages("nightly") or crash_mails(smtp, "nightly"), 3)
-        pump(lambda: False, 2.5)  # (a second message or email would have come by now)
-        service.wait_for_runs(10)
-    finally:
-        told_in_editor.stop()
-        write(env.root / "nightly.crash", "now")
-        end_runs(env.home)
+            service.wait_for_runs(10)
+            pump(lambda: told_in_editor.messages("nightly") or crash_mails(smtp, "nightly"), 3)
+            pump(lambda: False, 2.5)  # (a second message or email would have come by now)
+            service.wait_for_runs(10)
+        finally:
+            told_in_editor.stop()
+            write(env.root / "nightly.crash", "now")
+            end_runs(env.home)
 
     assert order == ["the editor recorded it", "the service checked"], f"the order was not forced: {order}"
     assert statuses(env.home, "nightly") == ["failed"] and [e for _, _, e in block_errors(env.home, "nightly")
@@ -523,7 +542,7 @@ def test_when_the_service_stops_with_runs_going_it_counts_only_the_runs_that_hav
                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                    env={**env.env, "TEST_STOP_FILE": str(stop)})
     try:
-        assert wait_until(lambda: going(env.home) == {"going"} and said_going(env.home), 20), \
+        assert wait_until(lambda: going(env.home) == {"going"}, 20) and checked_since_it_began(env, "going"), \
             f"going's run did not begin: {history(env.home)}\n{printed(log)}"
         assert run_processes(starts, soon, due, until=due - dt.timedelta(seconds=3)), \
             f"soon's run for {due:%H:%M:%S} was not started early"

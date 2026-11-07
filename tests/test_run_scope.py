@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from taskloom.config import Home  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.scheduler import Scheduler  # noqa: E402
+from tests.test_scheduler_promises import on  # noqa: E402
 
 # The user's flow: Manual Start -> a -> b, and Schedule -> c -> an If with no condition.
 USER_FLOW = {
@@ -242,12 +243,13 @@ def test_a_scheduled_run_goes_ahead_when_another_schedules_line_has_a_problem(en
     home = Home(env.home)
     home.set_scheduled(flow, True)
     notes = []
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    monday = dt.datetime(2026, 1, 5, 6, 30)
-    scheduler.tick(monday)  # first sight of the schedules
-    scheduler.tick(monday + dt.timedelta(hours=1))  # hourly's 07:00 is due; weekly's Sunday 03:00 is not
+    with on(env):
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
+        monday = dt.datetime(2026, 1, 5, 6, 30)
+        scheduler.tick(monday)  # first sight of the schedules
+        scheduler.tick(monday + dt.timedelta(hours=1))  # hourly's 07:00 is due; weekly's Sunday 03:00 is not
 
-    scheduler.wait_for_runs()
+        scheduler.wait_for_runs()
 
     runs = runs_of(env.home)
     assert [(r["status"], r["started_by"]) for r in runs] == [("success", "hourly")], notes

@@ -6,6 +6,7 @@ import json
 from taskloom.config import Home
 from taskloom.history import History
 from taskloom.scheduler import Scheduler
+from tests.test_scheduler_promises import on
 
 TWO_STARTS = """
     blocks:
@@ -59,11 +60,12 @@ def test_scheduler_runs_the_schedule_block_branch(env):
     flow = env.write("flow.yaml", TWO_STARTS.replace('"0 2 * * *"', '"* * * * *"'))
     home = Home(env.home)
     home.set_scheduled(flow, True)
-    scheduler = Scheduler(home)
-    t0 = dt.datetime(2026, 1, 5, 6, 30)
-    scheduler.tick(t0)
-    scheduler.tick(t0 + dt.timedelta(minutes=1))
-    scheduler.wait_for_runs()
+    with on(env):
+        scheduler = Scheduler(home)
+        t0 = dt.datetime(2026, 1, 5, 6, 30)
+        scheduler.tick(t0)
+        scheduler.tick(t0 + dt.timedelta(minutes=1))
+        scheduler.wait_for_runs()
 
     assert (env.root / "by_schedule.txt").exists() and not (env.root / "by_hand.txt").exists()
 
