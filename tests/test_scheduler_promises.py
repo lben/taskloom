@@ -266,9 +266,10 @@ class Simulation:
     checks: list = field(default_factory=list)  # (life, clock time) of each check
 
     def came(self, run: Started) -> dt.datetime:
-        """The check at which the run's time came: the first of its service's life that starts runs due by 5 s
-        after it (SCH-8), or the first of that life for a time missed before it."""
-        return min(t for life, t in self.checks if life == run.life and t + EARLY >= run.as_of)
+        """The check at which the run's time came: the first that starts runs due by 5 s after it (SCH-8), which for
+        a time missed is the first after it. A run still waiting its turn when the service stops is saved and started
+        by the service after it (SCH-16): it came at that check of the earlier one."""
+        return min(t for _, t in self.checks if t + EARLY >= run.as_of)
 
 
 SCHEDULE = st.tuples(st.one_of(st.tuples(st.just("cron"), st.sampled_from(["* * * * *", "*/2 * * * *", "*/5 * * * *",
