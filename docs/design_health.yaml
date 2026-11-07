@@ -35,6 +35,5 @@ baseline:
   - taskloom/flow.py:validate  # 60 decision points, 107 lines
   - taskloom/pyenv.py:run_code  # 12 decision points, 89 lines
   - taskloom/report.py:render_chart  # 49 decision points, 96 lines
-  - taskloom/scheduler.py:Scheduler.tick  # 31 decision points, 65 lines
   - taskloom/upgrade.py:_check  # 49 decision points, 99 lines
 kept: {}

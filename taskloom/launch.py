@@ -6,6 +6,7 @@ and the scheduler) and `taskloomw` (no console window; opens the editor by defau
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -31,3 +32,26 @@ def windowed_command() -> list[str]:
         return [str(windowed if windowed.exists() else Path(sys.executable).with_name(f"taskloom{EXE}"))]
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     return [str(pythonw if pythonw.exists() else sys.executable), "-m", "taskloom.cli"]
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether the process `pid` is running (e.g. a run's, recorded in its history)."""
+    if pid == os.getpid():
+        return True
+    if sys.platform == "win32":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True

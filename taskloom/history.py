@@ -249,11 +249,12 @@ class History:
         rows = self._exec("SELECT id, flow, flow_path, started, pid FROM runs WHERE status='running' ORDER BY id")
         return [dict(zip(("id", "flow", "flow_path", "started", "pid"), r)) for r in rows]
 
-    def mark_crashed(self, run_id: int, ts: str):
-        """Record a run whose process died without finishing (e.g. it was killed)."""
-        self._exec("UPDATE runs SET status='failed', finished=? WHERE id=? AND status='running'", (ts, run_id))
-        self._exec("UPDATE blocks SET status='failed', error='the run process stopped unexpectedly' "
-                   "WHERE run_id=? AND status='running'", (run_id,))
+    def mark_crashed(self, run_id: int, ts: str, cancelled: bool = False):
+        """Record a run whose process died without finishing (e.g. it was killed); `cancelled`: you stopped it, and
+        it had to be forced to end."""
+        status, error = ("cancelled", None) if cancelled else ("failed", "the run process stopped unexpectedly")
+        self._exec("UPDATE runs SET status=?, finished=? WHERE id=? AND status='running'", (status, ts, run_id))
+        self._exec("UPDATE blocks SET status=?, error=? WHERE run_id=? AND status='running'", (status, error, run_id))
 
     def close(self):
         self._db.close()

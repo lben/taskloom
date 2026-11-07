@@ -1,4 +1,8 @@
-"""Schedules: cron expressions, every N minutes or hours, and one-off times, in the machine's local time."""
+"""Schedules: cron expressions, every N minutes or hours, and one-off times, in the machine's local time.
+
+A clock time (cron, one-off) is when this PC's clock shows it; every N counts in real elapsed time. Asked with a moment
+(a datetime with its UTC offset), a schedule answers in moments, so a clock change neither moves an every-N rhythm nor
+loses or repeats a clock time; asked with a local time (no offset), it answers in local times, as on screen."""
 
 from __future__ import annotations
 
@@ -162,6 +166,20 @@ class Every:
         return start + ((t - start) // self.interval + 1) * self.interval
 
 
+def clock_moment(wall: dt.datetime) -> dt.datetime:
+    """The moment (in UTC) this PC's clock first shows the local time `wall`: a time it shows twice (the night the
+    clock goes back) is its first; a time it skips (the night it goes forward) is the moment of the jump."""
+    first, second = (int(wall.replace(fold=fold).timestamp()) for fold in (0, 1))
+    if first > second:  # skipped: the jump is between the moments its offsets before and after it give
+        while first - second > 1:  # the first second whose clock time is `wall` or later
+            middle = (first + second) // 2
+            if dt.datetime.fromtimestamp(middle) >= wall:
+                first = middle
+            else:
+                second = middle
+    return dt.datetime.fromtimestamp(first, dt.timezone.utc)
+
+
 class Trigger:
     def __init__(self, data: dict, block: str | None = None):
         self.block = block  # the Schedule block it comes from, or None for a flow-level trigger
@@ -188,10 +206,17 @@ class Trigger:
 
     def next_after(self, t: dt.datetime, start: dt.datetime | None = None) -> dt.datetime | None:
         """Its first time after t. An every-N schedule's times count from `start`, one of them (where the
-        scheduler service counts it from); without one it has none yet."""
+        scheduler service counts it from); without one it has none yet. A moment t (with its UTC offset) gives a
+        moment: a clock time's is when the clock first shows it (clock_moment)."""
         if self.every:
             return None if start is None else self.timing.next_after(t, start)
-        return self.timing.next_after(t)
+        if t.tzinfo is None:
+            return self.timing.next_after(t)
+        wall = t.astimezone().replace(tzinfo=None)
+        while (wall := self.timing.next_after(wall)) is not None:  # (after the clock went back: past the repeat)
+            if (when := clock_moment(wall)) > t:
+                return when
+        return None
 
     def due(self, after: dt.datetime, until: dt.datetime) -> list[dt.datetime]:
         """Fire times in (after, until], oldest first; an every-N schedule's count on from `after`, one of its times."""

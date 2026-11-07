@@ -60,14 +60,15 @@ def _print_json(event: dict):
 
 
 class StdinControl:
-    """Commands from the editor, one JSON object per line on stdin.
+    """Commands from the editor or the scheduler service, one JSON object per line on stdin.
 
     {"cancel": true} cancels the run; {"ask_id": ..., "value": ...} answers a question.
-    If stdin closes (the editor went away) the run is cancelled.
+    If stdin closes (the editor went away) the run is cancelled, unless `closing_cancels` is False: a scheduled run
+    goes on when the service that started it stops.
     """
 
-    def __init__(self, cancel: threading.Event):
-        self.cancel = cancel
+    def __init__(self, cancel: threading.Event, closing_cancels: bool = True):
+        self.cancel, self.closing_cancels = cancel, closing_cancels
         self._answers: dict[str, queue.Queue] = {}
         self._lock = threading.Lock()
         threading.Thread(target=self._read, name="stdin-control", daemon=True).start()
@@ -86,7 +87,8 @@ class StdinControl:
                 self.cancel.set()
             elif "ask_id" in message:
                 self._queue(message["ask_id"]).put(message.get("value"))
-        self.cancel.set()
+        if self.closing_cancels:
+            self.cancel.set()
 
     def wait(self, ask_id: str, ctx):
         answers = self._queue(ask_id)
@@ -122,6 +124,14 @@ def _stdin_lines():
     yield from sys.stdin
 
 
+def _stdin_control(args, cancel: threading.Event) -> StdinControl | None:
+    """What a run reads on stdin: from the editor (--interactive), cancel requests and answers, and closing it cancels
+    the run; from the scheduler service (--stoppable), cancel requests only."""
+    if args.interactive or args.stoppable:
+        return StdinControl(cancel, closing_cancels=args.interactive)
+    return None
+
+
 def _parse_overrides(items) -> dict:
     overrides = {}
     for item in items or []:
@@ -133,7 +143,7 @@ def _parse_overrides(items) -> dict:
 
 
 def cmd_run(args, home: Home) -> int:
-    start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None
+    start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None  # (local, or with a UTC offset)
     early = start_at is not None and start_at.timestamp() > time.time()  # started before its time
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
@@ -151,9 +161,11 @@ def cmd_run(args, home: Home) -> int:
     signal.signal(signal.SIGINT, on_signal)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, on_signal)
-    answers = StdinControl(cancel) if args.interactive else None
-    # Its now() is when it begins.
-    as_of = dt.datetime.fromisoformat(args.as_of) if args.as_of else (start_at if early else None)
+    control = _stdin_control(args, cancel)
+    answers = control if args.interactive else None
+    # Its now() is when it begins, on this PC's clock.
+    as_of = (dt.datetime.fromisoformat(args.as_of) if args.as_of
+             else start_at.astimezone().replace(tzinfo=None) if early else None)
     overrides = _parse_overrides(args.param)
     if args.input and not (args.only or args.run_from):
         raise ValueError("--input gives a value to an input of the block that --only (or --from) runs")
@@ -187,7 +199,8 @@ def cmd_run(args, home: Home) -> int:
         while (left := start_at.timestamp() - time.time()) > 0:
             if cancel.wait(min(left, 1)):
                 raise KeyboardInterrupt  # stopped before it began: nothing is recorded
-        why = why_not_due(home, flow.path, args.trigger, start_at) if early and args.if_scheduled else None
+        why = (why_not_due(home, flow.path, args.trigger, args.if_scheduled, start_at)
+               if early and args.if_scheduled else None)
         if why:
             print(f"not begun: {why}", file=sys.stderr, flush=True)
             raise SystemExit(NOT_DUE)
@@ -341,18 +354,21 @@ def main(argv=None) -> int:
                    help="with --only or --from: give this input a value (a Python expression, e.g. 42, 'text', [1, 2], "
                         "table('data.csv'); empty for no value) instead of the one it got in --inputs-from")
     p.add_argument("--start-at", metavar="DATETIME",
-                   help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS) to "
-                        "begin the run; at once if it has passed (the scheduler starts each run a few seconds early "
-                        "so)")
-    p.add_argument("--if-scheduled", action="store_true",
+                   help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS, or with "
+                        "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (the scheduler starts "
+                        "each run a few seconds early so)")
+    p.add_argument("--if-scheduled", metavar="SCHEDULE",
                    help="if started before --start-at: begin then only if the scheduler service runs and the flow's "
-                        "schedule (its --trigger) still has that time, else end with exit code 3 (the scheduler "
-                        "sets it)")
+                        "schedule (its --trigger) is still SCHEDULE (e.g. 'cron 0 7 * * *'), unchanged, with that "
+                        "time, else end with exit code 3 (the scheduler sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",
                    help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
+    p.add_argument("--stoppable", action="store_true",
+                   help="read cancel requests as JSON lines on stdin; the run goes on if stdin closes (used by the "
+                        "scheduler service)")
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
