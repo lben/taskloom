@@ -17,7 +17,7 @@ from pathlib import Path
 from .config import Home
 from .engine import Cancelled, finished_text, run_flow
 from .flow import FlowError, load_flow, real_path, validate
-from .launch import ARGS_VARIABLE
+from .launch import ARGS_VARIABLE, process_began
 from .registry import discover
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -144,7 +144,9 @@ def _parse_overrides(items) -> dict:
 
 def cmd_run(args, home: Home) -> int:
     start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None  # (local, or with a UTC offset)
-    early = start_at is not None and start_at.timestamp() > time.time()  # started before its time
+    # Started before its time: its process began before then (also if it was still loading at that time; where
+    # when it began cannot be told, before now).
+    early = start_at is not None and start_at.timestamp() > (process_began(os.getpid()) or time.time())
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
     os.chdir(flow.path.parent)
@@ -193,14 +195,14 @@ def cmd_run(args, home: Home) -> int:
         if not overrides:  # same parameters as that run
             overrides = {k: v for k, v in json.loads(earlier["params"]).items() if k in flow.params}
     if args.if_scheduled:
-        from .scheduler import NOT_DUE, why_not_due
+        from .scheduler import NOT_DUE, claim_time
 
     def wait_for_start():  # loaded and checked: it begins at --start-at
         while (left := start_at.timestamp() - time.time()) > 0:
             if cancel.wait(min(left, 1)):
                 raise KeyboardInterrupt  # stopped before it began: nothing is recorded
-        why = (why_not_due(home, flow.path, args.trigger, args.if_scheduled, start_at)
-               if early and args.if_scheduled else None)
+        why = (claim_time(home, flow.path, args.trigger, args.if_scheduled, start_at, early) if args.if_scheduled
+               else None)
         if why:
             print(f"not begun: {why}", file=sys.stderr, flush=True)
             raise SystemExit(NOT_DUE)
@@ -209,7 +211,8 @@ def cmd_run(args, home: Home) -> int:
         result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
                           answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
                           given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
-                          run_from=args.run_from, before_start=wait_for_start if start_at else None)
+                          run_from=args.run_from, before_start=wait_for_start if start_at else None,
+                          scheduled=args.scheduled)
     except FlowError:  # refused: e.g. a block file that did not load is why its block type is unknown
         for message in registry.warnings:
             print(f"warning: {message}", file=sys.stderr)
@@ -360,10 +363,15 @@ def main(argv=None) -> int:
                         "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (the scheduler starts "
                         "each run a few seconds early so)")
     p.add_argument("--if-scheduled", metavar="SCHEDULE",
-                   help="if started before --start-at: begin then only if the scheduler service runs and the flow's "
-                        "schedule (its --trigger) is still SCHEDULE (e.g. 'cron 0 7 * * *'), unchanged, with that "
-                        "time, else end with exit code 3 (the scheduler sets it)")
+                   help="claim the --start-at time of the flow's schedule (its --trigger) SCHEDULE (e.g. 'cron 0 7 * "
+                        "* *') as it begins, so that time runs once: begin only if that schedule is unchanged, still "
+                        "has that time, and no other run has begun for it; started before that time, also only if the "
+                        "scheduler service runs then and it is at most 2 minutes past it; else end with exit code 3 "
+                        "(the scheduler sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
+    p.add_argument("--scheduled", action="store_true",
+                   help="the scheduler service started this run: its run history says so, and if its process stops "
+                        "unexpectedly, whoever finds it gone tells you (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",

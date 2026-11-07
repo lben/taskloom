@@ -1076,10 +1076,14 @@ One scheduler service runs every scheduled flow. Each run begins at its time: th
 starts the run's process a few seconds early, to load the flow and wait, so the Log says the
 run started at its time (from a terminal: `taskloom run FLOW --start-at 2026-10-08T15:30:00`).
 A run whose schedule goes off before then (the service turned off, Active unticked, the flow
-taken off) does not begin. The service checks every second and then rereads changed flow files,
-so a schedule applies within a second of saving it, without restarting the service; a new or
-changed schedule, or one turned back on (Active ticked again, the flow scheduled again), counts
-from that moment (nothing before it counts as missed).
+taken off) does not begin. Nor does one that reaches its time with no service on (the service
+was ended or crashed just before) or more than 2 minutes late (the computer slept): that time
+is then a missed one, as if the service had been off (see `misfire`). A run started early takes
+its time as it begins, so a time runs once, also when the service restarts just before it. The
+service checks every second and then rereads changed flow files, so a schedule applies within
+a second of saving it, without restarting the service; a new or changed schedule, or one turned
+back on (Active ticked again, the flow scheduled again), counts from that moment (nothing
+before it counts as missed).
 
 At each check, of the times that came since the previous check only the most recent can be
 on time, and only if it is at most 2 minutes old; the others were missed (the scheduler
@@ -1150,9 +1154,11 @@ the service crashes or is ended), they are not lost: when it is back, each start
 the order they came. If only the service stops, the runs it started go on by themselves
 (each run is a program of its own), and they count as going once it is back. After a PC
 restart, a run that was going has ended, and its program's number may be another program's
-by then: the service counts a run as going only if its program began before the service saw
-the run begin (also after the time zone changed), so it never waits for, or stops, another
-program. A run whose program has gone is recorded as crashed, and you are told (see below).
+by then: a run records when it began (in a way no clock or time zone change alters), and it
+counts as going only if its program began before that, so the service never waits for, or
+stops, another program. A run whose program has gone is recorded as crashed, and you are told
+(see below). A service that stops (other than by your turning it off) says how many runs it
+leaves going; a run it started early that has not begun is not one of them.
 
 **A run that crashes.** If a run's program stops unexpectedly (it crashed, or something
 ended it), the run is recorded as crashed: it counts as failed, and its error says "crashed:

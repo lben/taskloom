@@ -38,8 +38,8 @@ from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, bl
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, run_alive, runner_command
-from ..scheduler import (acquire_lock, counted_from, paused, request_turn_off, running_scheduler_version, runs_going,
-                         runs_listed, set_paused, set_start_at_login, startup_file, startup_script_outdated,
+from ..scheduler import (counted_from, paused, request_turn_off, running_scheduler_version, runs_going,
+                         service_running, set_paused, set_start_at_login, startup_file, startup_script_outdated,
                          tell_crashed, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
@@ -1534,32 +1534,26 @@ class MainWindow(QMainWindow):
 
     def _show_running_flows(self):
         """The flows running now, wherever they were started. A run whose process is gone is recorded as crashed by
-        whoever finds it first, the editor or the scheduler service; if the service listed it (a scheduled run), you
-        are told then (tell_crashed), once."""
+        whoever finds it first, the editor or the scheduler service; if the service started it (its run history says
+        so), whoever recorded it tells you (tell_crashed), once."""
         while not self._told_later.empty():
             self._message(*self._told_later.get())
         if not self.home.history_db.exists():
             return
-        listed = runs_listed(self.home)
         history = self._history()
         try:
             running, crashed = [], []
             for run in history.running():
                 if run["pid"] is None:
                     continue  # from before runs recorded their process: cannot tell
-                # A run not listed: its start in the run history, on this PC's clock (of a time the clock shows twice,
-                # the night it goes back, the later: a run then is never taken for gone).
-                began = (listed[run["id"]] if run["id"] in listed
-                         else dt.datetime.fromisoformat(run["started"]).replace(fold=1).timestamp())
-                if run_alive(run["pid"], began):
+                if run_alive(run["pid"], run["began"]):
                     running.append(run)
                 elif history.mark_crashed(run["id"], dt.datetime.now().isoformat(timespec="milliseconds")):
                     crashed.append(run)
         finally:
             history.close()
-        listed = runs_listed(self.home) if crashed else {}  # (as the service lists them now: see Scheduler._ended)
         for run in crashed:
-            if run["id"] in listed:
+            if run["scheduled"]:
                 tell_crashed(self.home, run["flow_path"], self._message, lambda *told: self._told_later.put(told))
         count = len(running)
         self.running_flows.setText("No flows running" if not count else
@@ -1646,11 +1640,7 @@ class MainWindow(QMainWindow):
 
     def scheduler_running(self) -> bool:
         """The scheduler holds its lock file while it runs."""
-        try:
-            acquire_lock(self.home).close()  # we got it, so nobody holds it
-            return False
-        except RuntimeError:
-            return True
+        return service_running(self.home)
 
     def scheduler_on(self) -> bool:
         """The scheduler service runs, and you have not turned it off (turned off, it runs on until the runs you let
