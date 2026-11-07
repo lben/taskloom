@@ -1,0 +1,64 @@
+# What must always be true of the scheduler service, as agreed with the maintainer in chat on 2026-11-07.
+# Each row is checked by the tests marked @pytest.mark.invariant("SCH-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: Scheduler service
+agreed: 2026-11-07
+rows:
+  SCH-1: >-
+    Only one scheduler service runs at a time. If one is already running, starting another (clicking On, logging in,
+    opening the editor) does nothing, so no scheduled run ever starts twice. Strictly, it is one per Taskloom folder,
+    the folder that holds your settings and run history; normally a PC has one.
+  SCH-2: >-
+    If you turn it off, it stays off. Logging in, opening the editor or scheduling a flow doesn't start it again; only
+    you turning it on does.
+  SCH-3: >-
+    If you didn't turn it off, it starts by itself when you schedule a flow, when you open the editor, and when you log
+    in if Start at login is on (Windows).
+  SCH-4: >-
+    When you turn the service off, a dialog lists the flows with runs going, and you choose for each flow: Let it
+    finish (the default: its runs going finish, and its runs waiting their turn still run) or Stop now (its runs going
+    stop and are recorded as cancelled, and its waiting runs are dropped). Once you click Proceed, nothing new starts,
+    and the service turns off when the last run you let finish is done. Cancel keeps it on. With no runs going, it only
+    asks you to confirm. The tray icon's Turn off shows the same dialog. Flows not listed keep their waiting runs: they
+    are saved and start when you turn the service back on.
+  SCH-5: >-
+    A run begins at its time: never before it, and at most 2 seconds after it while the service is on.
+  SCH-6: >-
+    Each due time runs at most once.
+  SCH-7: >-
+    An Every N minutes or hours schedule counts from when the service first sees it, not from the clock's :00.
+  SCH-8: >-
+    A run started 5 seconds early, to be ready on time, doesn't begin, and nothing is recorded for it, if before its
+    time the service is turned off, or its schedule is turned off or changed.
+  SCH-9: >-
+    Times missed while the service was off or the PC was asleep follow the schedule's Misfire setting. Skip runs none
+    of them and tells you how many (a time less than 2 minutes late still runs). Run once runs one, for the latest.
+    Catch up runs every one of them, oldest first, one at a time. When more than 100 were missed, a dialog first says
+    how many and offers Run all of them, or Run only the latest N (N editable, 100 by default; the older ones count as
+    missed and you are told how many). The service shows it even when the editor is closed; until you answer, that
+    schedule's missed runs wait and other flows run as usual. On a server, with no screen, it runs the latest 100 and
+    tells you how many were missed: in the server's log, plus an email if the flow asks for notices.
+  SCH-10: >-
+    A schedule turned off and on again, or changed, starts afresh: times from while it was off neither run nor count as
+    missed.
+  SCH-11: >-
+    Two runs of the same flow go at once only if its Overlap is Allow. Otherwise a new time is skipped (and you are
+    told) or waits for the run going, as Overlap says.
+  SCH-12: >-
+    No more runs go at once than Max concurrent runs allows. The rest wait and start in the order they came.
+  SCH-13: >-
+    A run that crashes is recorded as crashed, and you are told: a desktop message, plus an email if the flow asks for
+    one.
+  SCH-14: >-
+    A mistake in the list of scheduled flows or the settings, or a mail server that doesn't answer, never stops the
+    service: you are told, and it goes on.
+  SCH-15: >-
+    Daylight-saving clock changes never pause an Every N schedule (it keeps its rhythm in real time) and never skip a
+    run with a false "scheduler was off" message. A time the clock skips (02:30 on the spring-forward night) runs right
+    after the jump; a time that happens twice (01:30 in autumn) runs once.
+  SCH-16: >-
+    Runs waiting their turn are saved: if the service stops any other way (a PC restart, a crash), they start when it
+    is back.
+  SCH-17: >-
+    The docs explain each case in this list where the scheduler might surprise you: missed times and the 100 limit
+    (also on servers), overlaps, turning the service off, saved runs and clock changes.

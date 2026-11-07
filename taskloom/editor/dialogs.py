@@ -5,7 +5,6 @@ from __future__ import annotations
 import html
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -1100,13 +1099,12 @@ class PythonEnvDialog(QDialog):
         return env_python(self.home)
 
     def _show_status(self):
-        from ..pyenv import env_dir
+        from ..pyenv import env_dir, python_version
 
         python = self._env_python()
         ready = python.exists()
         if ready:
-            version = subprocess.run([str(python), "--version"], capture_output=True, text=True,
-                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+            version = python_version(python)
             self.status.setText(f"<b>In use:</b> {html.escape(str(env_dir(self.home)))} ({html.escape(version)})")
         else:
             self.status.setText(f"<b>Not created yet:</b> {html.escape(str(env_dir(self.home)))}. Create one, or use "

@@ -156,6 +156,10 @@ def base_python(home) -> list[str]:
                             "path under Tools → Settings → Python (or the python setting)")
 
 
+CREATE_SECONDS = 600  # creating an environment (pip included): minutes on a slow disk
+VERSION_SECONDS = 30
+
+
 def _no_window() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -164,14 +168,24 @@ def create(home, python: str | None = None) -> str:
     command = [python] if python else base_python(home)
     try:
         result = subprocess.run(command + ["-m", "venv", str(env_dir(home))], capture_output=True, text=True,
-                                creationflags=_no_window())
+                                creationflags=_no_window(), timeout=CREATE_SECONDS)
     except OSError as e:  # named here: on Windows the error does not say which file
         raise OSError(f"could not start the Python {command[0]}: {e.strerror or e}") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"could not create the environment: Python had not finished after "
+                           f"{CREATE_SECONDS // 60} minutes") from None
     if result.returncode != 0:
         raise RuntimeError(f"could not create the environment: {result.stderr.strip() or result.stdout.strip()}")
-    version = subprocess.run([str(env_python(home)), "--version"], capture_output=True, text=True,
-                             creationflags=_no_window()).stdout.strip()
-    return f"created {env_dir(home)} ({version})"
+    return f"created {env_dir(home)} ({python_version(env_python(home))})"
+
+
+def python_version(python) -> str:
+    """What `python --version` says, e.g. "Python 3.12.4"; a Python that does not answer in time is said so."""
+    try:
+        return subprocess.run([str(python), "--version"], capture_output=True, text=True, creationflags=_no_window(),
+                              timeout=VERSION_SECONDS).stdout.strip()
+    except subprocess.TimeoutExpired:
+        return f"it did not say its version within {VERSION_SECONDS} s"
 
 
 def pip(home, args: list[str]) -> int:

@@ -1,0 +1,40 @@
+# Design health (charter C14): the functions over a limit (more than 25 decision points or 80 lines).
+# baseline: those over a limit in 0.37.0, the last release. kept: a function newly over a limit that splitting
+# would make worse, with a one-line reason the reviewer accepts. packaging/design_health.py checks this list.
+baseline:
+  - taskloom/blocks/anomalies.py:DetectAnomalies.run  # 44 decision points, 100 lines
+  - taskloom/blocks/check_table.py:CheckTable.problems  # 31 decision points, 31 lines
+  - taskloom/blocks/checks.py:CheckFile.run  # 29 decision points, 63 lines
+  - taskloom/blocks/files.py:_copy  # 30 decision points, 53 lines
+  - taskloom/blocks/servers.py:from_curl  # 106 decision points, 161 lines
+  - taskloom/blocks/statistics.py:Statistics._charts  # 34 decision points, 55 lines
+  - taskloom/blocks/statistics.py:Statistics.run  # 35 decision points, 53 lines
+  - taskloom/cli.py:cmd_run  # 34 decision points, 72 lines
+  - taskloom/cli.py:main  # 4 decision points, 81 lines
+  - taskloom/editor/dialogs.py:ConnectionsDialog.__init__  # 14 decision points, 123 lines
+  - taskloom/editor/dialogs.py:ConnectionsDialog._store_current  # 38 decision points, 48 lines
+  - taskloom/editor/dialogs.py:SettingsDialog.__init__  # 16 decision points, 92 lines
+  - taskloom/editor/panels.py:PropertiesPanel._cron_rows  # 17 decision points, 87 lines
+  - taskloom/editor/panels.py:PropertiesPanel._field_widget  # 37 decision points, 82 lines
+  - taskloom/editor/panels.py:PropertiesPanel.refresh  # 30 decision points, 91 lines
+  - taskloom/editor/window.py:MainWindow.__init__  # 6 decision points, 87 lines
+  - taskloom/editor/window.py:MainWindow.run_flow  # 33 decision points, 64 lines
+  - taskloom/engine.py:_Runner._gather  # 48 decision points, 59 lines
+  - taskloom/engine.py:_Runner._run_block  # 27 decision points, 68 lines
+  - taskloom/engine.py:_Runner._run_loop  # 50 decision points, 99 lines
+  - taskloom/engine.py:_Runner._run_per_line  # 98 decision points, 149 lines
+  - taskloom/engine.py:_Runner.run  # 44 decision points, 69 lines
+  - taskloom/engine.py:_only_inputs  # 26 decision points, 27 lines
+  - taskloom/engine.py:run_flow  # 42 decision points, 118 lines
+  - taskloom/expr.py:_eval  # 33 decision points, 51 lines
+  - taskloom/flow.py:_lines_problems  # 51 decision points, 67 lines
+  - taskloom/flow.py:_loop_problems  # 43 decision points, 64 lines
+  - taskloom/flow.py:_per_line_problems  # 51 decision points, 53 lines
+  - taskloom/flow.py:flow_from_data  # 46 decision points, 92 lines
+  - taskloom/flow.py:keep_source_names  # 26 decision points, 20 lines
+  - taskloom/flow.py:validate  # 60 decision points, 107 lines
+  - taskloom/pyenv.py:run_code  # 12 decision points, 89 lines
+  - taskloom/report.py:render_chart  # 49 decision points, 96 lines
+  - taskloom/scheduler.py:Scheduler.tick  # 31 decision points, 65 lines
+  - taskloom/upgrade.py:_check  # 49 decision points, 99 lines
+kept: {}

@@ -44,6 +44,8 @@ taskloom = "taskloom.cli:run_cli"
 dev = [
     "aiosmtpd>=1.4.6",
     "asyncssh>=2.24.1",
+    "hypothesis>=6.170.15",
+    "mutmut>=3.8.1",
     "pyflakes>=4.0.3",
     "pyinstaller>=6.10",
     "pytest>=8",
@@ -52,3 +54,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "charter(rule): a test that checks a rule of the architecture charter (docs/ARCHITECTURE.md), e.g. C6",
+    "invariant(row): a test that checks an agreed must-always-be-true row (docs/promises/), e.g. SCH-4",
+]
