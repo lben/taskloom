@@ -294,6 +294,8 @@ def cmd_scheduler(args, home: Home) -> int:
         if args.unless_paused and scheduler.paused(home):
             print("the scheduler service is off (you turned it off): not starting it (turn it on in the editor)")
             return EXIT_OK
+        if not args.unless_paused:  # started by you, it is on (before it takes its lock: see Scheduler._take_requests)
+            scheduler.set_paused(home, False)
         return scheduler.serve(home, args.headless)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)

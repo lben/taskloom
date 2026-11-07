@@ -7,6 +7,7 @@ import datetime as dt
 import hashlib
 import heapq
 import os
+import queue
 import shutil
 import signal
 import subprocess
@@ -38,8 +39,8 @@ from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, run_alive, runner_command
 from ..scheduler import (acquire_lock, counted_from, paused, request_turn_off, running_scheduler_version, runs_going,
-                         runs_held, set_paused, set_start_at_login, startup_file, startup_script_outdated,
-                         version_tuple)
+                         runs_listed, set_paused, set_start_at_login, startup_file, startup_script_outdated,
+                         tell_crashed, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
@@ -465,6 +466,7 @@ class MainWindow(QMainWindow):
         self._offered_restart = False  # asked once per session to restart an older scheduler
         if frozen() and sys.platform == "win32":
             self._update_start_at_login()
+        self._told_later: queue.Queue = queue.Queue()  # (title, message) from the emails being sent: shown at the check
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
         self._poll.start()
@@ -1531,23 +1533,34 @@ class MainWindow(QMainWindow):
         self._show_running_flows()
 
     def _show_running_flows(self):
-        """The flows running now, wherever they were started; a run whose process is gone is recorded as failed
-        (one the scheduler service holds, by the service: it also tells you)."""
+        """The flows running now, wherever they were started. A run whose process is gone is recorded as crashed by
+        whoever finds it first, the editor or the scheduler service; if the service listed it (a scheduled run), you
+        are told then (tell_crashed), once."""
+        while not self._told_later.empty():
+            self._message(*self._told_later.get())
         if not self.home.history_db.exists():
             return
-        held = runs_held(self.home) if self.scheduler_running() else set()
+        listed = runs_listed(self.home)
         history = self._history()
         try:
-            running = []
+            running, crashed = [], []
             for run in history.running():
                 if run["pid"] is None:
                     continue  # from before runs recorded their process: cannot tell
-                if run_alive(run["pid"], run["started"]):
+                # A run not listed: its start in the run history, on this PC's clock (of a time the clock shows twice,
+                # the night it goes back, the later: a run then is never taken for gone).
+                began = (listed[run["id"]] if run["id"] in listed
+                         else dt.datetime.fromisoformat(run["started"]).replace(fold=1).timestamp())
+                if run_alive(run["pid"], began):
                     running.append(run)
-                elif run["id"] not in held:
-                    history.mark_crashed(run["id"], dt.datetime.now().isoformat(timespec="milliseconds"))
+                elif history.mark_crashed(run["id"], dt.datetime.now().isoformat(timespec="milliseconds")):
+                    crashed.append(run)
         finally:
             history.close()
+        listed = runs_listed(self.home) if crashed else {}  # (as the service lists them now: see Scheduler._ended)
+        for run in crashed:
+            if run["id"] in listed:
+                tell_crashed(self.home, run["flow_path"], self._message, lambda *told: self._told_later.put(told))
         count = len(running)
         self.running_flows.setText("No flows running" if not count else
                                    f"{count} flow{'s' if count > 1 else ''} running")
@@ -1568,6 +1581,13 @@ class MainWindow(QMainWindow):
                 text += (f"  ·  next run {upcoming:%Y-%m-%d %H:%M:%S}" if self.flow_status.scheduler_on else
                          "  ·  scheduler service off")
             menu.addAction(text, lambda path=run["flow_path"]: self.open_flow(Path(path)))
+
+    def _message(self, title: str, message: str):
+        """A message window that holds nothing up (the editor's checks go on while it is open)."""
+        box = QMessageBox(QMessageBox.Warning, title, title, QMessageBox.Ok, self)
+        box.setInformativeText(message)  # (a Mac shows no title on a message window)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.show()
 
     def _next_scheduled(self, path: Path) -> dt.datetime | None:
         """When the soonest of a flow's schedules comes next (from its saved file), or None."""
@@ -1738,7 +1758,7 @@ class MainWindow(QMainWindow):
         runs going (see dialogs.ask_turn_off)."""
         if self.scheduler_running():
             self.stop_scheduler(choices)
-        else:  # (no request: a starting service deletes one it finds)
+        else:  # (a service starting now finds it off at its first check, and turns off)
             set_paused(self.home, True)
         self._show_scheduler_state(False)
 
@@ -1758,8 +1778,10 @@ class MainWindow(QMainWindow):
             self._show_scheduler_state(self.scheduler_on())
             return
         self._offered_restart = True  # this version's: nothing to offer
+        # (turned on by you, it is on by now; started by itself, it stays off if you turn it off before it is up)
         subprocess.Popen(
-            runner_command() + ["scheduler"], env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
+            runner_command() + ["scheduler", "--unless-paused"],
+            env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=sys.platform != "win32",
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),

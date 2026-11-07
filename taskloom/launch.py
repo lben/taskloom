@@ -6,7 +6,6 @@ and the scheduler) and `taskloomw` (no console window; opens the editor by defau
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 import struct
 import sys
@@ -59,13 +58,12 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
-def run_alive(pid: int | None, started: str) -> bool:
-    """Whether a run in the run history, recorded with the process `pid` and its start `started` (this PC's clock), is
-    still going: that process runs, and it is the run's, as it began before the run did. Once a process has ended,
-    another program may get its number (after a restart, any program)."""
-    began = _began(pid) if pid and pid_alive(pid) else None
-    # (of a time the clock shows twice, the night it goes back, the later: a run then is never taken for gone)
-    return began is not None and began <= dt.datetime.fromisoformat(started).replace(fold=1).timestamp()
+def run_alive(pid: int | None, began: float | None) -> bool:
+    """Whether a run whose process is `pid` (as the run history records it) is still going: that process runs, and it
+    is the run's, as it began by `began`, a moment (seconds since 1970) by which the run had begun. Once a process has
+    ended, another program may get its number (after a restart, any program). Not known (None): not going."""
+    since = _began(pid) if pid and isinstance(began, (int, float)) and pid_alive(pid) else None
+    return since is not None and since <= began
 
 
 def _began(pid: int) -> float | None:
