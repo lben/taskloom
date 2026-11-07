@@ -187,12 +187,14 @@ def test_an_every_n_schedule_has_no_time_until_the_service_has_seen_it():
 @pytest.mark.parametrize("was, now", [({"at": "2026-10-08 15:30"}, {"at": "2026-10-08 15:10"}),
                                       ({"every": "5 minutes"}, {"every": "10 minutes"}),
                                       ({"cron": "0 7 * * *"}, {"cron": "0 8 * * *"}),
-                                      ({"at": "2026-10-08 15:30+02:00"}, {"at": "2026-10-08 15:30+01:00"})],
-                         ids=["at", "every", "cron", "at with a UTC offset"])
+                                      ({"at": "2026-10-08 15:30+02:00"}, {"at": "2026-10-08 15:30+01:00"}),
+                                      ({"at": "2026-10-08 15:30:30"}, {"at": "2026-10-08 15:30:07"})],
+                         ids=["at", "every", "cron", "at with a UTC offset", "at changed only in its seconds"])
 def test_a_changed_schedule_is_told_apart_from_what_it_was(was, now):
     """The scheduler service keeps a schedule's state (the newest time it handled, where Every N counts from) under
     the schedule's text, so a schedule changed to another time is a new one and starts afresh: its text is not the
-    same."""
+    same. A one-off time written by hand with seconds runs at that second, so changing only its seconds is a change
+    too."""
     assert Trigger({"schedule": was}).text != Trigger({"schedule": now}).text
 
 
@@ -298,6 +300,19 @@ def test_a_trigger_that_is_not_exactly_one_of_cron_every_or_at_is_refused_with_a
     assert [set(example["schedule"]) for example in examples] == [{"cron"}, {"every"}, {"at"}], message
     for example in examples:
         Trigger(example)  # (raises if the example does not work)
+
+
+@pytest.mark.invariant("SCH-5")
+@pytest.mark.charter("C9")
+@pytest.mark.parametrize("written", ["{at: '2026-10-08 15:30:07.5'}", "{at: '2026-10-08 15:30:07.5+02:00'}",
+                                     "{at: 2026-10-08 15:30:07.5}"])
+def test_a_one_off_time_with_a_fraction_of_a_second_is_refused_saying_it_is_to_the_second(written):
+    """A run begins on a whole second, so a one-off time between two seconds could only begin before it or after it:
+    rather than round it without saying so, the schedule is refused when it is read, and the message names the time
+    and says one-off times are to the second. Quoted (text, with or without its UTC offset) or not (YAML reads it as a
+    date and time)."""
+    message = refused({"schedule": yaml.safe_load(written)})
+    assert "15:30:07" in message and re.search(r"\bsecond\b", message), message
 
 
 @pytest.mark.charter("C9")
