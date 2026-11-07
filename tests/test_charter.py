@@ -54,10 +54,12 @@ def taskloom_part(module: str) -> str | None:
     return parts[1] if len(parts) > 1 else "__init__"
 
 
+@pytest.mark.charter("C1")
 def test_every_module_has_a_layer():
     assert [str(f.relative_to(ROOT)) for name, f, _ in modules() if name not in LAYER_OF] == []
 
 
+@pytest.mark.charter("C1")
 def test_code_uses_its_own_layer_and_the_layers_below_never_those_above():
     """C1."""
     upward = []
@@ -70,6 +72,7 @@ def test_code_uses_its_own_layer_and_the_layers_below_never_those_above():
     assert upward == []
 
 
+@pytest.mark.charter("C1")
 def test_foundations_never_call_a_database_a_server_a_mail_server_or_the_web():
     """C1."""
     calls = [f"{file.relative_to(ROOT)}:{line} imports {module}" for name, file, tree in modules()
@@ -78,6 +81,7 @@ def test_foundations_never_call_a_database_a_server_a_mail_server_or_the_web():
     assert calls == []
 
 
+@pytest.mark.charter("C2")
 def test_only_the_editor_and_the_tray_icon_use_qt():
     """C2: outside the editor, Qt is imported only inside the scheduler service's tray functions, so the command line,
     a run and the headless service never load it (the Linux runner is built without it)."""
@@ -98,6 +102,7 @@ def test_only_the_editor_and_the_tray_icon_use_qt():
     assert found == []
 
 
+@pytest.mark.charter("C5")
 def test_only_the_history_code_opens_the_taskloom_folders_database():
     """C5."""
     opens = []
@@ -114,6 +119,7 @@ def test_only_the_history_code_opens_the_taskloom_folders_database():
     assert opens == []
 
 
+@pytest.mark.charter("C8")
 def test_calls_outside_taskloom_have_a_time_limit():
     """C8, where the code shows it: mail servers, the web, network connections and other programs run to their end."""
     limited = ("SMTP", "SMTP_SSL", "urlopen", "HTTPConnection", "HTTPSConnection", "create_connection")
@@ -130,6 +136,7 @@ def test_calls_outside_taskloom_have_a_time_limit():
     assert missing == []
 
 
+@pytest.mark.charter("C12")
 def test_every_built_in_block_has_a_description():
     """C12."""
     from taskloom.registry import discover
@@ -138,6 +145,7 @@ def test_every_built_in_block_has_a_description():
     assert [type_id for type_id, cls in registry.blocks.items() if not (cls.description or "").strip()] == []
 
 
+@pytest.mark.charter("C14")
 def test_design_health_is_no_worse_than_the_last_release():
     """C14: a function newly over a limit is split, or kept with a reason in docs/design_health.yaml."""
     report = design_health.report()

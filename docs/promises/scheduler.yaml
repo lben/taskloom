@@ -3,6 +3,22 @@
 # results. Changing a row's words needs the maintainer's approval first.
 feature: Scheduler service
 agreed: 2026-11-07
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-10-08
+    words: "there should also be a button on the main view given how core this functionality is, probably a play button with a clock?"
+  - date: 2026-10-23
+    words: "if I start one at say second 14 I expect it to do its first run at second 14"
+  - date: 2026-11-07
+    words: "instead it should present me a dialog box showing me which schedules are running and giving me the option to keep until they finish or to be closed when I click on \"Proceed\""
+  - date: 2026-11-07
+    words: "why cap at 100? I'd rather have it mean ALL of them if we are saying ALL of them"
+  - date: 2026-11-07
+    words: "for those cases show a dialog explaining the user about it and then asking them to proceed or to cap to a value they can modify in that dialog (100 by default)"
+  - date: 2026-11-07
+    words: "yes, they’re saved and start when the service is back."
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_scheduler, test_proof_interval_schedules]
 rows:
   SCH-1: >-
     Only one scheduler service runs at a time. If one is already running, starting another (clicking On, logging in,

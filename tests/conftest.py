@@ -237,3 +237,42 @@ def win(qtbot, tmp_path, monkeypatch):
                 run.proc.kill()
                 run.proc.waitForFinished(5000)
         tab.doc.dirty = False
+
+
+# --- the proof's ledger: with TASKLOOM_LEDGER=<file>, which agreed row (invariant) or charter rule each test checks,
+# and how it ended, are written to that file (packaging/ledger.py builds the ledger from it) -------------------------
+
+_LEDGER = {}
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get("TASKLOOM_LEDGER"):
+        for item in items:
+            rows = [m.args[0] for m in item.iter_markers("invariant")]
+            every = [m.kwargs["every"] for m in item.iter_markers("invariant") if m.kwargs.get("every")]
+            rules = [m.args[0] for m in item.iter_markers("charter")]
+            if rows or rules:
+                _LEDGER[item.nodeid] = {"id": item.nodeid, "rows": rows, "charter": rules, "every": every,
+                                        "outcome": "not run", "why": ""}
+
+
+def pytest_runtest_logreport(report):
+    entry = _LEDGER.get(report.nodeid)
+    if entry is None or entry["outcome"] == "failed":
+        return
+    if report.failed:
+        entry["outcome"], entry["why"] = "failed", (str(report.longrepr).strip().splitlines() or [""])[-1][:300]
+    elif report.skipped:
+        entry["outcome"], entry["why"] = "skipped", str(report.longrepr[-1] if isinstance(report.longrepr, tuple)
+                                                         else report.longrepr)[:300]
+    elif report.when == "call":
+        entry["outcome"] = "passed"
+
+
+def pytest_sessionfinish(session):
+    out = os.environ.get("TASKLOOM_LEDGER")
+    if out and _LEDGER:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True,
+                                timeout=30).stdout.strip()
+        Path(out).write_text(json.dumps({"commit": commit, "platform": sys.platform, "tests": list(_LEDGER.values())},
+                                        indent=1), encoding="utf-8")

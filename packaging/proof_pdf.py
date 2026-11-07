@@ -13,6 +13,14 @@ A change is new when its scenario (module.function in tests/proofs, the name of 
 the base tag: the nearest v tag from the parent of the commit built (for a release's build, the previous release),
 read with the git program in --repo (by default the repository this script is in). Without git, the history (a
 shallow checkout) or a base tag, nothing is said to be new.
+
+    python packaging/proof_pdf.py <proof_dir>... <out.pdf> --evidence proof/<release> --feature docs/promises/X.yaml...
+
+With features, the PDF is the evidence CI gathered in proof/<release>/ for each (the ledger, the checkers' output,
+the mutants, the leak check, the statechart, a question that blocks it), never written by hand. It opens with the
+page to read if nothing else (each feature's verdict, the release-wide numbers, how to read the colours) and the C4
+view; then each feature in the order given: what you asked, what must always be true, the design, the evidence, then
+its changes (the proofs whose module starts with one of its `proofs`); then the other changes.
 """
 
 import argparse
@@ -25,6 +33,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # it shows no window
 if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unless pointed at them
@@ -128,32 +138,58 @@ def news(repo: Path, version: str) -> tuple[str, str, set] | None:
     return f"New in {version}" if tagged else f"New since {base}", base, before
 
 
-def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, since: tuple | None,
-          new: list) -> str:
-    """`since`: what news() says; `new`: whether each change is new."""
-    problems = []
+def problems(records: list, sessions: list) -> list:
+    """What went wrong with the proofs on screen, in words: none when every change passed its proof."""
+    found = []
     for proof_dir, session in sessions:
         if session is None:
-            problems.append(f"The proof run of {proof_dir.name} did not finish: proofs may be missing.")
+            found.append(f"The proof run of {proof_dir.name} did not finish: proofs may be missing.")
         elif session["exitstatus"] != 0:
-            problems.append(f"The proof run on {session['system']} failed (pytest exit status "
-                            f"{session['exitstatus']}): see the CI run.")
+            found.append(f"The proof run on {session['system']} failed (pytest exit status "
+                         f"{session['exitstatus']}): see the CI run.")
     if not records:
-        problems.append("No proof was recorded.")
+        found.append("No proof was recorded.")
     if failed := sum(r["status"] != "passed" for r in records):
-        problems.append(f"{failed} of {len(records)} changes did not pass their proof.")
-    verdict = "<br>".join(mark(False, p, "15pt") for p in problems) or mark(
-        True, "The change passed its proof." if len(records) == 1 else f"All {len(records)} changes passed their "
-                                                                       "proofs.", "15pt")
-    about = [("Version", ", ".join(sorted({r["version"] for r in records})) or "unknown"),
-             ("Date", when(min(records, key=lambda r: r["started"])) if records else "unknown"),
-             ("Platform", "; ".join(sorted({r["platform"] for r in records})) or "unknown")]
+        found.append(f"{failed} of {len(records)} changes did not pass their proof.")
+    return found
+
+
+def all_passed(records: list) -> str:
+    return "The change passed its proof." if len(records) == 1 else f"All {len(records)} changes passed their proofs."
+
+
+def facts(records: list, ci_url: str, commit: str = "") -> str:
+    """The version, the commit built (when known), the date, the platform and the CI run, as a small table."""
+    about = [("Version", ", ".join(sorted({r["version"] for r in records})) or "unknown")]
+    about += [("Commit", commit)] if commit else []
+    about += [("Date", when(min(records, key=lambda r: r["started"])) if records else "unknown"),
+              ("Platform", "; ".join(sorted({r["platform"] for r in records})) or "unknown")]
     if ci_url:
         about.append(("CI run", f"<a href=\"{html.escape(ci_url)}\" style=\"color: {IDEA_BAR}\">"
                                 f"{html.escape(ci_url)}</a>"))
-    facts = "".join(f"<tr><td style=\"color: {MUTED}; padding: 3px 18px 3px 0\">{name}</td>"
-                    f"<td style=\"padding: 3px 0\">{value if name == 'CI run' else esc(value)}</td></tr>"
-                    for name, value in about)
+    return "".join(f"<tr><td style=\"color: {MUTED}; padding: 3px 18px 3px 0\">{name}</td>"
+                   f"<td style=\"padding: 3px 0\">{value if name == 'CI run' else esc(value)}</td></tr>"
+                   for name, value in about)
+
+
+def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, since: tuple | None,
+          new: list) -> str:
+    """`since`: what news() says; `new`: whether each change is new."""
+    verdict = "<br>".join(mark(False, p, "15pt") for p in problems(records, sessions)) or mark(
+        True, all_passed(records), "15pt")
+    return (label("Taskloom", ACCENT) +
+            f"<p style=\"font-size: 34pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
+            f"<p style=\"font-size: 13pt; color: {MUTED}; line-height: 140%; margin-bottom: 22px\">Each change in this "
+            "version, shown working in the running app: what was asked, the idea behind it and why it is built that "
+            "way, then the app doing it, step by step, with what was checked.</p>"
+            f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 18px\">{facts(records, ci_url)}</table>"
+            f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 26px\"><tr><td>{verdict}</td></tr></table>"
+            f"{lists(records, pages, since, new)}")
+
+
+def lists(records: list, pages: list, since: tuple | None, new: list) -> str:
+    """The cover's lists of the changes: what is new (when news() says), then every change; each row with its number,
+    its title (a link to its first page), its result, the system it was shown on and its page (`pages`)."""
     cell = f"valign=\"top\" style=\"padding: 12px 0; border-top: 1px solid {RULE}"
 
     def row(i: int, about: str, anchor: str = "") -> str:
@@ -191,14 +227,7 @@ def cover(title: str, records: list, sessions: list, ci_url: str, pages: list, s
         heading, base, _ = since
         linked = [row(i, title_link(i)) for i in range(1, len(records) + 1) if new[i - 1]]
         news_list = listing(heading if linked else f"Nothing new since {base}", linked)
-    return (label("Taskloom", ACCENT) +
-            f"<p style=\"font-size: 34pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
-            f"<p style=\"font-size: 13pt; color: {MUTED}; line-height: 140%; margin-bottom: 22px\">Each change in this "
-            "version, shown working in the running app: what was asked, the idea behind it and why it is built that "
-            "way, then the app doing it, step by step, with what was checked.</p>"
-            f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 18px\">{facts}</table>"
-            f"<table cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 26px\"><tr><td>{verdict}</td></tr></table>"
-            f"{news_list}{listing('In this proof', listed)}")
+    return f"{news_list}{listing('In this proof', listed)}"
 
 
 def story(number: int, over: str, record: dict) -> list:
@@ -331,6 +360,333 @@ def checked(over: str, record: dict) -> str:
             + listed + wrong)
 
 
+# --- The features (--feature, --evidence): what must always be true of each, and the evidence it is -----------------
+
+def read(path: Path):
+    """What the JSON or YAML file holds; None when there is no such file."""
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    return json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
+
+
+def load_feature(promises: Path, evidence: Path) -> dict:
+    """The feature of the agreed list `promises` (docs/promises/<stem>.yaml), its design choices next to it, and what
+    CI found of it in <evidence>/<stem>/ (a file that is not there: None)."""
+    agreed = read(promises)
+    folder = evidence / promises.stem
+    found = {name: read(folder / f"{name}.json") for name in ("ledger", "checkers", "mutants", "leak", "blocked")}
+    return {**found, "name": agreed["feature"], "agreed": agreed["agreed"], "asked": agreed.get("asked") or [],
+            "proofs": tuple(agreed.get("proofs") or ()), "folder": folder,
+            "design": read(promises.with_name(promises.stem + ".design.yaml"))}
+
+
+def by_feature(proofs: list, features: list) -> list:
+    """[(the feature's index, its proofs on screen)] in the features' order, then (None, the other proofs): a proof is
+    the first feature's whose `proofs` its module (tests/proofs/<module>.py) starts with."""
+    sections, rest = [], proofs
+    for index, feature in enumerate(features):
+        mine = [p for p in rest if feature["proofs"] and p[0].name.split(".")[0].startswith(feature["proofs"])]
+        rest = [p for p in rest if all(p is not m for m in mine)]
+        sections.append((index, mine))
+    return [*sections, (None, rest)]
+
+
+def mermaid(path: Path) -> QImage | None:
+    """The drawing of the Mermaid file, made twice as big as it is shown (see drawing()), sharp; None when there is
+    no such file."""
+    if not path.is_file():
+        return None
+    import mmdr  # only the features' pages draw diagrams
+
+    diagram = mmdr.render(path.read_text(encoding="utf-8"))
+    size = QImage.fromData(diagram.png(background="#ffffff")).width()
+    return QImage.fromData(diagram.png(width=2 * size, background="#ffffff"))
+
+
+def drawing(name: str, image: QImage | None, room: QSizeF, path: Path) -> str:
+    """The diagram (resource `name`) at its size, or smaller to fit `room`; or that its file `path` is missing."""
+    if image is None:
+        return f"<p>{mark(False, f'Not found: {path.as_posix()}')}</p>"
+    scale = min(0.5, room.width() / image.width(), room.height() / image.height())
+    return (f"<p align=\"center\"><img src=\"{name}\" width=\"{image.width() * scale:.0f}\" "
+            f"height=\"{image.height() * scale:.0f}\"></p>")
+
+
+AMBER = "#b35c00"
+STATUS = {"GREEN": (OK, "#e6f4ea"), "AMBER": (AMBER, "#fff1d6"), "RED": (FAILED, "#fdecea")}  # colour, tint
+MEANING = {"GREEN": "Checked for every input or state: a model checker explored every state, or a test tried every "
+                    "case of a stated range.",
+           "AMBER": "Checked by tests only. They all pass, but a bug could still hide in a case they did not try; "
+                    "each amber row says why it is not green.",
+           "RED": "Not verified, or a check failed. Each red row says what is missing or what failed."}
+# The checkers, in the order their output is shown, in plain words. A trace validation comes before the model check:
+# it shows that the model, which the model check explores, behaves as the code does.
+KINDS = {"trace": ("Trace validation", "real runs replayed through the model, to show it behaves as the code does"),
+         "model": ("Model check", "every state the model can reach, explored"),
+         "tests": ("Tests", ""),
+         "mutation": ("Mutation testing", "small bugs planted in the code on purpose, to see the tests catch them"),
+         "leak": ("Memory and leak check", ""),
+         "charter": ("Architecture rules", "the charter's rules on how the code is laid out")}
+TERMINAL, TERMINAL_TOP, TERMINAL_INK, TERMINAL_DIM = "#0d1117", "#262c36", "#e6edf3", "#8b949e"
+MUTATION_BAR = 90  # percent of the planted bugs the tests must catch
+
+
+def day(value) -> str:
+    """A date (a YAML date or ISO text) in words: 7 November 2026."""
+    date = value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
+    return f"{date.day} {date:%B %Y}"
+
+
+def section(text: str, note: str = "", space: int = 26) -> str:
+    """A section's heading, with a quiet note after it."""
+    quiet = f"&nbsp;&nbsp;<span style=\"font-size: 10pt; font-weight: normal; color: {MUTED}\">{esc(note)}</span>"
+    return (f"<p style=\"font-size: 15pt; font-weight: 600; margin-top: {space}px; margin-bottom: 8px\">{esc(text)}"
+            f"{quiet if note else ''}</p>")
+
+
+def kept(text: str, items: list, note: str = "") -> str:
+    """The section `text`, its items each a table whole on one page (see whole()); its heading in the first item's
+    table, so that it is on that item's page."""
+    first = items[0] if items else ""
+    return "".join([f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 26px\"><tr><td>"
+                    f"{section(text, note, 0)}{first}</td></tr></table>", *items[1:]])
+
+
+def verdict(feature: dict) -> tuple[str, str]:
+    """The feature's verdict, one phrase, and its colour."""
+    if feature["blocked"] is not None:
+        return AMBER, "BLOCKED: needs your decision"
+    if feature["ledger"] is None:
+        return FAILED, "Not certified: no ledger"
+    red = sum(row["status"] == "RED" for row in feature["ledger"]["rows"])
+    return (FAILED, f"Not certified: {red} red") if red else (OK, "Certified")
+
+
+def tally(feature: dict) -> list:
+    """How many rows the feature's ledger has, then how many are green, amber and red."""
+    rows = (feature["ledger"] or {}).get("rows", [])
+    return [len(rows), *(sum(row["status"] == status for row in rows) for status in STATUS)]
+
+
+def same_commit(release: dict, features: list) -> tuple:
+    """Whether every checker and test result is of the commit built: (what, passed, in words)."""
+    commit = str(release["commit"])[:7]
+    others = sorted({f"{c['name']} ran on {str(c['commit'])[:7]}" for f in features for c in f["checkers"] or []
+                     if str(c["commit"])[:7] != commit} |
+                    {f"the tests of {f['name']} ran on {str(x)[:7]}" for f in features
+                     for x in (f["ledger"] or {}).get("commits", []) if str(x)[:7] != commit})
+    return ("Commit", not others, f"Not all of this commit ({commit}): " + "; ".join(others) if others else
+            f"Every checker and test result here is of commit {commit}, the one built.")
+
+
+def release_lines(release: dict, records: list, sessions: list, features: list) -> list:
+    """The release-wide numbers: (what, passed or None when it is neither, in words)."""
+    found = problems(records, sessions)
+    lines = [("Proofs on screen", not found, "; ".join(found) or all_passed(records))]
+    if release is None:
+        return lines + [("Release", False, "No release-wide numbers: release.json was not found.")]
+    mutation, tests, checkers = release["mutation"], release["tests"], release["checkers"]
+    each = "".join(f" · {name}: {n['passed']:,} passed, {n['failed']} failed, {n['skipped']} skipped"
+                   for name, n in tests["platforms"].items())
+    health = release["design_health"]
+    kept_ones = " · ".join(f"{name}: {reason}" for name, reason in (health.get("kept") or {}).items())
+    return lines + [
+        same_commit(release, features),
+        ("Mutation testing", mutation["score"] >= MUTATION_BAR,
+         f"{round(mutation['score'], 1):g}%: the tests caught {mutation['killed']:,} of the {mutation['total']:,} small "
+         f"bugs planted in the code on purpose. The bar is {MUTATION_BAR}%."),
+        ("Tests", tests["failed"] == 0, f"{tests['passed']:,} passed, {tests['failed']} failed, {tests['skipped']} "
+                                        f"skipped{each}"),
+        ("Checkers", checkers["passed"] == checkers["run"], f"{checkers['passed']} of the {checkers['run']} run "
+                                                            "passed."),
+        ("Memory and leaks", release["leak"]["passed"], release["leak"]["summary"]),
+        ("Architecture rules", release["charter"]["violations"] == 0,
+         f"{release['charter']['rules_checked']} rules of the charter checked, {release['charter']['violations']} "
+         "broken."),
+        ("Design health", None, f"Functions over 25 decision points (the ifs, loops, ands and ors in one "
+                                f"function): {health['over_points']}. Over 80 lines: {health['over_lines']}."
+                                + (f" Kept as they are, and why: {kept_ones}." if kept_ones else "")),
+    ]
+
+
+def summary(title: str, features: list, release: dict | None, records: list, sessions: list, ci_url: str) -> str:
+    """The first page, to read if nothing else: each feature's verdict, the release-wide numbers, how to read the
+    colours."""
+    cell = f"valign=\"top\" style=\"padding: 8px 12px; border-top: 1px solid {RULE}\""
+    names = ("", "Feature", "Invariants", "Green", "Amber", "Red", "Verdict")
+    head = "".join(f"<td bgcolor=\"{CARD_TINT}\" {cell}><b>{name}</b></td>" for name in names)
+    rows = ""
+    for i, feature in enumerate(features, 1):
+        colour, phrase = verdict(feature)
+        tint = next(t for c, t in STATUS.values() if c == colour)
+        numbers = "".join(f"<td width=\"8%\" {cell}>{n}</td>" for n in tally(feature))
+        rows += (f"<tr><td width=\"3%\" {cell}><a name=\"feature-row-{i}\"></a>{i}</td>"
+                 f"<td {cell}><a href=\"#feature-{i}\" style=\"color: {IDEA_BAR}; font-weight: 600\">"
+                 f"{esc(feature['name'])}</a></td>{numbers}<td width=\"26%\" bgcolor=\"{tint}\" {cell}>"
+                 f"<span style=\"color: {colour}; font-weight: 600\">{esc(phrase)}</span></td></tr>")
+    numbers = "".join(f"<tr><td width=\"16%\" valign=\"top\" style=\"color: {MUTED}; padding: 4px 18px 4px 0\">{what}"
+                      f"</td><td style=\"padding: 4px 0\">{esc(words) if ok is None else mark(ok, words)}</td></tr>"
+                      for what, ok, words in release_lines(release, records, sessions, features))
+    key = "".join(f"<tr><td width=\"10%\" bgcolor=\"{STATUS[s][1]}\" style=\"padding: 7px 12px; color: {STATUS[s][0]}; "
+                  f"font-weight: bold\">{s}</td><td bgcolor=\"{STATUS[s][1]}\" style=\"padding: 7px 12px\">"
+                  f"{esc(MEANING[s])}</td></tr>" for s in STATUS)
+    table = "<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\""
+    commit = str((release or {}).get("commit", ""))[:7]
+    return (label("Taskloom", ACCENT) +
+            f"<p style=\"font-size: 30pt; font-weight: 600; margin-top: 0; margin-bottom: 8px\">{esc(title)}</p>"
+            f"<table cellspacing=\"0\" cellpadding=\"0\">{facts(records, ci_url, commit)}</table>"
+            + section("Read this page if you read nothing else")
+            + f"{table}><tr>{head}</tr>{rows}</table>"
+            + section("Release-wide numbers") + f"{table}>{numbers}</table>"
+            + section("How to read the colors") + f"{table}>{key}</table>"
+            + f"<p style=\"color: {MUTED}; margin-top: 10px\">Each checker's output shows the log it is from, the "
+              "commit it ran on and its exit code (0: it passed). The diagrams are generated from the code and the "
+              "model, never drawn by hand.</p>")
+
+
+def c4_page(images: dict, room: QSizeF, evidence: Path) -> str:
+    """The C4 view (packaging/c4.py): who and what Taskloom talks to; the programs it is made of."""
+    maps = [("context", "Who and what Taskloom talks to."),
+            ("containers", "The programs Taskloom is made of, and where each keeps its state.")]
+    shown = "".join(f"<p style=\"font-size: 12pt; font-weight: 600; margin-top: 18px\">{esc(caption)}</p>"
+                    + drawing(f"c4/{name}", images[f"c4/{name}"], room, evidence / "c4" / f"{name}.mmd")
+                    for name, caption in maps)
+    return (heading("The C4 view", "How Taskloom is built")
+            + f"<p style=\"font-size: 11pt; color: {MUTED}; line-height: 135%\">Two maps of Taskloom, the first two "
+              "of the C4 model's zoom levels (context, containers, components, code). They are generated from the "
+              "code, never drawn by hand.</p>" + shown)
+
+
+def blocked_banner(blocked: dict) -> str:
+    options = "".join(f"<li style=\"font-size: 12pt; margin-bottom: 4px\">{esc(o)}</li>" for o in blocked["options"])
+    return box(f"<p style=\"font-size: 17pt; font-weight: 600; color: {AMBER}\">BLOCKED: needs your decision</p>"
+               f"<p style=\"font-size: 12pt; margin-top: 4px\">I can't certify this until you choose.</p>"
+               f"<p style=\"font-size: 12pt; font-weight: 600; margin-top: 10px\">{esc(blocked['question'])}</p>"
+               f"<ol type=\"A\">{options}</ol>", STATUS["AMBER"][1], AMBER)
+
+
+def asked_and_agreed(feature: dict) -> str:
+    """You asked (the quotes, with their dates); what must always be true; the design choices."""
+    quotes = "".join(f"<p style=\"font-size: 13pt; font-style: italic; line-height: 135%; margin-bottom: 8px\">"
+                     f"“{esc(a['words'])}”&nbsp;&nbsp;<span style=\"font-size: 10pt; font-style: normal; color: "
+                     f"{MUTED}\">{day(a['date']).replace(' ', '&nbsp;')}</span></p>" for a in feature["asked"])
+    rows = (feature["ledger"] or {}).get("rows", [])
+    promised = "".join(f"<li style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\">{esc(r['text'])}</li>"
+                       for r in rows)
+    design = "".join(f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\"><b>Chosen:</b> "
+                     f"{esc(str(d['chosen']).rstrip('.'))}. <b>Revisit if:</b> {esc(str(d['revisit_if']).rstrip('.'))}."
+                     f"</p>" for d in feature["design"] or [])
+    return (kept("You asked", [box(quotes, ASKED_TINT, ACCENT) if quotes else paragraphs([])])
+            + section("What must always be true", f"(agreed with you in chat on {day(feature['agreed'])})")
+            + (f"<ol>{promised}</ol>" if promised else paragraphs([]))
+            + kept("Design", [design or paragraphs([])]))
+
+
+def ledger_rows(rows: list) -> list:
+    """The evidence ledger: its header, then each row (a table of its own, whole on a page); a row's status in a
+    coloured cell, and under an amber or red row why it is not green."""
+    widths = (4, 30, 24, 26, 16)
+    cell = f"valign=\"top\" style=\"padding: 8px 10px; border-top: 1px solid {RULE}\""
+    table = "<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">"
+    head = table + "<tr>" + "".join(
+        f"<td width=\"{w}%\" bgcolor=\"{CARD_TINT}\" {cell}><b>{name}</b></td>" for w, name in
+        zip(widths, ("#", "Must always be true", "How it is enforced", "Checker result", "Status"))) + "</tr></table>"
+    tables = []
+    for n, row in enumerate(rows, 1):
+        colour, tint = STATUS[row["status"]]
+        short = re.split(r"(?<=[.!?])\s", row["text"], maxsplit=1)[0]
+        texts = [str(n), esc(short), esc(row["enforced"]) or mark(False, "Not said"), esc(row["checked"])]
+        green = (f"<br><span style=\"font-size: 8.5pt\">{esc(row['why'])}</span>"
+                 if row["status"] == "GREEN" and row["why"] else "")
+        why = (f"<tr><td></td><td colspan=\"4\" style=\"padding: 0 10px 10px; line-height: 130%\"><span style=\"color: "
+               f"{colour}; font-weight: 600\">Why {row['status'].lower()}:</span> {esc(row['why'])}</td></tr>"
+               if row["status"] != "GREEN" else "")
+        tables.append(f"{table}<tr>" + "".join(f"<td width=\"{w}%\" {cell}>{t}</td>" for w, t in zip(widths, texts))
+                      + f"<td width=\"{widths[-1]}%\" bgcolor=\"{tint}\" {cell}><span style=\"color: {colour}; "
+                        f"font-weight: bold\">{row['status']}</span>{green}</td></tr>{why}</table>")
+    return [head + (tables[0] if tables else paragraphs([])), *tables[1:]]
+
+
+def terminal(checker: dict, evidence: Path) -> str:
+    """A checker's output as on its terminal: its log, commit and exit code; the command; its final lines. Over it,
+    what it checks, in words, and what it found."""
+    ok = checker["exit"] == 0
+    top = (f"{html.escape((evidence / checker['log']).as_posix())}&nbsp;&nbsp;&nbsp;commit "
+           f"{html.escape(str(checker['commit'])[:7])}&nbsp;&nbsp;&nbsp;<span style=\"color: "
+           f"{'#3fb950' if ok else '#ff7b72'}\">exit {checker['exit']}</span>")
+    lines = (f"<span style=\"color: {TERMINAL_DIM}\">$ {html.escape(checker['command'])}</span>\n"
+             + html.escape("\n".join(checker["tail"][-12:])))
+    name, gloss = KINDS.get(checker["kind"], (checker["kind"], ""))
+    about = name + (f" ({gloss})" if gloss else "") + f": {checker['summary']}"
+    return (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 14px\">"
+            f"<tr><td style=\"padding-bottom: 6px; font-size: 11pt\">{mark(ok, about)}</td></tr>"
+            f"<tr><td bgcolor=\"{TERMINAL_TOP}\" style=\"padding: 6px 12px; {MONO}; color: {TERMINAL_DIM}\">{top}</td>"
+            f"</tr><tr><td bgcolor=\"{TERMINAL}\" style=\"padding: 8px 12px 10px\"><p style=\"{MONO}; color: "
+            f"{TERMINAL_INK}\">{lines}</p></td></tr></table>")
+
+
+def survivors(mutants: dict | None, path: Path) -> str:
+    """The mutation score against its bar, then each mutant the tests did not catch and why it does not matter."""
+    if mutants is None:
+        return f"<p>{mark(False, f'Not found: {path.as_posix()}')}</p>"
+    score = (f"Mutation score {round(mutants['score'], 1):g}%: the tests caught {mutants['killed']:,} of the "
+             f"{mutants['total']:,} small bugs planted in the code on purpose. The bar is {mutants['threshold']}%.")
+    lines = "".join(f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\"><b>{esc(s['where'])}</b>"
+                    f"&nbsp;&nbsp;{esc(s['change'])}. {esc(s['why_equivalent'])}</p>" for s in mutants["survivors"])
+    return (f"<p style=\"font-size: 11pt; margin-bottom: 8px\">{mark(mutants['score'] >= mutants['threshold'], score)}"
+            "</p>" + (lines or "<p style=\"font-size: 11pt\">None: the tests caught every one.</p>"))
+
+
+def leaks(leak: dict | None, path: Path) -> str:
+    if leak is None:
+        return f"<p>{mark(False, f'Not found: {path.as_posix()}')}</p>"
+    numbers = "".join(f"<tr><td style=\"color: {MUTED}; padding: 3px 18px 3px 0\">{esc(name)}</td>"
+                      f"<td style=\"padding: 3px 0\">{esc(str(value))}</td></tr>"
+                      for name, value in (leak.get("numbers") or {}).items())
+    return (f"<p style=\"font-size: 11pt; margin-bottom: 8px\">{mark(leak['passed'], leak['summary'])}</p>"
+            f"<table cellspacing=\"0\" cellpadding=\"0\">{numbers}</table>")
+
+
+def on_screen(changes: list) -> str:
+    """The changes that show the feature in the running app (their pages follow), each a link to its first page."""
+    if not changes:
+        return f"<p style=\"font-size: 11pt\">{mark(False, 'No proof on screen was recorded for this feature.')}</p>"
+    return ("<p style=\"font-size: 11pt; margin-bottom: 8px\">The pages after this one show it in the running app, "
+            "step by step:</p>" + "".join(
+                f"<p style=\"font-size: 11pt; margin-bottom: 6px\"><span style=\"color: {ACCENT}; font-weight: 600\">"
+                f"Change {n}</span>&nbsp;&nbsp;<a href=\"#change-{n}\" style=\"color: {IDEA_BAR}; font-weight: 600\">"
+                f"{esc(r['title'])}</a>&nbsp;&nbsp;{outcome(r)} <span style=\"color: {MUTED}\">on "
+                f"{esc(r['system'])}</span></p>" for n, r in changes))
+
+
+def feature_page(index: int, total: int, feature: dict, changes: list, images: dict, room: QSizeF,
+                 evidence: Path) -> str:
+    """The feature's pages, before its changes' (`changes`: (number, record) each)."""
+    folder = feature["folder"]
+    order = list(KINDS)
+    checkers = sorted(feature["checkers"] or [], key=lambda c: order.index(c["kind"]) if c["kind"] in order else
+                      len(order))
+    boxes = [terminal(c, evidence) for c in checkers] or [f"<p>{mark(False, 'No checker ran for this feature.')}</p>"]
+    colour, phrase = verdict(feature)
+    # A blocked feature opens with its question; any other with its verdict.
+    opening = (blocked_banner(feature["blocked"]) if feature["blocked"] is not None else
+               f"<p style=\"font-size: 13pt; font-weight: 600; color: {colour}\">{esc(phrase)}</p>")
+    # The statechart, and beside it the rest: on one page.
+    statechart = (section("Statechart", "(generated from the model, not drawn by hand)", 0)
+                  + drawing(f"statechart{index}", images[f"statechart{index}"], QSizeF(room.width() * 0.56,
+                                                                                         room.height()),
+                            folder / "statechart.mmd"))
+    rest = (section("Memory and leaks", space=0) + leaks(feature["leak"], folder / "leak.json")
+            + section("It works on screen") + on_screen(changes))
+    return "".join([heading(f"Feature {index} of {total}", feature["name"], anchor=f"feature-{index}"), opening,
+                    asked_and_agreed(feature),
+                    kept("Evidence ledger", ledger_rows((feature["ledger"] or {}).get("rows", []))),
+                    kept("Checker output", boxes, "(final lines, this commit)"),
+                    kept("Surviving mutants, one line each", [survivors(feature["mutants"], folder / "mutants.json")]),
+                    columns(statechart, rest, 58)])
+
+
 def cuts_a_box(doc: QTextDocument) -> bool:
     """Whether a page's end cuts a tinted box: a table with a coloured cell, or a paragraph with a background."""
     layout, height = doc.documentLayout(), doc.pageSize().height()
@@ -391,8 +747,9 @@ def badge(number: int) -> QImage:
     return image
 
 
-def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, repo: Path = Path(__file__).parent):
-    QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
+def read_proofs(proof_dirs: list) -> tuple[list, list]:
+    """The proofs the folders hold, (folder, record) each, in the order they ran, the folders in the order given; and
+    each folder's session (None: its run did not finish)."""
     proofs, sessions = [], []
     for proof_dir in proof_dirs:
         proofs += sorted(((folder, json.loads((folder / "proof.json").read_text(encoding="utf-8")))
@@ -403,10 +760,45 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     # A change skipped on one system, where it cannot be shown, and shown on another: once, as shown. (A proof's
     # folder is named after its scenario.)
     shown = {folder.name for folder, record in proofs if record["status"] != "skipped"}
-    proofs = [(folder, record) for folder, record in proofs
-              if record["status"] != "skipped" or folder.name not in shown]
+    return [(folder, record) for folder, record in proofs
+            if record["status"] != "skipped" or folder.name not in shown], sessions
+
+
+def change_pages(number: int, total: int, folder: Path, record: dict, marked: str, resources: dict, body: QSizeF,
+                 measure) -> list:
+    """Change `number`'s pages, (html, footer, go-back link, whether it is a feature's) each: its story, its
+    steps, what was checked. Its screenshots are added to `resources`; `marked`: its NEW mark."""
+    images = {}
+    for entry in record["entries"]:
+        for file in (entry.get("file"), entry.get("zoom")):
+            if entry["kind"] == "shot" and file:
+                name = f"proof{number}/{file}"
+                resources[name] = framed(QImage(str(folder / file)))
+                images[file] = (name, resources[name].size())
+    over = f"Change {number}{marked}"
+    footer = f"Change {number}: {record['title']} · on {record['system']}"
+    back = (f"row-{number}", "Back to the list")
+    pages = [(text, footer, back, False) for text in story(number, f"Change {number} of {total}{marked}", record)]
+    step, steps = 0, sum(e["kind"] == "step" for e in record["entries"])
+    for page in groups(record["entries"]):
+        text, step = step_page(over, page, step, steps, images, body, measure)
+        pages.append((text, footer, back, False))
+    pages.append((checked(over, record), footer, back, False))
+    return pages
+
+
+def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, repo: Path = Path(__file__).parent,
+          features: list = (), evidence: Path | None = None):
+    """`features`: the agreed lists (docs/promises/<name>.yaml) of the features whose evidence CI laid out in
+    `evidence` (proof/<release>/): the PDF opens with their verdicts and tells each before its changes."""
+    QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
+    proofs, sessions = read_proofs(proof_dirs)
+    loaded = [load_feature(promises, evidence) for promises in features]
+    sections = by_feature(proofs, loaded)
+    proofs = [proof for _, part in sections for proof in part]
     records = [record for _, record in proofs]
-    version = ", ".join(sorted({r["version"] for r in records}))
+    release = read(evidence / "release.json") if loaded else None
+    version = ", ".join(sorted({r["version"] for r in records})) or str((release or {}).get("version", ""))
     since = news(repo, version)
     new = [since is not None and folder.name not in since[2] for folder, _ in proofs]
 
@@ -464,51 +856,70 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
                 smaller = document(text, scale=scale, rows=rows)
         return doc
 
-    pages = []  # (html, footer, the change's number)
-    starts = []  # the page each change starts on
-    for number, (folder, record) in enumerate(proofs, 1):
-        images = {}
-        for entry in record["entries"]:
-            for file in (entry.get("file"), entry.get("zoom")):
-                if entry["kind"] == "shot" and file:
-                    name = f"proof{number}/{file}"
-                    resources[name] = framed(QImage(str(folder / file)))
-                    images[file] = (name, resources[name].size())
-        marked = f" · {since[0]}" if new[number - 1] else ""
-        over = f"Change {number}{marked}"
-        footer = f"Change {number}: {record['title']} · on {record['system']}"
-        starts.append(len(pages))
-        pages += [(text, footer, number)
-                  for text in story(number, f"Change {number} of {len(proofs)}{marked}", record)]
-        step, steps = 0, sum(e["kind"] == "step" for e in record["entries"])
-        for page in groups(record["entries"]):
-            text, step = step_page(over, page, step, steps, images, body, measure)
-            pages.append((text, footer, number))
-        pages.append((checked(over, record), footer, number))
+    # The features' diagrams, drawn once.
+    drawings = {f"statechart{i}": mermaid(f["folder"] / "statechart.mmd") for i, f in enumerate(loaded, 1)}
+    drawings.update({f"c4/{name}": mermaid(evidence / "c4" / f"{name}.mmd")
+                     for name in ("context", "containers")} if loaded else {})
+    resources.update({name: image for name, image in drawings.items() if image is not None})
+    room = QSizeF(body.width() - 24, body.height() * 0.8)
 
-    docs = [fitted(text) for text, _, _ in pages]
+    pages = []  # (html, footer, the go-back link at its top: (anchor, words), whether it is a feature's)
+    starts = []  # the page each change starts on
+    number = 0
+    for index, part in sections:  # each feature's page, then its changes'; then the other changes'
+        if index is not None:
+            changes = [(number + k, record) for k, (_, record) in enumerate(part, 1)]
+            pages.append((feature_page(index + 1, len(loaded), loaded[index], changes, drawings, room, evidence),
+                          f"Feature {index + 1}: {loaded[index]['name']}",
+                          (f"feature-row-{index + 1}", "Back to the summary"), True))
+        for folder, record in part:
+            number += 1
+            starts.append(len(pages))
+            pages += change_pages(number, len(proofs), folder, record, f" · {since[0]}" if new[number - 1] else "",
+                                  resources, body, measure)
+
+    # A feature's pages run on as long as they take, at their size, each table whole on a page; a change's are
+    # fitted to as few pages as reads well.
+    docs = [document(text, rows=True) if feature else fitted(text) for text, _, _, feature in pages]
     counts = [doc.pageCount() for doc in docs]
     first = [sum(counts[:i]) for i in range(len(counts))]
-    cover_doc = fitted(cover(title, records, sessions, ci_url, [0] * len(records), since, new),
-                       rows=True)  # its page count
-    shift = cover_doc.pageCount()
-    cover_doc = fitted(cover(title, records, sessions, ci_url, [shift + first[i] + 1 for i in starts], since, new),
-                       rows=True)
-    docs, footers = [cover_doc, *docs], ["", *(footer for _, footer, _ in pages)]
-    numbers = [0, *(number for _, _, number in pages)]
-    total = sum(doc.pageCount() for doc in docs)
+    # With features, the summary and the C4 view come first, then the list of the changes; else the cover.
+    front = [fitted(text, rows=True) for text in (summary(title, loaded, release, records, sessions, ci_url),
+                                                   c4_page(drawings, room, evidence))] if loaded else []
 
+    def listed(pages: list) -> str:
+        if not loaded:
+            return cover(title, records, sessions, ci_url, pages, since, new)
+        return heading("It works on screen", "Every change, shown in the running app") + lists(records, pages, since,
+                                                                                               new)
+
+    cover_doc = fitted(listed([0] * len(records)), rows=True)  # its page count
+    shift = sum(doc.pageCount() for doc in front) + cover_doc.pageCount()
+    cover_doc = fitted(listed([shift + first[i] + 1 for i in starts]), rows=True)
+    docs = [*front, cover_doc, *docs]
+    footers = [""] * (len(front) + 1) + [footer for _, footer, _, _ in pages]
+    backs = [None] * (len(front) + 1) + [back for _, _, back, _ in pages]
+
+    def back_link(to: tuple | None) -> QTextDocument | None:
+        """On each page of a change (of a feature), at its top: a link to its row on the cover (the summary)."""
+        return document(f"<p align=\"right\" style=\"font-size: 8pt\"><a href=\"#{to[0]}\" style=\"color: "
+                        f"{IDEA_BAR}\"><span style=\"{SYMBOLS}\">↑</span> {to[1]}</a></p>",
+                        paged=False) if to else None
+
+    paint(writer, list(zip(docs, footers, map(back_link, backs))), body, font, f"Taskloom {version} · {title}")
+
+
+def paint(writer: QPdfWriter, docs: list, body: QSizeF, font: QFont, left: str):
+    """The documents' pages, in order; on each page but the cover's, its go-back link at its top and its footer:
+    `left`, its own words and its number. `docs`: (document, its footer's words, its go-back link) each."""
+    total = sum(doc.pageCount() for doc, _, _ in docs)
     painter = QPainter(writer)
     painter.setRenderHint(QPainter.LosslessImageRendering)  # screenshots as sharp as on the screen, not as JPEG
     painter.scale(writer.resolution() / DPI, writer.resolution() / DPI)
     small = QFont(font)
     small.setPixelSize(11)  # in the page's pixels (a point size would count the PDF's resolution too)
     number = 0
-    for doc, footer, change in zip(docs, footers, numbers):
-        # On each page of a change, at its top: a link to the change's row on the cover.
-        back = document(f"<p align=\"right\" style=\"font-size: 8pt\"><a href=\"#row-{change}\" style=\"color: "
-                        f"{IDEA_BAR}\"><span style=\"{SYMBOLS}\">↑</span> Back to the list</a></p>",
-                        paged=False) if change else None
+    for doc, footer, back in docs:
         for i in range(doc.pageCount()):
             if number:
                 writer.newPage()
@@ -531,7 +942,7 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
             painter.setFont(small)
             painter.setPen(QColor(FAINT))
             line = QRectF(8, body.height() + 6, body.width() - 16, FOOTER - 6)
-            painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter, f"Taskloom {version} · {title}")
+            painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter, left)
             painter.drawText(line, Qt.AlignHCenter | Qt.AlignVCenter, footer)
             painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, f"{number} / {total}")
     painter.end()
@@ -545,8 +956,14 @@ def main():
     parser.add_argument("--title", default=TITLE)
     parser.add_argument("--repo", type=Path, default=Path(__file__).parent,
                         help="the Git checkout that says which changes are new (default: the one this script is in)")
+    parser.add_argument("--feature", type=Path, action="append", default=[], metavar="PROMISES_YAML",
+                        help="a feature's agreed list (docs/promises/<name>.yaml), told first; repeatable")
+    parser.add_argument("--evidence", type=Path, metavar="DIR",
+                        help="where CI laid out the features' evidence (proof/<release>/); needed with --feature")
     args = parser.parse_args()
-    build(args.proof_dirs, args.out, args.ci_url, args.title, args.repo)
+    if args.feature and args.evidence is None:
+        parser.error("--feature needs --evidence")
+    build(args.proof_dirs, args.out, args.ci_url, args.title, args.repo, args.feature, args.evidence)
     print(args.out)
 
 
