@@ -75,7 +75,19 @@ def first_block_start(env, run_id: int) -> dt.datetime:
 
 
 def seconds_after(moment: dt.datetime, when: dt.datetime) -> float:
-    return (when - moment).total_seconds()
+    """Seconds from `moment` to `when`: a time with its UTC offset is the moment it is, one without a local time."""
+    return when.timestamp() - moment.timestamp()
+
+
+def start_at_clock(text: str) -> dt.datetime:
+    """The time a run's --start-at names, on this PC's clock (without a UTC offset, as the tests' clock times are):
+    one given with its UTC offset is that moment (fold=1 the second time the clock shows it); one without, a local
+    time already."""
+    when = dt.datetime.fromisoformat(text)
+    if when.tzinfo is None:
+        return when
+    clock = when.astimezone().replace(tzinfo=None)
+    return clock.replace(fold=int(clock.timestamp() != when.timestamp()))
 
 
 def wait_until(moment: dt.datetime):

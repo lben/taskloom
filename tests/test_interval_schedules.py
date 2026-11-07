@@ -23,8 +23,8 @@ from taskloom.history import History
 from taskloom.scheduler import Scheduler, acquire_lock
 from tests.test_editor import write_flow
 from tests.test_paths_editor_editing import clean, field, save_as, saved, select_only, settle
-from tests.test_scheduler_start_at import (assert_began_at, record_process_starts, start_service, stop_service,
-                                           wait_until_finished)
+from tests.test_scheduler_start_at import (assert_began_at, record_process_starts, start_at_clock, start_service,
+                                           stop_service, wait_until_finished)
 from tests.test_scheduler_start_at import runs as history_runs
 from tests.test_scheduler_start_at import write
 from tests.test_service_off import plain
@@ -74,7 +74,7 @@ def record_runs(monkeypatch) -> list[tuple[str | None, dt.datetime]]:
         def __init__(self, args, *rest, **kwargs):
             if isinstance(args, list) and "--start-at" in args:
                 block = args[args.index("--trigger") + 1] if "--trigger" in args else None
-                started.append((block, dt.datetime.fromisoformat(args[args.index("--start-at") + 1])))
+                started.append((block, start_at_clock(args[args.index("--start-at") + 1])))
             super().__init__(args, *rest, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", Recorded)
@@ -203,7 +203,7 @@ def run_processes_of(starts: Path, flow: Path) -> list[tuple[float, dt.datetime]
         started = json.loads(record.read_text(encoding="utf-8"))
         args = started["args"]
         if "run" in args and "--start-at" in args and Path(args[args.index("run") + 1]).resolve() == flow.resolve():
-            found.append((started["time"], dt.datetime.fromisoformat(args[args.index("--start-at") + 1])))
+            found.append((started["time"], start_at_clock(args[args.index("--start-at") + 1])))
     return sorted(found)
 
 

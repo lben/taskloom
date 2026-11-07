@@ -38,7 +38,7 @@ from taskloom.editor.safety import pid_alive  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.scheduler import Scheduler, paused  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
-from tests.test_scheduler_start_at import start_service, stop_service  # noqa: E402
+from tests.test_scheduler_start_at import start_at_clock, start_service, stop_service  # noqa: E402
 from tests.test_service_off import stays_off_at_login  # noqa: E402
 
 REAL_POPEN = subprocess.Popen
@@ -400,6 +400,11 @@ def begins(runs: list[FakeRun]) -> list[str]:
 
 def utc(local_times: list[dt.datetime]) -> list[str]:
     return [f"{t.astimezone(UTC):%Y-%m-%d %H:%M:%S}" for t in local_times]
+
+
+def hhmm(run: FakeRun) -> str:
+    """The time a run begins (its --start-at) on this PC's clock, as HH:MM."""
+    return f"{start_at_clock(run.start_at):%H:%M}"
 
 
 def says(text: str, number: int) -> bool:
@@ -873,7 +878,7 @@ def test_runs_waiting_their_turn_start_once_each_in_order_after_the_service_stop
     before = Scheduler(Home(env.home))
     before.tick(dt.datetime(2026, 1, 5, 10, 0))
     before.tick(dt.datetime(2026, 1, 5, 10, 5))
-    first = [(r.flow, r.block, r.start_at[11:16]) for r in fake_runs.started]
+    first = [(r.flow, r.block, hhmm(r)) for r in fake_runs.started]
     assert first == [("backlog", "s1", "10:01"), ("queued", "s1", "10:05")], first
 
     fake_runs.holding.clear()  # (the runs going are gone with it)
@@ -883,12 +888,12 @@ def test_runs_waiting_their_turn_start_once_each_in_order_after_the_service_stop
     drain(after, dt.datetime(2026, 1, 5, 10, 5, 20), fake_runs)
 
     again = fake_runs.started[len(first):]
-    assert sorted((r.flow, r.block, r.start_at[11:16]) for r in again) == [
+    assert sorted((r.flow, r.block, hhmm(r)) for r in again) == [
         ("backlog", "s1", "10:02"), ("backlog", "s1", "10:03"), ("backlog", "s1", "10:04"),
         ("backlog", "s1", "10:05"), ("queued", "s2", "10:05"), ("slot", "s1", "10:05")], \
         f"the runs waiting their turn did not start, each once, once the service was back: {begins(again)}"
     backlog = [r for r in again if r.flow == "backlog"]
-    assert [r.start_at[11:16] for r in backlog] == ["10:02", "10:03", "10:04", "10:05"]  # in order
+    assert [hhmm(r) for r in backlog] == ["10:02", "10:03", "10:04", "10:05"]  # in order
     assert one_at_a_time(backlog) == []
 
 

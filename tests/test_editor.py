@@ -1585,8 +1585,8 @@ def test_the_scheduler_service_starts_by_itself_unless_you_paused_it(win, tmp_pa
     win._start_scheduler_if_needed()  # (and when the editor opens with scheduled flows)
     assert started == [False, False]
 
-    monkeypatch.setattr(win, "stop_scheduler", lambda: None)
-    win.pause_scheduler()  # you paused it: it stays off
+    monkeypatch.setattr(win, "stop_scheduler", lambda choices: None)
+    win.pause_scheduler({})  # you paused it (no runs going): it stays off
     assert paused(win.home)
     tab.doc.move_blocks({"work": (20, 20)})
     win.save(tab)

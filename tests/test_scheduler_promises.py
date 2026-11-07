@@ -26,7 +26,7 @@ from taskloom.scheduler import Scheduler, acquire_lock
 from tests.test_paths_scheduler import flow as timed_flow
 from tests.test_paths_scheduler import heartbeat, runs, service, wait_for, write
 from tests.test_paths_scheduler import start_service as start_headless
-from tests.test_scheduler_start_at import TRAY_SERVICE, stop_service, wait_until
+from tests.test_scheduler_start_at import TRAY_SERVICE, start_at_clock, stop_service, wait_until
 
 SECOND, MINUTE = dt.timedelta(seconds=1), dt.timedelta(minutes=1)
 EARLY = dt.timedelta(seconds=5)  # SCH-8: a run's process is started this long before its time
@@ -237,7 +237,7 @@ class FakeRun:
         self.simulation, self.returncode = simulation, None
         flow = Path(args[args.index("run") + 1]).stem
         self.record = Started(simulation.life, flow, args[args.index("--trigger") + 1],
-                              dt.datetime.fromisoformat(args[args.index("--start-at") + 1]), next(simulation.moments))
+                              start_at_clock(args[args.index("--start-at") + 1]), next(simulation.moments))
         simulation.started.append(self.record)
         simulation.fakes.append(self)
         self.checks_left = simulation.lasts[flow]
