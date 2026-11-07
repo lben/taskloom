@@ -110,9 +110,19 @@ class Home:
         return self.root / "history.db"
 
     def scheduled_flows(self) -> list[Path]:
-        """Flows the scheduler runs, listed in scheduled.yaml."""
-        data = _load_yaml(self.root / "scheduled.yaml")
-        return [Path(p) for p in data.get("flows") or []]
+        """Flows the scheduler runs, listed in scheduled.yaml (see scheduled_list)."""
+        return self.scheduled_list()[0]
+
+    def scheduled_list(self) -> tuple[list[Path], list]:
+        """The flows listed in scheduled.yaml, and the entries in it that are not a flow file's path (e.g. an empty
+        item or a number, left by a hand edit), which are left out. ValueError if it cannot be read."""
+        path = self.root / "scheduled.yaml"
+        flows = _load_yaml(path).get("flows") or []
+        if not isinstance(flows, list):
+            raise ValueError(f"{path}: flows must be a list of flow files, each on a line of its own after a -; "
+                             f"got {flows!r}")
+        listed = [p for p in flows if isinstance(p, str) and p.strip()]
+        return [Path(p) for p in listed], [p for p in flows if p not in listed]
 
     def set_scheduled(self, flow_path: Path, enabled: bool):
         flows = [p for p in self.scheduled_flows() if p != flow_path] + ([flow_path] if enabled else [])

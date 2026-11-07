@@ -870,7 +870,8 @@ class CatchUpDialog(QDialog):
         layout.addWidget(QLabel(
             f"{flow_name} missed {count} of its scheduled times while the scheduler service was off or the computer "
             "was asleep. Its schedule's Misfire is catch_up: it runs each missed time, oldest first, one at a time. "
-            "They wait for your answer; other flows run as usual.", textFormat=Qt.PlainText, wordWrap=True))
+            "They wait for your answer, and so do its times that come meanwhile (those are not missed: they run "
+            "after them); other flows run as usual.", textFormat=Qt.PlainText, wordWrap=True))
         # (answer kept here and called by accept: in a slot's lambda, it would keep the service and this window
         # alive through Qt, after the service has ended)
         self.answer = answer

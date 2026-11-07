@@ -1097,14 +1097,18 @@ The rest of this section is about the cases where the scheduler might surprise y
 
 **More than 100 missed.** When a `catch_up` schedule has missed more than 100 times, the
 scheduler service asks you first. A **Catch up missed runs?** window says how many times were
-missed. Choose **Run all of them**, or **Run only the latest** with a number (100 unless you
-change it), and click **Proceed**. With only the latest, the older times are not run: they
-count as missed, and a **Missed runs skipped** notification says how many (plus an email, if
-the flow's notifications include skipped runs). The window shows even when the editor is
-closed. Until you answer, that schedule's missed runs wait, and so do its new times; other
-flows run as usual. If the service stops before you answer, it asks again when it is back.
-On a server, with no screen to ask on (`taskloom scheduler --headless`), the latest 100 run,
-oldest first. The service's log says how many were missed (the log is what the service
+missed: the times already past when the service found them. Choose **Run all of them**, or
+**Run only the latest** with a number (100 unless you change it), and click **Proceed**. With
+only the latest, the older times are not run: they count as missed, and a **Missed runs
+skipped** notification says how many (plus an email, if the flow's notifications include
+skipped runs). The window shows even when the editor is closed. Until you answer, that
+schedule's missed runs wait, and so do its times that are not missed (the one on time when
+the window opened, and those that come while it is open); other flows run as usual. Those
+times are never dropped or counted as missed: they run after the missed runs you chose,
+oldest first, one at a time. If the service stops before you answer, it asks again when it
+is back. On a server, with no screen to ask on (`taskloom scheduler --headless`), the latest
+100 missed times run, oldest first, then the times that are not missed. The service's log
+says how many were missed and how many of them are not run (the log is what the service
 prints: `scheduler.log` in its Taskloom folder when your PC's keeper started it), and so does
 an email if the flow's notifications include skipped runs.
 
@@ -1124,23 +1128,33 @@ they came: a flow whose run has just finished does not jump the line.
 are, a **Turn off the scheduler service?** window lists each flow with runs going, and you
 choose for each one. **Let it finish** (the default): its runs going finish, and its runs
 waiting their turn still run. **Stop now**: its runs going stop and are recorded as
-cancelled, and its waiting runs are dropped. Once you click **Proceed**, nothing new starts,
-and the service turns off when the last run you let finish is done. **Cancel** keeps it on
-and changes nothing. Flows not in the list keep their waiting runs: they are saved, and start
-when you turn the service on again. The tray icon's **Turn off the scheduler service** shows
-the same window.
+cancelled, and its waiting runs are dropped (a run that does not stop within a few seconds
+is forced to end, and is recorded as cancelled all the same). Once you click **Proceed**,
+nothing new starts, and the service turns off when the last run you let finish is done. A
+run whose program the service started early, to begin on time, has not begun yet: it is not
+listed, and it does not begin. **Cancel** keeps it on and changes nothing. Flows not in the
+list keep their waiting runs: they are saved, and start when you turn the service on again.
+The tray icon's **Turn off the scheduler service** shows the same window. From **Proceed**,
+the editor shows the service off, also while the runs you let finish go; click the button to
+turn it on again before they are done, and it stays on: they go on, and scheduled times run
+again.
 
 **Waiting runs are saved.** Runs waiting their turn are saved in the run history: behind
 their flow's run going, until fewer runs go than **Scheduled runs at once** allows, in a
 catch-up, or for your answer about missed times. However the service stops (the PC restarts,
 the service crashes or is ended), they are not lost: when it is back, each starts once, in
 the order they came. If only the service stops, the runs it started go on by themselves
-(each run is a program of its own), and they count as going once it is back.
+(each run is a program of its own), and they count as going once it is back. After a PC
+restart, a run that was going has ended, and its program's number may be another program's
+by then: the service counts a run as going only if its program began before the run did, so
+it never waits for, or stops, another program. A run whose program has gone is recorded as
+crashed, and you are told (see below).
 
 **A run that crashes.** If a run's program stops unexpectedly (it crashed, or something
 ended it), the run is recorded as crashed: it counts as failed, and its error says "crashed:
 the run process stopped unexpectedly". You get a desktop message (for a flow named nightly:
-**nightly crashed**), and an email if the flow's notifications include failures.
+**nightly crashed**), and an email if the flow's notifications include failures; also for a
+run that was going when the service started again.
 
 **Clock changes.** Twice a year, daylight saving time (summer time) moves the clock. The
 service counts in real time, so: an **Every N minutes or hours** schedule keeps its rhythm

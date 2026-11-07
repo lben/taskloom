@@ -34,7 +34,7 @@ from .config import Home
 from .flow import FlowError, load_flow, real_path
 from .history import History
 from .history import connect as history_connect
-from .launch import pid_alive, runner_command, windowed_command
+from .launch import run_alive, runner_command, windowed_command
 from .report import Html
 
 UTC = dt.timezone.utc
@@ -77,27 +77,33 @@ class _Waiting:
     as_of: dt.datetime  # the moment it is for
     block: str | None
     schedule: str
-    waits: str  # for "slot": a free slot (max_concurrent_runs); "flow": its flow's runs going; "answer": your answer
+    # For "slot": a free slot (max_concurrent_runs); "flow": its flow's runs going; "missed": your answer about the
+    # schedule's missed runs (it is one of them); "answer": that answer too (it is not missed: it runs after them).
+    waits: str
 
 
 class _Adopted:
-    """The process of a run started before the service restarted: not its child, so known only by its PID."""
+    """The process of a run started before the service restarted: not its child, so known only by its process id and
+    the run's start (another program may have that id now: see run_alive)."""
 
-    def __init__(self, pid: int):
-        self.pid, self.returncode, self.stdin = pid, None, None
+    def __init__(self, pid: int | None, started: str):
+        self.pid, self.started, self.returncode, self.stdin = pid, started, None, None
 
     def poll(self):
-        if self.returncode is None and not pid_alive(self.pid):
+        if self.returncode is None and not run_alive(self.pid, self.started):
             self.returncode = 0
         return self.returncode
 
     def terminate(self):  # (a run cancels on SIGTERM; on Windows this ends it at once)
-        with contextlib.suppress(OSError):
-            os.kill(self.pid, signal.SIGTERM)
+        self._signal(signal.SIGTERM)
 
     def kill(self):
-        with contextlib.suppress(OSError):
-            os.kill(self.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        self._signal(getattr(signal, "SIGKILL", signal.SIGTERM))
+
+    def _signal(self, sig):
+        if self.poll() is None:  # (never another program's process)
+            with contextlib.suppress(OSError):
+                os.kill(self.pid, sig)
 
 
 def _moment(text: str) -> dt.datetime:
@@ -123,7 +129,7 @@ class Scheduler:
         self._answers: dict[tuple, int | None] = {}  # your answers about missed runs, applied at the next check
         self._flows: dict[str, tuple[float, object]] = {}
         self._sending: list[threading.Thread] = []  # emails being sent
-        self._list_error: str | None = None  # why scheduled.yaml cannot be read (told once)
+        self._list_error: tuple | None = None  # what is wrong with scheduled.yaml, as told (once, until it changes)
         self._runs_told: list | None = None  # what scheduler.runs says
         home.root.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
@@ -167,33 +173,30 @@ class Scheduler:
         """The runs waiting their turn that a service before this one saved, and the runs it started still going."""
         for row in self._db.execute("SELECT id, flow, due, block, schedule, waits FROM waiting_runs ORDER BY id"):
             entry = _Waiting(row[0], row[1], _moment(row[2]), *row[3:])
-            if entry.waits == "answer":
+            if entry.waits in ("missed", "answer"):
                 self.asking.setdefault((entry.flow, entry.block, entry.schedule), []).append(entry)
             elif entry.waits == "flow":
                 self.queued.setdefault(entry.flow, []).append(entry)
             else:
                 self.waiting.append(entry)
         for schedule, backlog in list(self.asking.items()):
-            self._ask_about(schedule, len(backlog))
+            self._ask_about(schedule, sum(entry.waits == "missed" for entry in backlog))
         self._adopt()
 
     def _adopt(self):
-        """The runs the service before this one started that are still going (as it said in scheduler.runs, and as the
-        history says): they count as going, for Overlap, Max concurrent runs and catching up one at a time."""
-        try:
-            told = json.loads((self.home.root / RUNS_FILE).read_text(encoding="utf-8"))
-        except (OSError, ValueError):  # none (or not written by a service)
-            return
+        """The runs the service before this one started that the history says are going (as it said in
+        scheduler.runs): they count as going, for Overlap, Max concurrent runs and catching up one at a time. One whose
+        process has gone, or is another program's now (after a restart), is recorded as crashed at the first check,
+        and you are told."""
         history = History(self.home.history_db)
         try:
-            running = {run["id"]: run["pid"] for run in history.running()}
+            running = {run["id"]: run for run in history.running()}
         finally:
             history.close()
-        for run in told if isinstance(told, list) else []:
-            pid = running.get(run.get("run")) if isinstance(run, dict) else None
-            if pid and pid != os.getpid() and pid_alive(pid):
-                self.runs.append(_Run(str(run.get("flow")), None, _Adopted(pid), run.get("block"),
-                                      str(run.get("schedule")), run_id=run["run"], adopted=True))
+        for told in _told(self.home):
+            if run := running.get(told.get("run")):
+                self.runs.append(_Run(str(told.get("flow")), None, _Adopted(run["pid"], run["started"]),
+                                      told.get("block"), str(told.get("schedule")), run_id=run["id"], adopted=True))
 
     def _busy(self, path: str) -> bool:
         """A run of this flow is going, queued, or waiting for a free slot."""
@@ -279,7 +282,7 @@ class Scheduler:
         self._set_last(key, due[-1])
         schedule = (path, trigger.block, trigger.text)
         if schedule in self.asking or (trigger.misfire == "catch_up" and len(past) > ASK_OVER):
-            self._backlog(schedule, due, len(past))
+            self._backlog(schedule, past, soon)
             return
         planned = self._misfire(flow, trigger, past, soon, now)
         # A catch-up of more than one time runs one after another, including behind a run that is already going
@@ -308,13 +311,17 @@ class Scheduler:
                        f"{flow.name}: {missed} run(s) were due while the scheduler was off")
         return planned
 
-    def _backlog(self, schedule: tuple, due: list, missed: int):
-        """More than ASK_OVER missed times of a Catch up schedule: they wait (saved) for your answer, and so do its
-        times that come meanwhile; other flows run as usual."""
+    def _backlog(self, schedule: tuple, past: list, soon: list):
+        """More than ASK_OVER missed times of a Catch up schedule (`past`, at the check that asks): they wait (saved)
+        for your answer. So do its times that are not missed, the on-time one (`soon`) and those that come meanwhile:
+        they run after the missed runs you choose. Other flows run as usual."""
+        path, block, text = schedule
         asked = schedule in self.asking
-        self.asking.setdefault(schedule, []).extend(self._save(schedule[0], due, schedule[1], schedule[2], "answer"))
+        missed, later = ([], past + soon) if asked else (past, soon)
+        self.asking.setdefault(schedule, []).extend(self._save(path, missed, block, text, "missed")
+                                                    + self._save(path, later, block, text, "answer"))
         if not asked:
-            self._ask_about(schedule, missed)
+            self._ask_about(schedule, len(missed))
 
     def _ask_about(self, schedule: tuple, count: int):
         if self.ask is None:  # (a server: no one to ask)
@@ -328,10 +335,12 @@ class Scheduler:
 
     def _answer(self, schedule: tuple, limit: int | None):
         """About a schedule's missed runs: None runs them all, N only the latest N; the older ones count as missed,
-        and you are told how many. They run oldest first, one at a time."""
+        and you are told how many. They run oldest first, one at a time, and then its times that are not missed."""
         backlog = self.asking.pop(schedule, [])
-        dropped = backlog[:max(0, len(backlog) - limit)] if limit is not None else []
-        kept = backlog[len(dropped):]
+        missed = [entry for entry in backlog if entry.waits == "missed"]
+        dropped = missed[:max(0, len(missed) - limit)] if limit is not None else []
+        gone = {entry.id for entry in dropped}
+        kept = [entry for entry in backlog if entry.id not in gone]
         with self._changes() as db:
             db.executemany("DELETE FROM waiting_runs WHERE id=?", [(entry.id,) for entry in dropped])
             db.executemany("UPDATE waiting_runs SET waits='flow' WHERE id=?", [(entry.id,) for entry in kept])
@@ -342,22 +351,27 @@ class Scheduler:
         if dropped:
             name = self._name(path)
             self._tell(self._load(Path(path)), "skipped", "Missed runs skipped", (
-                f"{name}: you chose to run only the latest {limit} of {len(backlog)} missed runs; the other "
+                f"{name}: you chose to run only the latest {limit} of {len(missed)} missed runs; the other "
                 f"{len(dropped)} are not run" if self.ask else
-                f"{name}: {len(backlog)} runs were due while the scheduler was off, more than {ASK_OVER}: the latest "
+                f"{name}: {len(missed)} runs were due while the scheduler was off, more than {ASK_OVER}: the latest "
                 f"{limit} run, oldest first, and the other {len(dropped)} are missed"))
 
     def _scheduled_flows(self) -> list[Path] | None:
-        """The flows in scheduled.yaml; None (and one notification, until that changes) if it cannot be read."""
+        """The flows in scheduled.yaml; None if it cannot be read. A mistake in it (e.g. edited by hand) is told once,
+        until it changes, and the service goes on: an entry that is not a flow file's path is left out, and the flows
+        listed right run."""
         try:
-            paths = self.home.scheduled_flows()
-        except (OSError, ValueError) as e:  # e.g. edited by hand: you are told, and the service goes on
-            if str(e) != self._list_error:
-                self.notify("The list of scheduled flows cannot be read",
-                            f"{e}\n(no scheduled flow starts until it is put right)")
-            self._list_error = str(e)
-            return None
-        self._list_error = None
+            paths, left_out = self.home.scheduled_list()
+            mistake = left_out and ("Mistake in the list of scheduled flows", (
+                f"{self.home.root / 'scheduled.yaml'}: not a flow file's path, so left out: "
+                + ", ".join("an empty item" if entry is None else repr(entry) for entry in left_out)
+                + ". The other flows listed run."))
+        except (OSError, ValueError) as e:
+            paths, mistake = None, ("The list of scheduled flows cannot be read",
+                                    f"{e}\n(no scheduled flow starts until it is put right)")
+        if mistake and mistake != self._list_error:
+            self.notify(*mistake)
+        self._list_error = mistake or None
         return paths
 
     def _request(self, path: str, flow, as_of: dt.datetime, block: str | None, schedule: str, behind: bool = False):
@@ -392,19 +406,27 @@ class Scheduler:
         # Started early, it loads, then waits for its time (a time that has passed: it begins at once); then it begins
         # only if the service is on and the schedule is still this one with this time (--if-scheduled). It goes on if
         # the service stops; only a request on its stdin stops it (--stoppable).
+        # --start-at with its UTC offset: one moment, also when this PC's clock shows that time twice.
         command = runner_command() + ["run", path, "--json-events", "--notify", "--stoppable",
                                       "--as-of", f"{as_of.astimezone():%Y-%m-%d %H:%M:%S}",
-                                      "--start-at", _start_at(as_of), "--if-scheduled", schedule]
+                                      "--start-at", as_of.astimezone().isoformat(timespec="seconds"),
+                                      "--if-scheduled", schedule]
         if block:
             command += ["--trigger", block]
-        # errors="replace": a program the run starts (Java, a console tool) may write bytes that are not text in
-        # this encoding straight to the output; reading must go on, or the run hangs once the pipe is full.
-        proc = subprocess.Popen(
-            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            errors="replace",
-            env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        try:
+            # errors="replace": a program the run starts (Java, a console tool) may write bytes that are not text in
+            # this encoding straight to the output; reading must go on, or the run hangs once the pipe is full.
+            proc = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                errors="replace",
+                env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as e:  # the system did not start it: you are told, and the service goes on
+            name = Path(path).stem
+            self._tell(self._load(Path(path)), "failure", f"{name} could not start",
+                       f"{name}: the system could not start its run ({e.strerror or e})")
+            return
         run = _Run(path, as_of, proc, block, schedule)
         run.reader = threading.Thread(target=self._read, args=(run,), daemon=True)
         run.reader.start()
@@ -432,11 +454,11 @@ class Scheduler:
             pass
 
     def turn_off(self, choices: dict[str, str]):
-        """You turned the service off (request_turn_off): it stays off, and nothing new starts. For each flow in
+        """You turned the service off (request_turn_off, which keeps it off): nothing new starts. For each flow in
         `choices`, "stop": its runs going stop (recorded as cancelled) and its waiting runs are dropped; "finish": its
         runs going finish, and its waiting runs still run. The runs going of other flows finish too; their waiting runs
-        stay saved, to start when you turn it on again. Once nothing it lets finish is going or waiting, it is off."""
-        set_paused(self.home, True)
+        stay saved, to start when you turn it on again. Once nothing it lets finish is going or waiting, it is off;
+        turned on again before then, it is on (see _take_requests)."""
         self.turning_off = dict(choices)
         stop = {path for path, choice in choices.items() if choice == "stop"}
         for run in self.runs:
@@ -469,8 +491,11 @@ class Scheduler:
         for run in [r for r in self.runs if r.proc.poll() is not None]:
             self.runs.remove(run)
             self._ended(run)
-        for run in self.runs:  # asked to stop, and still going: forced
+        for run in self.runs:  # asked to stop, and still going: forced to end
             if run.stopping is not None and time.monotonic() - run.stopping > STOP_SECONDS:
+                if run.status is None and run.run_id is not None:  # recorded as cancelled first: whatever then finds
+                    self._mark_crashed(run)                        # its process gone does not take it for a crash
+                    run.status = "cancelled"
                 run.proc.kill()
         self._next_in_line()
         self._tell_runs()
@@ -481,9 +506,12 @@ class Scheduler:
             self.off = True
 
     def _take_requests(self):
-        """Your answers about missed runs, and a request to turn the service off (request_turn_off)."""
+        """Your answers about missed runs, a request to turn the service off (request_turn_off), and turning it on
+        again before the runs you let finish are done: then it is on (they go on, and new times start)."""
         while self._answers:
             self._answer(*self._answers.popitem())
+        if self.turning_off is not None and not paused(self.home):
+            self.turning_off = None
         request = self.home.root / TURN_OFF_FILE
         try:
             choices = json.loads(request.read_text(encoding="utf-8"))
@@ -499,23 +527,30 @@ class Scheduler:
         flow asks)."""
         if run.reader is not None:
             run.reader.join(5)  # it has read the last lines once the process has exited
-        if run.status is None and run.run_id is not None:
-            history = History(self.home.history_db)
-            history.mark_crashed(run.run_id, dt.datetime.now().isoformat(timespec="milliseconds"),
-                                 cancelled=run.stopping is not None)
-            history.close()
-        # Nothing to tell for one you stopped, one from before the service restarted (it told about itself), or one
-        # that did not begin, as its schedule or the service was turned off before its time.
-        if (run.status == "success" or run.stopping is not None or run.adopted
+        crashed = run.status is None and run.run_id is not None and self._mark_crashed(run)
+        # Nothing to tell for one you stopped, one from before the service restarted that ended by itself (it told
+        # about itself), or one that did not begin, as its schedule or the service was turned off before its time.
+        if (run.status == "success" or run.stopping is not None or (run.adopted and not crashed)
                 or (run.run_id is None and run.proc.returncode == NOT_DUE)):
             return
         name = Path(run.flow).stem
-        detail = (run.errors or run.output or [f"exit code {run.proc.returncode}"])[-1]
+        detail = (run.errors or run.output or ["the run process stopped unexpectedly" if run.adopted
+                                               else f"exit code {run.proc.returncode}"])[-1]
         if run.status is None:  # it could not email about itself: it crashed, or was refused before it began
             title = f"{name} crashed" if run.run_id is not None else f"{name} failed"
             self._tell(self._load(Path(run.flow)), "failure", title, detail)
         else:
             self.notify(f"{name} {run.status}", detail)
+
+    def _mark_crashed(self, run: _Run) -> bool:
+        """Records the run, whose process has died (or is being forced to end), as crashed; as cancelled if you
+        stopped it. False: its end was recorded already."""
+        history = History(self.home.history_db)
+        try:
+            return history.mark_crashed(run.run_id, dt.datetime.now().isoformat(timespec="milliseconds"),
+                                        cancelled=run.stopping is not None)
+        finally:
+            history.close()
 
     def _next_in_line(self):
         """Runs waiting their turn start in the order they came: a flow's next one waiting for its runs joins the line
@@ -540,10 +575,11 @@ class Scheduler:
         return any(w.flow in finish for w in self.waiting) or any(self.queued.get(path) for path in finish)
 
     def _tell_runs(self):
-        """scheduler.runs: the runs going, for turning the service off flow by flow (runs_going), and for the next
-        service if this one stops while they go (they count as going for it)."""
+        """scheduler.runs: the runs going, for turning the service off flow by flow (runs_going), for the next service
+        if this one stops while they go (they count as going for it), and for the editor (runs_held). A run started
+        early that has not begun is not going yet: it has no run number."""
         going = [{"flow": r.flow, "name": self._name(r.flow), "run": r.run_id, "block": r.block,
-                  "schedule": r.schedule} for r in self.runs]
+                  "schedule": r.schedule} for r in self.runs if r.run_id is not None]
         if going != self._runs_told:
             part = self.home.root / (RUNS_FILE + ".part")
             try:
@@ -800,6 +836,8 @@ def why_not_due(home: Home, path: Path, block: str | None, schedule: str, when: 
     e.g. "cron 0 7 * * *"), does not begin at that time: the service was turned off, or that schedule no longer runs
     then (Active unticked, changed, even if it still has that time, the flow taken off scheduled.yaml: a changed
     schedule asks for its times itself). None: it begins."""
+    if paused(home):  # (also while it turns off: it holds its lock until the runs you let finish are done)
+        return "the scheduler service is off"
     try:
         acquire_lock(home).close()  # nobody holds it: no scheduler service runs
         return "the scheduler service is off"
@@ -818,36 +856,43 @@ def why_not_due(home: Home, path: Path, block: str | None, schedule: str, when: 
     return f"{path.name} is not scheduled at {when.astimezone():%Y-%m-%d %H:%M} any more"
 
 
-def _start_at(when: dt.datetime) -> str:
-    """`taskloom run --start-at` for the moment `when`: its time on this PC's clock, with its UTC offset when the
-    clock shows that time twice (the night it goes back), so that it names that one moment."""
-    local = when.astimezone()
-    clock = local.replace(tzinfo=None)
-    once = clock.replace(fold=0).timestamp() == clock.replace(fold=1).timestamp()
-    return (clock if once else local).isoformat(timespec="seconds")
+def _told(home: Home) -> list[dict]:
+    """The runs going in the scheduler service, as it last said in scheduler.runs (see Scheduler._tell_runs)."""
+    try:
+        told = json.loads((home.root / RUNS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # none (or not written by a service)
+        return []
+    return [run for run in told if isinstance(run, dict)] if isinstance(told, list) else []
 
 
 def runs_going(home: Home) -> list[tuple[str, str]]:
     """The flows with runs going in the scheduler service, as it last said: (flow file, flow name), each flow once,
     in the order their runs started. For turning the service off flow by flow (request_turn_off)."""
     try:
-        told = json.loads((home.root / RUNS_FILE).read_text(encoding="utf-8"))
-        return list(dict.fromkeys((run["flow"], run["name"]) for run in told))
-    except (OSError, ValueError, TypeError, KeyError):  # none, or not as the service writes it
+        return list(dict.fromkeys((run["flow"], run["name"]) for run in _told(home)))
+    except (TypeError, KeyError):  # not as the service writes it
         return []
+
+
+def runs_held(home: Home) -> set:
+    """The run numbers of the runs going in the scheduler service, as it last said: while it runs, it records how
+    each ends, and tells you if one crashed."""
+    return {run.get("run") for run in _told(home)} - {None}
 
 
 def request_turn_off(home: Home, choices: dict[str, str]):
     """Turns the scheduler service off; it stays off until you turn it on. `choices`: for each flow with runs going
     (runs_going), "finish" (let its runs finish; its waiting runs still run) or "stop" (stop them now; its waiting runs
     are dropped); empty when none go. The service applies it within a second, and ends once what it lets finish is
-    done (see Scheduler.turn_off)."""
+    done (see Scheduler.turn_off); a run it started early that has not begun does not begin."""
     set_paused(home, True)
     (home.root / TURN_OFF_FILE).write_text(json.dumps(choices), encoding="utf-8")
 
 
 def serve(home: Home, headless: bool) -> int:
     with acquire_lock(home):  # held until the scheduler stops
+        # Started, it is on (at login it does not start while you have it off: --unless-paused).
+        set_paused(home, False)
         # The keeper checks this PID, however the scheduler was started.
         (home.root / "scheduler.pid").write_text(str(os.getpid()))
         # The editor checks which Taskloom this is (with the PID: an older scheduler writes no version).

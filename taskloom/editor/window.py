@@ -36,9 +36,10 @@ from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, bl
                    validate)
 from ..schedule import Trigger
 from ..history import History, run_label
-from ..launch import frozen, runner_command
+from ..launch import frozen, run_alive, runner_command
 from ..scheduler import (acquire_lock, counted_from, paused, request_turn_off, running_scheduler_version, runs_going,
-                         set_paused, set_start_at_login, startup_file, startup_script_outdated, version_tuple)
+                         runs_held, set_paused, set_start_at_login, startup_file, startup_script_outdated,
+                         version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
@@ -48,7 +49,7 @@ from .document import FlowDocument
 from .panels import (FindToggles, FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
                      PreviewPanel, PropertiesPanel, mermaid_picture, scheduler_icon)
 from .runs import RunProcess
-from .safety import CRASH_LOG, Safety, pid_alive
+from .safety import CRASH_LOG, Safety
 
 CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
@@ -1526,22 +1527,24 @@ class MainWindow(QMainWindow):
                 self._load_last_run(tab)
         if self.current is not None:  # each run as it comes, whoever started it, whatever the canvas shows
             self._refresh_history(self.current)
-        self._show_scheduler_state(self.scheduler_running())
+        self._show_scheduler_state(self.scheduler_on())
         self._show_running_flows()
 
     def _show_running_flows(self):
-        """The flows running now, wherever they were started; a run whose process is gone is recorded as failed."""
+        """The flows running now, wherever they were started; a run whose process is gone is recorded as failed
+        (one the scheduler service holds, by the service: it also tells you)."""
         if not self.home.history_db.exists():
             return
+        held = runs_held(self.home) if self.scheduler_running() else set()
         history = self._history()
         try:
             running = []
             for run in history.running():
                 if run["pid"] is None:
                     continue  # from before runs recorded their process: cannot tell
-                if pid_alive(run["pid"]):
+                if run_alive(run["pid"], run["started"]):
                     running.append(run)
-                else:
+                elif run["id"] not in held:
                     history.mark_crashed(run["id"], dt.datetime.now().isoformat(timespec="milliseconds"))
         finally:
             history.close()
@@ -1628,6 +1631,11 @@ class MainWindow(QMainWindow):
             return False
         except RuntimeError:
             return True
+
+    def scheduler_on(self) -> bool:
+        """The scheduler service runs, and you have not turned it off (turned off, it runs on until the runs you let
+        finish are done)."""
+        return self.scheduler_running() and not paused(self.home)
 
     def _show_countdowns(self):
         """Under each Schedule block of the flow on screen: when it starts the flow next."""
@@ -1718,19 +1726,21 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Could not update starting the scheduler service at login: {e}", 10000)
 
     def toggle_scheduler(self):
-        if not self.scheduler_running():
+        if not self.scheduler_on():
             self.start_scheduler(by_you=True)
             return
         choices = dialogs.ask_turn_off(runs_going(self.home), self)
         if choices is not None:
             self.pause_scheduler(choices)
 
-    def pause_scheduler(self, choices: dict[str, str] | None = None):
+    def pause_scheduler(self, choices: dict[str, str]):
         """Turn the scheduler service off, and keep it off until you turn it on. `choices`: what happens to each flow's
         runs going (see dialogs.ask_turn_off)."""
-        set_paused(self.home, True)
-        if self.scheduler_running():  # (a starting service deletes a request it finds: one left for none is no use)
-            self.stop_scheduler(choices or {})
+        if self.scheduler_running():
+            self.stop_scheduler(choices)
+        else:  # (no request: a starting service deletes one it finds)
+            set_paused(self.home, True)
+        self._show_scheduler_state(False)
 
     def stop_scheduler(self, choices: dict[str, str]):
         """The running service applies `choices` within a second and ends once the runs you let finish are done; the
@@ -1743,8 +1753,9 @@ class MainWindow(QMainWindow):
     def start_scheduler(self, by_you: bool = False):
         if by_you:
             set_paused(self.home, False)  # you turned it on: it starts by itself again when needed
-        if self.scheduler_running():
-            self.statusBar().showMessage("The scheduler service is already on", 5000)
+        if self.scheduler_running():  # (one turning off is on again: its runs go on, and new times start)
+            self.statusBar().showMessage("The scheduler service is on", 5000)
+            self._show_scheduler_state(self.scheduler_on())
             return
         self._offered_restart = True  # this version's: nothing to offer
         subprocess.Popen(
@@ -1754,7 +1765,7 @@ class MainWindow(QMainWindow):
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self.statusBar().showMessage("Scheduler service on: it runs your scheduled flows in the background", 8000)
-        QTimer.singleShot(2000, self, lambda: self._show_scheduler_state(self.scheduler_running()))
+        QTimer.singleShot(2000, self, lambda: self._show_scheduler_state(self.scheduler_on()))
 
     def _refresh_history(self, tab: FlowTab):
         if tab.doc.path is None or not self.home.history_db.exists():
