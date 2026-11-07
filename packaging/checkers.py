@@ -1,0 +1,66 @@
+"""Runs a feature's checkers and records what each printed, for the proof: never written by hand.
+
+    python packaging/checkers.py docs/promises/scheduler.yaml proof/<release>
+
+The checkers are listed in the feature's <name>.evidence.yaml under `checkers:`, each with a name (rows name it in
+green_by), a kind (trace, model, mutation, leak, charter, tests) and a command, run by the shell from the repository
+with {out} replaced by proof/<release>/<name> (where a checker writes its own result, e.g. leak.json). Each one's
+whole output goes to proof/<release>/<name>/logs/; checkers.json there says, for each, its command, exit code,
+commit, log, final lines and last line (its summary). Exit 1 when any checker failed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+HOURS = 3  # the longest a checker may run
+
+
+def commit() -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                          timeout=30).stdout.strip()
+
+
+def run(checker: dict, out: Path, evidence: Path) -> dict:
+    command = checker["command"].replace("{out}", out.as_posix())
+    log = out / "logs" / (re.sub(r"[^a-z0-9]+", "-", checker["name"].lower()).strip("-") + ".log")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        done = subprocess.run(command, shell=True, cwd=ROOT, capture_output=True, text=True, errors="replace",
+                              timeout=HOURS * 3600)
+        output, code = done.stdout + done.stderr, done.returncode
+    except subprocess.TimeoutExpired as e:
+        output, code = f"{e.stdout or ''}{e.stderr or ''}\nstopped: it had not finished after {HOURS} hours", 124
+    log.write_text(output, encoding="utf-8")
+    lines = [line for line in output.splitlines() if line.strip()]
+    return {"name": checker["name"], "kind": checker["kind"], "command": command, "exit": code, "commit": commit(),
+            "log": log.relative_to(evidence).as_posix(), "summary": lines[-1] if lines else "(it printed nothing)",
+            "tail": lines[-12:]}
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("promises", type=Path)
+    p.add_argument("evidence", type=Path)
+    a = p.parse_args(argv)
+    listed = yaml.safe_load(a.promises.with_name(a.promises.stem + ".evidence.yaml").read_text(encoding="utf-8"))
+    out = (a.evidence / a.promises.stem).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    results = []
+    for checker in listed.get("checkers") or []:
+        results.append(run(checker, out, a.evidence.resolve()))
+        print(f"{results[-1]['name']}: exit {results[-1]['exit']}: {results[-1]['summary']}", flush=True)
+    (out / "checkers.json").write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
+    return 1 if any(r["exit"] != 0 for r in results) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

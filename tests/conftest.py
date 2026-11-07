@@ -243,6 +243,7 @@ def win(qtbot, tmp_path, monkeypatch):
 # and how it ended, are written to that file (packaging/ledger.py builds the ledger from it) -------------------------
 
 _LEDGER = {}
+_OUTCOMES = {}  # every test's outcome, for the release-wide numbers
 
 
 def pytest_collection_modifyitems(config, items):
@@ -257,6 +258,11 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_runtest_logreport(report):
+    if _OUTCOMES.get(report.nodeid) != "failed":
+        if report.failed or report.skipped:
+            _OUTCOMES[report.nodeid] = "failed" if report.failed else "skipped"
+        elif report.when == "call":
+            _OUTCOMES[report.nodeid] = "passed"
     entry = _LEDGER.get(report.nodeid)
     if entry is None or entry["outcome"] == "failed":
         return
@@ -274,5 +280,6 @@ def pytest_sessionfinish(session):
     if out and _LEDGER:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True,
                                 timeout=30).stdout.strip()
-        Path(out).write_text(json.dumps({"commit": commit, "platform": sys.platform, "tests": list(_LEDGER.values())},
-                                        indent=1), encoding="utf-8")
+        totals = {o: sum(v == o for v in _OUTCOMES.values()) for o in ("passed", "failed", "skipped")}
+        Path(out).write_text(json.dumps({"commit": commit, "platform": sys.platform, "totals": totals,
+                                         "tests": list(_LEDGER.values())}, indent=1), encoding="utf-8")
