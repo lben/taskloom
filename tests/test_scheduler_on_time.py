@@ -473,9 +473,9 @@ def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expecte
     notes = []
     home = schedule(env, every_minute(misfire))
     due = next_minute(dt.datetime.now() + dt.timedelta(seconds=6))  # (room for the check before it)
-    scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
-    lock = acquire_lock(home)
+    lock = acquire_lock(home)  # (as `taskloom scheduler` does: the lock first, then its Scheduler)
     try:
+        scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
         scheduler.tick(due - dt.timedelta(minutes=3))  # first sight: nothing is due yet
         time.sleep(max(0.0, (due - dt.timedelta(seconds=4) - dt.datetime.now()).total_seconds()))
         scheduler.tick(dt.datetime.now())  # 5 s early window reaches the minute; the two before it are already due

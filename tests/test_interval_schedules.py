@@ -69,19 +69,22 @@ def scheduled(env, text: str) -> tuple[Path, Home]:
     return flow, home
 
 
-def record_runs(monkeypatch) -> list[FakeRun]:
-    """The run processes the scheduler starts, in the order it starts them, each replaced by a stand-in (FakeRuns):
-    the service checks at the test's clock times, so a run it starts early reaches its time and claims it on that
-    clock, as `taskloom run --if-scheduled` does, with the service on."""
+@pytest.fixture
+def fake_runs(monkeypatch):
+    """The run processes the scheduler starts, each replaced by a stand-in (FakeRuns; .started: in the order it starts
+    them): the service checks at the test's clock times, so a run it starts early reaches its time and claims it on
+    that clock, as `taskloom run --if-scheduled` does."""
     runs = FakeRuns()
     monkeypatch.setattr(subprocess, "Popen", runs.popen)
-    return runs.started
+    yield runs
+    runs.end()
 
 
-def service(home: Home) -> Scheduler:
-    """The scheduler service's loop; what it tells is kept in .told (shown when a test fails)."""
+def service(runs: FakeRuns, home: Home) -> Scheduler:
+    """The scheduler service's loop, made as `taskloom scheduler` makes it (it takes the folder's lock first:
+    FakeRuns.service); what it tells is kept in .told (shown when a test fails)."""
     told = []
-    scheduler = Scheduler(home, lambda title, message: told.append(f"{title}: {message}"))
+    scheduler = runs.service(home.root, lambda title, message: told.append(f"{title}: {message}"))
     scheduler.told = told
     return scheduler
 
@@ -113,11 +116,11 @@ def outcomes(started: list[FakeRun]) -> list[str]:
 ], ids=["1 minute", "2 hours"])
 @pytest.mark.invariant("SCH-6")
 @pytest.mark.invariant("SCH-7")
-def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(env, monkeypatch, every, checks,
+def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(env, fake_runs, every, checks,
                                                                                  expected):
-    started = record_runs(monkeypatch)
+    started = fake_runs.started
     _, home = scheduled(env, flow_with(check={"every": every}))
-    scheduler = service(home)
+    scheduler = service(fake_runs, home)
     for clock in checks:
         tick(scheduler, clock)
 
@@ -126,10 +129,10 @@ def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(
 
 
 @pytest.mark.invariant("SCH-7")
-def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes_schedule(env, monkeypatch):
-    started = record_runs(monkeypatch)
+def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes_schedule(env, fake_runs):
+    started = fake_runs.started
     scheduled(env, flow_with(every_five={"every": "5 minutes"}, on_the_clock={"cron": "*/5 * * * *"}))
-    scheduler = service(Home(env.home))
+    scheduler = service(fake_runs, Home(env.home))
     for clock in ("10:02:14", "10:04:56", "10:07:10", "10:09:56"):
         tick(scheduler, clock)
 
@@ -148,16 +151,17 @@ def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes
 ])
 @pytest.mark.invariant("SCH-7")
 @pytest.mark.invariant("SCH-9")
-def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_misfire(env, monkeypatch, misfire,
+def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_misfire(env, fake_runs, misfire,
                                                                                      after_restart):
-    started = record_runs(monkeypatch)
+    started = fake_runs.started
     _, home = scheduled(env, flow_with(check={"every": "5 minutes", "misfire": misfire}))
-    before = service(home)
+    before = service(fake_runs, home)
     for clock in ("10:00:14", "10:05:10"):
         tick(before, clock)
     assert clocks(started) == ["10:00:14", "10:05:14"], before.told
 
-    after = service(home)  # off after 10:05:14, on again at 10:23:00: 10:10:14, 10:15:14 and 10:20:14 were missed
+    # off after 10:05:14, on again at 10:23:00: 10:10:14, 10:15:14 and 10:20:14 were missed
+    after = service(fake_runs, home)
     for clock in ("10:23:00", "10:23:15", "10:25:10"):
         tick(after, clock)
 
@@ -169,10 +173,10 @@ def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_mis
                                     "taken off the scheduler and scheduled again"])
 @pytest.mark.invariant("SCH-7")
 @pytest.mark.invariant("SCH-10")
-def test_changing_n_or_turning_the_schedule_off_and_on_starts_it_again_from_then(env, monkeypatch, change):
-    started = record_runs(monkeypatch)
+def test_changing_n_or_turning_the_schedule_off_and_on_starts_it_again_from_then(env, fake_runs, change):
+    started = fake_runs.started
     flow, home = scheduled(env, flow_with(check={"every": "5 minutes"}))
-    scheduler = service(home)
+    scheduler = service(fake_runs, home)
     tick(scheduler, "10:00:14")
     if change == "every changed":
         save(flow, flow_with(check={"every": "2 minutes"}))

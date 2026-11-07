@@ -389,28 +389,25 @@ def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | Non
                           **early)
 
 
-@contextlib.contextmanager
-def service_on(home: Path):
-    """The scheduler service is on: it holds the Taskloom folder's lock, as `taskloom scheduler` does. Here the
-    service is the Scheduler a test checks with, in this process, which takes no lock: meanwhile it is taken for it
-    (unless a service holds it already)."""
+def seen_then(home: Path, moment: dt.datetime):
+    """A scheduler service before this one, made as `taskloom scheduler` makes one (it takes the Taskloom folder's
+    lock, then makes its Scheduler), checked at `moment` (its runs, if any, stand-ins) and has stopped since."""
+    lock = acquire_lock(Home(home))
     try:
-        lock = acquire_lock(Home(home))
-    except RuntimeError:  # (a service holds it)
-        lock = None
-    try:
-        yield
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(subprocess, "Popen", FakeRuns().popen)
+            Scheduler(Home(home)).tick(moment)
     finally:
-        if lock is not None:
-            unlock(lock)
+        unlock(lock)
+    gc.collect()  # (that service's hold on the history file goes with it)
 
 
 class FakeRun:
     """A stand-in for one `taskloom run` process the scheduler starts: it records the command, and has finished by
     the service's next check (unless its flow is held). One started early, to claim its time (--if-scheduled), has
     reached that time by then too (unless it `waits` for the test to say so: reach_its_time): it claims it as the real
-    run does (claim_its_time), with the service on (unless you turned it off), and begins only if it has it; else it
-    prints why, records nothing and ends with the exit code NOT_DUE."""
+    run does (claim_its_time), and begins only if it has it; else it prints why, records nothing and ends with the exit
+    code NOT_DUE."""
 
     def __init__(self, args: list[str], runs: "FakeRuns", home: Path):
         self.args, self._runs, self.home = args, runs, home
@@ -431,8 +428,7 @@ class FakeRun:
     def reach_its_time(self) -> bool:
         """Started early, it reaches its time (its --start-at) and claims it; whether it began."""
         self.reached = True
-        with service_on(self.home):
-            self.not_begun = claim_its_time(self.args, self.home, instant(self.start_at)[0])
+        self.not_begun = claim_its_time(self.args, self.home, instant(self.start_at)[0])
         if self.not_begun:
             self.stdout.say(f"not begun: {self.not_begun}\n")
             self.end(NOT_DUE)
@@ -469,6 +465,21 @@ class FakeRuns:
     def __init__(self):
         self.started: list[FakeRun] = []  # in the order the scheduler started them
         self.holding: set[str] = set()  # flows whose runs keep going
+        self.lock = None  # the Taskloom folder's lock, held by the service made last (service)
+
+    def service(self, home: Path, *args, **kwargs) -> Scheduler:
+        """A scheduler service for the Taskloom folder `home`, made as `taskloom scheduler` makes one: it takes the
+        folder's lock, then makes its Scheduler (`args`: its notify and ask), and holds the lock while it lives: until
+        the next one is made here (this one has stopped then), or the test ends."""
+        self.stop()
+        self.lock = acquire_lock(Home(home))
+        return Scheduler(Home(home), *args, **kwargs)
+
+    def stop(self):
+        """The service made last stops: it lets go of the folder's lock."""
+        if self.lock is not None:
+            unlock(self.lock)
+            self.lock = None
 
     def popen(self, args, *rest, **kwargs):
         if not (isinstance(args, list) and "run" in map(str, args) and "--start-at" in map(str, args)):
@@ -482,9 +493,10 @@ class FakeRuns:
         return [r for r in self.started if r.flow == flow]
 
     def end(self):
-        """The stand-ins still going end (nothing reads them any more)."""
+        """The stand-ins still going end (nothing reads them any more), and the service made last stops."""
         for run in self.started:
             run.end(-9)
+        self.stop()
 
 
 @pytest.fixture
@@ -743,8 +755,8 @@ def test_more_than_100_missed_ask_once_and_wait_for_the_answer_while_other_flows
                                                                                      missed):
     schedule(env.home, env.root, {"backlog": flow_yaml(EVERY_TEN), "other": flow_yaml({"cron": "* * * * *"})})
     told, asked = [], []
-    scheduler = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"),
-                          ask=lambda flow, count, answer: asked.append((flow, count, answer)))
+    scheduler = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"),
+                                  ask=lambda flow, count, answer: asked.append((flow, count, answer)))
     scheduler.tick(FIRST_SIGHT)
     now = check_after(150)  # 150 times missed, each over 2 minutes ago
     drain(scheduler, now, fake_runs)
@@ -770,7 +782,7 @@ def test_more_than_100_missed_ask_once_and_wait_for_the_answer_while_other_flows
 def test_a_catch_up_asks_only_when_more_than_100_were_missed(env, fake_runs, count):
     schedule(env.home, env.root, {"backlog": flow_yaml(EVERY_TEN)})
     asked = []
-    scheduler = Scheduler(Home(env.home), ask=lambda flow, missed, answer: asked.append((flow, missed)))
+    scheduler = fake_runs.service(env.home, ask=lambda flow, missed, answer: asked.append((flow, missed)))
     scheduler.tick(FIRST_SIGHT)
     drain(scheduler, check_after(count), fake_runs)
 
@@ -790,7 +802,7 @@ def test_with_no_screen_more_than_100_missed_run_the_latest_100_and_tell_how_man
     schedule(env.home, env.root, {"backlog": flow_yaml(EVERY_TEN, notify={"when": ["skipped"],
                                                                            "to": ["team@example.com"]})})
     told = []
-    scheduler = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    scheduler = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     scheduler.tick(FIRST_SIGHT)
     drain(scheduler, check_after(150), fake_runs)
     wait_until(lambda: smtp.messages, 10)
@@ -811,7 +823,7 @@ def test_the_server_service_runs_the_latest_100_at_once_and_its_log_says_how_man
     minute = (now.minute + 30) % 60  # its times are at least 25 minutes from now: none comes during the test
     schedule(env.home, env.root, {"backlog": flow_yaml({"cron": f"{minute} * * * *", "misfire": "catch_up"})})
     seen_at = now - dt.timedelta(hours=120)
-    Scheduler(Home(env.home)).tick(seen_at)  # the service first saw the schedule then, and has been off since
+    seen_then(env.home, seen_at)  # the service first saw the schedule then, and has been off since
     times = hourly_times(seen_at, now, minute)
     missed = len(times) - 100
     log = env.root / "scheduler.log"
@@ -841,7 +853,7 @@ def test_the_tray_service_asks_in_a_dialog_and_runs_only_the_latest_n_chosen(qap
     minute = (now.minute + 30) % 60  # its times are at least 25 minutes from now: none comes during the test
     schedule(env.home, env.root, {"backlog": flow_yaml({"cron": f"{minute} * * * *", "misfire": "catch_up"})})
     seen_at = now - dt.timedelta(hours=120)
-    Scheduler(Home(env.home)).tick(seen_at)  # the service first saw the schedule then, and has been off since
+    seen_then(env.home, seen_at)  # the service first saw the schedule then, and has been off since
     schedule(env.home, env.root, {"other": flow_yaml(HOURLY)})  # it runs as soon as the service sees it
     times = hourly_times(seen_at, now, minute)
     # (it may show during the service's first check, before the drive: answered from then on)
@@ -913,10 +925,10 @@ def missed_said(told: list[str]) -> list[str]:
     return [t for t in told if re.search(r"missed|was off", t, re.IGNORECASE)]
 
 
-def service_with(env, config: dict) -> tuple[Scheduler, list[str]]:
+def service_with(env, runs: FakeRuns, config: dict) -> tuple[Scheduler, list[str]]:
     schedule(env.home, env.root, {"clock": flow_yaml(config)})
     told = []
-    return Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}")), told
+    return runs.service(env.home, lambda title, message: told.append(f"{title}: {message}")), told
 
 
 @NO_TZ_ON_WINDOWS
@@ -926,7 +938,7 @@ def service_with(env, config: dict) -> tuple[Scheduler, list[str]]:
     (dt.datetime(2026, 10, 24, 23, 41, 10, tzinfo=UTC), dt.datetime(2026, 10, 25, 2, 20, tzinfo=UTC)),
 ], ids=["spring forward, 01:41 CET to 03:20 CEST", "fall back, 01:41 CEST to 03:20 CET"])
 def test_every_5_minutes_keeps_its_rhythm_in_real_time_through_a_clock_change(env, berlin, fake_runs, start, end):
-    scheduler, told = service_with(env, {"every": "5 minutes"})  # first seen at `start`
+    scheduler, told = service_with(env, fake_runs, {"every": "5 minutes"})  # first seen at `start`
     started = run_through(scheduler, fake_runs, start, end, every=10)
 
     expected = []
@@ -942,7 +954,8 @@ def test_every_5_minutes_keeps_its_rhythm_in_real_time_through_a_clock_change(en
 @pytest.mark.invariant("SCH-15")
 @pytest.mark.parametrize("misfire", ["skip", "run_once", "catch_up"])
 def test_a_time_the_clock_skips_runs_once_right_after_the_jump(env, berlin, fake_runs, misfire):
-    scheduler, told = service_with(env, {"cron": "30 2 * * *", "misfire": misfire})  # 02:30 does not exist that day
+    # (02:30 does not exist that day)
+    scheduler, told = service_with(env, fake_runs, {"cron": "30 2 * * *", "misfire": misfire})
     jump = dt.datetime(2026, 3, 29, 1, 0, tzinfo=UTC)  # 02:00 CET becomes 03:00 CEST
     started = run_through(scheduler, fake_runs, jump - dt.timedelta(minutes=10), jump + dt.timedelta(minutes=40), 5)
 
@@ -959,7 +972,7 @@ def test_a_time_the_clock_skips_runs_once_right_after_the_jump(env, berlin, fake
 @pytest.mark.invariant("SCH-15")
 @pytest.mark.parametrize("misfire", ["skip", "run_once", "catch_up"])
 def test_a_time_the_clock_shows_twice_runs_once_the_first_time(env, berlin, fake_runs, misfire):
-    scheduler, told = service_with(env, {"cron": "30 2 * * *", "misfire": misfire})
+    scheduler, told = service_with(env, fake_runs, {"cron": "30 2 * * *", "misfire": misfire})
     started = run_through(scheduler, fake_runs, dt.datetime(2026, 10, 24, 23, 50, tzinfo=UTC),
                           dt.datetime(2026, 10, 25, 2, 10, tzinfo=UTC), every=10)  # 01:50 CEST to 03:10 CET
 
@@ -973,7 +986,7 @@ def test_a_time_the_clock_shows_twice_runs_once_the_first_time(env, berlin, fake
 @NO_TZ_ON_WINDOWS
 @pytest.mark.invariant("SCH-15")
 def test_each_quarter_hour_of_the_repeated_hour_runs_once(env, berlin, fake_runs):
-    scheduler, told = service_with(env, {"cron": "*/15 * * * *"})
+    scheduler, told = service_with(env, fake_runs, {"cron": "*/15 * * * *"})
     started = run_through(scheduler, fake_runs, dt.datetime(2026, 10, 24, 23, 50, tzinfo=UTC),
                           dt.datetime(2026, 10, 25, 2, 20, tzinfo=UTC), every=10)  # 01:50 CEST to 03:20 CET
 
@@ -1000,7 +1013,7 @@ def test_runs_waiting_their_turn_start_once_each_in_order_after_the_service_stop
         "queued": flow_yaml(at_10_05, at_10_05, overlap="queue"),
         "slot": flow_yaml({"cron": "* * * * *"})})
     fake_runs.holding |= {"backlog", "queued"}
-    before = Scheduler(Home(env.home))
+    before = fake_runs.service(env.home)
     before.tick(dt.datetime(2026, 1, 5, 10, 0))
     before.tick(dt.datetime(2026, 1, 5, 10, 5))
     first = [(r.flow, r.block, hhmm(r)) for r in fake_runs.started]
@@ -1009,7 +1022,7 @@ def test_runs_waiting_their_turn_start_once_each_in_order_after_the_service_stop
     fake_runs.holding.clear()  # (the runs going are gone with it)
     for run in fake_runs.started:
         run.poll()
-    after = Scheduler(Home(env.home))  # the service started again (`before` is never checked again)
+    after = fake_runs.service(env.home)  # the service started again (`before` is never checked again)
     drain(after, dt.datetime(2026, 1, 5, 10, 5, 20), fake_runs)
 
     again = fake_runs.started[len(first):]

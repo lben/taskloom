@@ -2,14 +2,16 @@
 while it is off, asleep, starting or restarting: more missed Catch up times found before you answer the question about
 them (SCH-9), a scheduled run whose process is gone told exactly once, by the editor or the service, whichever finds it
 first (SCH-13), a time whose run was started early when you turned the service off just before it (SCH-9, SCH-8), a
-turn-off asked for while the service starts (SCH-4), and a run going across a time zone change and a restart of the
-service (SCH-11, SCH-16).
+turn-off asked for while the service starts (SCH-4), a run going across a time zone change and a restart of the
+service (SCH-11, SCH-16), and a run that began just before the service crashed, before the service checked again
+(SCH-11, SCH-12).
 
-The counts use the service's checks (Scheduler.tick) at chosen clock times, with each run's process replaced at the
-process boundary by a stand-in (test_scheduler_new_promises.FakeRuns). Where the behaviour crosses processes, the real
-service, the real editor window and real run processes are used, and turning off is sent as the dialog's Proceed
-sends it (request_turn_off). Only what cannot happen in a test is arranged: a run going when the PC restarted (its
-process has gone since) as the run history and the service's list of runs going left it; the moment a service is
+The counts use the service's checks (Scheduler.tick) at chosen clock times, made as `taskloom scheduler` makes its
+service (it takes the folder's lock first: FakeRuns.service), with each run's process replaced at the process boundary
+by a stand-in (test_scheduler_new_promises.FakeRuns). Where the behaviour crosses processes, the real service, the real
+editor window and real run processes are used, and turning off is sent as the dialog's Proceed sends it
+(request_turn_off). Only what cannot happen in a test is arranged: a run going when the PC restarted (its process has
+gone since), or when the service crashed, as the run history has it; the moment a service is
 starting, held by a pause in its start until the test has turned it off; a schedule's next time a few seconds away (a
 service before it first saw it a minute earlier: next_time_in); and the PC's time zone, as the TZ each process starts
 with."""
@@ -33,16 +35,17 @@ from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox  # noqa
 
 from taskloom.config import Home  # noqa: E402
 from taskloom.history import History  # noqa: E402
-from taskloom.scheduler import (RUNS_FILE, Scheduler, acquire_lock, paused, request_turn_off,  # noqa: E402
-                                set_paused)
-from tests.test_scheduler_mistakes_and_counts import (ASKED_AT, ON_TIME, catch_up_service, headless,  # noqa: E402
-                                                      printed)
-from tests.test_scheduler_new_promises import (HOURLY, FakeRun, FakeRuns, begins, drain, end_runs, ended,  # noqa: E402
-                                               flow_yaml, going, history, hhmm, hold_until, missed_times,
-                                               one_at_a_time, pump, says, schedule, statuses, utc, wait_until, write)
+from taskloom.launch import run_alive  # noqa: E402
+from taskloom.scheduler import Scheduler, acquire_lock, paused, request_turn_off, set_paused  # noqa: E402
+from taskloom.scheduler import _unlock as unlock  # noqa: E402
+from tests.test_scheduler_mistakes_and_counts import ASKED_AT, ON_TIME, headless, printed  # noqa: E402
+from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, REAL_POPEN, FakeRun,  # noqa: E402
+                                               FakeRuns, begins, drain, end_runs, ended, flow_yaml, going, history,
+                                               hhmm, hold_until, missed_times, one_at_a_time, pump, says, schedule,
+                                               statuses, utc, wait_until, write)
 from tests.test_scheduler_start_at import (checked_after, record_process_starts, run_processes,  # noqa: E402
                                            start_service, stop_service, tray_messages)
-from tests.test_scheduler_turn_off_and_restart import EVERY_MINUTE, block_errors, next_time_in, said_going  # noqa: E402
+from tests.test_scheduler_turn_off_and_restart import EVERY_MINUTE, block_errors, next_time_in  # noqa: E402
 
 
 # --- stand-ins for run processes -------------------------------------------------------------------------------------
@@ -106,13 +109,20 @@ def test_times_missed_before_you_answer_are_asked_again_in_the_new_total_and_onl
     438. Run only the latest 100: exactly the latest 100 of the 438 missed times run, oldest first, one at a time, and
     01:10 runs too, once (neither counted as missed nor dropped); you are told the other 338 were not run."""
     assert len(MISSED) == 438 and EVERY_TIME[150] == ON_TIME
-    scheduler, told, asked = catch_up_service(env, someone_to_ask=True)
+    schedule(env.home, env.root, {"backlog": flow_yaml(EVERY_TEN)})
+    told, asked = [], []
+
+    def service() -> Scheduler:
+        return fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"),
+                                 lambda flow, count, answer: asked.append((flow, count, answer)))
+
+    scheduler = service()
+    scheduler.tick(FIRST_SIGHT)
     drain(scheduler, ASKED_AT, fake_runs)
     drain(scheduler, ON_TIME, fake_runs)
     assert [(flow, count) for flow, count, _ in asked] == [("backlog", 150)], told
     if restarts:  # (the service before it is never checked again)
-        scheduler = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"),
-                              lambda flow, count, answer: asked.append((flow, count, answer)))
+        scheduler = service()
     drain(scheduler, WOKE, fake_runs)
     before_the_answer = begins(fake_runs.of("backlog"))
 
@@ -155,8 +165,7 @@ def pc_restarted(home: Path, folder: Path):
     """Before the PC restarted, the scheduler service had started a run of nightly (its flow asks for failure emails)
     and the editor a run of adhoc (it has no schedule; started with its Manual block), both 10 minutes ago: the run
     history says both are running, as each run recorded itself (its process, the moment it began, and for nightly's
-    that the service started it), and the service's list of runs going (scheduler.runs) lists nightly's, as they were
-    left. The PC restarted: their processes are gone."""
+    that the service started it). The PC restarted: their processes are gone."""
     write(home / "settings.yaml", "smtp_connection: mailer\n")
     nightly = schedule(home, folder, {"nightly": flow_yaml(YEARLY, notify=FAILURE_MAILS)})["nightly"]
     adhoc = write(folder / "adhoc.yaml", ADHOC).resolve()
@@ -175,8 +184,6 @@ def pc_restarted(home: Path, folder: Path):
         db.executemany("UPDATE runs SET pid=?, began=? WHERE id=?",
                        [(gone, began.timestamp(), run) for run in runs.values()])
         db.commit()
-    write(home / RUNS_FILE, json.dumps([{"flow": str(nightly), "name": "nightly", "run": runs["nightly"],
-                                         "block": "s1", "schedule": "cron 0 2 1 1 *"}]))
 
 
 class Told:
@@ -298,7 +305,7 @@ def turned_off_before_its_time(env, runs: Runs, schedule_config: dict, began: bo
     begun (Let it finish); the service turns off once that run has ended. What the service told."""
     path = schedule(env.home, env.root, {"report": flow_yaml(schedule_config)})["report"]
     told = []
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     service.tick(clock("06:59:30"))
     runs.early.add("report")
     service.tick(clock("06:59:56"))
@@ -338,7 +345,7 @@ def test_a_time_whose_run_did_not_begin_as_you_turned_the_service_off_just_befor
     told = turned_off_before_its_time(env, fake_runs, {"cron": cron, "misfire": misfire}, began=False)
     set_paused(Home(env.home), False)  # you turn it on: a new service starts
     before = len(fake_runs.started)
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     drain(service, clock(on), fake_runs)
 
     after = fake_runs.started[before:]
@@ -364,7 +371,7 @@ def test_a_time_whose_run_began_before_you_turned_the_service_off_never_runs_aga
     told = turned_off_before_its_time(env, fake_runs, {"cron": "0 7 * * *", "misfire": misfire}, began=True)
     set_paused(Home(env.home), False)
     before = len(fake_runs.started)
-    service = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     drain(service, clock("08:00"), fake_runs)
 
     assert begins(fake_runs.started[before:]) == [], "07:00, whose run began and finished, ran again"
@@ -530,7 +537,8 @@ def test_a_run_going_when_the_time_zone_changes_and_the_service_restarts_is_stil
     service = headless(env, logs[0], TZ=WEST)
     try:
         assert wait_until(lambda: going(env.home) == {"nightly"}, 30), f"{history(env.home)}\n{printed(logs[0])}"
-        assert wait_until(lambda: said_going(env.home), 10), "the service did not say which runs go"
+        began = dt.datetime.now()
+        assert checked_after(env, began, until=began + dt.timedelta(seconds=10)), "the service did not check again"
         time.sleep(1.5)  # (a check later: s2's run waits its turn)
         stop_service(env, service)  # the service stops; the run goes on
         (live,) = history(env.home)
@@ -560,3 +568,109 @@ def test_a_run_going_when_the_time_zone_changes_and_the_service_restarts_is_stil
     first_finished = runs[0]["finished"] + dt.timedelta(hours=8)
     second_started = runs[1]["started"] - dt.timedelta(hours=9)
     assert second_started >= first_finished, f"s2's run started before the live run finished: {runs}"
+
+
+# --- SCH-11, SCH-12: a run that began just before the service crashed, before it checked again ----------------------
+
+# A run's process: it goes until the file "go" appears in the folder it is given.
+UNTIL_GO = ("import sys, time\nfrom pathlib import Path\nwhile not Path(sys.argv[1], 'go').exists():\n"
+            "    time.sleep(0.05)\n")
+
+
+def began_before_the_crash(env, flows: dict[str, str]) -> tuple[subprocess.Popen, int]:
+    """A service (made as `taskloom scheduler` makes it: it took the folder's lock, then made its Scheduler) checked
+    the scheduled `flows` at 06:59 and at 07:00, starting nightly's run for 07:00 at its check at 07:00; its process is
+    this test's own, going until the file go appears in env.root / "run". That run began: it recorded itself in the run
+    history as a run does as it begins (running, its process, the moment it began, its Schedule block, and that the
+    service started it). The service crashed then, before its next check (it let go of the lock as its process ended).
+    That run's process, and its number."""
+    paths = schedule(env.home, env.root, flows)
+    folder = env.root / "run"
+    folder.mkdir()
+    started = []
+
+    def run_process(args, *rest, **kwargs):  # (the process the service starts for the run: this test's)
+        if isinstance(args, list) and "run" in map(str, args) and "--start-at" in map(str, args):
+            started.append(REAL_POPEN([sys.executable, "-c", UNTIL_GO, str(folder)], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+            return started[-1]
+        return REAL_POPEN(args, *rest, **kwargs)
+
+    lock = acquire_lock(Home(env.home))
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(subprocess, "Popen", run_process)
+            before = Scheduler(Home(env.home))
+            before.tick(clock("06:59"))
+            before.tick(clock("07:00"))
+        (process,) = started
+        began = time.time()  # (once its process has begun, as a run records it: launch.run_alive)
+        record = History(env.home / "history.db")
+        try:
+            run_id = record.start_run("nightly", str(paths["nightly"]), {"when": "2026-01-05 07:00:00"},
+                                      dt.datetime.now().isoformat(timespec="milliseconds"), started_by="s1",
+                                      scheduled=True)
+            record({"event": "block_started", "run_id": run_id, "ts": dt.datetime.now().isoformat(),
+                    "block": "work1", "attempt": 1})
+        finally:
+            record.close()
+        with contextlib.closing(sqlite3.connect(env.home / "history.db", timeout=30)) as db:  # (as its process had it)
+            db.execute("UPDATE runs SET pid=?, began=? WHERE id=?", (process.pid, began, run_id))
+            db.commit()
+    finally:
+        unlock(lock)  # (the service has crashed: its process let go of the lock)
+    return process, run_id
+
+
+def finishes(env, process: subprocess.Popen, run_id: int):
+    """The run finishes: it records its end, and its process ends."""
+    record = History(env.home / "history.db")
+    try:
+        record({"event": "run_finished", "run_id": run_id, "ts": dt.datetime.now().isoformat(), "status": "success"})
+    finally:
+        record.close()
+    write(env.root / "run" / "go", "go")
+    process.wait(timeout=30)
+
+
+@pytest.mark.invariant("SCH-11")
+@pytest.mark.invariant("SCH-12")
+@pytest.mark.parametrize("case", ["Overlap skip", "Max concurrent runs 1"])
+def test_a_run_that_began_just_before_the_service_crashed_counts_as_going_for_the_service_after_it(env, fake_runs,
+                                                                                                    case):
+    """nightly runs every minute (Overlap skip), or, with Max concurrent runs 1, daily at 07:00, and other once at
+    07:01. The service started nightly's run for 07:00, the run began, and the service crashed before its next check
+    (began_before_the_crash). The next service checks at 07:01, while that run goes: nightly's run for 07:01 does not
+    start (it is skipped, and you are told: SCH-11), or other's run for 07:01 waits for the free slot (SCH-12). Once
+    nightly's run has finished, nightly's next time runs as usual, or other's waiting run starts."""
+    skip = case == "Overlap skip"
+    if skip:
+        flows = {"nightly": flow_yaml({"cron": "* * * * *"})}
+    else:
+        write(env.home / "settings.yaml", "max_concurrent_runs: 1\n")
+        flows = {"nightly": flow_yaml({"cron": "0 7 * * *"}), "other": flow_yaml({"cron": "1 7 * * *"})}
+    process, run_id = began_before_the_crash(env, flows)
+    told = []
+    try:
+        with contextlib.closing(sqlite3.connect(env.home / "history.db", timeout=30)) as db:
+            began = db.execute("SELECT began FROM runs WHERE id=?", (run_id,)).fetchone()[0]
+        assert run_alive(process.pid, began), "not arranged: the run's history does not match its process"
+        after = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
+        drain(after, clock("07:01"), fake_runs)
+        while_going = [(run.flow, hhmm(run)) for run in fake_runs.started]
+        finishes(env, process, run_id)
+        drain(after, clock("07:01:30"), fake_runs)
+        drain(after, clock("07:02"), fake_runs)
+    finally:
+        write(env.root / "run" / "go", "go")
+        process.wait(timeout=30)
+
+    assert while_going == [], (f"while nightly's run for 07:00 went (it began just before the service crashed), the "
+                               f"service after it started {while_going} ({case})")
+    if skip:
+        assert [t for t in told if "nightly" in t and "skip" in t.lower()], f"not told that 07:01 was skipped: {told}"
+        assert begins(fake_runs.of("nightly")) == utc([clock("07:02")]), \
+            f"once that run finished, nightly's next time did not run as usual: {begins(fake_runs.of('nightly'))}"
+    else:
+        assert begins(fake_runs.of("other")) == utc([clock("07:01")]), \
+            f"once that run finished, other's run for 07:01 did not start: {begins(fake_runs.of('other'))}"
