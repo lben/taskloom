@@ -1,8 +1,9 @@
 """Schedules: cron expressions, every N minutes or hours, and one-off times, in the machine's local time.
 
-A clock time (cron, one-off) is when this PC's clock shows it; every N counts in real elapsed time. Asked with a moment
-(a datetime with its UTC offset), a schedule answers in moments, so a clock change neither moves an every-N rhythm nor
-loses or repeats a clock time; asked with a local time (no offset), it answers in local times, as on screen."""
+A clock time (cron, one-off) is when this PC's clock shows it, and a one-off time written with its UTC offset the
+moment it names; every N counts in real elapsed time. Asked with a moment (a datetime with its UTC offset), a schedule
+answers in moments, so a clock change neither moves an every-N rhythm nor loses or repeats a clock time; asked with a
+local time (no offset), it answers in local times, as on screen."""
 
 from __future__ import annotations
 
@@ -12,28 +13,31 @@ import re
 MISFIRE_POLICIES = ("skip", "run_once", "catch_up")
 _NAMES = {
     "month": {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)},
-    "dow": {d: i for i, d in enumerate(["sun", "mon", "tue", "wed", "thu", "fri", "sat"])},
+    "weekday": {d: i for i, d in enumerate(["sun", "mon", "tue", "wed", "thu", "fri", "sat"])},
 }
-_FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("dow", 0, 7))
+_FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day of the month", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
 
 
 def _parse_field(text: str, name: str, lo: int, hi: int) -> set[int]:
     values = set()
-    for part in text.lower().split(","):
-        part, _, step = part.partition("/")
-        step = int(step) if step else 1
+    for item in text.split(","):
+        part, slash, step = item.lower().partition("/")
+        if slash and not step.isdigit():
+            raise ValueError(f"cannot read '{item}' in the {name} field: the step after / is not a number")
+        step = int(step) if slash else 1
         if part == "*":
             start, end = lo, hi
         else:
             a, _, b = part.partition("-")
             start = _NAMES.get(name, {}).get(a) if not a.isdigit() else int(a)
-            end = (_NAMES.get(name, {}).get(b) if not b.isdigit() else int(b)) if b else (hi if step > 1 else start)
+            # a step from a single start counts on to the end of the field, as in cron: 5/15 is 5, 20, 35, 50
+            end = (_NAMES.get(name, {}).get(b) if not b.isdigit() else int(b)) if b else (hi if slash else start)
             if start is None or end is None:
-                raise ValueError(f"cannot read '{part}' in the {name} field")
+                raise ValueError(f"cannot read '{item}' in the {name} field")
         if not lo <= start <= hi or not lo <= end <= hi or start > end or step < 1:
             raise ValueError(f"'{text}' is out of range for the {name} field ({lo}-{hi})")
         values.update(range(start, end + 1, step))
-    if name == "dow" and 7 in values:  # both 0 and 7 mean Sunday
+    if name == "weekday" and 7 in values:  # both 0 and 7 mean Sunday
         values = (values - {7}) | {0}
     return values
 
@@ -44,7 +48,7 @@ class Cron:
     def __init__(self, expr: str):
         parts = expr.split()
         if len(parts) != 5:
-            raise ValueError(f"cron needs 5 fields (minute hour day month weekday), got {expr!r}")
+            raise ValueError(f"cron needs 5 fields (minute, hour, day of the month, month, weekday), got {expr!r}")
         self.expr = expr
         self.minute, self.hour, self.day, self.month, self.dow = (
             _parse_field(p, name, lo, hi) for p, (name, lo, hi) in zip(parts, _FIELDS))
@@ -140,13 +144,21 @@ def describe_cron(text: str) -> str:
 
 
 class At:
-    """A single run at a given time, e.g. "2026-10-08 15:30"."""
+    """A single run at a given time on this PC's clock, e.g. "2026-10-08 15:30", or at the moment a time written with
+    its UTC offset names, e.g. "2026-10-08 15:30+02:00"."""
 
     def __init__(self, when):
         self.when = when if isinstance(when, dt.datetime) else dt.datetime.fromisoformat(str(when))
 
+    @property
+    def wall(self) -> dt.datetime:
+        """Its time on this PC's clock (of a time with its UTC offset: the moment it names, in local time)."""
+        return self.when.astimezone().replace(tzinfo=None) if self.when.tzinfo else self.when
+
     def next_after(self, t: dt.datetime) -> dt.datetime | None:
-        return self.when if self.when > t else None
+        """Its time on this PC's clock if after the local time t."""
+        wall = self.wall
+        return wall if wall > t else None
 
 
 class Every:
@@ -198,7 +210,7 @@ class Trigger:
             self.text = f"every {self.timing.text}"
         else:
             self.timing = At(spec["at"])
-            self.text = f"at {self.timing.when:%Y-%m-%d %H:%M}"
+            self.text = f"at {self.timing.when.isoformat(' ', 'minutes')}"  # (with its UTC offset, if written with one)
         self.every = self.timing.interval if isinstance(self.timing, Every) else None
         self.misfire = spec.get("misfire", "run_once")
         if self.misfire not in MISFIRE_POLICIES:
@@ -212,6 +224,9 @@ class Trigger:
             return None if start is None else self.timing.next_after(t, start)
         if t.tzinfo is None:
             return self.timing.next_after(t)
+        if isinstance(self.timing, At) and self.timing.when.tzinfo:  # written with its UTC offset: already a moment
+            moment = self.timing.when.astimezone(dt.timezone.utc)
+            return moment if moment > t else None
         wall = t.astimezone().replace(tzinfo=None)
         while (wall := self.timing.next_after(wall)) is not None:  # (after the clock went back: past the repeat)
             if (when := clock_moment(wall)) > t:
