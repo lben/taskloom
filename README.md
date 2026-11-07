@@ -1081,7 +1081,10 @@ A run whose schedule goes off before then (the service turned off, Active untick
 taken off) does not begin. Nor does one that reaches its time with no service on (the service
 was ended or crashed just before) or more than 2 minutes late (the computer slept): that time
 is then a missed one, as if the service had been off (see `misfire`). A run started early takes
-its time as it begins, so a time runs once, also when the service restarts just before it. The
+its time as it begins, so a time runs once. If the service restarts just before that time (it
+was ended or crashed, and started again), the run the earlier service started does not begin
+(nothing is recorded for it): the service now on runs that time itself, as one of its own runs,
+so `overlap` and **Scheduled runs at once** count it. The
 service checks every second and then rereads changed flow files, so a schedule applies within
 a second of saving it, without restarting the service; a new or changed schedule, or one turned
 back on (Active ticked again, the flow scheduled again), counts from that moment (nothing

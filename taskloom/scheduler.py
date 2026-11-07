@@ -7,8 +7,10 @@ Each run is a separate `taskloom run` process, like runs from the editor.
 The service works in moments (UTC): a schedule's clock time is when this PC's clock shows it, and every N minutes or
 hours is real elapsed time, so a clock change neither moves nor loses a run (taskloom.schedule). Runs waiting their
 turn are saved in the history database (waiting_runs) until they start: however the service stops, they start once it
-is back. A run started early claims its time as it begins (claim_time), so a time runs once; a time whose run did not
-begin (the service stopped, the PC slept) is left to the service, as a missed time if it comes to that.
+is back. A run started early claims its time as it begins (claim_time), so a time runs once, and only while the service
+that started it is the one on, which knows of it (a service knows only the runs it started, and those going that the one
+before it told of: Scheduler._adopt); a time whose run did not begin (the service stopped or restarted, the PC slept) is
+left to the service, as a missed time if it comes to that.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,6 +56,8 @@ KEEPER_START_SECONDS = 30  # how long the keeper waits for a server scheduler it
 KEEPER_STOP_SECONDS = 5  # how long it waits for a hung one asked to stop, before it forces it
 RUNS_FILE = "scheduler.runs"  # the runs going, as the service last saw them (see _tell_runs)
 TURN_OFF_FILE = "scheduler.turnoff"  # you turned the service off: what to do with each flow's runs going
+# The service on: its Scheduler.id and its process; none while a service in another process starts (acquire_lock).
+SERVICE_ON_TABLE = "CREATE TABLE IF NOT EXISTS service_on (id TEXT NOT NULL, pid INTEGER NOT NULL)"
 
 
 @dataclass
@@ -118,8 +123,10 @@ class Scheduler:
     def __init__(self, home: Home, notify=None, ask=None):
         """`ask(flow name, count, answer)`, when more than ASK_OVER times of a Catch up schedule were missed: it
         returns at once, and answer(limit) is called later: None runs them all, N only the latest N. Without it (a
-        server, no one to ask), the latest ASK_OVER run, and you are told how many were missed."""
+        server, no one to ask), the latest ASK_OVER run, and you are told how many were missed. Made, it is the service
+        on (the table service_on): the runs a service before it started early no longer begin (see claim_time)."""
         self.home = home
+        self.id = uuid.uuid4().hex  # (its runs started early say it, to claim their times: see claim_time)
         self.notify = notify or (lambda title, message: None)
         self.ask = ask
         self.runs: list[_Run] = []
@@ -141,6 +148,10 @@ class Scheduler:
         self._db.execute("CREATE TABLE IF NOT EXISTS schedule_state (trigger TEXT PRIMARY KEY, last TEXT NOT NULL)")
         self._db.execute("CREATE TABLE IF NOT EXISTS waiting_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                          "flow TEXT NOT NULL, block TEXT, schedule TEXT NOT NULL, due TEXT NOT NULL, waits TEXT NOT NULL)")
+        self._db.execute(SERVICE_ON_TABLE)
+        with self._changes() as db:
+            db.execute("DELETE FROM service_on")
+            db.execute("INSERT INTO service_on VALUES (?, ?)", (self.id, os.getpid()))
         self._restore()
 
     # --- state ------------------------------------------------------------------
@@ -448,14 +459,14 @@ class Scheduler:
 
     def _start(self, path: str, as_of: dt.datetime, block: str | None, schedule: str, claims: str | None = None):
         # It loads, then waits for its time (a time that has passed: it begins at once). Started early (`claims`), it
-        # then begins only if it can claim its time (--if-scheduled: see claim_time). It goes on if the service stops;
-        # only a request on its stdin stops it (--stoppable).
+        # then begins only if it can claim its time for this service (--if-scheduled: see claim_time). It goes on if the
+        # service stops; only a request on its stdin stops it (--stoppable).
         # --start-at with its UTC offset: one moment, also when this PC's clock shows that time twice.
         command = runner_command() + ["run", path, "--json-events", "--notify", "--stoppable", "--scheduled",
                                       "--as-of", f"{as_of.astimezone():%Y-%m-%d %H:%M:%S}",
                                       "--start-at", as_of.astimezone().isoformat(timespec="seconds")]
         if claims:
-            command += ["--if-scheduled", schedule]
+            command += ["--if-scheduled", schedule, self.id]
         if block:
             command += ["--trigger", block]
         try:
@@ -573,13 +584,14 @@ class Scheduler:
     def _ended(self, run: _Run):
         """A run's process has ended: one that died without finishing is recorded as crashed (a failed run whose error
         says so; as cancelled if you stopped it), and you are told what did not succeed (a crash also by email, as the
-        flow asks: see tell_crashed). A run started early has had its time if it began (it claimed it) or failed before
-        it could (it does not run again); one that did not begin as it was not to (see claim_time), or that was stopped,
-        leaves its time to the service: a missed time, if it comes to that."""
+        flow asks: see tell_crashed). A run started early that began has had its time: it claimed it as it began (see
+        claim_time). One that failed before it could has had its time too: it is handled now, and does not run again.
+        One that did not begin as it was not to (see claim_time), or that was stopped, leaves its time to the service:
+        a missed time, if it comes to that."""
         if run.reader is not None:
             run.reader.join(5)  # it has read the last lines once the process has exited
-        if run.claims is not None and (run.run_id is not None
-                                       or (run.stopping is None and run.proc.returncode != NOT_DUE)):
+        if (run.claims is not None and run.run_id is None and run.stopping is None
+                and run.proc.returncode != NOT_DUE):  # (it failed before it could claim its time)
             self._handled(run.claims, run.as_of)
         if run.run_id is None and run.proc.returncode == NOT_DUE:  # it did not begin: nothing to tell
             return
@@ -871,9 +883,19 @@ def version_tuple(version: str | None) -> tuple:
 
 
 def acquire_lock(home: Home):
-    """Hold an exclusive lock for the life of this process, so only one scheduler runs per home."""
+    """Hold an exclusive lock for the life of this process, so only one scheduler runs per home. Taking it ends, in the
+    same turn, the term of a service on in another process (it has gone, or is ending: it let go of the lock): a run
+    that service started early does not begin, also before this process's service is made the one on (Scheduler: see
+    claim_time)."""
     with _taking_turns(home):
         handle = _lock(home.root / "scheduler.lock")
+        if handle is not None:
+            db = history_connect(home.history_db)
+            try:
+                db.execute(SERVICE_ON_TABLE)
+                db.execute("DELETE FROM service_on WHERE pid != ?", (os.getpid(),))
+            finally:
+                db.close()
     if handle is None:
         raise RuntimeError(f"a scheduler is already running for {home.root}")
     return handle
@@ -957,19 +979,21 @@ def counted_from(home: Home, path, triggers: list) -> list[dt.datetime | None]:
 
 
 def claim_time(home: Home, path: Path, block: str | None, schedule: str, when: dt.datetime,
-               early: bool) -> str | None:
-    """A run the scheduler service left the time `when` to (a local time, or with its UTC offset) of the flow `path`'s
-    Schedule block `block` (None: its flow-level schedule) as that schedule was then (`schedule`, e.g. "cron 0 7 * * *")
-    claims that time as it begins: None, the time is its own, and it begins. Else why not; the time is then left to the
-    service (a missed time, if it comes to that). It does not begin if that schedule no longer runs then (Active
-    unticked, changed, even if it still has that time, the flow taken off scheduled.yaml: a changed schedule asks for
-    its times itself), or another run has that time (a time runs once). Started `early` (before that time, as the
-    service starts its runs), also if the service is off at that time, or it is more than ON_TIME_GRACE after it (the
-    PC slept)."""
+               service: str) -> str | None:
+    """A run the scheduler service `service` (Scheduler.id) left the time `when` to (a local time, or with its UTC
+    offset) of the flow `path`'s Schedule block `block` (None: its flow-level schedule) as that schedule was then
+    (`schedule`, e.g. "cron 0 7 * * *") claims that time as it begins: None, the time is its own, and it begins. Else
+    why not; the time is then left to the service (a missed time, if it comes to that). It does not begin if the service
+    is off, it is more than ON_TIME_GRACE after that time (the PC slept), the service on is another one (it restarted
+    since: the one on now knows only its own runs, and sees to that time itself), that schedule no longer runs then
+    (Active unticked, changed, even if it still has that time, the flow taken off scheduled.yaml: a changed schedule
+    asks for its times itself), or another run has that time (a time runs once)."""
     moment, said = when.astimezone(UTC), f"{when.astimezone():%Y-%m-%d %H:%M}"
-    if early and (paused(home) or not service_running(home)):  # (paused: also while it turns off, holding its lock)
+    # (Whoever takes the folder's lock ends the term of a service on in another process in that same turn: see
+    # acquire_lock. So once the lock is seen held, the service on, read below, holds it, or none is made the one on yet.)
+    if paused(home) or not service_running(home):  # (paused: also while it turns off, holding its lock)
         return SERVICE_OFF
-    if early and dt.datetime.now(UTC) - moment > ON_TIME_GRACE:
+    if dt.datetime.now(UTC) - moment > ON_TIME_GRACE:
         return f"its time, {said}, was more than 2 minutes ago (e.g. the computer was asleep): it counts as missed"
     try:
         listed = [p for p in home.scheduled_flows() if real_path(p) == path]
@@ -982,6 +1006,9 @@ def claim_time(home: Home, path: Path, block: str | None, schedule: str, when: d
     try:
         with db:  # (commits at the end)
             db.execute("BEGIN IMMEDIATE")  # (a check of the service waits meanwhile, and it for one: Scheduler._check)
+            if db.execute("SELECT id FROM service_on").fetchall() != [(service,)]:
+                return (f"the scheduler service has restarted since it started this run: the service on now sees "
+                        f"to {said}")
             for key, trigger in ours:
                 row = db.execute("SELECT last FROM schedule_state WHERE trigger=?", (key,)).fetchone()
                 last = _moment(row[0]) if row else None
@@ -1054,7 +1081,7 @@ def serve(home: Home, headless: bool) -> int:
             now = dt.datetime.now()
             scheduler.tick(now)
             stop.wait(scheduler.seconds_to_next_check(now))
-        # (a run started early that has not begun is not one of them: it begins only if a service is on at its time)
+        # (a run started early that has not begun is not one of them: it begins only if this service is on at its time)
         notify("Scheduler stopped", "turned off by you" if scheduler.off else
                f"{sum(r.run_id is not None for r in scheduler.runs)} run(s) still going continue on their own")
         return 0

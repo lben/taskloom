@@ -17,7 +17,7 @@ from pathlib import Path
 from .config import Home
 from .engine import Cancelled, finished_text, run_flow
 from .flow import FlowError, load_flow, real_path, validate
-from .launch import ARGS_VARIABLE, process_began
+from .launch import ARGS_VARIABLE
 from .registry import discover
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -48,14 +48,18 @@ def _print_event(event: dict):
 
 
 def _print_json(event: dict):
+    _print(json.dumps(event, default=str), sys.stdout)
+
+
+def _print(line: str, stream):
     try:
-        print(json.dumps(event, default=str), flush=True)
+        print(line, file=stream, flush=True)
     except OSError:
-        # Nothing reads them any more (e.g. the scheduler service was turned off): the run goes on, and what it
-        # prints from now on goes nowhere.
+        # Nothing reads it any more (e.g. the scheduler service that started the run was turned off, or has gone):
+        # the run goes on, and what it prints from now on goes nowhere.
         devnull = os.open(os.devnull, os.O_WRONLY)
-        for stream in (sys.stdout, sys.stderr):
-            os.dup2(devnull, stream.fileno())
+        for std in (sys.stdout, sys.stderr):
+            os.dup2(devnull, std.fileno())
         os.close(devnull)
 
 
@@ -144,9 +148,10 @@ def _parse_overrides(items) -> dict:
 
 def cmd_run(args, home: Home) -> int:
     start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None  # (local, or with a UTC offset)
-    # Started before its time: its process began before then (also if it was still loading at that time; where
-    # when it began cannot be told, before now).
-    early = start_at is not None and start_at.timestamp() > (process_began(os.getpid()) or time.time())
+    if args.if_scheduled:  # (it claims that time as it begins: see wait_for_start)
+        if start_at is None:
+            raise ValueError("--if-scheduled claims the --start-at time: give --start-at too")
+        from .scheduler import NOT_DUE, claim_time
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
     os.chdir(flow.path.parent)
@@ -165,9 +170,10 @@ def cmd_run(args, home: Home) -> int:
         signal.signal(signal.SIGTERM, on_signal)
     control = _stdin_control(args, cancel)
     answers = control if args.interactive else None
-    # Its now() is when it begins, on this PC's clock.
+    # Its now() is when it begins, on this PC's clock: its --start-at, if it is to wait for that time.
     as_of = (dt.datetime.fromisoformat(args.as_of) if args.as_of
-             else start_at.astimezone().replace(tzinfo=None) if early else None)
+             else start_at.astimezone().replace(tzinfo=None) if start_at and start_at.timestamp() > time.time()
+             else None)
     overrides = _parse_overrides(args.param)
     if args.input and not (args.only or args.run_from):
         raise ValueError("--input gives a value to an input of the block that --only (or --from) runs")
@@ -194,17 +200,15 @@ def cmd_run(args, home: Home) -> int:
                              "choose a run of this flow")
         if not overrides:  # same parameters as that run
             overrides = {k: v for k, v in json.loads(earlier["params"]).items() if k in flow.params}
-    if args.if_scheduled:
-        from .scheduler import NOT_DUE, claim_time
 
     def wait_for_start():  # loaded and checked: it begins at --start-at
         while (left := start_at.timestamp() - time.time()) > 0:
             if cancel.wait(min(left, 1)):
                 raise KeyboardInterrupt  # stopped before it began: nothing is recorded
-        why = (claim_time(home, flow.path, args.trigger, args.if_scheduled, start_at, early) if args.if_scheduled
-               else None)
+        why = (claim_time(home, flow.path, args.trigger, args.if_scheduled[0], start_at, args.if_scheduled[1])
+               if args.if_scheduled else None)
         if why:
-            print(f"not begun: {why}", file=sys.stderr, flush=True)
+            _print(f"not begun: {why}", sys.stderr)
             raise SystemExit(NOT_DUE)
 
     try:
@@ -362,12 +366,12 @@ def main(argv=None) -> int:
                    help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS, or with "
                         "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (the scheduler starts "
                         "each run a few seconds early so)")
-    p.add_argument("--if-scheduled", metavar="SCHEDULE",
+    p.add_argument("--if-scheduled", nargs=2, metavar=("SCHEDULE", "SERVICE"),
                    help="claim the --start-at time of the flow's schedule (its --trigger) SCHEDULE (e.g. 'cron 0 7 * "
-                        "* *') as it begins, so that time runs once: begin only if that schedule is unchanged, still "
-                        "has that time, and no other run has begun for it; started before that time, also only if the "
-                        "scheduler service runs then and it is at most 2 minutes past it; else end with exit code 3 "
-                        "(the scheduler sets it)")
+                        "* *') for the scheduler service SERVICE that started the run, as it begins, so that time runs "
+                        "once: begin only if that service is the one on then, it is at most 2 minutes past that time, "
+                        "that schedule is unchanged and still has that time, and no other run has begun for it; else "
+                        "end with exit code 3 (the scheduler sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--scheduled", action="store_true",
                    help="the scheduler service started this run: its run history says so, and if its process stops "

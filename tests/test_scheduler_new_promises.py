@@ -374,9 +374,9 @@ def clock_shows(moment: dt.datetime):
 
 
 def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | None:
-    """What `taskloom run FLOW --trigger BLOCK --start-at T --if-scheduled SCHEDULE` (its command line: `args`) does
-    when it reaches T, with this PC's clock showing `clock`: the claim of T the real run makes (claim_time), started
-    before T as the scheduler service starts such a run. Whether a service is on is told by the Taskloom folder
+    """What `taskloom run FLOW --trigger BLOCK --start-at T --if-scheduled SCHEDULE SERVICE` (its command line: `args`)
+    does when it reaches T, with this PC's clock showing `clock`: the claim of T the real run makes (claim_time),
+    started before T as the scheduler service starts such a run. Whether a service is on is told by the Taskloom folder
     `home`, as the real run tells it. None: T is its own, and it begins; else why it does not begin."""
     def option(name: str) -> str | None:
         return args[args.index(name) + 1] if name in args else None
@@ -385,7 +385,8 @@ def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | Non
     early = {"early": True} if "early" in inspect.signature(claim_time).parameters else {}
     with clock_shows(clock):
         return claim_time(Home(home), real_path(Path(option("run"))), option("--trigger"), option("--if-scheduled"),
-                          dt.datetime.fromisoformat(option("--start-at")), **early)
+                          dt.datetime.fromisoformat(option("--start-at")), args[args.index("--if-scheduled") + 2],
+                          **early)
 
 
 @contextlib.contextmanager
