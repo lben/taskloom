@@ -64,13 +64,12 @@ markers = [
 # reach its function, and nearly every scheduler test reaches the schedule code and the service's check. So the
 # selection is the scheduler tests that run in this process within about a second: those that start real processes,
 # wait in real time or run many generated cases are left out (the whole suite still runs them), and so are those that
-# start Qt (a process forked after Qt has started can hang or crash). Only the lines those tests run are mutated: the
-# rest (the tray icon's window, the service's own loop, Windows-only lines) is checked by the slower tests and the
-# proofs, not by mutation testing.
+# start Qt (a process forked after Qt has started can hang or crash). Every line is mutated: mutate_only_covered_lines
+# would leave out what the selection does not run, but mutmut ignores a test that fails while it measures that, so a
+# flaky test would silently shrink what is checked.
 [tool.mutmut]
 source_paths = ["taskloom/"]
 only_mutate = ["taskloom/schedule.py", "taskloom/scheduler.py"]
-mutate_only_covered_lines = true
 also_copy = ["README.md"]  # (tests check the README's words)
 process_isolation = "fork"
 timeout_multiplier = 2.0
