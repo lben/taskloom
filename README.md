@@ -1082,7 +1082,7 @@ terminal: `taskloom run FLOW --start-at 2026-10-08T15:30:00` waits for that time
 whose schedule goes off while its program loads (the service turned off, Active unticked, the
 flow taken off) does not begin, and nothing is recorded for it. Nor does one whose program has
 loaded with no service on (the service was ended or crashed just before), or more than 2
-minutes after its time (the computer slept while it loaded): that time is then a missed one,
+minutes after it started (the computer slept while it loaded): that time is then a missed one,
 as if the service had been off (see `misfire`). Every run the service starts takes its time as
 it begins, so a time runs once. If the service restarts before a run has begun (it was ended
 or crashed, and started again), the run the earlier service started does not begin (nothing

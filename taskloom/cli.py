@@ -222,16 +222,17 @@ def _claim(home: Home, flow, args, start_at):
     """What a run the scheduler service started claims as its run is recorded (History.start_run): the row the service
     saved for it (--if-scheduled). Refused, it says why, ends with exit code 3 (scheduler.NOT_DUE), and nothing is
     recorded (see claim_time)."""
-    service, row, epoch = args.if_scheduled
+    service, row, epoch, started = args.if_scheduled
     if start_at is None or args.scheduled is None or not (row.isdigit() and epoch.isdigit()):
         raise ValueError("--if-scheduled claims, for its --start-at time, the row ROW the scheduler service saved for "
                          "the run of its schedule (--scheduled): give --start-at and --scheduled, and whole numbers "
                          "for ROW and EPOCH")
+    started = dt.datetime.fromisoformat(started).astimezone()  # (local, or with a UTC offset)
     from .scheduler import NOT_DUE, claim_time  # (now: at its time, it claims at once)
 
     def claim(db):
         if why := claim_time(home, flow.path, args.trigger, args.scheduled, start_at, service, int(row), int(epoch),
-                             db):
+                             started, db):
             _print(f"not begun: {why}", sys.stderr)
             raise SystemExit(NOT_DUE)
 
@@ -378,14 +379,15 @@ def main(argv=None) -> int:
                    help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS, or with "
                         "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (as for a run the "
                         "scheduler starts at its time)")
-    p.add_argument("--if-scheduled", nargs=3, metavar=("SERVICE", "ROW", "EPOCH"),
+    p.add_argument("--if-scheduled", nargs=4, metavar=("SERVICE", "ROW", "EPOCH", "STARTED"),
                    help="as it begins, claim the row ROW that the scheduler service SERVICE saved for this run of the "
                         "flow's schedule (--scheduled, its --trigger) at the --start-at time, so it runs once: begin "
                         "only if that service is the one on and has not been turned off since it started this run (its "
                         "epoch EPOCH; while it is off, only a run waiting its turn for a flow you let finish begins), "
                         "that schedule is unchanged, the row is still there, no other run of the flow is going (unless "
-                        "its Overlap is allow), and, for a run for its time, it is at most 2 minutes past that time; "
-                        "else end with exit code 3 (the scheduler sets it)")
+                        "its Overlap is allow), and, for a run for its time, it begins at most 2 minutes after "
+                        "STARTED, when that service started this process (with its UTC offset); else end with exit "
+                        "code 3 (the scheduler sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--scheduled", metavar="SCHEDULE",
                    help="the scheduler service started this run for the flow's schedule (its --trigger) SCHEDULE (e.g. "

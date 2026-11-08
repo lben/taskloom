@@ -93,8 +93,8 @@ class _Waiting:
     # What it waits for. "slot": a free slot (max_concurrent_runs); "flow": its flow's runs going; "missed": your answer
     # about the schedule's missed runs (it is one of them); "answer": that answer too (it is not missed: it runs after
     # them). "now": nothing, a run for its time, started at it or just after it: it does not begin once you turned the
-    # service off, nor more than ON_TIME_GRACE after its time; its time is then due again (Scheduler._check: a missed
-    # time, if it comes to that).
+    # service off, nor if its program took more than ON_TIME_GRACE to load; its time is then due again
+    # (Scheduler._check: a missed time, if it comes to that).
     waits: str
 
 
@@ -471,7 +471,8 @@ class Scheduler:
             if policy == "queue":
                 self._put_in_line(self._save(path, [as_of], block, schedule, "flow", came)[0])
                 return
-        ahead = [w for w in self._line() if (came is None or w.id < came) and self._may_start(w)]  # (for a free slot)
+        # (for a free slot: also one that waits only for a time of its flow due again, decided later in this check)
+        ahead = [w for w in self._line() if (came is None or w.id < came) and self._may_start(w, deciding=True)]
         if on_time and not ahead and not self._at_limit():
             self._start(self._save(path, [as_of], block, schedule, "now", came)[0])
         else:
@@ -512,14 +513,15 @@ class Scheduler:
 
     def _start(self, saved: _Waiting):
         # Its time has come: it loads, then begins at once, only if it can claim its row `saved` for this service, in
-        # this epoch (--if-scheduled: see claim_time). It records its schedule in its run history (--scheduled), and
-        # goes on if the service stops: only a request on its stdin stops it.
+        # this epoch, as its process started now (--if-scheduled: see claim_time). It records its schedule in its run
+        # history (--scheduled), and goes on if the service stops: only a request on its stdin stops it.
         # --start-at with its UTC offset: one moment, also when this PC's clock shows that time twice.
         path, as_of, block, schedule = saved.flow, saved.as_of, saved.block, saved.schedule
         command = runner_command() + ["run", path, "--json-events", "--notify", "--scheduled", schedule,
                                       "--as-of", f"{as_of.astimezone():%Y-%m-%d %H:%M:%S}",
                                       "--start-at", as_of.astimezone().isoformat(timespec="seconds"),
-                                      "--if-scheduled", self.id, str(saved.id), str(_epoch(self._db))]
+                                      "--if-scheduled", self.id, str(saved.id), str(_epoch(self._db)),
+                                      dt.datetime.now(UTC).isoformat()]
         if block:
             command += ["--trigger", block]
         try:
@@ -685,15 +687,16 @@ class Scheduler:
                 (self.queued[entry.flow] if entry.waits == "flow" else self.waiting).remove(entry)
                 self._start(entry)
 
-    def _may_start(self, entry: _Waiting) -> bool:
+    def _may_start(self, entry: _Waiting, deciding: bool = False) -> bool:
         """Whether the run waiting its turn would begin now (see claim_time), given a free slot: while turning off,
         only one of a flow you let finish; not before a time of its flow due again that came before it (decided first,
-        at the check: _check); and while a run of its flow goes (also one you started yourself), only one waiting for
-        a slot whose flow's Overlap is allow."""
+        at the check: _check; `deciding`, the check still deciding them: as if they did not run); and while a run of
+        its flow goes (also one you started yourself), only one waiting for a slot whose flow's Overlap is allow."""
         if self.turning_off is not None:
             if self.turning_off.get(entry.flow) != "finish":
                 return False
-        elif any(w.flow == entry.flow and w.id < entry.id for line in self.again.values() for w in line):
+        elif not deciding and any(w.flow == entry.flow and w.id < entry.id
+                                  for line in self.again.values() for w in line):
             return False
         if entry.flow not in self.yours and not any(r.flow == entry.flow for r in self.runs):
             return True
@@ -1031,11 +1034,12 @@ def counted_from(home: Home, path, triggers: list) -> list[dt.datetime | None]:
 
 
 def claim_time(home: Home, path: Path, block: str | None, schedule: str, when: dt.datetime, service: str, row: int,
-               epoch: int, db) -> str | None:
-    """What a run the scheduler service `service` (Scheduler.id) started in the epoch `epoch` claims as it begins, in
-    the transaction `db` (the run's own, which records its start: History.start_run): its row `row` in waiting_runs,
-    which that service saved for the flow `path`'s Schedule block `block` (None: its flow-level schedule), as that
-    schedule was then (`schedule`, e.g. "cron 0 7 * * *"), and its time `when` (a local time, or with its UTC offset).
+               epoch: int, started: dt.datetime, db) -> str | None:
+    """What a run the scheduler service `service` (Scheduler.id) started in the epoch `epoch` at the moment `started`
+    (with its UTC offset) claims as it begins, in the transaction `db` (the run's own, which records its start:
+    History.start_run): its row `row` in waiting_runs, which that service saved for the flow `path`'s Schedule block
+    `block` (None: its flow-level schedule), as that schedule was then (`schedule`, e.g. "cron 0 7 * * *"), and its
+    time `when` (a local time, or with its UTC offset).
     None: it is its own (the row is gone), and the run begins. Else why not, and the row stays: the service starts it
     again in its turn, or, for a run for its time, that time is due again (a missed one, if it comes to that).
 
@@ -1044,10 +1048,11 @@ def claim_time(home: Home, path: Path, block: str | None, schedule: str, when: d
     it was started, also if you turned it on again meanwhile (SCH-8); but while the service is off, a run that waited
     its turn for a flow you chose Let it finish for begins (SCH-4). Nor does one whose schedule no longer runs as it
     was (Active unticked, changed, the flow taken off scheduled.yaml: a changed schedule asks for its times itself), or
-    whose row is gone (dropped, or another run began for it: a time runs once), or a run for its time more than
-    ON_TIME_GRACE after it (e.g. the PC slept while its program loaded), or one while another run of its flow goes
-    (scheduled, or started by you), unless the flow's Overlap is allow (SCH-11)."""
-    moment, said = when.astimezone(UTC), f"{when.astimezone():%Y-%m-%d %H:%M}"
+    whose row is gone (dropped, or another run began for it: a time runs once), or a run for its time that begins more
+    than ON_TIME_GRACE after `started`, by this PC's clock: its program took that long to load (e.g. the PC slept
+    meanwhile). Nor one while another run of its flow goes (scheduled, or started by you), unless the flow's Overlap is
+    allow (SCH-11)."""
+    said = f"{when.astimezone():%Y-%m-%d %H:%M}"
     if not service_running(home):  # (whoever takes the lock makes the service before not the one on: acquire_lock)
         return SERVICE_OFF
     if db.execute("SELECT id FROM service_on").fetchall() != [(service,)]:
@@ -1067,8 +1072,9 @@ def claim_time(home: Home, path: Path, block: str | None, schedule: str, when: d
             return SERVICE_OFF
     elif epoch != _epoch(db):
         return f"the scheduler service was turned off after it started this run: the service sees to {said} itself"
-    if saved[1] == "now" and dt.datetime.now(UTC) - moment > ON_TIME_GRACE:
-        return f"its time, {said}, was more than 2 minutes ago (e.g. the computer was asleep): it counts as missed"
+    if saved[1] == "now" and dt.datetime.now(UTC) - started > ON_TIME_GRACE:
+        return (f"its program took more than 2 minutes to load (e.g. the computer was asleep): its time, {said}, "
+                "counts as missed")
     if flow.overlap != "allow" and any(run_alive(pid, began) for pid, began in db.execute(
             "SELECT pid, began FROM runs WHERE status='running' AND flow_path=?", (str(path),))):
         return f"a run of {path.name} is still going"
