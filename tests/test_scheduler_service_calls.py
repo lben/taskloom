@@ -17,7 +17,8 @@ from taskloom.config import Home
 from taskloom.flow import load_flow, real_path
 from taskloom.history import History
 from taskloom.scheduler import (Scheduler, counted_from, forget_schedules, paused, request_turn_off,
-                                running_scheduler_version, runs_going, service_running, tell_crashed)
+                                running_scheduler_version, runs_going, service_running, set_start_at_login,
+                                tell_crashed)
 from tests.test_scheduler_at_its_time import clock
 from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, FakeRuns, begins, check_after,
                                                clock_shows, drain, end_runs, flow_yaml, going, history, hhmm,
@@ -167,6 +168,7 @@ def test_an_every_n_schedule_is_counted_on_from_where_the_service_counts_it(env,
         service.tick(clock(moment))
 
     assert asked == [[None, None], [clock("10:00:14"), None], [clock("10:05:14"), None]], asked
+    assert counted_from(home, paths["report"], triggers[1:]) == [None]  # (a schedule on the clock alone: none)
     assert triggers[0].next_after(clock("10:05:15"), asked[-1][0]) == clock("10:10:14")
     assert service.seconds_to_next_check(clock("10:10:13.600")) == pytest.approx(0.4)
     assert begins(fake_runs.of("report")) == utc(
@@ -394,7 +396,7 @@ def runs_of(fake_runs, flow: str) -> list[tuple[str, str]]:
 
 @pytest.mark.invariant("SCH-10")
 @pytest.mark.invariant("SCH-7")
-def test_saving_a_flow_forgets_only_its_schedules_that_are_off_and_keeps_the_others_and_other_flows_as_they_were(
+def test_a_flow_saved_forgets_only_its_schedules_that_are_off_and_keeps_the_others_and_other_flows_as_they_were(
         env, fake_runs):
     """report has two flow-level schedules, every 5 and every 7 minutes (Overlap queue); daily_load runs every 3
     minutes. The service first saw them at 10:00:14: report's every-5 run goes on, and its every-7 run, then its
@@ -630,3 +632,38 @@ def test_stop_now_records_a_stopped_scheduled_run_as_cancelled_also_where_it_can
     assert recorded == ["cancelled"], recorded
     (run,) = history(env.home)
     assert run["finished"] is not None and abs(run["finished"] - dt.datetime.now()) < dt.timedelta(minutes=1), run
+
+
+@pytest.mark.invariant("SCH-4")
+def test_stop_now_stops_the_scheduled_run_of_a_flow_taken_off_the_scheduled_flows_while_it_goes(env):
+    """nightly's scheduled run goes, and meanwhile you take nightly off the scheduled flows. With no service running
+    you turn the service off: the dialog still lists nightly (by its file), and Stop now stops its run and records it
+    as cancelled."""
+    paths = schedule(env.home, env.root, {"nightly": flow_yaml(HOURLY, work=hold_until("nightly"))})
+    home = Home(env.home)
+    proc = run_process(env, paths["nightly"], scheduled=True)
+    try:
+        assert wait_until(lambda: statuses(env.home, "nightly") == ["running"], 30), history(env.home)
+        home.set_scheduled(paths["nightly"], False)
+        listed = runs_going(home)
+        request_turn_off(home, {path: "stop" for path, _ in listed})  # Proceed
+        stopped = wait_until(lambda: proc.poll() is not None, 15)
+    finally:
+        write(env.root / "nightly.go", "go")
+        end_runs(env.home)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(10)
+
+    assert listed == [(str(real_path(paths["nightly"])), "nightly")], listed
+    assert stopped and statuses(env.home, "nightly") == ["cancelled"], history(env.home)
+
+
+def test_starting_at_login_anywhere_but_windows_says_it_is_for_windows_only(env, monkeypatch):
+    """`taskloom scheduler --at-login on` (and Tools → Settings) away from Windows: refused, saying so in plain
+    words."""
+    monkeypatch.delenv("APPDATA", raising=False)
+    with pytest.raises(RuntimeError) as refused:
+        set_start_at_login(Home(env.home), True)
+
+    assert str(refused.value) == "starting the scheduler at login is supported on Windows only"
