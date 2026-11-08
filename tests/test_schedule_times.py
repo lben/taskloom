@@ -143,18 +143,21 @@ def test_each_time_the_clock_skips_runs_exactly_at_the_jump(berlin):
         assert daily.next_after(jump) == dt.datetime(2026, 3, 30, 0, minute, tzinfo=UTC), f"{skipped:%H:%M}"
 
 
-# --- a one-off time with a UTC offset: refused (C9, C10) -------------------------------------------------------------
+# --- a one-off time with a UTC offset: refused (C9, C10, C12) --------------------------------------------------------
 
 @pytest.mark.charter("C9")
 @pytest.mark.charter("C10")
+@pytest.mark.charter("C12")
 @pytest.mark.parametrize("written", ["{at: '2026-10-08 15:30+02:00'}", "{at: 2026-10-08 15:30:00+02:00}",
                                      "{at: '2026-10-08T13:30:00Z'}"])
 def test_a_one_off_time_with_a_utc_offset_is_refused_saying_so(written):
     """A one-off time is a time on this PC's clock, as the editor writes it (it never writes a UTC offset). One written
     by hand with a UTC offset, quoted (text) or not (YAML reads it as a date and time with its offset), is refused when
-    it is read, as one with a fraction of a second is: the message names the time and says it has a UTC offset."""
+    it is read, as one with a fraction of a second is: the message names the time, says it has a UTC offset, in plain
+    words a time zone, and says how to write it instead: as this PC's clock shows that time."""
     message = refused({"schedule": yaml.safe_load(written)})
     assert "2026-10-08" in message and re.search(r"\boffset\b|\btime zone\b", message, re.IGNORECASE), message
+    assert "time zone" in message and "as this PC's clock shows that time" in message, message
 
 
 # --- SCH-7, SCH-10: every N, and a changed schedule ------------------------------------------------------------------
@@ -289,13 +292,16 @@ def test_a_trigger_that_is_not_exactly_one_of_cron_every_or_at_is_refused_with_a
 
 @pytest.mark.invariant("SCH-5")
 @pytest.mark.charter("C9")
+@pytest.mark.charter("C12")
 @pytest.mark.parametrize("written", ["{at: '2026-10-08 15:30:07.5'}", "{at: 2026-10-08 15:30:07.5}"])
 def test_a_one_off_time_with_a_fraction_of_a_second_is_refused_saying_it_is_to_the_second(written):
     """A run begins on a whole second, so a one-off time between two seconds could only begin before it or after it:
-    rather than round it without saying so, the schedule is refused when it is read, and the message names the time
-    and says one-off times are to the second. Quoted (text) or not (YAML reads it as a date and time)."""
+    rather than round it without saying so, the schedule is refused when it is read, and the message names the time,
+    says one-off times are to the second and says, in plain words, how to write it instead: without the fraction of a
+    second. Quoted (text) or not (YAML reads it as a date and time)."""
     message = refused({"schedule": yaml.safe_load(written)})
     assert "15:30:07" in message and re.search(r"\bsecond\b", message), message
+    assert "without the fraction of a second" in message, message
 
 
 @pytest.mark.charter("C9")

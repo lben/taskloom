@@ -58,3 +58,47 @@ markers = [
     "charter(rule): a test that checks a rule of the architecture charter (docs/ARCHITECTURE.md), e.g. C6",
     "invariant(row): a test that checks an agreed must-always-be-true row (docs/promises/), e.g. SCH-4",
 ]
+
+# Mutation testing of the scheduler feature (`mutmut run`, then packaging/mutants.py with
+# docs/promises/scheduler.mutants.yaml). Each mutant runs, in a process forked from mutmut's, the selected tests that
+# reach its function, and nearly every scheduler test reaches the schedule code and the service's check. So the
+# selection is the scheduler tests that run in this process within about a second: those that start real processes,
+# wait in real time or run many generated cases are left out (the whole suite still runs them), and so are those that
+# start Qt (a process forked after Qt has started can hang or crash).
+[tool.mutmut]
+source_paths = ["taskloom/"]
+only_mutate = ["taskloom/schedule.py", "taskloom/scheduler.py"]
+also_copy = ["README.md"]  # (tests check the README's words)
+process_isolation = "fork"
+timeout_multiplier = 2.0
+timeout_constant = 10.0
+pytest_add_cli_args = ["-p", "no:randomly", "-p", "no:cacheprovider"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_schedule_times.py", "tests/test_scheduler.py", "tests/test_interval_schedules.py",
+    "tests/test_scheduler_at_its_time.py", "tests/test_scheduler_held_times.py", "tests/test_scheduler_manual_runs.py",
+    "tests/test_scheduler_mistakes_and_counts.py", "tests/test_scheduler_model_fixes.py",
+    "tests/test_scheduler_new_promises.py", "tests/test_scheduler_while_off.py",
+    # (from files whose other tests are slow)
+    "tests/test_scheduler_promises.py::test_an_every_n_schedule_has_its_times_every_n_from_when_first_seen_through_2028",
+    "tests/test_scheduler_promises.py::test_skip_still_runs_a_time_less_than_2_minutes_late",
+    "tests/test_scheduler_promises.py::test_a_crashed_run_is_emailed_about_only_when_its_flow_asks_for_failure_emails",
+    "tests/test_scheduler_on_time.py::test_a_one_off_time_missed_while_the_scheduler_was_off",
+    "tests/test_scheduler_on_time.py::test_a_paused_schedule_block_never_starts_a_run",
+    "tests/test_scheduler_on_time.py::test_an_edited_schedule_starts_from_now",
+    "tests/test_scheduler_on_time.py::test_one_catch_up_time_while_a_run_is_going_still_follows_overlap_skip",
+    "tests/test_scheduler_on_time.py::test_the_scheduler_waits_until_the_next_due_time_and_at_most_a_second",
+    "tests/test_paths_scheduler.py::test_a_mistake_in_settings_does_not_stop_the_keeper_for_good",
+    "tests/test_paths_scheduler.py::test_a_run_that_prints_bytes_that_are_not_text_is_still_reported_as_it_ended",
+    "tests/test_paths_scheduler.py::test_a_schedule_turned_back_on_counts_from_that_moment",
+    "tests/test_paths_scheduler.py::test_a_scheduled_run_that_fails_is_told_once_on_the_desktop_and_emailed_once",
+    "tests/test_paths_scheduler.py::test_a_scheduled_yaml_taskloom_cannot_read_is_told_and_the_service_goes_on",
+    "tests/test_paths_scheduler.py::test_a_server_the_keeper_cannot_check_is_told_clearly",
+    "tests/test_paths_scheduler.py::test_the_keeper_leaves_a_server_scheduler_that_is_running_alone",
+    "tests/test_paths_scheduler.py::test_the_keeper_starts_a_server_scheduler_that_is_hung_or_gone",
+    "tests/test_triggers.py::test_scheduler_runs_the_schedule_block_branch",
+    "-k","""not (tray or editor or countdown or when_builders or stays_a_custom or while_the_service_is_off \
+        or saving_a_flow or clicking_run or stop_now_with_no_service or process_is_gone or real_service or headless \
+        or saved_while_the_service_is_on or keeps_the_starting_point or misfire_policy or on_time_runs \
+        or its_time_and_still_loading or half_written or overlap_skip_a_time or server_service_with \
+        or refuses_to_start or process_is_killed or time_zone_changes or turn_off_asked_for)""",
+]
