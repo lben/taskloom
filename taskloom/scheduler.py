@@ -363,12 +363,21 @@ class Scheduler:
             self.queued = {path: [w for w in line if not which(w)] for path, line in self.queued.items()}
             self._forget(dropped)
 
+    def _drop_gone(self):
+        """Forgets the saved runs whose row is gone: the saved rows are the truth. Whoever deleted a row has dealt with
+        it and told you (the editor's save of a changed schedule: forget_schedules; Stop now: request_turn_off; each
+        deletes a schedule's rows together). Read before the service decides anything about its saved runs, in that
+        decision's transaction when it has one, so no row deleted before a decision counts in it."""
+        saved = {row[0] for row in self._db.execute("SELECT id FROM waiting_runs")}
+        self._drop_waiting(lambda entry: entry.id not in saved)
+
     def _check(self, path: str, flow, trigger, key: str, now: dt.datetime):
         """The runs of one of the flow's schedules due since its last check, as its Misfire and the flow's Overlap say;
         and its times whose run for them did not begin (refused: again), as the missed times they may be now. The times
         it deals with are handled (schedule_state) together with what it does about them (each run saved, waiting_runs,
         to claim as it begins: claim_time; skipped; missed)."""
         with self._changes():
+            self._drop_gone()
             last = self._last(key)
             if last is None:  # a new schedule starts from now; nothing is "missed"
                 # Every N minutes or hours: its first run is now (to the second), the next ones N after it.
@@ -437,13 +446,14 @@ class Scheduler:
     def _answer(self, schedule: tuple, limit: int | None):
         """About a schedule's missed runs: None runs them all, N only the latest N; the older ones count as missed,
         and you are told how many. They run with its times that are not missed, oldest first, one at a time."""
-        backlog = self.asking.pop(schedule, [])
-        self._questions.pop(schedule, None)
-        missed = [entry for entry in backlog if entry.waits == "missed"]
-        dropped = missed[:max(0, len(missed) - limit)] if limit is not None else []
-        gone = {entry.id for entry in dropped}
-        kept = [entry for entry in backlog if entry.id not in gone]
         with self._changes() as db:
+            self._drop_gone()
+            backlog = self.asking.pop(schedule, [])
+            self._questions.pop(schedule, None)
+            missed = [entry for entry in backlog if entry.waits == "missed"]
+            dropped = missed[:max(0, len(missed) - limit)] if limit is not None else []
+            gone = {entry.id for entry in dropped}
+            kept = [entry for entry in backlog if entry.id not in gone]
             db.executemany("DELETE FROM waiting_runs WHERE id=?", [(entry.id,) for entry in dropped])
             db.executemany("UPDATE waiting_runs SET waits='flow' WHERE id=?", [(entry.id,) for entry in kept])
         for entry in kept:
@@ -703,6 +713,7 @@ class Scheduler:
         cannot be read, none does (they would not begin)."""
         if self._list_error and self._list_error[0] == LIST_UNREADABLE:
             return
+        self._drop_gone()
         for entry in self._line():
             if self._may_start(entry):
                 if self._at_limit():
