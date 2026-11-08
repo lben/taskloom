@@ -1,0 +1,22 @@
+# The scheduler service's design decisions, one line each (read by packaging/proof_pdf.py): what was chosen, and
+# when to look at it again. The alternatives weighed are in specs/formal/README.md and the commit history.
+- chosen: Each run claims its time in the same transaction that records its start, in the one run history.
+  revisit_if: runs are ever recorded anywhere other than history.db.
+- chosen: A run's program starts at its time, never before, and begins within 5 seconds of it.
+  revisit_if: a flow must begin on the exact second although its program takes seconds to load.
+- chosen: A run for its time counts as missed only if its program took more than 2 minutes to load, timed from when the service started it.
+  revisit_if: flows often take minutes to load on a healthy PC.
+- chosen: A program still loading 2 minutes after it started is asked to stop, and its flow's times are decided once it has ended.
+  revisit_if: a program can be stuck loading for longer than the stop timeout and still matter.
+- chosen: Turning the service off and on each start a new epoch; a run begins only in the epoch it was started in.
+  revisit_if: you want a run still loading at a quick off-and-on to begin anyway.
+- chosen: Proceed applies Stop now itself, whether or not a service is running.
+  revisit_if: Stop now must also reach runs on another PC.
+- chosen: Saving a changed fixed-time schedule records the save time; an Every N schedule counts from when the service first sees it.
+  revisit_if: you want an edit to keep the times missed before it.
+- chosen: A run you start by hand counts for Overlap when a scheduled time comes, and always starts at once itself.
+  revisit_if: you want runs by hand to wait their turn too.
+- chosen: Waiting runs and runs going live only in the run history; there is no separate runs file.
+  revisit_if: the run history must be shared between PCs.
+- chosen: The design is checked in a small TLA+ model (2 flows, 2 time steps, 2 service lives), and the code's runs are traced against it.
+  revisit_if: a promise could only break with more flows, times or restarts than the model holds.
