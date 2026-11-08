@@ -1761,8 +1761,8 @@ class MainWindow(QMainWindow):
         runs going (see dialogs.ask_turn_off)."""
         if self.scheduler_running():
             self.stop_scheduler(choices)
-        else:  # (a service starting now finds it off at its first check, and turns off)
-            set_paused(self.home, True)
+        else:  # Stop now applies all the same; a service starting now finds it off at its first check, and turns off
+            request_turn_off(self.home, choices)
         self._show_scheduler_state(False)
 
     def stop_scheduler(self, choices: dict[str, str]):

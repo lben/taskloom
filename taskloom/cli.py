@@ -158,7 +158,7 @@ def cmd_run(args, home: Home) -> int:
     def on_signal(signum, frame):
         if cancel.is_set():  # second Ctrl+C: stop immediately
             raise KeyboardInterrupt
-        print("cancelling… (press Ctrl+C again to force)", file=sys.stderr, flush=True)
+        _print("cancelling… (press Ctrl+C again to force)", sys.stderr)  # (also when nothing reads it any more)
         cancel.set()
 
     signal.signal(signal.SIGINT, on_signal)
@@ -222,15 +222,16 @@ def _claim(home: Home, flow, args, start_at):
     """What a run the scheduler service started claims as its run is recorded (History.start_run): the row the service
     saved for it (--if-scheduled). Refused, it says why, ends with exit code 3 (scheduler.NOT_DUE), and nothing is
     recorded (see claim_time)."""
-    service, row = args.if_scheduled
-    if start_at is None or args.scheduled is None or not row.isdigit():
+    service, row, epoch = args.if_scheduled
+    if start_at is None or args.scheduled is None or not (row.isdigit() and epoch.isdigit()):
         raise ValueError("--if-scheduled claims, for its --start-at time, the row ROW the scheduler service saved for "
-                         "the run of its schedule (--scheduled): give --start-at and --scheduled, and a whole number "
-                         "for ROW")
+                         "the run of its schedule (--scheduled): give --start-at and --scheduled, and whole numbers "
+                         "for ROW and EPOCH")
     from .scheduler import NOT_DUE, claim_time  # (now: at its time, it claims at once)
 
     def claim(db):
-        if why := claim_time(home, flow.path, args.trigger, args.scheduled, start_at, service, int(row), db):
+        if why := claim_time(home, flow.path, args.trigger, args.scheduled, start_at, service, int(row), int(epoch),
+                             db):
             _print(f"not begun: {why}", sys.stderr)
             raise SystemExit(NOT_DUE)
 
@@ -375,15 +376,16 @@ def main(argv=None) -> int:
                         "table('data.csv'); empty for no value) instead of the one it got in --inputs-from")
     p.add_argument("--start-at", metavar="DATETIME",
                    help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS, or with "
-                        "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (the scheduler starts "
-                        "each run a few seconds early so)")
-    p.add_argument("--if-scheduled", nargs=2, metavar=("SERVICE", "ROW"),
+                        "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (as for a run the "
+                        "scheduler starts at its time)")
+    p.add_argument("--if-scheduled", nargs=3, metavar=("SERVICE", "ROW", "EPOCH"),
                    help="as it begins, claim the row ROW that the scheduler service SERVICE saved for this run of the "
                         "flow's schedule (--scheduled, its --trigger) at the --start-at time, so it runs once: begin "
-                        "only if that service is the one on (turned off: only a run waiting its turn for a flow you let "
-                        "finish), that schedule is unchanged, the row is still there, and, for a run that waited for "
-                        "its time, it is at most 2 minutes past that time; else end with exit code 3 (the scheduler "
-                        "sets it)")
+                        "only if that service is the one on and has not been turned off since it started this run (its "
+                        "epoch EPOCH; while it is off, only a run waiting its turn for a flow you let finish begins), "
+                        "that schedule is unchanged, the row is still there, no other run of the flow is going (unless "
+                        "its Overlap is allow), and, for a run for its time, it is at most 2 minutes past that time; "
+                        "else end with exit code 3 (the scheduler sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--scheduled", metavar="SCHEDULE",
                    help="the scheduler service started this run for the flow's schedule (its --trigger) SCHEDULE (e.g. "
