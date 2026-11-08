@@ -36,7 +36,7 @@ Shown == [now |-> now, lives |-> lives, lock |-> lock, svcOn |-> svcOn,
           rows |-> {<<d, row[d]>> : d \in {x \in Dues : row[x] # "none"}},
           runs |-> {<<d, run[d], starter[d]>> : d \in {x \in Dues : run[x] # "no"}},
           manualGoing |-> manualGoing,
-          loading |-> {<<p.d, p.l, p.e>> : p \in loading},
+          loading |-> {<<p.d, p.l, p.e>> : p \in {q \in loading : ~q.dead}},   \* (a dead one has ended)
           adopted |-> adopted, turning |-> turning, checked |-> checked]
 
 ShowsAfter(e) == \A k \in DOMAIN e.state : e.state[k] = Shown'[k]

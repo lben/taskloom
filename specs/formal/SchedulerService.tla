@@ -11,7 +11,9 @@
 (*    is skipped and told, or it waits in a saved line (waiting_runs).     *)
 (*  - A run process loads, then CLAIMS as it begins: one atomic step that  *)
 (*    checks the term, the schedule and the turn-off, takes its row and    *)
-(*    writes its own history row.  Refused, it ends; its row stays.        *)
+(*    writes its own history row.  Refused, it ends; its row stays.  One   *)
+(*    that ends before it claims (its program died) is dropped by its      *)
+(*    service at its next poll, and you are told it failed.                *)
 (*  - The service adopts the scheduled runs going that it did not start.   *)
 (*  - Turning off: Proceed in the dialog, with a per-flow choice.         *)
 (*  - The user changes or turns off schedules, starts runs by hand and     *)
@@ -68,7 +70,8 @@ VARIABLES
     epoch,                \* turn-off/turn-on epoch (variant TermOnTurnOff only; else 0)
     last,                 \* schedule_state: per flow [v |-> version seen (-1: none), t |-> newest time handled]
     row,                  \* waiting_runs: per due time "none" | "time" (started for its time) | "queue" | "slot"
-    loading,              \* the run processes loading: [d, l (life that started it), e (epoch), off, chg, man]
+    loading,              \* the run processes loading: [d, l (life that started it), e (epoch), off, chg, man,
+                          \* dead (it ended before its claim; its service, still on, has not polled since)]
     run,                  \* the run history and the run's process: "no" | "going" | "died" (process gone,
                           \* history says running) | "over"
     starter,              \* the life whose process began the run
@@ -91,9 +94,10 @@ Fates == {"none",     \* not handled yet
           "begun",    \* claimed: in the run history
           "skipped",  \* Overlap skip, told
           "missed",   \* Misfire, told
+          "failed",   \* its run's program ended before its claim: its service dropped it, told
           "dropped"}  \* by a user choice: Stop now, or the schedule changed or turned off
 
-NewProc(d, L) == [d |-> d, l |-> L, e |-> epoch, off |-> FALSE, chg |-> FALSE, man |-> FALSE]
+NewProc(d, L) == [d |-> d, l |-> L, e |-> epoch, off |-> FALSE, chg |-> FALSE, man |-> FALSE, dead |-> FALSE]
 HasLoading(d, L) == \E p \in loading : p.d = d /\ p.l = L
 
 (* What the service on (life L) counts as going: the scheduled runs going that it started or adopted, and *)
@@ -146,29 +150,35 @@ ServiceStart ==
                    epoch, last, row, loading, run, starter, manualGoing, manuals, kills, fate, stopRows, changedAt>>
 
 \* The service process dies (crash, kill, PC restart of the service alone): the OS lets go of its lock; the
-\* service-on record still names it; its memory is gone; its run processes go on.
+\* service-on record still names it; its memory is gone (also of its processes that ended before their claim:
+\* their rows stay); its run processes go on.
 ServiceCrash ==
     /\ lock # 0
     /\ lock' = 0 /\ adopted' = {} /\ turning' = FALSE /\ checked' = FALSE
+    /\ loading' = {p \in loading : ~(p.l = lock /\ p.dead)}
     /\ UNCHANGED <<now, overlap, misfire, ver, schedOn, changes, svcOn, lives, paused, choice, offs, epoch, last,
-                   row, loading, run, starter, manualGoing, manuals, kills, fate, stopRows, changedAt>>
+                   row, run, starter, manualGoing, manuals, kills, fate, stopRows, changedAt>>
 
 \* ---- The service's check, part 1: poll (one atomic step) ----------------------------
 \* It reads the run history: a run whose process died is recorded as crashed (SCH-13); the scheduled runs going
 \* that it did not start are adopted. It reads scheduler.paused: seen for the first time, the turn-off is applied
 \* (Stop now: the flow's runs going are stopped and recorded as cancelled, its saved runs dropped, its own processes
-\* loading asked to stop); turned on again, it is on. Turned off and nothing it lets finish is going or waiting,
+\* loading asked to stop); turned on again, it is on. Its own processes that ended before their claim are dropped
+\* with their rows, and you are told they failed (_ended). Turned off and nothing it lets finish is going or waiting,
 \* the service ends.
 Poll ==
     LET L == lock
         applyOff == paused /\ ~turning
         stopF == IF applyOff THEN {f \in Flows : choice[f] = "stop"} ELSE {}
+        failed == {p.d : p \in {q \in loading : q.l = L /\ q.dead}}
         run1 == [d \in Dues |-> IF run[d] = "died" THEN "over"
                                 ELSE IF run[d] = "going" /\ F(d) \in stopF THEN "over"
                                 ELSE run[d]]
-        row1 == [d \in Dues |-> IF F(d) \in stopF THEN "none" ELSE row[d]]
-        fate1 == [d \in Dues |-> IF F(d) \in stopF /\ row[d] # "none" THEN "dropped" ELSE fate[d]]
-        loading1 == {p \in loading : ~(p.l = L /\ F(p.d) \in stopF)}
+        row1 == [d \in Dues |-> IF F(d) \in stopF \/ d \in failed THEN "none" ELSE row[d]]
+        fate1 == [d \in Dues |-> IF row[d] = "none" THEN fate[d]
+                                 ELSE IF F(d) \in stopF THEN "dropped"
+                                 ELSE IF d \in failed THEN "failed" ELSE fate[d]]
+        loading1 == {p \in loading : ~(p.l = L /\ (F(p.d) \in stopF \/ p.dead))}
         finishF == {f \in Flows : choice[f] = "finish"}
         done == /\ paused
                 /\ \A d \in Dues : run1[d] # "going"
@@ -189,10 +199,16 @@ Poll ==
 \* ---- The service's check, part 2: one schedule's times (one transaction) -------------
 \* One request, as Overlap and the limit say, given what this check has done so far (`st`).
 BusyIn(L, f, st) == FlowGoingIn(L, f, st.loading) \/ \E d \in Dues : F(d) = f /\ st.row[d] \in WaitKinds
-SlotLineIn(L, st) == \E d \in Dues : st.row[d] = "slot" /\ ~\E p \in st.loading : p.d = d /\ p.l = L
+\* A saved run in line (no process of this life runs it) that could start now, given a free slot: no run of its flow
+\* is going, or it waits for a slot and its Overlap is allow (_request's `ahead`, _may_start). A new time waits
+\* behind one; a time due again only behind one that came before it. The model has no order, so the time due again
+\* that is on time may or may not have come first (`first`).
+Ahead(L, st) == \E d \in Dues : /\ st.row[d] \in WaitKinds
+                                /\ ~\E p \in st.loading : p.d = d /\ p.l = L
+                                /\ ~FlowGoingIn(L, F(d), st.loading) \/ (st.row[d] = "slot" /\ overlap[F(d)] = "allow")
 
-RECURSIVE Plan(_, _, _, _, _, _)
-Plan(L, f, v, ts, behind, st) ==
+RECURSIVE Plan(_, _, _, _, _, _, _)
+Plan(L, f, v, ts, behind, first, st) ==
     IF ts = <<>> THEN st
     ELSE LET t == Head(ts)
              d == <<f, v, t>>
@@ -203,15 +219,15 @@ Plan(L, f, v, ts, behind, st) ==
                             [st EXCEPT !.row[d] = "none", !.fate[d] = "skipped"]       \* SCH-11: told
                        [] busy /\ policy = "queue" ->
                             [st EXCEPT !.row[d] = "queue", !.fate[d] = "saved"]        \* waits for its flow
-                       [] onTime /\ ~SlotLineIn(L, st) /\ ~AtLimitIn(L, st.loading) ->
+                       [] onTime /\ (t \in first \/ ~Ahead(L, st)) /\ ~AtLimitIn(L, st.loading) ->
                             [st EXCEPT !.row[d] = "time", !.fate[d] = "saved",
                                        !.loading = @ \cup {NewProc(d, L)}]             \* starts now
                        [] OTHER ->
                             [st EXCEPT !.row[d] = "slot", !.fate[d] = "saved"]         \* waits for a slot
-         IN Plan(L, f, v, Tail(ts), behind, next)
+         IN Plan(L, f, v, Tail(ts), behind, first, next)
 
 \* The times of flow f's schedule that have come since it last looked, and its times whose run did not begin
-\* (a row "time" with no process of this life: refused, or killed while loading), judged by Misfire (late: the
+\* (a row "time" with no process of this life: refused, or started by a service before), judged by Misfire (late: the
 \* time is before now) and then requested oldest first. A schedule it has not seen (changed) starts afresh.
 PlanFlow(f) ==
     LET L == lock IN
@@ -237,9 +253,10 @@ PlanFlow(f) ==
                         loading |-> loading,
                         fate |-> [d \in Dues |-> IF F(d) = f /\ V(d) = v /\ T(d) \in due \ planned
                                                  THEN "missed" ELSE fate[d]]]          \* SCH-9: told
-                st == Plan(L, f, v, Ascending(planned), behind, st0)
             IN /\ due # {}
-               /\ row' = st.row /\ loading' = st.loading /\ fate' = st.fate
+               /\ \E first \in SUBSET (againT \cap {now}) :
+                    LET st == Plan(L, f, v, Ascending(planned), behind, first, st0)
+                    IN row' = st.row /\ loading' = st.loading /\ fate' = st.fate
                /\ last' = [last EXCEPT ![f].t = now]
     /\ UNCHANGED <<now, overlap, misfire, ver, schedOn, changes, lock, svcOn, lives, paused, choice, offs, epoch,
                    run, starter, manualGoing, manuals, kills, adopted, turning, checked, stopRows, changedAt>>
@@ -277,7 +294,7 @@ ClaimOK(p) ==
        /\ ClaimChecksOverlap => (overlap[f] = "allow" \/ ~OtherGoing(d))
 
 Claim(p) ==
-    /\ p \in loading
+    /\ p \in loading /\ ~p.dead
     /\ IF ClaimOK(p)
        THEN /\ run' = [run EXCEPT ![p.d] = "going"]
             /\ starter' = [starter EXCEPT ![p.d] = p.l]
@@ -288,9 +305,12 @@ Claim(p) ==
     /\ UNCHANGED <<now, overlap, misfire, ver, schedOn, changes, lock, svcOn, lives, paused, choice, offs, epoch,
                    last, manualGoing, manuals, kills, adopted, turning, checked, stopRows, changedAt>>
 
+\* A run's program ends before its claim (it failed to load, or died). Its service, if still on, sees it at its next
+\* poll and counts it as going until then; with no service that started it on, it is as if it never started.
 KillLoading(p) ==
-    /\ p \in loading /\ kills < MaxKills
-    /\ loading' = loading \ {p} /\ kills' = kills + 1
+    /\ p \in loading /\ ~p.dead /\ kills < MaxKills
+    /\ loading' = (loading \ {p}) \cup (IF p.l = lock THEN {[p EXCEPT !.dead = TRUE]} ELSE {})
+    /\ kills' = kills + 1
     /\ UNCHANGED <<now, overlap, misfire, ver, schedOn, changes, lock, svcOn, lives, paused, choice, offs, epoch,
                    last, row, run, starter, manualGoing, manuals, adopted, turning, checked, fate, stopRows,
                    changedAt>>
@@ -396,7 +416,8 @@ Symmetry == Permutations(Flows)
 (* The promises. INVARIANT: true in every state. PROPERTY [][A]_vars: A    *)
 (* holds of every step (primed = after the step).                          *)
 (***************************************************************************)
-Procs == [d : Dues, l : Lives, e : 0..(2 * MaxTurnOffs), off : BOOLEAN, chg : BOOLEAN, man : BOOLEAN]
+Procs == [d : Dues, l : Lives, e : 0..(2 * MaxTurnOffs), off : BOOLEAN, chg : BOOLEAN, man : BOOLEAN,
+          dead : BOOLEAN]
 TypeOK ==
     /\ now \in 0..MaxTime
     /\ overlap \in [Flows -> Overlaps] /\ misfire \in [Flows -> Misfires]
@@ -444,9 +465,9 @@ NoBeginAfterOffOrChange == \A p \in loading : ClaimedBy(p) => (~p.off /\ ~p.chg)
 OffBegins == \A d \in Dues : (Begins(d) /\ paused) => (row[d] \in WaitKinds /\ choice[F(d)] = "finish")
 StopRowsStay == \A d \in Dues : Begins(d) => <<d, starter'[d]>> \notin stopRows
 
-\* SCH-16, SCH-9, SCH-10 (no loss): every due time that has come is begun, saved, told skipped or missed, dropped by
-\* a user choice, void (a changed schedule's time before the change), or still to be handled by a check; never
-\* silently gone. A saved run is a row; a row is always for a schedule that is on as it was (so it can begin).
+\* SCH-16, SCH-9, SCH-10 (no loss): every due time that has come is begun, saved, told skipped, missed or failed,
+\* dropped by a user choice, void (a changed schedule's time before the change), or still to be handled by a check;
+\* never silently gone. A saved run is a row; a row is always for a schedule that is on as it was (so it can begin).
 ToHandle(d) == /\ V(d) = ver[F(d)] /\ schedOn[F(d)]
                /\ (last[F(d)].v = V(d) => last[F(d)].t < T(d))
 NoLoss == \A d \in Dues :
