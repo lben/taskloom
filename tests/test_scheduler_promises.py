@@ -950,9 +950,13 @@ def test_generated_a_time_is_skipped_only_if_a_run_of_its_flow_goes_at_that_time
     for (clock, flow), messages in told.items():
         before = max((t for _, t, _ in simulation.checks if t < clock), default=simulation.checks[0][1] - MINUTE)
         ours = [r for r in simulation.started if r.flow == flow]
+        # (an Every N schedule first seen at this check has its first time then, to the second: SCH-7; that can be
+        # the second of the check before it)
         due = {(block, version, t) for (name, block), versions in simulation.versions.items() if name == flow
                for version, (_, schedule) in enumerate(versions)
-               for t in times_of(schedule, simulation.counts_from(flow, block, version), clock) if t > before}
+               for first in [simulation.counts_from(flow, block, version)]
+               for t in times_of(schedule, first, clock)
+               if t > before or (first > before and t == first.replace(microsecond=0))}
         due |= {(r.block, r.version, r.as_of) for r in ours if r.begun is None and r.as_of <= clock}
         skipped = sorted((block, version, t) for block, version, t in due
                          if not any((r.block, r.version, r.as_of) == (block, version, t) and r.begun is not None
