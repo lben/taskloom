@@ -1081,16 +1081,19 @@ run started at its time (from a terminal: `taskloom run FLOW --start-at 2026-10-
 A run whose schedule goes off before then (the service turned off, Active unticked, the flow
 taken off) does not begin. Nor does one that reaches its time with no service on (the service
 was ended or crashed just before) or more than 2 minutes late (the computer slept): that time
-is then a missed one, as if the service had been off (see `misfire`). A run started early takes
-its time as it begins, so a time runs once. If the service restarts just before that time (it
-was ended or crashed, and started again), the run the earlier service started does not begin
-(nothing is recorded for it): the service now on runs that time itself, as one of its own runs,
-so `overlap` and **Scheduled runs at once** count it. The
-service checks every second and then rereads changed flow files, so a schedule applies within
-a second of saving it, without restarting the service; a new or changed schedule, or one turned
-back on (Active ticked again, the flow scheduled again), counts from that moment (nothing
-before it counts as missed), also when you turned it off and on again while the service was
-off: saving a flow with a schedule off makes the service forget that schedule.
+is then a missed one, as if the service had been off (see `misfire`). A run the service starts
+at its time or just after it (the first run of an **Every N** schedule, a time less than 2
+minutes late) begins once its program has loaded, unless its schedule or the service goes off
+meanwhile. Every run the service starts takes its time as it begins, so a time runs once. If
+the service restarts before a run has begun (it was ended or crashed, and started again), the
+run the earlier service started does not begin (nothing is recorded for it): the service now
+on sees to that time itself, as one of its own runs, so `overlap` and **Scheduled runs at
+once** count it. The service checks every second and then rereads changed flow files, so a
+schedule applies within a second of saving it, without restarting the service; a new or
+changed schedule, or one turned back on (Active ticked again, the flow scheduled again),
+counts from that moment (nothing before it counts as missed), also when you turned it off and
+on again while the service was off: saving a flow with a schedule off makes the service forget
+that schedule.
 
 At each check, the time about to come (in the next few seconds) runs at its time. Of the
 times that came since the previous check, only the most recent can be on time, and only if
@@ -1129,18 +1132,25 @@ an email if the flow's notifications include skipped runs.
 
 **Overlaps.** If a flow's time comes while its previous run is still going, its `overlap`
 decides what happens (in the editor: Flow settings, **If a scheduled run starts while the
-last one is still going**). `skip`, the default, does not start the new run, and a **Run
-skipped** notification tells you; this is decided at the time itself, so a run that ends a
-few seconds before the next time does not hold that time up. A run of the flow that is
-waiting its turn counts as going: then the notification says that the previous run is still
-waiting its turn. `queue` makes the new run wait; it starts once the run going has
-finished. `allow` runs both at the same time. A catch-up is the exception: the
-missed runs of a `catch_up` schedule always go one at a time, even with `allow`.
+last one is still going**). A run of the flow that you started yourself (**Run** in the editor,
+or `taskloom run` in a terminal) counts as going too, while its program is going; clicking
+**Run** yourself always starts at once, even while a scheduled run of the flow goes. `skip`,
+the default, does not start the new run, and a **Run skipped** notification tells you; this is
+decided at the time itself, so a run that ends a few seconds before the next time does not
+hold that time up. If the service stops before that time, or you turn it off and the previous
+run has ended by then, the time is decided when the service is back on, as any time is: a
+missed time if it is more than 2 minutes late by then (see `misfire`), and skipped if a run of
+the flow is going then. A run of the flow that is waiting its turn counts as going: then the
+notification says that the previous run is still waiting its turn. `queue` makes the new run
+wait; it starts once the run going (also one you started) has finished. `allow` runs both at
+the same time. A catch-up is the exception: the missed runs of a `catch_up` schedule always go
+one at a time, even with `allow`.
 
 **Runs at once.** **Scheduled runs at once** in Tools → Settings (`max_concurrent_runs` in
-`settings.yaml`) limits how many scheduled runs go at the same time; unlimited by default.
-When that many are going, the next runs wait until one ends, and they start in the order
-they came: a flow whose run has just finished does not jump the line.
+`settings.yaml`) limits how many scheduled runs go at the same time (runs you start yourself
+do not count); unlimited by default. When that many are going, the next runs wait until one
+ends, and they start in the order they came: a flow whose run has just finished does not jump
+the line.
 
 **Turning the service off.** If no runs are going, you are only asked to confirm. If some
 are, a **Turn off the scheduler service?** window lists each flow with runs going, and you
@@ -1149,12 +1159,14 @@ waiting their turn still run. **Stop now**: its runs going stop and are recorded
 cancelled, and its waiting runs are dropped (a run that does not stop within a few seconds is
 forced to end, and is recorded as cancelled all the same). Once you click **Proceed**,
 nothing new starts, and the service turns off when the last run you let finish is done. A run
-whose program the service started early, to begin on time, has not begun yet: it is not
-listed, and it does not begin; its time is not lost: when you turn the service on again, it
-is a missed time like the others (see `misfire`). **Cancel** keeps it on and changes nothing.
+whose program the service has started but that has not begun yet (started early, to begin on
+time, or still loading) is not listed, and it does not begin. For a flow you chose **Stop
+now**, such a run is stopped and its time is dropped: it neither runs later nor counts as
+missed. For the other flows its time is not lost: when you turn the service on again, it is a
+missed time like the others (see `misfire`). **Cancel** keeps it on and changes nothing.
 Flows not in the list keep their waiting runs: they are saved, and start when you turn the
-service on again, also one whose program the service had already started (to begin on time,
-or as its turn came) and that had not begun. The tray icon's **Turn off the scheduler service** shows the same window.
+service on again, also one whose program the service had already started as its turn came and
+that had not begun. The tray icon's **Turn off the scheduler service** shows the same window.
 From **Proceed**, the editor shows the service off, also while the runs you let finish go;
 click the button to turn it on again before they are done, and it stays on: they go on, and
 scheduled times run again.
@@ -1169,13 +1181,13 @@ begun (that program does not begin then). A waiting run whose schedule you turn 
 change meanwhile is dropped: it would not run as it was. If only the service stops, the runs
 it started go on by themselves (each run is a program of its own), and they count as going
 once it is back: every run records itself in the run history as it begins, so also one that
-began just before the service stopped, or as it started again. After a PC
+began just before the service stopped. After a PC
 restart, a run that was going has ended, and its program's number may be another program's
 by then: a run records when it began (in a way no clock or time zone change alters), and it
 counts as going only if its program began before that, so the service never waits for, or
 stops, another program. A run whose program has gone is recorded as crashed, and you are told
 (see below). A service that stops (other than by your turning it off) says how many runs it
-leaves going; a run it started early that has not begun is not one of them.
+leaves going; a run it started that has not begun yet is not one of them.
 
 **One service per Taskloom folder.** Only one scheduler service runs for a Taskloom folder
 (the folder that holds your settings and run history; normally a PC has one). Starting

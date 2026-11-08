@@ -10,6 +10,7 @@ import os
 import queue
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1628,6 +1629,11 @@ class MainWindow(QMainWindow):
         except OSError as e:  # e.g. the list of scheduled flows kept open by another program: it is as it was
             QMessageBox.warning(self, "Schedule not saved", f"This flow is saved, but the list of scheduled flows "
                                 f"could not be changed: {e}\n\nSave the flow again to try again.")
+        except sqlite3.Error as e:  # the run history cannot be opened or written: its schedules are not forgotten
+            QMessageBox.warning(self, "Schedule change not applied", f"This flow is saved, but its schedule change was "
+                                f"not applied: the run history could not be written ({e}). Until it is, a schedule "
+                                "you turned off or changed does not start afresh while the scheduler service is off."
+                                "\n\nSave the flow again to try again.")
         self._refresh_schedule(tab)
         if scheduled and not self.scheduler_running():
             if paused(self.home):

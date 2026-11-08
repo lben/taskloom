@@ -291,8 +291,7 @@ class FakeRun:
         flow_path = real_path(Path(args[args.index("run") + 1]))
         schedule = args[args.index("--scheduled") + 1] if "--scheduled" in args[:-1] else None
         self.run_id = simulation.history.start_run(self.record.flow, str(flow_path), {}, clock.isoformat(),
-                                                   started_by=self.record.block, scheduled=True,
-                                                   **({"schedule": schedule} if schedule else {}))
+                                                   started_by=self.record.block, schedule=schedule)
         simulation.db.execute("UPDATE runs SET pid=?, began=? WHERE id=?", (self.pid, clock.timestamp(), self.run_id))
         self.record.begun = simulation.moment()
         self.stdout.say(json.dumps({"event": "run_started", "run_id": self.run_id}) + "\n",

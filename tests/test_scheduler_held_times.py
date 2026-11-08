@@ -33,7 +33,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from taskloom.cli import EXIT_CANCELLED  # noqa: E402
 from taskloom.config import Home  # noqa: E402
-from taskloom.flow import real_path  # noqa: E402
+from taskloom.flow import load_flow, real_path  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.scheduler import NOT_DUE, request_turn_off, set_paused  # noqa: E402
 from tests.test_paths_editor_editing import field, select_only  # noqa: E402
@@ -298,7 +298,7 @@ def said_it_began(home: Path, run: FakeRun, path: Path, run_id: int | None = Non
     record = History(home / "history.db")
     try:
         own = record.start_run(run.flow, str(real_path(path)), {}, dt.datetime.now().isoformat(),
-                               started_by=run.block or "", scheduled=True)
+                               started_by=run.block or "", schedule=run.args[run.args.index("--scheduled") + 1])
     finally:
         record.close()
     run_id = run_id or own
@@ -316,7 +316,7 @@ def earlier_run_began(home: Path, path: Path, pid: int, run_id: int | None = Non
     record = History(home / "history.db")
     try:
         own = record.start_run("nightly", str(real_path(path)), {}, dt.datetime.now().isoformat(), started_by="s1",
-                               scheduled=True)
+                               schedule=load_flow(real_path(path)).triggers[0].text)
     finally:
         record.close()
     with contextlib.closing(sqlite3.connect(home / "history.db", timeout=30)) as db:

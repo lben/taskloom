@@ -65,13 +65,12 @@ class History:
         columns = {table: {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
                    for table in ("runs", "logs", "blocks")}
         # A history file from before runs recorded their process, what started them, the start blocks they count
-        # for, the version of the flow file they ran, when they began, whether the scheduler service started them or
-        # for which schedule, before log lines said how the Log shows them, before blocks kept the query they sent, or how a block inside a
-        # Loop ended over its items: it gets the column (a run from before has no version: NULL).
+        # for, the version of the flow file they ran, when they began, for which schedule the scheduler service started
+        # them, before log lines said how the Log shows them, before blocks kept the query they sent, or how a block
+        # inside a Loop ended over its items: it gets the column (a run from before has no version: NULL).
         for table, name, kind in (("runs", "pid", "INTEGER"), ("runs", "started_by", "TEXT NOT NULL DEFAULT ''"),
                                   ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("runs", "version", "TEXT"),
-                                  ("runs", "began", "REAL"), ("runs", "scheduled", "INTEGER NOT NULL DEFAULT 0"),
-                                  ("runs", "schedule", "TEXT"),
+                                  ("runs", "began", "REAL"), ("runs", "schedule", "TEXT"),
                                   ("logs", "show", "TEXT"), ("blocks", "query", "TEXT"), ("blocks", "items", "TEXT")):
             if name not in columns[table]:
                 try:
@@ -85,13 +84,13 @@ class History:
             return self._db.execute(sql, args)
 
     def start_run(self, flow: str, flow_path: str, params: dict, ts: str, started_by: str = "",
-                  counts_for=(), keeps: dict | None = None, version: str | None = None, scheduled: bool = False,
-                  schedule: str | None = None, claim=None) -> int:
+                  counts_for=(), keeps: dict | None = None, version: str | None = None, schedule: str | None = None,
+                  claim=None) -> int:
         """`started_by`: the start blocks that started it ("manual, manual_2"), or "only load" / "from load".
         `counts_for`: the start blocks it counts for. `keeps`: the flow's start blocks, with their Keep runs and
         Always keep failed runs ({block: (keep, keep_failed)}); from now on these decide for all their runs.
-        `version`: the version of the flow file it runs (the Git blob id of the bytes it read). `scheduled`: the
-        scheduler service started it, for its `schedule` (e.g. "cron 0 7 * * *"). The run records itself so, from
+        `version`: the version of the flow file it runs (the Git blob id of the bytes it read). `schedule`: the
+        scheduler service started it, for this schedule (e.g. "cron 0 7 * * *"). The run records itself so, from
         its own process: with that process (pid) and the moment it began (seconds since 1970, which no clock or time
         zone change alters), by which that process had begun (see launch.run_alive). `claim(db)`, if given, is done
         first, in the same transaction: it may refuse the run by raising, and then nothing is recorded (a run the
@@ -106,9 +105,9 @@ class History:
                                  "keep_failed=excluded.keep_failed", (flow_path, block, kept, failed))
             cur = self._db.execute(
                 "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by, counts_for, version, "
-                "began, scheduled, schedule) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "began, schedule) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)",
                 (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by,
-                 ", ".join(counts_for), version, time.time(), int(scheduled), schedule),
+                 ", ".join(counts_for), version, time.time(), schedule),
             )
         return cur.lastrowid
 
@@ -259,12 +258,12 @@ class History:
 
     def running(self) -> list[dict]:
         """Runs in progress, of any flow, with the process running each (None: from before runs said), the moment it
-        began, whether the scheduler service started it, the start blocks that did and the schedule it was for (see
-        start_run)."""
-        rows = self._exec("SELECT id, flow, flow_path, started, pid, began, scheduled, started_by, schedule FROM runs "
+        began, the start blocks that started it and the schedule it was for (see start_run), and whether the scheduler
+        service started it (it has a schedule)."""
+        rows = self._exec("SELECT id, flow, flow_path, started, pid, began, started_by, schedule FROM runs "
                           "WHERE status='running' ORDER BY id")
-        return [{**dict(zip(("id", "flow", "flow_path", "started", "pid", "began"), r)), "scheduled": bool(r[6]),
-                 "started_by": r[7], "schedule": r[8]} for r in rows]
+        return [{**dict(zip(("id", "flow", "flow_path", "started", "pid", "began", "started_by", "schedule"), r)),
+                 "scheduled": r[7] is not None} for r in rows]
 
     def mark_crashed(self, run_id: int, ts: str, cancelled: bool = False) -> bool:
         """Record a run whose process died without finishing (e.g. it was killed); `cancelled`: you stopped it, and

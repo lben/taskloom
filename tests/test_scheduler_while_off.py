@@ -34,6 +34,7 @@ from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox  # noqa: E402
 
 from taskloom.config import Home  # noqa: E402
+from taskloom.flow import load_flow  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.launch import run_alive  # noqa: E402
 from taskloom.scheduler import Scheduler, acquire_lock, paused, request_turn_off, set_paused  # noqa: E402
@@ -173,7 +174,8 @@ def pc_restarted(home: Path, folder: Path):
     started = began.isoformat(timespec="milliseconds")
     record = History(home / "history.db")
     try:
-        runs = {"nightly": record.start_run("nightly", str(nightly), {}, started, started_by="s1", scheduled=True),
+        runs = {"nightly": record.start_run("nightly", str(nightly), {}, started, started_by="s1",
+                                            schedule=load_flow(nightly).triggers[0].text),
                 "adhoc": record.start_run("adhoc", str(adhoc), {}, started, started_by="manual")}
         for name, block in (("nightly", "work1"), ("adhoc", "work")):
             record({"event": "block_started", "run_id": runs[name], "ts": started, "block": block, "attempt": 1})
@@ -609,7 +611,7 @@ def began_before_the_crash(env, flows: dict[str, str]) -> tuple[subprocess.Popen
         try:
             run_id = record.start_run("nightly", str(paths["nightly"]), {"when": "2026-01-05 07:00:00"},
                                       dt.datetime.now().isoformat(timespec="milliseconds"), started_by="s1",
-                                      scheduled=True)
+                                      schedule=load_flow(paths["nightly"]).triggers[0].text)
             record({"event": "block_started", "run_id": run_id, "ts": dt.datetime.now().isoformat(),
                     "block": "work1", "attempt": 1})
         finally:

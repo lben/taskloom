@@ -58,7 +58,8 @@ def runs_of(home: Path, flow: str) -> list[tuple[str, bool, int | None]]:
     """(status, whether the scheduler service started it, its process) of each run of `flow` in the run history, in
     the order they started."""
     with contextlib.closing(sqlite3.connect(home / "history.db", timeout=30)) as db:
-        rows = db.execute("SELECT status, scheduled, pid FROM runs WHERE flow=? ORDER BY id", (flow,)).fetchall()
+        rows = db.execute("SELECT status, schedule IS NOT NULL, pid FROM runs WHERE flow=? ORDER BY id",
+                          (flow,)).fetchall()
     return [(status, bool(scheduled), pid) for status, scheduled, pid in rows]
 
 

@@ -39,6 +39,7 @@ from taskloom.config import Home  # noqa: E402
 from taskloom.editor.safety import pid_alive  # noqa: E402
 from taskloom.flow import real_path  # noqa: E402
 from taskloom.history import History  # noqa: E402
+from taskloom.history import connect as history_connect  # noqa: E402
 from taskloom.scheduler import NOT_DUE, Scheduler, acquire_lock, claim_time, paused  # noqa: E402
 from taskloom.scheduler import _unlock as unlock  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
@@ -383,10 +384,12 @@ def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | Non
 
     # (started before its time: where claim_time is told so, it is)
     early = {"early": True} if "early" in inspect.signature(claim_time).parameters else {}
-    with clock_shows(clock):
+    # (in one transaction, as the real run claims in the one that records its start: History.start_run)
+    with clock_shows(clock), contextlib.closing(history_connect(Home(home).history_db)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
         return claim_time(Home(home), real_path(Path(option("run"))), option("--trigger"), option("--scheduled"),
                           dt.datetime.fromisoformat(option("--start-at")), option("--if-scheduled"),
-                          int(args[args.index("--if-scheduled") + 2]), **early)
+                          int(args[args.index("--if-scheduled") + 2]), db, **early)
 
 
 def seen_then(home: Path, moment: dt.datetime):

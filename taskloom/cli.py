@@ -381,9 +381,9 @@ def main(argv=None) -> int:
                    help="as it begins, claim the row ROW that the scheduler service SERVICE saved for this run of the "
                         "flow's schedule (--scheduled, its --trigger) at the --start-at time, so it runs once: begin "
                         "only if that service is the one on (turned off: only a run waiting its turn for a flow you let "
-                        "finish), that schedule is unchanged, the row is still there, and, for a run started before its "
-                        "time, it is at most 2 minutes past that time; else end with exit code 3 (the scheduler sets "
-                        "it)")
+                        "finish), that schedule is unchanged, the row is still there, and, for a run that waited for "
+                        "its time, it is at most 2 minutes past that time; else end with exit code 3 (the scheduler "
+                        "sets it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
     p.add_argument("--scheduled", metavar="SCHEDULE",
                    help="the scheduler service started this run for the flow's schedule (its --trigger) SCHEDULE (e.g. "
