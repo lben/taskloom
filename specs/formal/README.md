@@ -116,8 +116,9 @@ level, so every behaviour up to the level before it was fully checked:
 | All four switches on | all | none | 12.9M | 16 steps |
 | All four switches on | all | Overlap queue, Misfire catch_up only | 2.3M | 19 steps |
 
-A complete sweep at the cfg's bounds (`MaxKills = 1`) needs well over an hour on a 10-core laptop. Run it
-unattended.
+With the cfg as committed (all four switches on, `MaxKills = 1`), the sweep is complete and no promise is
+broken: 457,327,633 states generated, 89,912,884 distinct, depth 34, 53 minutes 46 seconds with 4 workers on a
+10-core laptop (2026-11-08). Run it unattended.
 
 One reading of the target design is load-bearing: "a waiting run starts when it may" is taken to also check
 Overlap, counting runs by hand. If a run waiting for a free slot starts on the limit alone (as
