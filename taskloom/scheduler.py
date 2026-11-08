@@ -333,12 +333,15 @@ class Scheduler:
 
     def _loading_too_long(self) -> set[str]:
         """The flows with a run for its time that has not begun and whose program started more than ON_TIME_GRACE ago,
-        by this PC's clock (as claim_time reads it): it can never begin (e.g. the PC slept while it loaded). Each such
-        program is asked to stop, once (_poll forces it STOP_SECONDS later); once it has ended, its time is due again
-        (_ended), and the next check decides it with the times that came meanwhile, as Misfire says."""
+        by this PC's clock (as claim_time reads it): it can never begin (e.g. the PC slept while it loaded). Not begun:
+        its saved row is still there, read now (a run that claimed it has begun, though the service may not have heard
+        so yet; any later claim is refused). Each such program is asked to stop, once (_poll forces it STOP_SECONDS
+        later); once it has ended, its time is due again (_ended), and the next check decides it with the times that
+        came meanwhile, as Misfire says."""
         clock = dt.datetime.now(UTC)
         late = [run for run in self.runs if run.waiting is not None and run.waiting.waits == "now"
-                and run.run_id is None and clock - run.started > ON_TIME_GRACE]
+                and run.run_id is None and clock - run.started > ON_TIME_GRACE
+                and self._db.execute("SELECT 1 FROM waiting_runs WHERE id=?", (run.waiting.id,)).fetchone()]
         for run in late:
             if run.stopping is None:
                 self._stop(run)
