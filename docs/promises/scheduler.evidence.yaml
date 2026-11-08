@@ -1,12 +1,17 @@
 # How each agreed row of docs/promises/scheduler.yaml is kept, and why a row is not green (read by
 # packaging/ledger.py; the reviewer checks these words against the code). A row is green only when a checker that
-# tries every state or case covers all of its words; green_by names those checkers (listed below under checkers:).
+# tries every state or case covers all of its words. green_by names the checkers that check it, wholly or in part
+# (listed under checkers:); if one fails, the row is red. not_green says which of its words only tests check.
 SCH-1:
   enforced: >-
     The service takes the Taskloom folder's lock (acquire_lock) before it does anything, and a second one that cannot
     take it ends at once; the service_on record names the one holding the lock, and a run begins only for that one
     (claim_time).
   green_by: [TLA+ trace validation, TLA+ model check]
+  not_green: >-
+    The model checks, in every state of its bounds, that one service is on at a time, but it assumes the folder lock
+    lets only one process hold it (the operating system's file lock); that each way of starting another (On, login,
+    the editor) does nothing is checked by tests.
 SCH-2:
   enforced: >-
     Turning the service off writes the paused file (request_turn_off, set_paused); the editor, scheduling a flow and
@@ -27,6 +32,7 @@ SCH-4:
     The dialog's choices are applied on Proceed in one transaction (request_turn_off): a new epoch, the Stop now
     flows' waiting runs dropped and their runs going stopped and recorded as cancelled, also with no service running;
     while off, a run begins only if it waited its turn for a flow you let finish (claim_time).
+  green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
     The model checks, in every state of its bounds, which runs may begin after Proceed; the dialog itself (what it
     lists, Cancel, the confirm-only case, the tray's Turn off) is checked by tests on the real editor and tray.
@@ -43,21 +49,32 @@ SCH-6:
     Each run claims its saved row (waiting_runs) in the transaction that records its start (History.start_run with
     claim_time); a row is claimed once, and a time is saved once.
   green_by: [TLA+ trace validation, TLA+ model check]
+  not_green: >-
+    The model checks it in every state of its bounds for Skip and Catch up; the runs of Run once and of the
+    more-than-100 question make the same claim, and are checked by tests.
 SCH-7:
   enforced: >-
     An Every N schedule seen for the first time counts from that moment, to the second (Scheduler._check), and from
     its previous time after that (Trigger.next_after).
+  not_green: >-
+    The times N apart are tried for every Every choice of the editor through 2028, from a given start; that the start
+    is when the service first sees the schedule is checked by tests.
 SCH-8:
   enforced: >-
     A run begins only in the epoch it was started in (turning off and on each start a new one), only while its
     schedule is on and unchanged, and only if its saved row is still there (claim_time, in the transaction that
-    records its start).
+    records its start). One exception, for SCH-4: while the service is off, a run that waited its turn for a flow
+    you chose Let it finish for begins, also if its program was loading when you clicked Proceed.
   green_by: [TLA+ trace validation, TLA+ model check]
+  not_green: >-
+    The model checks it in every state of its bounds for Skip and Catch up; the runs of Run once and of the
+    more-than-100 question make the same claim, and are checked by tests.
 SCH-9:
   enforced: >-
     Times come due at the service's checks and follow Misfire (Scheduler._misfire); a time more than 2 minutes late, or
     whose program took more than 2 minutes to load, counts as missed (claim_time); more than 100 missed Catch up times
     ask first (_backlog), and on a server the latest 100 run and the rest are told.
+  green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
     The model checks Skip and Catch up within its bounds, and that a changed schedule's later times follow Misfire;
     Run once, the 2-minute rule, the more-than-100 question and the server's log are checked by tests only.
@@ -65,6 +82,7 @@ SCH-10:
   enforced: >-
     Saving a changed or re-enabled schedule records the save time as its last time (forget_schedules), and the service
     keeps no saved run for a schedule that is off or changed (claim_time, _still_waiting).
+  green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
     The model checks, within its bounds, that a changed schedule starts afresh and keeps no saved run; that times from
     while it was off are not told as missed is checked by tests.
@@ -73,10 +91,15 @@ SCH-11:
     At the check (_busy) and again as the run begins (claim_time), a run of the flow going, scheduled or started by
     you, holds a new one unless Overlap is allow; the time is then told skipped, or waits, as Overlap says.
   green_by: [TLA+ trace validation, TLA+ model check]
+  not_green: >-
+    The model checks, in every state of its bounds, that a run begins beside another of its flow only with Overlap
+    allow; that you are told of a skipped time is checked by tests (the model and the traces do not compare what you
+    are told).
 SCH-12:
   enforced: >-
     A run starts only while fewer runs go than Max concurrent runs (_at_limit); the others wait in the order their
     rows were saved (_line, _next_in_line).
+  green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
     The model checks the limit in every state of its bounds, but it lets any waiting run start next; the order they
     came in is checked by generated tests (many random scenarios), not by the model.
@@ -103,6 +126,7 @@ SCH-16:
   enforced: >-
     Runs waiting their turn are rows in the run history (waiting_runs), restored when a service starts (_restore); a
     run going from before is adopted from the history (_adopt).
+  green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
     The model checks, within its bounds, that no saved run is lost or left without its schedule across restarts; that
     each one then starts is checked by tests.

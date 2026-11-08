@@ -38,9 +38,12 @@ service, its run processes and the user within small bounds, against the promise
   due again that is on time may or may not have come before the saved runs that could start now (`first`).
 - **The dialog.** It is one step with Proceed and lists the flows with runs going at that moment.
 - **Atomicity.** A check's reads of the history and its decisions are atomic within each step above. This is
-  sound for these promises: between a read and a decision, only the service's own claims (already counted),
-  runs ending (making the read conservative) and runs by hand can change things, and runs by hand are free to
-  begin at any step anyway.
+  sound for these promises: between a read and a decision, the service's own claims (already counted), runs
+  ending (making the read conservative) and runs by hand can change things, and runs by hand are free to begin at
+  any step anyway. An editor save and Proceed can too: they delete saved runs. The code reads the rows again inside
+  the transaction of each decision that relies on them (`_drop_gone` in `_check` and `_answer`); where it does not
+  (`_next_in_line`, before starting a waiting run), a run whose row was just deleted can still have its process
+  started, and its claim then refuses it: nothing begins.
 
 ## Constants (`SchedulerService.cfg`)
 
@@ -201,16 +204,18 @@ The ghost variables (`fate`, `stopRows`, `changedAt`) and the counters are left 
   unreadable files.
 - What you are told (skipped, missed, failed) and e-mails are not compared.
 - A stand-in asked to stop ends at once. The model's `Poll` applies Stop now in one step, while a real run takes a moment.
-- A service is started only while the service is on, as the model assumes.
+- A service is started only while the service is on, as the model assumes, and never a second one while one holds
+  the lock: the model assumes the lock is exclusive (the operating system's file lock), it does not check it.
+- No editor save or Proceed lands inside a check: each is a step of its own in the traces (see Atomicity).
 
-**Results (2026-11-08, the code as of 05b7249, the model with the two rulings in Decided).** 198 of the 200 traces
-match, and they take every action above; the planted divergence is caught. Before the rulings, 31 more stopped where
-a run's program died before its claim (21) or at start now or wait for a slot (10). The other 2 stop at a bug in the
-code, being fixed and not modelled: **the service's memory of saved runs goes stale.** Saving a changed schedule drops
-its saved runs, but until the end of its next check the service still counts them. A new time of that flow is then
-skipped as "still waiting its turn", or queued (trace 198). Proceed's Stop now also drops saved runs. If you turn the
-service on again before it sees the turn-off, it starts a process for one of those runs, which its claim then refuses
-(trace 181).
+**Results (2026-11-08, the code as of 4773c27, the model with the two rulings in Decided).** All 200 traces match,
+and they take every action above; the planted divergence is caught. Before the rulings, 31 traces stopped where a
+run's program died before its claim (21) or at start now or wait for a slot (10). Two more stopped at a bug in the
+code, now fixed (3bfd317): the service's memory of saved runs went stale. Saving a changed schedule drops its saved
+runs, but until the end of its next check the service still counted them, so a new time of that flow was skipped as
+"still waiting its turn" (trace 198); after Stop now and turning the service on again before it saw the turn-off, it
+started a process for a dropped run (trace 181). The service now drops from its memory every saved run whose row is
+gone before it decides.
 
 **How to run.** Run `python packaging/tla_trace.py --out /tmp/tla-trace`. It needs `java`, and tla2tools.jar 1.7.4 at
 `~/.local/share/tlaplus/1.7.4/tla2tools.jar` or `$TLA2TOOLS_JAR`. It takes about 1.5 minutes on 4 cores. Each trace
