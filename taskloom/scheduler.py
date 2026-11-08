@@ -1189,8 +1189,11 @@ def forget_schedules(home: Home, path, triggers: list):
     off): the state of its other schedules is forgotten, with their runs waiting their turn, so a schedule turned off
     and on again, or changed, starts afresh as a new one, also while the service is off (SCH-10). A new one on the
     clock (cron, a one-off time) starts now: its times after this save are due, also those that come while the service
-    is off, which are then missed ones (SCH-9); an Every N one counts from when the service first sees it (SCH-7). It
-    raises sqlite3.Error if the history database cannot be opened or written: then nothing is changed."""
+    is off, which are then missed ones (SCH-9); an Every N one counts from when the service first sees it (SCH-7). With
+    no schedules and no run history yet, there is nothing to forget: nothing is written. It raises sqlite3.Error if the
+    history database cannot be opened or written: then nothing is changed."""
+    if not triggers and not home.history_db.exists():
+        return
     keys, on = {schedule_key(path, i, t): t for i, t in enumerate(triggers)}, {(t.block, t.text) for t in triggers}
     saved = dt.datetime.now(UTC).isoformat()
     with _saved_state(home) as db:
