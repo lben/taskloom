@@ -219,21 +219,22 @@ def test_an_every_n_schedule_has_its_times_every_n_from_when_first_seen_through_
 # flows, Max concurrent runs, and check times with gaps: a second or so apart while it is on, minutes while the PC
 # sleeps or the service is off. Each run's process is replaced at the process boundary by a FakeRun (real processes are
 # too slow for hundreds of examples). It loads for a number of the checks to come (its flow's `loads`; 0: it has begun
-# by the end of the check that started it) and its time (--start-at) has come, then its run begins as `taskloom run`
-# does (one that claims no time never before it): it records itself in the run history (its process, the moment it
-# began, its Schedule block, that the service started it) and says it began and succeeded; it has finished when it has
-# been checked on for the n-th time since (its flow's `lasts`), and records its end. As the system tells it (run_alive),
-# its process is going until then. One whose command line says --if-scheduled (the service starts it early, for a time
-# to come) waits for that time once it has loaded and then claims it as `taskloom run` does (claim_its_time: the real
-# claim, on the simulation's clock, a service being on while it holds the folder's lock); it begins only if it has it,
-# else it records nothing and ends with NOT_DUE. Its time has come by the service's first check at or after it (the PC
-# may have slept meanwhile: it then wakes with the service). The service turned off and on again is a new Scheduler for
-# the same Taskloom folder: the old one stops just after its last check, the new one starts at its first. The runs going
-# finish while it is off; a run started early whose time comes before the new one starts finds no service on; a run
-# still loading, or started early for a time after the new one starts, goes on, and moves on with the new service on,
-# which may have started a run for that time too: both claim it, in the order the scenario draws (either can happen).
-# The services' notices are kept, with the clock time of the check that told them; each moment (a process starting, a
-# run beginning, a process ending, a check) is kept with the clock time then.
+# by the end of the check that started it) and its time (--start-at) has come; then, as `taskloom run` does, one whose
+# command line says --if-scheduled claims what that names (claim_its_time: the real claim, on the simulation's clock, a
+# service being on while it holds the folder's lock) and begins only if it has it, else it records nothing and ends with
+# NOT_DUE; one whose command line claims nothing begins (never before its time). A run that begins records itself in the
+# run history (its process, the moment it began, its Schedule block and schedule, that the service started it) and says
+# it began and succeeded; it has finished when it has been checked on for the n-th time since (its flow's `lasts`), and
+# records its end. As the system tells it (run_alive), its process is going until then. A run whose process has loaded
+# at a check begins just before that check reads the run history, or just after (`after_check`: either can happen). Its
+# time has come by the service's first check at or after it (the PC may have slept meanwhile: it then wakes with the
+# service). The service turned off and on again is a new Scheduler for the same Taskloom folder: the old one stops just
+# after its last check, the new one starts at its first. The runs going finish while it is off, or go on under the new
+# one (`outlive`: either can happen); a run started early whose time comes before the new one starts finds no service
+# on; a run still loading, or started early for a time after the new one starts, goes on, and moves on with the new
+# service on, which may have started a run for that time too: both claim it, in the order the scenario draws (either can
+# happen). The services' notices are kept, with the clock time of the check that told them; each moment (a process
+# starting, a run beginning, a process ending, a check) is kept with the clock time then.
 
 @dataclass
 class Started:
@@ -250,13 +251,15 @@ class Started:
     ended: int | None = None
 
     def going_at(self, other: "Started") -> bool:
-        """Going when the process of `other` started. A run counts from its process's start for the service that
-        started it (it counts it as going from then), for a later service from when it began; a process whose run never
-        began is no run."""
-        if self.begun is None:
+        """Going when `other` started. For the service that started a process, its run counts from that start (it
+        counts it as going from then); for a later service, from when it began. So of two runs of different services,
+        the earlier service's run counts from when it began, and the later one's from its process's start. A process
+        whose run never began is no run."""
+        if self.begun is None or other.begun is None:
             return False
-        start = self.began if self.life == other.life else self.begun
-        return start < other.began and (self.ended is None or self.ended > other.began)
+        start = self.began if self.life >= other.life else self.begun
+        at = other.began if other.life >= self.life else other.begun
+        return start < at and (self.ended is None or self.ended > at)
 
     def alive_at(self, other: "Started") -> bool:
         """Its process was going when the process of `other` started (whichever service started it, begun or not)."""
@@ -283,10 +286,13 @@ class FakeRun:
     def begin(self, clock: dt.datetime):
         """Its run begins, with this PC's clock showing `clock`: it records itself in the run history as `taskloom
         run` does (History.start_run: its process, the moment it began, its Schedule block, and that the scheduler
-        service started it), and says so."""
-        simulation, flow_path = self.simulation, real_path(Path(self.args[self.args.index("run") + 1]))
+        service started it, for the schedule its command line names), and says so."""
+        simulation, args = self.simulation, self.args
+        flow_path = real_path(Path(args[args.index("run") + 1]))
+        schedule = args[args.index("--scheduled") + 1] if "--scheduled" in args[:-1] else None
         self.run_id = simulation.history.start_run(self.record.flow, str(flow_path), {}, clock.isoformat(),
-                                                   started_by=self.record.block, scheduled=True)
+                                                   started_by=self.record.block, scheduled=True,
+                                                   **({"schedule": schedule} if schedule else {}))
         simulation.db.execute("UPDATE runs SET pid=?, began=? WHERE id=?", (self.pid, clock.timestamp(), self.run_id))
         self.record.begun = simulation.moment()
         self.stdout.say(json.dumps({"event": "run_started", "run_id": self.run_id}) + "\n",
@@ -329,6 +335,8 @@ class Simulation:
     lasts: dict  # flow -> how many of the service's checks its runs last
     loads: dict  # flow -> how many checks its runs' processes take to load (0: they begin by the end of the check)
     older_first: bool = False  # (see reach_times)
+    after_check: bool = False  # (see move_on)
+    outlive: bool = False  # the runs going when the service is turned off and on again go on (else they finish)
     history: History | None = None  # the run history, as runs record themselves in it
     db: sqlite3.Connection | None = None
     clock: dt.datetime | None = None  # this PC's clock: the time of the latest check
@@ -366,14 +374,21 @@ class Simulation:
         return min(t for _, t, _ in checks if t + EARLY >= run.as_of)
 
     def move_on(self, now: dt.datetime | None):
-        """The run processes reach this check (at `now`; None: as time goes on, with no check): those loading load,
-        those loaded begin (one started early, once its time has come: reach_times), and one the service asked to stop
-        (on its stdin) before it began ends without beginning."""
+        """The run processes reach this check (at `now`; None: as time goes on, with no check): those loading load, and
+        one the service asked to stop (on its stdin) before it began ends without beginning. Those loaded begin (one
+        started early, once its time has come: reach_times) before the service's check reads the run history, or,
+        with `after_check`, just after that check (begun)."""
         for fake in self.fakes:
             if fake.returncode is None and fake.loading > 0:
                 fake.loading -= 1
             if fake.returncode is None and fake.record.begun is None and "cancel" in fake.stdin.getvalue():
                 fake.end(130)  # (asked to stop before it began: it does not begin, and records nothing)
+        if not self.after_check or now is None:
+            self.begun(now)
+
+    def begun(self, now: dt.datetime | None):
+        """The runs loaded begin, those started early once their time has come by `now` (see begin_loaded and
+        reach_times)."""
         self.begin_loaded(now)
         self.reach_times(now)
 
@@ -422,9 +437,13 @@ STEPS = st.lists(st.tuples(st.one_of(st.integers(200, 75_000), st.integers(120_0
 
 def scenarios(limits=(None, 1, 2, 3)):
     """Also `older_first`: whether, of two runs started early for the same time, one by a service since turned off
-    and on again and one by the service now on, the older one claims it first (either can happen)."""
+    and on again and one by the service now on, the older one claims it first (either can happen); and `after_check`:
+    whether a run whose process has loaded at a check begins just before that check reads the run history, or just
+    after it (either can happen); and `outlive`: whether the runs going as the service is turned off and on again go
+    on under the new one, or finish while it is off."""
     return st.fixed_dictionaries({"flows": FLOWS, "limit": st.sampled_from(limits), "steps": STEPS,
-                                  "first_check": st.integers(0, 3_599_999), "older_first": st.booleans()})
+                                  "first_check": st.integers(0, 3_599_999), "older_first": st.booleans(),
+                                  "after_check": st.booleans(), "outlive": st.booleans()})
 
 
 GENERATED = settings(max_examples=200, deadline=None, database=None, suppress_health_check=[HealthCheck.too_slow])
@@ -456,7 +475,8 @@ def simulate(root: Path, scenario: dict) -> Simulation:
     home.root.mkdir(parents=True)
     if scenario["limit"]:
         (home.root / "settings.yaml").write_text(f"max_concurrent_runs: {scenario['limit']}\n", encoding="utf-8")
-    simulation = Simulation(home.root, lasts={}, loads={}, older_first=scenario["older_first"])
+    simulation = Simulation(home.root, lasts={}, loads={}, older_first=scenario["older_first"],
+                            after_check=scenario["after_check"], outlive=scenario["outlive"])
     for i, spec in enumerate(scenario["flows"]):
         path = root / f"flow{i}.yaml"
         path.write_text(flow_file(spec), encoding="utf-8")
@@ -476,7 +496,7 @@ def simulate(root: Path, scenario: dict) -> Simulation:
                 if turned_off:  # it stopped just after its last check; the new one starts now
                     unlock(lock)
                     for fake in simulation.fakes:
-                        if fake.returncode is None and fake.record.begun is not None:
+                        if fake.returncode is None and fake.record.begun is not None and not simulation.outlive:
                             fake.end(0)  # (its runs going finish while it is off)
                     simulation.reach_times(now, before=True)  # (no service is on)
                     simulation.life += 1
@@ -485,7 +505,7 @@ def simulate(root: Path, scenario: dict) -> Simulation:
                 simulation.move_on(now)
                 simulation.checks.append((simulation.life, now, simulation.moment()))
                 service.tick(now)
-                simulation.begin_loaded(now)
+                simulation.begun(now)  # (by the end of this check)
                 for fake in simulation.earlier():
                     fake.poll()
             for _ in range(5000):  # the runs going and those waiting their turn all finish (no new time comes)
@@ -530,23 +550,42 @@ RESTARTED_JUST_BEFORE = [
     {"flows": [{"schedules": [(("every", "1 minute"), "catch_up")], "overlap": "allow", "lasts": 1, "loads": 0}],
      "limit": None, "first_check": 0, "steps": [(57_000, False), (1_000, True), (5_000, False)]},
 ]
-RESTARTED_JUST_BEFORE = [{**scenario, "older_first": older_first} for scenario in RESTARTED_JUST_BEFORE
-                         for older_first in (False, True)]
+RESTARTED_JUST_BEFORE = [{**scenario, "older_first": older_first, "after_check": False,
+                          "outlive": False}
+                         for scenario in RESTARTED_JUST_BEFORE for older_first in (False, True)]
 # As the first of those, with the older run claiming 06:01 first, that run lasting 4 checks and a check at 06:02:03
 # (the flow's next time comes while it may still go), and Max concurrent runs 1.
 STILL_GOING = {"flows": [{"schedules": [(("cron", "* * * * *"), "run_once")], "overlap": "skip", "lasts": 4,
                            "loads": 0}],
                "limit": 1, "first_check": 57_000, "steps": [(1_000, True), (5_000, False), (60_000, False)],
-               "older_first": True}
+               "older_first": True, "after_check": False, "outlive": False}
 CAUGHT_UP_STILL_GOING = {**STILL_GOING, "flows": [{"schedules": [(("cron", "* * * * *"), "catch_up")],
                                                    "overlap": "skip", "lasts": 4, "loads": 0}]}  # (the same, Catch up)
-# An Every 1 minute schedule first seen at 06:00:30: its run for then starts at once (it has no time to claim), and the
-# service is turned off and on again while its process loads (a check). It begins with the new service on, lasting 4
-# checks; at 06:01:30.2 the flow's next time comes (Overlap skip, Max concurrent runs 1).
+# An Every 1 minute schedule first seen at 06:00:30: its run for then starts at once, and the service is turned off and
+# on again while its process loads (a check). Then the run's process has loaded: it begins (or does not, as the service
+# that started it is not the one on), lasting 4 checks; at 06:01:30.2 the flow's next time comes (Overlap skip, Max
+# concurrent runs 1).
 LOADING_ACROSS_RESTART = {"flows": [{"schedules": [(("every", "1 minute"), "run_once")], "overlap": "skip", "lasts": 4,
                                      "loads": 1}],
                           "limit": 1, "first_check": 30_000, "steps": [(200, True), (60_000, False)],
-                          "older_first": False}
+                          "older_first": False, "after_check": False, "outlive": False}
+# A flow with two Every 1 minute schedules (Overlap queue), first seen at 06:00:30: its first schedule's run for then
+# starts at once, and the second's waits behind it. The service is turned off and on again while that run's process
+# loads; the new service's first check, at 06:00:30.2, starts the waiting run (it reads the run history before the
+# loading run has begun, and so finds no run of the flow going); the loading run's process then has loaded, and begins
+# (or does not, as the service that started it is not the one on). Max concurrent runs 1.
+LOADING_AS_THE_SERVICE_CHECKS = {"flows": [{"schedules": [(("every", "1 minute"), "run_once"),
+                                                          (("every", "1 minute"), "run_once")],
+                                            "overlap": "queue", "lasts": 4, "loads": 1}],
+                                 "limit": 1, "first_check": 30_000, "steps": [(200, True), (200, False)],
+                                 "older_first": False, "after_check": True, "outlive": False}
+# An Every 1 minute Catch up schedule first seen at 06:00 (its run for then starts at once); the service is turned off
+# and on again two minutes later while that run's process loads. The new service's first check catches up 06:01 and
+# 06:02 (it reads the run history before the loading run has begun); that run then begins (or does not).
+CAUGHT_UP_AS_THE_SERVICE_CHECKS = {"flows": [{"schedules": [(("every", "1 minute"), "catch_up")], "overlap": "skip",
+                                              "lasts": 1, "loads": 1}],
+                                   "limit": None, "first_check": 0, "steps": [(120_000, True)],
+                                   "older_first": False, "after_check": True, "outlive": False}
 CAUGHT_UP_LOADING = {**LOADING_ACROSS_RESTART, "flows": [{"schedules": [(("every", "1 minute"), "catch_up")],
                                                           "overlap": "skip", "lasts": 4, "loads": 1}]}
 
@@ -572,6 +611,7 @@ def test_generated_each_due_time_starts_at_most_once(tmp_path_factory, scenario)
 @example(scenario=STILL_GOING)
 @example(scenario={**STILL_GOING, "older_first": False})
 @example(scenario=LOADING_ACROSS_RESTART)
+@example(scenario=LOADING_AS_THE_SERVICE_CHECKS)
 def test_generated_two_runs_of_a_flow_go_at_once_only_if_its_overlap_is_allow(tmp_path_factory, scenario):
     started = simulate(tmp_path_factory.mktemp("service"), scenario).started
     for run in started:
@@ -586,6 +626,7 @@ def test_generated_two_runs_of_a_flow_go_at_once_only_if_its_overlap_is_allow(tm
 @example(scenario=STILL_GOING)
 @example(scenario={**STILL_GOING, "older_first": False})
 @example(scenario=LOADING_ACROSS_RESTART)
+@example(scenario=LOADING_AS_THE_SERVICE_CHECKS)
 def test_generated_no_more_runs_go_at_once_than_max_concurrent_runs(tmp_path_factory, scenario):
     started = simulate(tmp_path_factory.mktemp("service"), scenario).started
     for run in started:
@@ -621,6 +662,7 @@ def test_generated_runs_waiting_for_a_free_slot_start_in_the_order_they_came(tmp
 @example(scenario=CAUGHT_UP_STILL_GOING)
 @example(scenario={**CAUGHT_UP_STILL_GOING, "older_first": False})
 @example(scenario=CAUGHT_UP_LOADING)
+@example(scenario=CAUGHT_UP_AS_THE_SERVICE_CHECKS)
 def test_generated_catch_up_runs_go_oldest_first_one_at_a_time(tmp_path_factory, scenario):
     """Catch up's runs of a schedule start oldest first and never two at once (a process whose run did not begin is no
     run). With Overlap allow (a new time may go alongside a run going), this holds for the times missed: those that
@@ -702,7 +744,7 @@ def test_generated_a_catch_up_schedule_whose_runs_wait_their_turn_loses_none_of_
 SKIPPED_EARLY = {"flows": [{"schedules": [(("cron", "* * * * *"), "run_once")], "overlap": "skip", "lasts": 3,
                             "loads": 0}],
                  "limit": None, "first_check": 57_000, "steps": [(3_000, False), (56_000, False), (2_000, False)],
-                 "older_first": False}
+                 "older_first": False, "after_check": False, "outlive": False}
 
 
 @pytest.mark.invariant("SCH-11")
@@ -742,6 +784,34 @@ def test_generated_a_time_is_skipped_only_if_a_run_of_its_flow_goes_at_that_time
             f"runs: "
             f"{[(described(r), f'{clocks[r.began]:%H:%M:%S.%f}', r.ended and f'{clocks[r.ended]:%H:%M:%S.%f}')
                 for r in ours]}")
+
+
+# A flow every minute (Misfire Skip, Overlap skip) whose run for 06:01 lasts 3 checks: at 06:01:56 the flow's next time,
+# 06:02, is due within 5 s while that run goes, so it waits to be skipped or not at its time. The service is turned off
+# and on again then, and the new one starts 10 minutes later, at 06:11:56; that run finished while it was off.
+SKIP_WAITING_ACROSS_RESTART = {"flows": [{"schedules": [(("cron", "* * * * *"), "skip")], "overlap": "skip",
+                                          "lasts": 3, "loads": 0}],
+                               "limit": None, "first_check": 57_000,
+                               "steps": [(3_000, False), (56_000, False), (600_000, True)],
+                               "older_first": False, "after_check": False, "outlive": False}
+
+
+@pytest.mark.invariant("SCH-9")
+@GENERATED
+@given(scenario=scenarios())
+@example(scenario=SKIP_WAITING_ACROSS_RESTART)
+def test_generated_with_misfire_skip_no_run_starts_more_than_2_minutes_after_its_time(tmp_path_factory, scenario):
+    """Skip runs none of the times missed, and a time less than 2 minutes late still runs: with Misfire Skip, the
+    service starts no run (its process) more than 2 minutes after its time, unless that run waited its turn: behind its
+    flow's runs going (Overlap queue) or for a free slot (Max concurrent runs). (A run whose process the service started
+    in time and that begins later, its process still loading, is not one.)"""
+    simulation = simulate(tmp_path_factory.mktemp("service"), scenario)
+    for run in simulation.started:
+        overlap, _, misfire = setting(scenario, run)
+        if misfire != "skip" or run.begun is None or overlap == "queue" or scenario["limit"]:
+            continue
+        late = simulation.clocks[run.began] - run.as_of
+        assert late <= 2 * MINUTE, f"{described(run)}: its run began, its process started {late} after its time"
 
 
 @pytest.mark.invariant("SCH-7")
