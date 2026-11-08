@@ -253,8 +253,8 @@ def test_a_run_waiting_for_a_free_slot_does_not_begin_while_a_run_of_its_flow_yo
     """Max concurrent runs 1. other's run (every 60 minutes: it runs as the service first sees it) holds the only slot
     when nightly's one-off time T comes, so nightly's run waits its turn. You start nightly yourself from a terminal,
     and your run is going when other's run ends and the slot is free. Unless nightly's Overlap is Allow, its waiting run
-    does not begin while yours goes (SCH-11); its time is not lost unseen: once your run has ended, it runs, or you
-    have been told it was skipped. Allow: it begins as the slot is free."""
+    does not begin while yours goes (SCH-11); it keeps waiting its turn (SCH-12), and once your run has ended, it
+    runs, once. Allow: it begins as the slot is free."""
     write(env.home / "settings.yaml", "max_concurrent_runs: 1\n")
     due = soon()
     paths = schedule(env.home, env.root, {"nightly": flow_text(one_off(due), overlap, "nightly"),
@@ -282,9 +282,8 @@ def test_a_run_waiting_for_a_free_slot_does_not_begin_while_a_run_of_its_flow_yo
         return
     assert while_yours == [], (f"Overlap {overlap}: nightly's run waiting for the slot began while the run of nightly "
                                f"you started was going: {while_yours}; told: {said}")
-    skipped = [t for t in about(said, "nightly") if re.search(r"skip", t, re.IGNORECASE)]
-    assert after == utc([due]) or (after == [] and skipped), \
-        f"once your run had ended, T ({due:%H:%M:%S}) neither ran once nor was told skipped: {after}; told: {said}"
+    assert after == utc([due]), \
+        f"once your run had ended, nightly's waiting run for T ({due:%H:%M:%S}) did not run, once: {after}; told: {said}"
 
 
 # --- SCH-8, SCH-9, SCH-4: the service turned off and on again while a run's program loads -----------------------------

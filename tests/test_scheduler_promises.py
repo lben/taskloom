@@ -1014,13 +1014,14 @@ def test_generated_every_n_runs_keep_the_rhythm_from_when_the_service_first_saw_
 @example(scenario=OFF_AND_ON_WHILE_LOADING[1])
 def test_generated_a_run_still_loading_as_you_turn_the_service_off_does_not_begin(tmp_path_factory, scenario):
     """A run whose program was still loading as you clicked Proceed does not begin, also when you turned the service
-    on again before it had loaded (SCH-8): of the flows you did not let finish (a waiting run of a flow you let finish
-    still runs, SCH-4). Its time is not lost: it follows Misfire once the service is on (a run for it may begin then,
+    on again before it had loaded (SCH-8). Only a run of a flow you let finish may begin, and only while the service is
+    still off (a waiting run of a flow you let finish still runs, SCH-4). Its time is not lost: it follows Misfire once the service is on (a run for it may begin then,
     from a process started after you turned it on)."""
     simulation = simulate(tmp_path_factory.mktemp("service"), scenario)
     for off in simulation.offs:
         began = [described(run) for run in simulation.started if run.began < off.moment
-                 and run.begun is not None and run.begun > off.moment and off.choices.get(run.flow) != "finish"]
+                 and run.begun is not None and run.begun > off.moment
+                 and not (off.choices.get(run.flow) == "finish" and (off.on is None or run.begun < off.on))]
         assert not began, (f"you turned the service off at {off.clock:%H:%M:%S.%f} (choices {off.choices}), and "
                            f"{began}, whose program was loading then, began after it")
 

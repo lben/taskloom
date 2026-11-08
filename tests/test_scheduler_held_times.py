@@ -201,6 +201,34 @@ def test_run_once_runs_only_the_latest_time_when_the_service_is_back_after_a_run
     assert still_going == [], f"the latest time was skipped as the previous run still going: {still_going}"
 
 
+# --- SCH-9: the PC asleep while a run's program loads ----------------------------------------------------------------
+
+@pytest.mark.invariant("SCH-5")
+@pytest.mark.invariant("SCH-9")
+@pytest.mark.parametrize("misfire, runs", [("skip", []), ("run_once", ["07:00:00"])], ids=["Skip", "Run once"])
+def test_a_run_whose_program_loads_as_the_pc_sleeps_follows_misfire_when_the_pc_wakes(env, fake_runs, misfire, runs):
+    """nightly's one-off time 07:00:00 comes and the service starts its run. While its program loads, the PC sleeps
+    until 08:00:00; then the run's program has loaded, and the service checks. 07:00:00 was missed while the PC was
+    asleep (an hour late), so it follows Misfire (SCH-9): Skip runs none of it and tells you it was missed; Run once
+    runs it, once."""
+    schedule(env.home, env.root, {"nightly": flow_yaml(one_off(clock("07:00:00"), misfire=misfire))})
+    told_you = []
+    service = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
+    check(service, fake_runs, clock("06:59:30"))
+    fake_runs.clock = clock("07:00:00")
+    service.tick(clock("07:00:00"))  # its run's process starts: its program loads
+    assert [r.reached for r in fake_runs.of("nightly")] == [False], f"not arranged: {told_you}"
+    check(service, fake_runs, clock("08:00:00"))  # the PC wakes: the program has loaded, and the service checks
+    check(service, fake_runs, clock("08:00:05"))
+
+    assert begins(fake_runs.of("nightly")) == utc([clock(t) for t in runs]), (
+        f"07:00:00 ({misfire}) was missed while the PC slept until 08:00:00, yet runs began for "
+        f"{begins(fake_runs.of('nightly'))}, not {runs}; told: {told_you}")
+    if misfire == "skip":
+        assert [m for m in about(told_you, "nightly") if re.search(r"miss", m, re.IGNORECASE)], \
+            f"not told that nightly's 07:00:00 was missed: {told_you}"
+
+
 # --- SCH-4: turning the service off a few seconds before a time, with a run of its flow going --------------------------
 
 @pytest.mark.invariant("SCH-4")
