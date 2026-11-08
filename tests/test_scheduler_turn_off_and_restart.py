@@ -32,8 +32,8 @@ from taskloom.config import Home  # noqa: E402
 from taskloom.scheduler import request_turn_off, runs_going  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
 from tests.test_paths_scheduler import start_service as start_headless  # noqa: E402
-from tests.test_scheduler_new_promises import (HOURLY, TURN_OFF, FakeRuns, answer_when_shown, end_runs,  # noqa: E402
-                                               ended, flow_yaml, going, history, hold_until, pump, schedule,
+from tests.test_scheduler_new_promises import (HOURLY, TURN_OFF, FakeRuns, answer_when_shown, drain,  # noqa: E402
+                                               end_runs, ended, flow_yaml, going, history, hold_until, pump, schedule,
                                                statuses, stop_the_service, wait_until, write)
 from tests.test_scheduler_start_at import (checked_after, record_process_starts, run_processes,  # noqa: E402
                                            start_service, stop_service, tray_messages)
@@ -48,13 +48,14 @@ NO_KEYRING = "keyring.backends.fail.Keyring"
 def next_time_in(home: Path, seconds: int) -> dt.datetime:
     """The scheduled flows' Every 1 minute schedules were first seen (and run) a minute minus `seconds` ago by a
     service before this one, so their next time comes `seconds` from now; that time (on this PC's clock, to the
-    second). Only the schedules' state is kept: that service's runs were stand-ins (FakeRuns), and it is gone (it was
-    made as `taskloom scheduler` makes one: FakeRuns.service, the folder's lock first, let go of as it stopped)."""
+    second). Only the schedules' state is kept: that service's runs were stand-ins (FakeRuns), each of which reached its
+    time and began (claiming it as a run does) while that service was on; and it is gone (it was made as `taskloom
+    scheduler` makes one: FakeRuns.service, the folder's lock first, let go of as it stopped)."""
     seen = (dt.datetime.now() + dt.timedelta(seconds=seconds) - MINUTE).replace(microsecond=0)
     runs = FakeRuns()
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(subprocess, "Popen", runs.popen)
-        runs.service(home).tick(seen)
+        drain(runs.service(home), seen, runs)  # (its checks at that time: its runs begin, and end)
     runs.end()  # (that service stops)
     gc.collect()  # (that service's hold on the history file goes with it)
     return seen + MINUTE

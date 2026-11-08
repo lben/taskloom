@@ -1,6 +1,7 @@
 """What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml), around a run's time:
 a run waiting its turn that the service starts before its time does not begin if, before then, you turn the service off
-or its schedule goes off (SCH-4, SCH-8); a schedule turned off and on again while the service is off starts afresh
+or its schedule goes off (SCH-4, SCH-8), nor does a run started at its time that is still loading as you turn the
+service off (SCH-4); a schedule turned off and on again while the service is off starts afresh
 (SCH-10); with Overlap skip, a time is skipped only if a run of its flow is going at that time (SCH-11); a time less
 than 2 minutes late still runs when the schedule's next time is a few seconds away (SCH-9); a mistake in the settings
 never stops the keeper, and is told once, saying what the service does meanwhile (SCH-14); the list of scheduled flows
@@ -17,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -30,8 +32,9 @@ from tests.test_paths_editor_editing import field, select_only  # noqa: E402
 from tests.test_paths_scheduler import keeper  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import headless, printed, python_words  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import told as service_said  # noqa: E402
+from tests.test_interval_schedules import run_processes_of  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, FakeRuns, begins, drain, end_runs, flow_yaml,  # noqa: E402
-                                               history, hold_until, schedule, schedules_prose, statuses, utc,
+                                               history, hold_until, says, schedule, schedules_prose, statuses, utc,
                                                wait_until, write)
 from tests.test_scheduler_start_at import record_process_starts, run_processes, stop_service  # noqa: E402
 from tests.test_scheduler_start_at import wait_until as clock_reaches  # noqa: E402
@@ -201,6 +204,69 @@ def test_a_run_waiting_for_its_flows_run_and_started_before_its_time_does_not_be
         assert [t for t in told if re.search(r"missed|skipped", t, re.IGNORECASE)] == [], told
 
 
+# A block file in the Taskloom folder whose libraries are slow to import: each run's process takes this long to load.
+SLOW_LOAD = "import time\n\ntime.sleep(4)\n"
+
+
+@pytest.mark.invariant("SCH-4")
+@pytest.mark.invariant("SCH-9")
+@pytest.mark.parametrize("misfire", ["skip", "run_once"], ids=["Skip", "Run once"])
+def test_a_run_started_at_its_time_and_still_loading_when_you_turn_the_service_off_does_not_begin(env, monkeypatch,
+                                                                                                   misfire):
+    """A run whose process the service starts at its time, not before it: report (every 60 minutes, Misfire
+    `misfire`) is scheduled while the service is on, so its first time is when the service sees it, and its run's
+    process starts then. That process takes a few seconds to load (a block file slow to import). While it loads, you
+    turn the service off (Proceed: no run is going, so it only asked you to confirm). SCH-4: once you click Proceed,
+    nothing new starts: the run does not begin, and nothing is recorded for it. Its time is not lost: turned on again 3
+    minutes later (on a chosen clock from then on, its run's process stood in for), that time is a missed one, as its
+    Misfire says (SCH-9): Skip runs none and tells you 1 was missed; Run once runs it, once."""
+    write(env.home / "blocks" / "slow_load.py", SLOW_LOAD)
+    starts = record_process_starts(env)
+    log = env.root / "service.log"
+    service = headless(env, log)
+    try:
+        beat = env.home / "scheduler.heartbeat"
+        assert wait_until(lambda: beat.exists() or service.poll() is not None, 60) and beat.exists(), \
+            f"the scheduler service did not check:\n{printed(log)}"
+        path = schedule(env.home, env.root, {"report": flow_yaml({**HOURLY, "misfire": misfire})})["report"]
+        assert wait_until(lambda: run_processes_of(starts, path), 30), \
+            f"no run process was started for report:\n{printed(log)}"
+        ((started, due),) = run_processes_of(starts, path)
+        loading = statuses(env.home, "report") == []  # (its process has not begun the run yet)
+        request_turn_off(Home(env.home), {})  # Proceed
+        clicked = time.time()
+        wait_until(lambda: service.poll() is not None, 30)  # (it turns off once that run's process has ended)
+        recorded = [(r["status"], f"started {r['started']:%H:%M:%S.%f}") for r in history(env.home)]
+    finally:
+        stop_service(env, service)
+        end_runs(env.home)
+
+    assert started >= due.timestamp(), f"report's run process was started before its time {due:%H:%M:%S}, not at it"
+    assert loading and clicked - started < 3, \
+        f"you clicked Proceed {clicked - started:.1f} s after the run's process started: not while it was loading"
+    assert recorded == [], (
+        f"you clicked Proceed {clicked - started:.1f} s after report's run for {due:%H:%M:%S} was started, at its "
+        f"time, while it was still loading; yet it began and was recorded: {recorded}\n{printed(log)}")
+
+    runs = FakeRuns()  # (from here on, on a chosen clock: the run processes are stood in for)
+    monkeypatch.setattr(subprocess, "Popen", runs.popen)
+    set_paused(Home(env.home), False)  # you turn the service on again, 3 minutes after that time
+    told = []
+    try:
+        drain(runs.service(env.home, lambda title, message: told.append(f"{title}: {message}")), due + LATER, runs)
+    finally:
+        runs.end()
+    ran, about = begins(runs.of("report")), [t for t in told if "report" in t]
+    if misfire == "skip":
+        assert ran == [] and [t for t in about if says(t, 1) and re.search(r"missed", t, re.IGNORECASE)], (
+            f"turned on again {LATER} after {due:%H:%M:%S}, with Skip: runs began for {ran}, and you were told "
+            f"{about}, not that 1 was missed")
+    else:
+        assert ran == utc([due]) and about == [], (
+            f"turned on again {LATER} after {due:%H:%M:%S}, with Run once: runs began for {ran}, not once for that "
+            f"time; told: {about}")
+
+
 # --- SCH-10: a schedule turned off and on again while the service is off ---------------------------------------------
 
 @pytest.mark.invariant("SCH-10")
@@ -221,7 +287,7 @@ def test_a_schedule_turned_off_and_on_again_while_the_service_is_off_starts_afre
     told = []
     seen = (dt.datetime.now() - dt.timedelta(minutes=5, seconds=30)).replace(microsecond=0)
     before = fake_runs.service(home.root, lambda title, message: told.append(f"{title}: {message}"))
-    before.tick(seen)  # the service first sees it: its first run is then
+    drain(before, seen, fake_runs)  # the service first sees it: its first run is then (it begins, and ends)
     request_turn_off(home, {})  # you turn the service off (no runs going: it only asked to confirm)
     before.tick(seen + SECONDS)
     assert before.off and begins(fake_runs.of("minutely")) == utc([seen]), told
