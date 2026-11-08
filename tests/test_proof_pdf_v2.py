@@ -237,3 +237,19 @@ def test_without_features_the_pdf_is_as_before(built):
     assert not any("Read this page" in flat(page) or "Feature 1:" in flat(page) for page in pdf)
     order = [first_page_of_change(pdf, title) for title in (OTHER_CHANGE, ALPHA_CHANGE, BETA_CHANGE)]
     assert order == sorted(order), order
+
+
+def test_a_row_tried_over_a_range_is_amber_when_its_evidence_says_what_the_range_leaves_out(tmp_path):
+    """A row whose test tries every case of a range is GREEN only when that range is the whole row: when its evidence
+    says why it is not green (a part no test tries every case of), it is AMBER, with that reason."""
+    promises, evidence = tmp_path / "promises", tmp_path / "evidence"
+    partly = "Only its time is tried at every second; how soon it begins after it is checked by tests."
+    feature(promises, evidence, "delta", "Delta service", {
+        "D-1": ("A run begins at its time.", {"enforced": "Tried at every second."}),
+        "D-2": ("A run begins at its time, and soon after it.", {"enforced": "Tried at every second.",
+                                                                  "not_green": partly})},
+            [result("d1", "D-1", every="every second of a day"), result("d2", "D-2", every="every second of a day")],
+            [])
+    rows = {r["row"]: r for r in json.loads((evidence / "delta" / "ledger.json").read_text(encoding="utf-8"))["rows"]}
+    assert (rows["D-1"]["status"], rows["D-2"]["status"]) == ("GREEN", "AMBER"), rows
+    assert rows["D-2"]["why"] == partly, rows["D-2"]

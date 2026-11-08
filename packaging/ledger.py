@@ -6,8 +6,9 @@ RESULTS.json files come from a test run with TASKLOOM_LEDGER=<file> (tests/conft
 of the agreed list gets a status:
 - GREEN: checked for every input or state. A checker that explores every state passed (named in the row's
   green_by), or a test that tries every case of a stated range passed (marked invariant(..., every="<range>")),
-  and every other check of the row passed.
-- AMBER: checked by tests only, all passing; the row's not_green sentence says why it is not green.
+  and every other check of the row passed, and the row's evidence names no part of it those leave out.
+- AMBER: checked by tests only, all passing, or partly so; the row's not_green sentence says why it is not green
+  (for a row partly checked for every case, which part is not).
 - RED: no check, a check failed, or AMBER without a reason.
 Done needs no RED row: the exit code is 1 otherwise.
 The words of how each row is enforced, and why it is not green, are in the feature's <name>.evidence.yaml next to
@@ -58,7 +59,7 @@ def row_status(row: str, evidence: dict, tests: dict, checkers: dict) -> dict:
                         [f"{c['name']} exit {c['exit']}" for c in broken])
     elif not ran and not checker_runs:
         status, why = "RED", "no check covers this row yet"
-    elif (checker_runs and not broken) or every:
+    elif ((checker_runs and not broken) or every) and not why:
         status, why = "GREEN", "; ".join(every)
     elif not why:
         status, why = "RED", "checked by tests only, and no reason is given why it is not green"
