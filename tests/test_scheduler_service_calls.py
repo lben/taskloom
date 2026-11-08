@@ -111,13 +111,15 @@ def test_stop_now_and_let_it_finish_with_the_service_on_follow_each_flows_choice
     its first check each flow's first run goes and the others wait their turn behind it. You turn the service off:
     Stop now for nightly, Let it finish for weekly; Proceed. Nothing new starts; nightly's run going stops and is
     recorded as cancelled, and its waiting run is dropped (it never begins); weekly's run finishes and its waiting runs
-    still run, one after another; the service turns off only once they are done."""
+    still run, one after another; the service turns off only once they are done. Nothing failed or was skipped, so
+    nothing is told (README: it notifies you about failed or skipped runs)."""
     paths = schedule(env.home, env.root, {
         "nightly": flow_yaml(HOURLY, HOURLY, work=hold_until("nightly"), overlap="queue"),
         "weekly": flow_yaml(HOURLY, HOURLY, HOURLY, work=hold_until("weekly"), overlap="queue")})
     home = Home(env.home)
+    told = []
     with on(env):
-        service = Scheduler(home)
+        service = Scheduler(home, lambda title, message: told.append((title, message)))
         try:
             service.tick()
             assert wait_until(lambda: (service.tick() or going(env.home)) == {"nightly", "weekly"}, 30), \
@@ -138,6 +140,7 @@ def test_stop_now_and_let_it_finish_with_the_service_on_follow_each_flows_choice
     assert stopped and weekly_going, f"Stop now did not stop nightly's run alone: {history(env.home)}"
     assert off and done, f"weekly's waiting runs did not all run before the service turned off: {history(env.home)}"
     assert statuses(env.home, "nightly") == ["cancelled"], f"nightly's waiting run began: {history(env.home)}"
+    assert told == [], told
 
 
 @pytest.mark.invariant("SCH-7")
