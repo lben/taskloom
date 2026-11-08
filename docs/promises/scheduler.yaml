@@ -19,6 +19,9 @@ asked:
     words: "yes, they’re saved and start when the service is back."
   - date: 2026-11-07
     words: "A, count manual runs when a scheduled time comes"
+  - date: 2026-11-07
+    # A: a run may begin up to 5 seconds after its time, so runs are no longer started early (SCH-5, SCH-8).
+    words: "A and B, go ahead"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_scheduler, test_proof_interval_schedules]
 rows:
@@ -40,14 +43,14 @@ rows:
     asks you to confirm. The tray icon's Turn off shows the same dialog. Flows not listed keep their waiting runs: they
     are saved and start when you turn the service back on.
   SCH-5: >-
-    A run begins at its time: never before it, and at most 2 seconds after it while the service is on.
+    A run begins at its time: never before it, and at most 5 seconds after it while the service is on.
   SCH-6: >-
     Each due time runs at most once.
   SCH-7: >-
     An Every N minutes or hours schedule counts from when the service first sees it, not from the clock's :00.
   SCH-8: >-
-    A run started 5 seconds early, to be ready on time, doesn't begin, and nothing is recorded for it, if before its
-    time the service is turned off, or its schedule is turned off or changed.
+    A run that has not begun yet (its program is still loading) doesn't begin, and nothing is recorded for it, if
+    meanwhile the service is turned off, or its schedule is turned off or changed.
   SCH-9: >-
     Times missed while the service was off or the PC was asleep follow the schedule's Misfire setting. Skip runs none
     of them and tells you how many (a time less than 2 minutes late still runs). Run once runs one, for the latest.
