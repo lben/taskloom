@@ -28,6 +28,7 @@ NOTE_TIME = """\
         output = "ran at " + datetime.datetime.now().strftime("%H:%M:%S")
 """
 FLOW = f"""\
+overlap: allow
 blocks:
   by_hand:
     type: trigger.manual
@@ -176,7 +177,8 @@ def test_run_history_lists_every_run_scheduled_ones_too_as_they_come(proof, env,
 
     p.step("Open nightly-sales.yaml (File > Open…) and save it (File > Save). It has two lines: by_hand, a Manual "
            "Start, runs note_time and check_files; every_minute, a Schedule block set to every 1 minute, runs "
-           "load_sales. note_time and load_sales each write down when they ran. Saved, the flow is scheduled.")
+           "load_sales. note_time and load_sales each write down when they ran. Its Overlap is Allow, so a "
+           "scheduled run goes at once also while a run you started is going. Saved, the flow is scheduled.")
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(flow), ""))
     file_menu(win, "Open…")
     tab = win.current
