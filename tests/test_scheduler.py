@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import os
 import sys
 import time
 
@@ -147,6 +148,33 @@ def test_start_at_login_writes_a_startup_script(env, monkeypatch):
     assert "scheduler" in path.read_text() and str(env.home) in path.read_text()
     set_start_at_login(home, False)
     assert not path.exists()
+
+
+@pytest.mark.invariant("SCH-3")
+def test_start_at_login_puts_its_script_in_the_windows_startup_folder_for_this_taskloom_folder(env, monkeypatch):
+    """README: Start the scheduler service when I log in "adds it to your Startup folder; no admin needed". On Windows
+    that folder is %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup, and it is there already (turning it
+    on twice works too). The script has Windows line ends and is read as UTF-8 (chcp 65001); it starts this Taskloom
+    without a console window, each part of its command line quoted, for this Taskloom folder, written so cmd.exe
+    reads it as it is: a folder with a letter outside ASCII or a % in its name (cmd.exe reads %NAME% as a variable)."""
+    from taskloom.launch import windowed_command
+
+    appdata = env.root / "AppData" / "Roaming"
+    startup = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    startup.mkdir(parents=True)
+    monkeypatch.setenv("APPDATA", str(appdata))
+    root = env.root / "100% José"
+    home = Home(root)
+
+    path = set_start_at_login(home, True)
+    assert set_start_at_login(home, True) == path == startup / "Taskloom Scheduler.cmd"
+
+    raw = path.read_bytes()
+    assert raw.count(b"\r\n") == raw.count(b"\n") > 0, raw
+    text = raw.decode("utf-8")
+    assert "chcp 65001" in text and f'set "TASKLOOM_HOME={env.root}{os.sep}100%% José"' in text, text
+    program = " ".join(f'"{part}"' for part in windowed_command()).replace("%", "%%")
+    assert f'start "" {program} scheduler --unless-paused' in text, text
 
 
 def test_cli_as_of_computes_parameters_for_that_time(env):
