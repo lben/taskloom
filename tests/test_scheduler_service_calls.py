@@ -205,14 +205,21 @@ def test_a_schedule_turned_off_and_on_again_with_no_service_running_starts_afres
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-10")
+@pytest.mark.parametrize("before", ["a service saw its old schedule", "no service has run yet"])
 def test_a_clock_schedule_turned_on_with_no_service_running_has_its_times_after_the_save_as_missed_ones(
-        env, fake_runs):
+        env, fake_runs, before):
     """With the service off, at 10:00:30 you save report with a new schedule, every minute on the clock, Catch up: the
-    editor forgets the state of its other schedules and starts the new one from the save (forget_schedules). The
-    service is back at 10:03:10: 10:01, 10:02 and 10:03 came after the save, so each runs, oldest first (Catch up);
-    nothing from before the save does."""
-    paths = schedule(env.home, env.root, {"report": flow_yaml({"cron": "0 5 * * *"})})
-    seen_then(env.home, clock("09:00:00"))  # (a service saw its old schedule, and stopped)
+    editor forgets the state of its other schedules and starts the new one from the save (forget_schedules); also in a
+    new Taskloom folder, where no service has run yet (no run history). The service is back (or first on) at 10:03:10:
+    10:01, 10:02 and 10:03 came after the save, so each runs, oldest first (Catch up); nothing from before the save
+    does."""
+    if before == "no service has run yet":
+        paths = {"report": write(env.root / "report.yaml", flow_yaml({"cron": "0 5 * * *"})).resolve()}
+        Home(env.home).set_scheduled(paths["report"], True)
+        assert not (env.home / "history.db").exists()
+    else:
+        paths = schedule(env.home, env.root, {"report": flow_yaml({"cron": "0 5 * * *"})})
+        seen_then(env.home, clock("09:00:00"))  # (a service saw its old schedule, and stopped)
     write(paths["report"], flow_yaml({"cron": "* * * * *", "misfire": "catch_up"}))
     with clock_shows(clock("10:00:30")):
         forget_schedules(Home(env.home), paths["report"], load_flow(paths["report"]).triggers)
