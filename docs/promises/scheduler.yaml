@@ -17,6 +17,8 @@ asked:
     words: "for those cases show a dialog explaining the user about it and then asking them to proceed or to cap to a value they can modify in that dialog (100 by default)"
   - date: 2026-11-07
     words: "yes, they’re saved and start when the service is back."
+  - date: 2026-11-07
+    words: "A, count manual runs when a scheduled time comes"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_scheduler, test_proof_interval_schedules]
 rows:
@@ -58,8 +60,8 @@ rows:
     A schedule turned off and on again, or changed, starts afresh: times from while it was off neither run nor count as
     missed.
   SCH-11: >-
-    Two runs of the same flow go at once only if its Overlap is Allow. Otherwise a new time is skipped (and you are
-    told) or waits for the run going, as Overlap says.
+    When a scheduled time comes while a run of the flow is going (scheduled or started by you), a second run goes at
+    once only if its Overlap is Allow; otherwise the time is skipped (and you are told) or waits, as Overlap says.
   SCH-12: >-
     No more runs go at once than Max concurrent runs allows. The rest wait and start in the order they came.
   SCH-13: >-
