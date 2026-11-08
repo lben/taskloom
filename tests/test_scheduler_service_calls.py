@@ -575,13 +575,18 @@ def test_stop_now_stops_a_run_the_service_before_a_restart_started_and_the_servi
     home = Home(env.home)
     try:
         with on(env):
-            Scheduler(home).tick()  # (the service before: its run goes on after it is gone)
+            before = Scheduler(home)  # (the service before: its run goes on after it is gone)
+            before.tick()
             assert wait_until(lambda: going(env.home) == {"nightly"}, 30), history(env.home)
+
+        def reaped():  # (the service before is gone: the system reaps its run's process as it ends; here, this test)
+            return [run.proc.poll() for run in before.runs]
+
         with on(env):
             service = Scheduler(home)
             service.tick()
             request_turn_off(home, {str(paths["nightly"]): "stop"})  # Proceed
-            off = wait_until(lambda: service.tick() or service.off, 30)
+            off = wait_until(lambda: reaped() and (service.tick() or service.off), 30)
         stopped = wait_until(lambda: statuses(env.home, "nightly") == ["cancelled"], 15)
     finally:
         write(env.root / "nightly.go", "go")
