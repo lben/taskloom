@@ -535,8 +535,17 @@ def test_the_service_never_reads_the_list_of_scheduled_flows_half_written(env, f
     ("a mail server that doesn't answer is told, and the service goes on (SCH-14)",
      [r"mail server|smtp", r"(doesn't|does not|never|not) answer|unreachable|cannot be reached|can't be reached",
       r"\btold\b|notif|message", r"goes on|keeps (running|going|checking)|continues|holds nothing up"]),
+    ("turned off with Stop now, a run started early is dropped: its time neither runs later nor counts as missed "
+     "(SCH-4, SCH-9)",
+     [r"\bstop now\b", r"\bearly\b",
+      r"(?=[^.]*\bstop)(?=[^.]*(?:\bneither|\bnot|\bnever|n't)\s+(?:runs?|be run)\b)"
+      r"[^.]*(?:\bnor|\bnot|\bnever|n't)\s+(?:counts?|counted|be counted)\b[^.]*\bmissed\b"]),
+    ("turned off, a run started early for a flow not stopped: its time is not lost, it is a missed time (SCH-4, SCH-9)",
+     [r"\bearly\b", r"\b(?:not|never) lost\b", r"\bmissed (?:time|one)\b|\bcounts? as missed\b",
+      r"let it finish|\bother flows\b|\bnot (?:in the list|listed|stopped)\b"]),
 ], ids=["one service per folder", "an entry not a flow", "a list that cannot be read", "a mistake in the settings",
-        "a mail server that does not answer"])
+        "a mail server that does not answer", "Stop now drops a time started early",
+        "a time started early is not lost for other flows"])
 def test_the_readme_explains_one_service_per_folder_and_what_a_mistake_does(case, patterns):
     """README.md's Schedules section (also the editor's guide) explains, in one paragraph each, these cases where the
     scheduler might surprise you, as the user asked that edge cases be clearly documented."""
