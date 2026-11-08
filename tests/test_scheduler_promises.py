@@ -1121,8 +1121,9 @@ def test_a_run_still_loading_does_not_begin_if_its_schedule_is_changed_meanwhile
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.parametrize("late, ran, missed", [
     (dt.timedelta(minutes=1, seconds=59), ["07:00"], None),
+    (dt.timedelta(minutes=2), [], 1),
     (dt.timedelta(minutes=2, seconds=1), [], 1),
-], ids=["1 min 59 s late", "2 min 1 s late"])
+], ids=["1 min 59 s late", "2 min late", "2 min 1 s late"])
 def test_skip_still_runs_a_time_less_than_2_minutes_late(env, late, ran, missed):
     with on(env):
         scheduler, notes = service(env, {"flow.yaml": timed_flow("0 * * * *", misfire="skip")})
