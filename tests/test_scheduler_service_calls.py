@@ -667,3 +667,25 @@ def test_starting_at_login_anywhere_but_windows_says_it_is_for_windows_only(env,
         set_start_at_login(Home(env.home), True)
 
     assert str(refused.value) == "starting the scheduler at login is supported on Windows only"
+
+
+@pytest.mark.invariant("SCH-10")
+@pytest.mark.invariant("SCH-14")
+def test_an_answer_about_missed_runs_of_a_schedule_turned_off_meanwhile_runs_nothing_and_the_service_goes_on(
+        env, fake_runs):
+    """You are asked about backlog's 150 missed runs; before you answer, you take backlog off the scheduled flows (its
+    schedule is off: its missed runs are dropped). Then you answer Run only the latest 30: nothing of backlog runs,
+    nothing more is told, and the service goes on with the other flows."""
+    paths = schedule(env.home, env.root, {"backlog": flow_yaml(EVERY_TEN), "other": flow_yaml({"cron": "* * * * *"})})
+    told, asked = [], []
+    service = fake_runs.service(env.home, lambda title, message: told.append((title, message)),
+                                ask=lambda flow, count, answer: asked.append(answer))
+    service.tick(FIRST_SIGHT)
+    drain(service, check_after(150), fake_runs)
+    Home(env.home).set_scheduled(paths["backlog"], False)
+    drain(service, check_after(150) + dt.timedelta(seconds=30), fake_runs)
+    asked[0](30)
+    drain(service, check_after(150) + MINUTE, fake_runs)
+
+    assert fake_runs.of("backlog") == [] and told == [], told
+    assert begins(fake_runs.of("other"))[-1] == utc([check_after(150) + MINUTE])[0]
