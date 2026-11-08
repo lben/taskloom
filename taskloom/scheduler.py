@@ -80,6 +80,7 @@ class _Run:
     reader: threading.Thread | None = None
     stopping: float | None = None  # when it was asked to stop (time.monotonic())
     waiting: _Waiting | None = None  # its row in waiting_runs, to claim as it begins (None: a run going from before)
+    started: dt.datetime | None = None  # when its process started, by this PC's clock (its --if-scheduled says it)
 
 
 @dataclass
@@ -294,6 +295,7 @@ class Scheduler:
         second time)."""
         now = (now or dt.datetime.now()).astimezone(UTC)
         self._poll()
+        loading = self._loading_too_long()  # (their flows' times are decided once that program has ended)
         paths = self._scheduled_flows() if self.turning_off is None else None  # (turned off: nothing new starts)
         on, schedules, unreadable, checks = set(), set(), [], []
         for path in paths or []:
@@ -305,7 +307,8 @@ class Scheduler:
                 key = schedule_key(path, i, trigger)
                 on.add(key)
                 schedules.add((str(path), trigger.block, trigger.text))
-                checks.append((str(path), flow, trigger, key))
+                if str(path) not in loading:
+                    checks.append((str(path), flow, trigger, key))
         # The times due again are decided first: the runs of their flows that came after them wait for that
         # (_may_start), and none of this check's new times starts before those that came earlier.
         checks.sort(key=lambda check: (check[0], check[2].block, check[2].text) not in self.again)
@@ -327,6 +330,19 @@ class Scheduler:
         # Only now, with the times due again decided, the runs waiting their turn start, in the order they came.
         self._next_in_line()
         self._write_heartbeat()
+
+    def _loading_too_long(self) -> set[str]:
+        """The flows with a run for its time that has not begun and whose program started more than ON_TIME_GRACE ago,
+        by this PC's clock (as claim_time reads it): it can never begin (e.g. the PC slept while it loaded). Each such
+        program is asked to stop, once (_poll forces it STOP_SECONDS later); once it has ended, its time is due again
+        (_ended), and the next check decides it with the times that came meanwhile, as Misfire says."""
+        clock = dt.datetime.now(UTC)
+        late = [run for run in self.runs if run.waiting is not None and run.waiting.waits == "now"
+                and run.run_id is None and clock - run.started > ON_TIME_GRACE]
+        for run in late:
+            if run.stopping is None:
+                self._stop(run)
+        return {run.flow for run in late}
 
     def _drop_waiting(self, which):
         """Drops the saved runs not going yet that `which(entry)` says (from the history database, and its lines)."""
@@ -517,11 +533,12 @@ class Scheduler:
         # history (--scheduled), and goes on if the service stops: only a request on its stdin stops it.
         # --start-at with its UTC offset: one moment, also when this PC's clock shows that time twice.
         path, as_of, block, schedule = saved.flow, saved.as_of, saved.block, saved.schedule
+        started = dt.datetime.now(UTC)
         command = runner_command() + ["run", path, "--json-events", "--notify", "--scheduled", schedule,
                                       "--as-of", f"{as_of.astimezone():%Y-%m-%d %H:%M:%S}",
                                       "--start-at", as_of.astimezone().isoformat(timespec="seconds"),
                                       "--if-scheduled", self.id, str(saved.id), str(_epoch(self._db)),
-                                      dt.datetime.now(UTC).isoformat()]
+                                      started.isoformat()]
         if block:
             command += ["--trigger", block]
         try:
@@ -539,7 +556,7 @@ class Scheduler:
             self._tell(self._load(Path(path)), "failure", f"{name} could not start",
                        f"{name}: the system could not start its run ({e.strerror or e})")
             return
-        run = _Run(path, as_of, proc, block, schedule, waiting=saved)
+        run = _Run(path, as_of, proc, block, schedule, waiting=saved, started=started)
         run.reader = threading.Thread(target=self._read, args=(run,), daemon=True)
         run.reader.start()
         self.runs.append(run)

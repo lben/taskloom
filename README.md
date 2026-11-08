@@ -1083,7 +1083,9 @@ whose schedule goes off while its program loads (the service turned off, Active 
 flow taken off) does not begin, and nothing is recorded for it. Nor does one whose program has
 loaded with no service on (the service was ended or crashed just before), or more than 2
 minutes after it started (the computer slept while it loaded): that time is then a missed one,
-as if the service had been off (see `misfire`). Every run the service starts takes its time as
+as if the service had been off (see `misfire`). A program the service finds still loading more
+than 2 minutes after it started is asked to stop, and the service decides that flow's times
+once it has ended. Every run the service starts takes its time as
 it begins, so a time runs once. If the service restarts before a run has begun (it was ended
 or crashed, and started again), the run the earlier service started does not begin (nothing
 is recorded for it): the service now on sees to that time itself, as one of its own runs, so
