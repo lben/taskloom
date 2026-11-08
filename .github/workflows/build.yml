@@ -45,6 +45,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: "17"}
+      - name: TLA+ tools 1.7.4 (TLC, for the model check and trace validation), where packaging/tla_trace.py looks
+        run: |
+          jar="$HOME/.local/share/tlaplus/1.7.4/tla2tools.jar"
+          mkdir -p "$(dirname "$jar")"
+          curl -sfL https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar -o "$jar"
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $jar" | sha256sum -c -
       - uses: astral-sh/setup-uv@v6
       - name: Qt libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
