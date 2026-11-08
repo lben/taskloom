@@ -193,7 +193,7 @@ def test_catch_up_keeps_every_missed_time_behind_a_run_still_going(proof, env, w
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
     file_menu(win, "Open…")
     tab = win.current
-    with clock_shows(at("06:29:50")):  # (saved as the service's clock has it: before its checks below)
+    with clock_shows(at("06:30:00")):  # (saved as the service's clock has it: as its checks below begin)
         file_menu(win, "Save")
     select_schedule(win, qtbot, tab)
     p.shot(win, "① every_minute, with Misfire: catch_up. ② long_work, the long piece of work.",
@@ -205,10 +205,10 @@ def test_catch_up_keeps_every_missed_time_behind_a_run_still_going(proof, env, w
            "it starts the 06:31 run, which keeps going.")
     p.note("Here the scheduler service's own checks run inside the proof, at times it chooses, yesterday morning: a "
            "proof cannot put the computer to sleep, nor wait for hours. The runs it starts are real, and the editor "
-           "shows them as it shows every scheduled run. The save above is dated 06:29:50 yesterday for the service, "
-           "so that its checks come after it. So Run history's Started is when the proof ran them; when, "
-           "under Parameters, is the time each run is for. The countdown under every_minute reads the computer's "
-           "clock.")
+           "shows them as it shows every scheduled run. The save above is dated 06:30:00 yesterday for the service, "
+           "as its checks begin: the flow's first time after the save is 06:31. So Run history's Started is when the "
+           "proof ran them; when, under Parameters, is the time each run is for. The countdown under every_minute "
+           "reads the computer's clock.")
     service.check(at("06:30:00"))
     service.check(at("06:31:00"))
     qtbot.waitUntil(lambda: win.running_flows.text() == "1 flow running", timeout=20_000)

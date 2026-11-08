@@ -529,11 +529,13 @@ def fake_runs(monkeypatch):
 
 
 def drain(scheduler: Scheduler, now: dt.datetime, runs: FakeRuns, checks: int = 500):
-    """The service checks at `now` until nothing new starts for 3 checks in a row (stand-in runs finish by the next)."""
+    """The service checks at `now` until nothing new starts for 3 checks in a row (stand-in runs finish by the next).
+    Meanwhile this PC's clock shows `now`, as every process reads it (clock_shows)."""
     idle = 0
     for _ in range(checks):
         before = len(runs.started)
-        scheduler.tick(now)
+        with clock_shows(now):
+            scheduler.tick(now)
         idle = idle + 1 if len(runs.started) == before else 0
         if idle == 3:
             return
