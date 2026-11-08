@@ -1,18 +1,17 @@
-"""What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml) with a time held for
-Overlap skip: a time that comes within the service's early start while a run of its flow is going is held, to be
-decided at the time itself. Such a time must follow Misfire when the service stops before it and is back more than 2
-minutes after it (SCH-9, SCH-11), or when the PC sleeps across it (SCH-9); and once you click Proceed to turn the
-service off, it does not begin, and it is a missed time when you turn the service on again (SCH-4, SCH-9). Also: a run
-going from an earlier service counts as going whatever its numbers (SCH-11, SCH-12); the editor tells you when it
-cannot forget a schedule you turned off (SCH-10); and a check of the headless service that fails never stops it
-(SCH-14, charter C10).
+"""What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml) with a run of a flow
+(Overlap skip) going a few seconds before the flow's next time: no run's process is started for that time before it
+(SCH-5); when the service stops before that time and is back after it, the time follows Misfire (SCH-9, SCH-11); and
+when you click Proceed to turn the service off before that time, it does not begin, and it is a missed time when you
+turn the service on again (SCH-4, SCH-9). Also: a run going from an earlier service counts as going whatever its
+numbers (SCH-11, SCH-12); the editor tells you when it cannot forget a schedule you turned off (SCH-10); and a check of
+the service that fails never stops it, headless or with its tray icon, and is told once (SCH-14, charter C10).
 
 The times use the service's checks (Scheduler.tick) at chosen clock times, each service made as `taskloom scheduler`
 makes it (the Taskloom folder's lock first, held while it lives: FakeRuns.service), with each run's process replaced at
 the process boundary by a stand-in that claims its time at this PC's clock as the real run does (Runs). A service that
-is killed is one that checks no more and has let go of the lock; the PC asleep is no check, and no run reaching its
-time, until it wakes. Turning the service off is sent as the dialog's Proceed sends it (request_turn_off). The editor
-is the real window; the failing check is in the real `taskloom scheduler --headless`."""
+is killed is one that checks no more and has let go of the lock. Turning the service off is sent as the dialog's
+Proceed sends it (request_turn_off). The editor is the real window; the failing check is in the real `taskloom
+scheduler --headless`, and in the tray service (`taskloom scheduler` with its tray icon) in this process."""
 
 import contextlib
 import datetime as dt
@@ -40,8 +39,8 @@ from tests.test_paths_editor_editing import field, select_only  # noqa: E402
 from tests.test_paths_scheduler import heartbeat  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import checks_on, headless, printed, python_words, told  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, REAL_POPEN, FakeRun, FakeRuns, Said, begins,  # noqa: E402
-                                               claim_its_time, drain, flow_yaml, hhmm, instant, says, schedule, utc,
-                                               wait_until)
+                                               claim_its_time, drain, flow_yaml, hhmm, instant, pump, says, schedule,
+                                               tray_service, utc, wait_until)
 from tests.test_scheduler_start_at import stop_service  # noqa: E402
 
 UTC = dt.timezone.utc
@@ -62,15 +61,13 @@ def one_off(moment: dt.datetime, misfire: str = "run_once") -> dict:
 # --- stand-ins for run processes -------------------------------------------------------------------------------------
 
 class Run(FakeRun):
-    """FakeRun (see there), which reaches its time at this PC's clock as the test has it (Runs.clock): a run whose time
-    has passed by then claims it then, as `taskloom run --start-at` claims a time that has passed at once. One asked to
+    """FakeRun (see there), which claims at this PC's clock as the test has it (Runs.clock): a run whose time has
+    passed by then claims it then, as `taskloom run --start-at` claims a time that has passed at once. One asked to
     stop (on its stdin) before it began ends without beginning and records nothing, as the real one does. One of a
-    flow in Runs.asleep, started early, waits for its time until the test says it has come (reach_its_time: the PC
-    was asleep). One of a flow in Runs.speaking says what the real run says as it begins (said_it_began)."""
+    flow in Runs.speaking says what the real run says as it begins (said_it_began)."""
 
     def __init__(self, args: list[str], runs: "Runs", home: Path):
         super().__init__(args, runs, home)
-        self.waits = self.claims and self.flow in runs.asleep
         if self.flow in runs.speaking:
             self.stdout = Said()
 
@@ -92,8 +89,6 @@ class Run(FakeRun):
 
     def poll(self):
         if self.returncode is None and not self.reached:
-            if self.waits and "cancel" not in self.stdin.getvalue():
-                return None  # (asleep: it has not reached its time)
             self.reach_its_time()  # (asked to stop before it: it ends without beginning)
         return super().poll()
 
@@ -102,7 +97,6 @@ class Runs(FakeRuns):
     def __init__(self):
         super().__init__()
         self.clock: dt.datetime | None = None  # this PC's clock now: the clock of the service's latest check
-        self.asleep: set[str] = set()
         self.speaking: set[str] = set()
 
     def popen(self, args, *rest, **kwargs):
@@ -136,10 +130,10 @@ def about(told_you: list[str], flow: str) -> list[str]:
     return [t for t in told_you if flow in t]
 
 
-def a_run_going_at_t0_and_t_held(runs: Runs, home: Path, told_you: list, t0: dt.datetime, t: dt.datetime):
+def a_run_going_at_t0_and_a_check_before_t(runs: Runs, home: Path, told_you: list, t0: dt.datetime, t: dt.datetime):
     """A service (made as `taskloom scheduler` makes one) has started nightly's run for its one-off time t0, which goes
-    on (its flow is held), and has checked 5 s before nightly's next one-off time t, so t is held for Overlap skip: no
-    run's process is started early for it. The service."""
+    on (its flow is held), and has checked 5 s before nightly's next one-off time t: no run's process is started for t
+    before t (SCH-5). The service."""
     runs.holding.add("nightly")
     service = runs.service(home, lambda title, message: told_you.append(f"{title}: {message}"))
     for moment in (t0 - dt.timedelta(seconds=10), t0 - dt.timedelta(seconds=4), t0):
@@ -147,23 +141,25 @@ def a_run_going_at_t0_and_t_held(runs: Runs, home: Path, told_you: list, t0: dt.
     assert begins(runs.of("nightly")) == utc([t0]), f"nightly's run for {t0:%H:%M:%S} did not begin: {told_you}"
     check(service, runs, t - dt.timedelta(seconds=5))
     assert for_time(runs.of("nightly"), t) == [], (
-        f"not arranged: a run's process was started early for {t:%H:%M:%S} while nightly's run for {t0:%H:%M:%S} went")
+        f"a run's process was started 5 s before its time {t:%H:%M:%S} while nightly's run for {t0:%H:%M:%S} went")
     return service
 
 
-# --- SCH-9, SCH-11: a time held for Overlap skip, and the service killed before it ----------------------------------
+# --- SCH-9, SCH-11: a run of the flow going, and the service killed before the flow's next time ---------------------
 
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-11")
-def test_a_time_held_for_overlap_skip_does_not_run_when_the_service_is_back_over_2_minutes_after_it(env, fake_runs):
+def test_a_time_with_a_run_of_its_flow_going_does_not_run_when_the_service_is_back_over_2_minutes_after_it(env,
+                                                                                                         fake_runs):
     """nightly (Overlap skip) has the one-off times T0 07:00:00 and T 07:00:14 (Misfire Skip). Its run for T0 goes on
-    past T (until 07:00:20), so the check 5 s before T holds T for Overlap skip. The service is killed 3 s before T,
-    and a new one starts 130 s after T. No run begins for T: a run of nightly was going at T (Overlap skip), and T is
-    more than 2 minutes late (Misfire Skip). You are told that T was skipped or missed."""
+    past T (until 07:00:20); the service checks 5 s before T (no run's process is started for T then), and is killed 3
+    s before T; a new one starts 130 s after T. No run begins for T: a run of nightly was going at T (Overlap skip), and
+    T is more than 2 minutes late (Misfire Skip). You are told that T was skipped or missed."""
     t0, t = clock("07:00:00"), clock("07:00:14")
     schedule(env.home, env.root, {"nightly": flow_yaml(one_off(t0), one_off(t, misfire="skip"))})
     told_you = []
-    a_run_going_at_t0_and_t_held(fake_runs, env.home, told_you, t0, t)
+    a_run_going_at_t0_and_a_check_before_t(fake_runs, env.home, told_you, t0, t)
     # (killed 3 s before T: it checks no more; its run for T0 ends at 07:00:20, before the next service starts)
     fake_runs.holding.discard("nightly")
     back = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
@@ -178,10 +174,11 @@ def test_a_time_held_for_overlap_skip_does_not_run_when_the_service_is_back_over
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-11")
-def test_run_once_runs_only_the_latest_time_when_the_service_is_back_after_one_held_for_overlap_skip(env, fake_runs):
+def test_run_once_runs_only_the_latest_time_when_the_service_is_back_after_a_run_of_the_flow_went_before_it(env,
+                                                                                                    fake_runs):
     """minutely runs every minute (Overlap skip, Misfire Run once: the defaults), each run lasting about 57 s. The
-    service first sees it at 07:00:00 and runs it then; its check 4 s before 07:01:00 holds 07:01:00 for Overlap skip,
-    as that run is still going. The service is killed 3 s before 07:01:00 (the run ends 2 s before it) and a new one
+    service first sees it at 07:00:00 and runs it then; it checks 4 s before 07:01:00, while that run is still going.
+    The service is killed 3 s before 07:01:00 (the run ends 2 s before it) and a new one
     starts at 07:03:10: 07:01:00, 07:02:00 and 07:03:00 came while no service was on. Run once runs one run, for the
     latest, 07:03:00, and you are not told that it was skipped as the previous run was still going."""
     schedule(env.home, env.root, {"minutely": flow_yaml({"every": "1 minute"})})
@@ -204,64 +201,23 @@ def test_run_once_runs_only_the_latest_time_when_the_service_is_back_after_one_h
     assert still_going == [], f"the latest time was skipped as the previous run still going: {still_going}"
 
 
-# --- SCH-9: a run for a held time, started from the line before it, and the PC asleep across it ---------------------
-
-@pytest.mark.invariant("SCH-9")
-@pytest.mark.parametrize("first", ["its run", "the service"],
-                         ids=["its run wakes first", "the service checks first"])
-def test_a_held_times_run_started_before_it_does_not_begin_when_the_pc_slept_over_2_minutes_past_it(env, fake_runs,
-                                                                                                    first):
-    """nightly (Overlap skip) has the one-off times T0 07:00:00 and T 07:00:15 (Misfire Skip). Its run for T0 goes on
-    until 07:00:12, so the check 5 s before T holds T for Overlap skip; at 07:00:12, T0's run having ended, the service
-    starts T's run's process from the line, before T. The PC then sleeps until 07:02:25, 130 s after T. As it wakes,
-    T's run reaches its time before the service checks, or after. T's run does not begin, and T counts as missed: with
-    Skip, you are told 1 run was missed (as for a run started early for its time: test_scheduler_stops_and_sleeps)."""
-    t0, t, woke = clock("07:00:00"), clock("07:00:15"), clock("07:02:25")
-    schedule(env.home, env.root, {"nightly": flow_yaml(one_off(t0), one_off(t, misfire="skip"))})
-    told_you = []
-    service = a_run_going_at_t0_and_t_held(fake_runs, env.home, told_you, t0, t)
-    fake_runs.holding.discard("nightly")  # T0's run ends
-    fake_runs.asleep.add("nightly")  # (T's run, started now, reaches its time only as the PC wakes)
-    check(service, fake_runs, clock("07:00:12"))
-    started = for_time(fake_runs.of("nightly"), t)
-    assert len(started) == 1 and started[0].returncode is None, \
-        f"not arranged: T's run's process was not started from the line before T: {told_you}"
-    early = started[0]
-    fake_runs.clock = woke  # the PC sleeps from 07:00:12 and wakes at 07:02:25
-    if first == "its run":
-        early.reach_its_time()
-        check(service, fake_runs, woke)
-    else:
-        service.tick(woke)
-        if early.returncode is None:
-            early.reach_its_time()
-        check(service, fake_runs, woke)
-
-    assert begins(fake_runs.of("nightly")) == utc([t0]), (
-        f"the PC slept from 07:00:12 to 07:02:25 ({first} first), and T's run ({t:%H:%M:%S}, Misfire Skip) began more "
-        f"than 2 minutes late: runs began for {begins(fake_runs.of('nightly'))}; told: {told_you}")
-    missed = [m for m in about(told_you, "nightly") if re.search(r"missed", m, re.IGNORECASE)]
-    assert [m for m in missed if says(m, 1)], f"not told that 1 run of nightly (T) was missed: {told_you}"
-
-
-# --- SCH-4: a time held for Overlap skip when you turn the service off ----------------------------------------------
+# --- SCH-4: turning the service off a few seconds before a time, with a run of its flow going --------------------------
 
 @pytest.mark.invariant("SCH-4")
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.parametrize("misfire, runs_when_on", [("skip", False), ("run_once", True)], ids=["Skip", "Run once"])
-def test_a_time_held_for_overlap_skip_does_not_begin_after_proceed_and_is_a_missed_time_when_on_again(
-        env, fake_runs, misfire, runs_when_on):
-    """nightly (Overlap skip) has the one-off times T0 07:00:00 and T 07:00:15. Its run for T0 goes on until 07:00:12,
-    so the check 5 s before T holds T for Overlap skip. At 07:00:10.5, 4.5 s before T, you turn the service off and
-    choose Let it finish for nightly (the turn-off dialog lists it, its run going) and click Proceed. Once you click
-    Proceed nothing new starts: T's run does not begin (a time held for Overlap skip is decided at the time itself: it
-    is not a run waiting its turn), and the service turns off once T0's run is done. You turn the service on again at
-    07:02:45, 150 s after T: T is a missed time, as its Misfire says: Skip runs none, and tells you 1 was missed; Run
-    once runs it, once."""
+def test_a_time_after_proceed_does_not_begin_and_is_a_missed_time_when_on_again(env, fake_runs, misfire,
+                                                                                runs_when_on):
+    """nightly (Overlap skip) has the one-off times T0 07:00:00 and T 07:00:15. Its run for T0 goes on until 07:00:12;
+    the service checks 5 s before T. At 07:00:10.5, 4.5 s before T, you turn the service off and choose Let it finish
+    for nightly (the turn-off dialog lists it, its run going) and click Proceed. Once you click Proceed nothing new
+    starts: no run begins for T (it is not a run waiting its turn), and the service turns off once T0's run is done.
+    You turn the service on again at 07:02:45, 150 s after T: T came while the service was off, so it is a missed time,
+    as its Misfire says: Skip runs none, and tells you 1 was missed; Run once runs it, once."""
     t0, t = clock("07:00:00"), clock("07:00:15")
     paths = schedule(env.home, env.root, {"nightly": flow_yaml(one_off(t0), one_off(t, misfire=misfire))})
     told_you = []
-    service = a_run_going_at_t0_and_t_held(fake_runs, env.home, told_you, t0, t)
+    service = a_run_going_at_t0_and_a_check_before_t(fake_runs, env.home, told_you, t0, t)
     request_turn_off(Home(env.home), {str(paths["nightly"]): "finish"})  # Proceed, at 07:00:10.5
     check(service, fake_runs, clock("07:00:11"))
     fake_runs.holding.discard("nightly")  # T0's run ends at 07:00:12
@@ -444,3 +400,43 @@ def test_the_headless_service_goes_on_checking_after_a_check_fails(env):
     assert failed, f"not told what failed (writing scheduler.heartbeat):\n{printed(log)}"
     assert python_words(failed[0]) == [] and "Traceback" not in printed(log), f"not in plain words:\n{printed(log)}"
     assert going_on, f"the service did not go on checking once the file could be written again:\n{printed(log)}"
+
+
+@pytest.mark.charter("C10")
+@pytest.mark.invariant("SCH-14")
+def test_the_tray_service_tells_a_failed_check_once_and_goes_on_checking(qapp, qtbot, env, monkeypatch):
+    """`taskloom scheduler` with its tray icon is checking (it writes the time of each check to scheduler.heartbeat).
+    For a while, that file cannot be written (it is a folder), so its checks fail. As the headless service does, it
+    tells you, on its tray icon, in plain words, what failed, once (not at each failing check), shows no traceback,
+    and goes on: once the file can be written again, it goes on checking."""
+    seen = {}
+
+    def about_it(told_you: list[str]) -> list[str]:
+        return [m for m in told_you if "heartbeat" in m.lower()]
+
+    def drive(tray, result):
+        if not pump(lambda: heartbeat(env.home) is not None, 15):
+            seen["no check"] = True
+            return
+        folder = heartbeat_made_a_folder(env.home)
+        pump(lambda: about_it(result["told"]), 10)
+        pump(lambda: False, 3.5)  # (a few more checks fail)
+        seen["told"] = list(result["told"])
+        folder.rmdir()  # it can be written again
+        beats = []
+        seen["checks on"] = pump(lambda: (beat := heartbeat(env.home)) is not None and beats.append(beat) is None
+                                 and len(set(beats)) >= 3, 10)
+        seen["asked to end"] = result["quit"]
+
+    with qtbot.capture_exceptions() as escaped:  # (what a check let escape: in the tray service, a traceback)
+        tray_service(monkeypatch, env.home, drive)
+
+    assert "no check" not in seen, "the tray service did not check"
+    failed = about_it(seen["told"])
+    assert len(failed) == 1, (f"over several failing checks, the tray icon did not tell once what failed (writing "
+                              f"scheduler.heartbeat): {seen['told']}")
+    assert python_words(failed[0]) == [], f"not in plain words: {failed[0]}"
+    assert escaped == [], (f"a failing check let {len(escaped)} errors escape, each a traceback: "
+                           f"{[f'{kind.__name__}: {error}' for kind, error, _ in escaped[:2]]}")
+    assert seen["checks on"] and seen["asked to end"] is None, \
+        f"the tray service did not go on checking once the file could be written again: {seen}"
