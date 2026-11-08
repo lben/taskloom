@@ -48,7 +48,7 @@ UTC = dt.timezone.utc
 TICK_SECONDS = 1  # it checks at least this often: a schedule saved (or changed) applies within a second
 NOT_DUE = 3  # the exit code of a run the service started that did not begin (see claim_time)
 SERVICE_OFF = "the scheduler service is off"  # why it did not begin, when that is why (see claim_time)
-ON_TIME_GRACE = dt.timedelta(minutes=2)  # later than this, a run counts as missed
+ON_TIME_GRACE = dt.timedelta(minutes=2)  # a time this late, or later, counts as missed: one less late runs on time
 ASK_OVER = 100  # more missed Catch up times than this: you are asked first (with no one to ask, the latest 100 run)
 STOP_SECONDS = 6  # a run asked to stop that is still going this long after is forced to end
 HEARTBEAT_STALE_SECONDS = 120
@@ -389,7 +389,7 @@ class Scheduler:
             due = sorted({*trigger.due(last, now), *(entry.as_of for entry in again)})
             if not due:
                 return
-            missed = [t for t in due if now - t > ON_TIME_GRACE]  # (the oldest of those due)
+            missed = [t for t in due if now - t >= ON_TIME_GRACE]  # (the oldest of those due)
             if schedule in self.asking or (trigger.misfire == "catch_up" and len(missed) > ASK_OVER):
                 self._backlog(schedule, missed, due[len(missed):])
             else:
@@ -401,7 +401,7 @@ class Scheduler:
                     flow.overlap == "allow" and due[0] < now and self._catching_up(schedule)))
                 came = {entry.as_of: entry.id for entry in again}  # (a time due again keeps its place: _request)
                 for as_of in planned:  # (one on time starts for its time; a missed one waits its turn)
-                    self._request(path, flow, as_of, trigger.block, trigger.text, behind, now - as_of <= ON_TIME_GRACE,
+                    self._request(path, flow, as_of, trigger.block, trigger.text, behind, now - as_of < ON_TIME_GRACE,
                                   came.get(as_of))
             if due[-1] > last:  # (the newest time handled; an every-N schedule counts on from it, one of its times)
                 self._set_last(key, due[-1])
@@ -413,7 +413,7 @@ class Scheduler:
         if trigger.misfire == "catch_up":
             return due
         # skip: the newest time still runs if less than ON_TIME_GRACE late; older ones were missed.
-        on_time = [t for t in due[-1:] if now - t <= ON_TIME_GRACE]
+        on_time = [t for t in due[-1:] if now - t < ON_TIME_GRACE]
         if missed := len(due) - len(on_time):
             self._tell(flow, "skipped", "Missed runs skipped",
                        f"{flow.name}: {missed} run(s) were due while the scheduler was off")
