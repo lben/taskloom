@@ -35,7 +35,7 @@ from PySide6.QtCore import QCoreApplication, QPoint, QTimer  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QDialog, QGroupBox, QLabel, QMessageBox, QPushButton,  # noqa: E402
                                QRadioButton, QSpinBox, QSystemTrayIcon)
 
-from taskloom import cli  # noqa: E402
+from taskloom import __version__, cli  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor.safety import pid_alive  # noqa: E402
 from taskloom.flow import FlowError, load_flow, real_path  # noqa: E402
@@ -490,10 +490,13 @@ class FakeRuns:
 
     def service(self, home: Path, *args, **kwargs) -> Scheduler:
         """A scheduler service for the Taskloom folder `home`, made as `taskloom scheduler` makes one: it takes the
-        folder's lock, then makes its Scheduler (`args`: its notify and ask), and holds the lock while it lives: until
-        the next one is made here (this one has stopped then), or the test ends."""
+        folder's lock, says which process and Taskloom it is (scheduler.pid, scheduler.version: the editor reads them),
+        then makes its Scheduler (`args`: its notify and ask), and holds the lock while it lives: until the next one is
+        made here (this one has stopped then), or the test ends."""
         self.stop()
         self.lock = acquire_lock(Home(home))
+        (home / "scheduler.pid").write_text(str(os.getpid()), encoding="utf-8")
+        (home / "scheduler.version").write_text(f"{__version__} {os.getpid()}", encoding="utf-8")
         return Scheduler(Home(home), *args, **kwargs)
 
     def stop(self):
