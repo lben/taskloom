@@ -22,6 +22,9 @@ asked:
   - date: 2026-11-07
     # A: a run may begin up to 5 seconds after its time, so runs are no longer started early (SCH-5, SCH-8).
     words: "A and B, go ahead"
+  - date: 2026-11-08
+    # Asked whether SCH-4 or SCH-8 wins for a Let it finish flow's waiting run still loading at Proceed (SCH-8).
+    words: "Let it finish wins"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_scheduler, test_proof_interval_schedules]
 rows:
@@ -50,7 +53,8 @@ rows:
     An Every N minutes or hours schedule counts from when the service first sees it, not from the clock's :00.
   SCH-8: >-
     A run that has not begun yet (its program is still loading) doesn't begin, and nothing is recorded for it, if
-    meanwhile the service is turned off, or its schedule is turned off or changed.
+    meanwhile the service is turned off, or its schedule is turned off or changed. One exception: a run that waited
+    its turn for a flow you chose Let it finish for still begins, as SCH-4 says.
   SCH-9: >-
     Times missed while the service was off or the PC was asleep follow the schedule's Misfire setting. Skip runs none
     of them and tells you how many (a time less than 2 minutes late still runs). Run once runs one, for the latest.

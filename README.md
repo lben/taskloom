@@ -1173,7 +1173,9 @@ its runs going are stopped and recorded as cancelled. Once you click **Proceed**
 starts, and the service turns off when the last run you let finish is done; a run waiting its
 turn of a flow you chose **Let it finish** still begins meanwhile. A run whose program the
 service has started but that has not begun yet (it is still loading) is not listed, and it
-does not begin, also if you turn the service on again while it is still loading. For a flow
+does not begin, also if you turn the service on again while it is still loading; the one
+exception is a run that waited its turn for a flow you chose **Let it finish**, which still
+begins. For a flow
 you chose **Stop now**, its time is dropped: it neither runs later nor counts as missed. For
 the other flows its time is not lost: once the service is on again, it follows `misfire` like
 any time that came while the service was off (less than 2 minutes late, it still runs, once).
