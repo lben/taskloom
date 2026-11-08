@@ -16,12 +16,16 @@ service, its run processes and the user within small bounds, against the promise
     nothing it lets finish is left.
   - `PlanFlow(f)` is one transaction per schedule. It judges the times that came, and the times whose run did
     not begin, by Misfire, then requests them by Overlap and the limit. Each time is started, skipped and told,
-    or saved in `waiting_runs` as `queue` (waiting for its flow) or `slot` (waiting for a free slot).
+    or saved in `waiting_runs` as `queue` (waiting for its flow) or `slot` (waiting for a free slot). A time on
+    time starts now only if no saved run that came before it could start now (`Ahead`: its flow is free, or it waits
+    for a slot and its Overlap is allow).
   - `StartNext(d)` starts one saved run when a slot is free and, unless Overlap is allow, no run of its flow
     is going. While turning off, it starts only Let-it-finish flows.
 - **Run processes** load, then `Claim`: one transaction. The claim checks the lock, the service-on record, the
   schedule version and the turn-off. It then takes the row and writes the run's history row. If refused, the
-  process ends and its row stays. Processes can be killed while loading or while going.
+  process ends and its row stays. Processes can be killed while loading or while going. One killed while loading
+  counts as going until its service's next `Poll`, which drops its row and tells you it failed (fate `failed`); if
+  that service is gone, its row stays.
 - **The user** can change a schedule or turn it off (the editor drops its state and saved runs), start one run
   by hand, turn the service off with Proceed and per-flow choices, and turn it on again.
 
@@ -30,7 +34,8 @@ service, its run processes and the user within small bounds, against the promise
 - **Time.** Time is a few ticks. A time handled at its own tick is on time; a later one is late. The 5-second
   and 2-minute windows, the ask-over-100 dialog, `run_once` (supported but not in the cfg), clock changes,
   e-mail and notices are not modelled.
-- **Run order.** Any saved run may start next. This over-approximates "in the order they came".
+- **Run order.** Any saved run may start next. This over-approximates "in the order they came". Likewise, a time
+  due again that is on time may or may not have come before the saved runs that could start now (`first`).
 - **The dialog.** It is one step with Proceed and lists the flows with runs going at that moment.
 - **Atomicity.** A check's reads of the history and its decisions are atomic within each step above. This is
   sound for these promises: between a read and a decision, only the service's own claims (already counted),
@@ -83,7 +88,7 @@ that one under `INVARIANTS`/`PROPERTIES`. To check a design change, set its swit
 | `LimitHeld` | invariant | SCH-12: scheduled runs going never exceed Max concurrent runs |
 | `SCH8` (`NoBeginAfterOffOrChange`) | step | SCH-8: a run never begins if, while it loaded, the service was turned off (except a Let-it-finish waiting run) or its schedule changed or was turned off |
 | `SCH4` (`OffBegins`, `StopRowsStay`) | step | SCH-4: while off, only Let-it-finish waiting runs begin; the runs saved for a Stop-now flow at Proceed never begin later in that service's term |
-| `NoLoss`, `NoOrphanRows` | invariant | SCH-16 (and SCH-9, SCH-11): every time that has come is begun, saved, told skipped or missed, dropped by a user choice, or still to be handled; a saved run is always for a schedule that is on |
+| `NoLoss`, `NoOrphanRows` | invariant | SCH-16 (and SCH-9, SCH-11): every time that has come is begun, saved, told skipped, missed or failed, dropped by a user choice, or still to be handled; a saved run is always for a schedule that is on |
 | `ChangedTimesHandled` | invariant | SCH-9 with SCH-10: a changed schedule starts fresh from the change; its later times follow Misfire |
 | `AdoptionCounted`, `Adoption` | invariant, step | Adoption: once the service on has checked, every scheduled run going is its own or adopted; when a run begins, every other scheduled run going was counted by the service that started it |
 | `TypeOK` | invariant | well-formed states |
@@ -116,9 +121,10 @@ level, so every behaviour up to the level before it was fully checked:
 | All four switches on | all | none | 12.9M | 16 steps |
 | All four switches on | all | Overlap queue, Misfire catch_up only | 2.3M | 19 steps |
 
-With the cfg as committed (all four switches on, `MaxKills = 1`), the sweep is complete and no promise is
-broken: 457,327,633 states generated, 89,912,884 distinct, depth 34, 53 minutes 46 seconds with 4 workers on a
-10-core laptop (2026-11-08). Run it unattended.
+With the cfg as committed (all four switches on, `MaxKills = 1`, and the two rulings in Decided), the sweep is
+complete and no promise is broken: 562,494,724 states generated, 113,767,922 distinct, depth 33, 1 hour 24 minutes
+with 4 workers on a 10-core laptop shared with other work (2026-11-08). Before the rulings it was 457,327,633
+generated, 89,912,884 distinct, depth 34, 54 minutes. Run it unattended.
 
 One reading of the target design is load-bearing: "a waiting run starts when it may" is taken to also check
 Overlap, counting runs by hand. If a run waiting for a free slot starts on the limit alone (as
@@ -136,6 +142,16 @@ All four changes are taken; none needs a promise reworded:
   Allow, also when the run by hand started while the scheduled run's program was loading.
 - `TermOnTurnOff` and `ProceedDropsStop`: SCH-8 and SCH-4 as worded. Stop now also holds when no service is
   running at Proceed.
+
+Two rulings on where trace validation found the code and the model apart; in both the code is right, and the model
+now does the same:
+
+- **A run's program that ends before its claim** (it failed to load, or died). Its service drops its saved row at
+  its next check and tells you it failed (`_ended`); that time does not run again. Its fate is `failed`, which
+  `NoLoss` counts as handled.
+- **Start now or wait for a slot.** A run for its time waits only behind saved runs that came before it and could
+  start now (`_request`'s `ahead`), not behind every run saved for a slot: nothing waits behind a run that cannot
+  start anyway.
 
 ## Trace validation
 
@@ -171,7 +187,7 @@ Then there are runs by hand (`ManualBegin`, `ManualEnd`), the editor saving a ch
 | `manualGoing` | Unscheduled rows in `runs` that are running, with the process alive |
 | `lock`, `lives`, `svcOn`, `epoch` | The life holding `scheduler.lock`; the services made; `service_on`; `service_epoch` |
 | `paused`, `choice` | `scheduler.paused` and the choices it holds |
-| `loading` | Processes started with `--if-scheduled` that have neither claimed nor ended: their due time, the life that started them, and the epoch they carry |
+| `loading` | Processes started with `--if-scheduled` that have neither claimed nor ended: their due time, the life that started them, and the epoch they carry. The model keeps one that ended before its claim (`dead`) until its service polls; it is not shown. |
 | `adopted`, `turning`, `checked` | The memory of the service on: its runs from before (`as_of` None), `turning_off`, and whether it has polled |
 
 The ghost variables (`fate`, `stopRows`, `changedAt`) and the counters are left to the model.
@@ -187,18 +203,14 @@ The ghost variables (`fate`, `stopRows`, `changedAt`) and the counters are left 
 - A stand-in asked to stop ends at once. The model's `Poll` applies Stop now in one step, while a real run takes a moment.
 - A service is started only while the service is on, as the model assumes.
 
-**Results (2026-11-08, the code as of 05b7249).** 167 of the 200 traces match, and they take every action above; the planted
-divergence is caught. The other 33 each stop at one of three differences between the code and the model:
-- **A run's program that dies before its claim** (21 traces). At its next `Poll`, the code drops the saved row and tells
-  you the run failed (`_ended`). The model keeps the row, so the time is due again or the saved run starts again.
-- **Start now or wait for a free slot** (10 traces). The model's `PlanFlow` makes a run for its time wait whenever any
-  run is saved for a slot (`SlotLineIn`). The code makes it wait only for saved runs that came before it and could
-  start now (`_request`'s `ahead`). So a time due again that came first starts now. A saved run whose flow is busy holds
-  nothing back. A queued run whose flow is free holds the new run back.
-- **The service's memory of saved runs goes stale** (2 traces). Saving a changed schedule drops its saved runs, but
-  until the end of its next check the service still counts them. A new time of that flow is then skipped as "still
-  waiting its turn", or queued. Proceed's Stop now also drops saved runs. If you turn the service on again before it
-  sees the turn-off, it starts a process for one of those runs, which its claim then refuses.
+**Results (2026-11-08, the code as of 05b7249, the model with the two rulings in Decided).** 198 of the 200 traces
+match, and they take every action above; the planted divergence is caught. Before the rulings, 31 more stopped where
+a run's program died before its claim (21) or at start now or wait for a slot (10). The other 2 stop at a bug in the
+code, being fixed and not modelled: **the service's memory of saved runs goes stale.** Saving a changed schedule drops
+its saved runs, but until the end of its next check the service still counts them. A new time of that flow is then
+skipped as "still waiting its turn", or queued (trace 198). Proceed's Stop now also drops saved runs. If you turn the
+service on again before it sees the turn-off, it starts a process for one of those runs, which its claim then refuses
+(trace 181).
 
 **How to run.** Run `python packaging/tla_trace.py --out /tmp/tla-trace`. It needs `java`, and tla2tools.jar 1.7.4 at
 `~/.local/share/tlaplus/1.7.4/tla2tools.jar` or `$TLA2TOOLS_JAR`. It takes about 1.5 minutes on 4 cores. Each trace
