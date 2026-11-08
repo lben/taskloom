@@ -1,9 +1,9 @@
 """Schedules: cron expressions, every N minutes or hours, and one-off times, in the machine's local time.
 
-A clock time (cron, one-off) is when this PC's clock shows it, and a one-off time written with its UTC offset the
-moment it names; every N counts in real elapsed time. Asked with a moment (a datetime with its UTC offset), a schedule
-answers in moments, so a clock change neither moves an every-N rhythm nor loses or repeats a clock time; asked with a
-local time (no offset), it answers in local times, as on screen."""
+A clock time (cron, one-off) is when this PC's clock shows it; every N counts in real elapsed time. Asked with a
+moment (a datetime with its UTC offset), a schedule answers in moments, so a clock change neither moves an every-N
+rhythm nor loses or repeats a clock time; asked with a local time (no offset), it answers in local times, as on
+screen."""
 
 from __future__ import annotations
 
@@ -144,24 +144,20 @@ def describe_cron(text: str) -> str:
 
 
 class At:
-    """A single run at a given time on this PC's clock, e.g. "2026-10-08 15:30", or at the moment a time written with
-    its UTC offset names, e.g. "2026-10-08 15:30+02:00"."""
+    """A single run at a given time on this PC's clock, e.g. "2026-10-08 15:30" (to the minute or to the second)."""
 
     def __init__(self, when):
         self.when = when if isinstance(when, dt.datetime) else dt.datetime.fromisoformat(str(when))
+        if self.when.tzinfo:  # (the editor writes it as this PC's clock shows it; a time zone would be a second clock)
+            raise ValueError(f"a one-off time is a time on this PC's clock, got '{when}' with a UTC offset (time "
+                             "zone): write it without one, as this PC's clock shows that time")
         if self.when.microsecond:  # (a run begins on a whole second: it would begin before it or after it)
             raise ValueError(f"a one-off time is to the second, got '{when}': write it without the fraction of a "
                              "second")
 
-    @property
-    def wall(self) -> dt.datetime:
-        """Its time on this PC's clock (of a time with its UTC offset: the moment it names, in local time)."""
-        return self.when.astimezone().replace(tzinfo=None) if self.when.tzinfo else self.when
-
     def next_after(self, t: dt.datetime) -> dt.datetime | None:
         """Its time on this PC's clock if after the local time t."""
-        wall = self.wall
-        return wall if wall > t else None
+        return self.when if self.when > t else None
 
 
 class Every:
@@ -213,7 +209,7 @@ class Trigger:
             self.text = f"every {self.timing.text}"
         else:
             self.timing = At(spec["at"])
-            # (to the second, with its UTC offset if written with one: a time changed in either is a new schedule)
+            # (to the second: a time changed only in its seconds is a new schedule)
             self.text = f"at {self.timing.when.isoformat(' ', 'seconds')}"
         self.every = self.timing.interval if isinstance(self.timing, Every) else None
         self.misfire = spec.get("misfire", "run_once")
@@ -228,9 +224,6 @@ class Trigger:
             return None if start is None else self.timing.next_after(t, start)
         if t.tzinfo is None:
             return self.timing.next_after(t)
-        if isinstance(self.timing, At) and self.timing.when.tzinfo:  # written with its UTC offset: already a moment
-            moment = self.timing.when.astimezone(dt.timezone.utc)
-            return moment if moment > t else None
         wall = t.astimezone().replace(tzinfo=None)
         while (wall := self.timing.next_after(wall)) is not None:  # (after the clock went back: past the repeat)
             if (when := clock_moment(wall)) > t:

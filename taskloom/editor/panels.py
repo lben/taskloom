@@ -1018,7 +1018,7 @@ class PropertiesPanel(QScrollArea):
             upcoming, t = [], dt.datetime.now()
             while len(upcoming) < 3 and (t := trigger.next_after(t)) is not None:
                 upcoming.append(t)
-            words = describe_cron(cron_text) if cron_text else f"Once, on {trigger.timing.wall:%A %d %B %Y at %H:%M}"
+            words = describe_cron(cron_text) if cron_text else f"Once, on {trigger.timing.when:%A %d %B %Y at %H:%M}"
             preview.setText(f"<b>{html.escape(words)}</b><br>" + ("Next: " + ", ".join(
                 f"{t:%a %d %b %H:%M}" for t in upcoming) if upcoming else "This time has passed."))
 
@@ -1045,7 +1045,7 @@ class PropertiesPanel(QScrollArea):
         edit = QDateTimeEdit(calendarPopup=True)
         edit.setDisplayFormat("yyyy-MM-dd HH:mm")
         try:
-            when = At(at).wall  # (a time written with its UTC offset: the moment it names, on this PC's clock)
+            when = At(at).when
         except ValueError:
             when = dt.datetime.now().replace(second=0, microsecond=0)
         edit.setDateTime(when)
@@ -1053,7 +1053,7 @@ class PropertiesPanel(QScrollArea):
         def commit():
             nonlocal when
             picked = edit.dateTime().toPython().replace(second=0, microsecond=0)
-            if picked == when.replace(second=0, microsecond=0):  # not changed: kept as written (e.g. its UTC offset)
+            if picked == when.replace(second=0, microsecond=0):  # not changed: kept as written (e.g. its seconds)
                 return
             when = picked
             text = picked.strftime("%Y-%m-%d %H:%M")
