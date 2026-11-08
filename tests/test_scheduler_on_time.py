@@ -466,8 +466,10 @@ def _hold_until_released(misfire: str) -> str:
 
 
 @pytest.mark.parametrize("misfire, expected, skipped", [
-    ("run_once", [0], None),
-    ("skip", [0], 2),  # the two minutes before it were missed; the on-time run is started early
+    # The minute before it is 56 s late at the check: less than 2 minutes, so it still runs (SCH-9), and Run once runs
+    # it as the latest missed time. Skip misses the one before that (1 min 56 s late: only the newest such time runs).
+    ("run_once", [-1, 0], None),
+    ("skip", [-1, 0], 1),  # the on-time run is started early
     ("catch_up", [-2, -1, 0], None),
 ])
 @pytest.mark.invariant("SCH-9")
