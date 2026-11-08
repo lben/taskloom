@@ -136,3 +136,71 @@ All four changes are taken; none needs a promise reworded:
   Allow, also when the run by hand started while the scheduled run's program was loading.
 - `TermOnTurnOff` and `ProceedDropsStop`: SCH-8 and SCH-4 as worded. Stop now also holds when no service is
   running at Proceed.
+
+## Trace validation
+
+`packaging/tla_trace.py` checks that what the real code does is a behaviour of this model. It drives the real service
+(`Scheduler.tick`, `claim_time` inside `History.start_run`, `request_turn_off`, `set_paused`, `forget_schedules`,
+`acquire_lock`) through 200 generated scenarios (fixed seeds) within the cfg's bounds. Run processes are stand-ins at
+`subprocess.Popen`, as in the scheduler tests. Each step is written, with the state the code shows after it, into a
+generated module `SchedulerTrace`. `TraceSchedulerService.tla` (with `TraceSchedulerService.cfg`) makes TLC look for a
+behaviour of `Next` that takes the same actions through the same states. The match is reported as `Invariant
+TraceIncomplete is violated`, because that invariant fails exactly when the whole trace is matched. Then a planted
+divergence must fail: a refused claim recorded as begun.
+
+**What each step of the code is.** The clock moving on to the next time is `Tick`. A service taking the lock and
+making its `Scheduler` is `ServiceStart`; its process dying is `ServiceCrash`. A check is several steps:
+- `_poll` is `Poll`. A service that turns off ends there and lets go of the lock.
+- each schedule's `_check` that changes anything is `PlanFlow(f)`, with the runs it starts for their time;
+- each saved run `_next_in_line` starts is `StartNext(d)`.
+
+A run's claim is `Claim(p)`, begun or refused, as the code said. A run's program dying before its claim is
+`KillLoading(p)`; dying after it is `KillRun(d)`. A run ending is `RunFinish(d)`, also one stopped by Proceed's Stop now.
+Then there are runs by hand (`ManualBegin`, `ManualEnd`), the editor saving a changed or turned-off schedule
+(`ChangeSchedule`), `Proceed` with the choices for the flows `runs_going` lists, and turning the service on (`TurnOn`).
+
+**The mapping** (code → model):
+
+| Model | Code |
+|---|---|
+| `now` | Mapped by order: the clock at tick 0 is 06:00, when the editor saved both flows. At tick k it is within 2 minutes after the schedule's k-th time (06:05, 06:10). |
+| `ver`, `schedOn` | The flow file's Schedule block: one of two cron texts with the same two times; Active ticked and listed in `scheduled.yaml` |
+| `last` | The `schedule_state` row: its text gives `v`, and its time gives `t`, the newest tick at or before it. No row gives `v` = -1. |
+| `row` | `waiting_runs`: `now` is `time`, `flow` is `queue`, `slot` is `slot`. A due time `<<f, v, t>>` is the flow, its schedule's text and its time. |
+| `run`, `starter` | Scheduled rows in `runs`. `going` is running with the process alive; `died` is running with the process gone; anything else is `over`. The starter is the life whose process claimed it. |
+| `manualGoing` | Unscheduled rows in `runs` that are running, with the process alive |
+| `lock`, `lives`, `svcOn`, `epoch` | The life holding `scheduler.lock`; the services made; `service_on`; `service_epoch` |
+| `paused`, `choice` | `scheduler.paused` and the choices it holds |
+| `loading` | Processes started with `--if-scheduled` that have neither claimed nor ended: their due time, the life that started them, and the epoch they carry |
+| `adopted`, `turning`, `checked` | The memory of the service on: its runs from before (`as_of` None), `turning_off`, and whether it has polled |
+
+The ghost variables (`fate`, `stopRows`, `changedAt`) and the counters are left to the model.
+
+**Not covered.**
+- The 2-minute load window. Once a run for its time has loaded for more than 2 minutes, the code refuses its claim, and
+  the service asks it to stop (`_loading_too_long`). The model has no such window, and there that claim would begin. So
+  the clock never moves on while a run for its time loads under the service on.
+- Outside the cfg's bounds or not modelled: Overlap allow, Misfire run_once, the more-than-100 question (`missed` and
+  `answer` rows), Every N schedules, Max concurrent runs other than 1, more than two flows or times, clock changes,
+  unreadable files.
+- What you are told (skipped, missed, failed) and e-mails are not compared.
+- A stand-in asked to stop ends at once. The model's `Poll` applies Stop now in one step, while a real run takes a moment.
+- A service is started only while the service is on, as the model assumes.
+
+**Results (2026-11-08, the code as of 05b7249).** 167 of the 200 traces match, and they take every action above; the planted
+divergence is caught. The other 33 each stop at one of three differences between the code and the model:
+- **A run's program that dies before its claim** (21 traces). At its next `Poll`, the code drops the saved row and tells
+  you the run failed (`_ended`). The model keeps the row, so the time is due again or the saved run starts again.
+- **Start now or wait for a free slot** (10 traces). The model's `PlanFlow` makes a run for its time wait whenever any
+  run is saved for a slot (`SlotLineIn`). The code makes it wait only for saved runs that came before it and could
+  start now (`_request`'s `ahead`). So a time due again that came first starts now. A saved run whose flow is busy holds
+  nothing back. A queued run whose flow is free holds the new run back.
+- **The service's memory of saved runs goes stale** (2 traces). Saving a changed schedule drops its saved runs, but
+  until the end of its next check the service still counts them. A new time of that flow is then skipped as "still
+  waiting its turn", or queued. Proceed's Stop now also drops saved runs. If you turn the service on again before it
+  sees the turn-off, it starts a process for one of those runs, which its claim then refuses.
+
+**How to run.** Run `python packaging/tla_trace.py --out /tmp/tla-trace`. It needs `java`, and tla2tools.jar 1.7.4 at
+`~/.local/share/tlaplus/1.7.4/tla2tools.jar` or `$TLA2TOOLS_JAR`. It takes about 1.5 minutes on 4 cores. Each trace
+and its TLC log go to `trace-NNN/`. The last line sums up. The command exits 0 only if every trace matches and the
+planted divergence is caught. `tests/test_tla_trace.py` keeps the planted case as a test.
