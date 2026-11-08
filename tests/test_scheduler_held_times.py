@@ -16,12 +16,14 @@ scheduler --headless`, and in the tray service (`taskloom scheduler` with its tr
 import contextlib
 import datetime as dt
 import gc
+import io
 import json
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -30,17 +32,19 @@ import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from taskloom import cli  # noqa: E402
 from taskloom.cli import EXIT_CANCELLED  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.flow import load_flow, real_path  # noqa: E402
 from taskloom.history import History  # noqa: E402
+from taskloom.history import connect as history_connect  # noqa: E402
 from taskloom.scheduler import NOT_DUE, request_turn_off, set_paused  # noqa: E402
 from tests.test_paths_editor_editing import field, select_only  # noqa: E402
 from tests.test_paths_scheduler import heartbeat  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import checks_on, headless, printed, python_words, told  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, REAL_POPEN, FakeRun, FakeRuns, Said, begins,  # noqa: E402
                                                claim_its_time, clock_shows, drain, flow_yaml, hhmm, instant, pump, says, schedule,
-                                               tray_service, utc, wait_until)
+                                               run_command_line, tray_service, utc, wait_until)
 from tests.test_scheduler_start_at import stop_service  # noqa: E402
 
 UTC = dt.timezone.utc
@@ -307,6 +311,60 @@ def test_a_run_that_began_just_before_the_pc_slept_is_not_stopped_when_it_wakes(
         f"07:00's run, begun at 07:01:50 (its row gone), was asked to stop when the PC woke at 10:00:30: "
         f"{run.stdin.getvalue()!r}; told: {told_you}")
     assert run.returncode is None, f"07:00's run, begun at 07:01:50, did not go on: it ended ({run.returncode})"
+    ran = begins(for_time(fake_runs.of("hourly"), clock("07:00")))
+    assert ran == utc([clock("07:00")]), f"07:00 did not run once: runs began for it {ran}; told: {told_you}"
+
+
+@pytest.mark.invariant("SCH-9")
+def test_a_run_whose_claim_is_being_written_as_the_pc_wakes_is_not_stopped(env, fake_runs):
+    """hourly runs at minute 0 (Overlap skip). At 07:00:00 the service starts its run's process. At 07:01:50 its
+    program has loaded and claims its time: it has read the clock and taken its saved row, and the PC sleeps before
+    that is written (the claim's transaction is still open). On waking, the service checks at 10:00:30; the claim is
+    written half a second after that check begins. That run has claimed its time: it is not asked to stop and goes on,
+    and 07:00 runs once."""
+    schedule(env.home, env.root, {"hourly": flow_yaml({"cron": "0 * * * *"})})
+    told_you = []
+    service = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
+    check(service, fake_runs, clock("06:59:30"))
+    fake_runs.loading.add("hourly")
+    check(service, fake_runs, clock("07:00:00"))  # 07:00's run's process starts: its program loads
+    (run,) = fake_runs.of("hourly")
+    arguments = run_command_line(run.args, env.home)  # (its claim, as `taskloom run` makes it: History.start_run)
+    claim = cli._claim(Home(env.home), load_flow(real_path(Path(arguments.flow))), arguments,
+                       dt.datetime.fromisoformat(arguments.start_at))
+    db = history_connect(Home(env.home).history_db)
+    with clock_shows(clock("07:01:50")), contextlib.redirect_stderr(io.StringIO()):
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            claim(db)  # it takes its row (not written yet)
+        except SystemExit:
+            db.rollback()
+            db.close()
+            pytest.fail("not arranged: 07:00's run could not claim its time at 07:01:50")
+    run.reached = True
+    checking, wrote = threading.Event(), []
+
+    def written():  # half a second after the check begins, the claim is written, and the run says it began
+        checking.wait(30)
+        time.sleep(0.5)
+        db.commit()
+        db.close()
+        run.stdout.say(json.dumps({"event": "run_started", "run_id": 10 ** 6}) + "\n")
+        wrote.append(True)
+
+    claiming = threading.Thread(target=written, daemon=True)
+    claiming.start()
+    checking.set()
+    check(service, fake_runs, clock("10:00:30"))  # the PC wakes, and the service checks
+    claiming.join(30)
+    assert wrote, "not arranged: the claim was not written, or the run did not say it began"
+    for moment in ("10:00:45", "10:01:00"):
+        check(service, fake_runs, clock(moment))
+
+    assert "cancel" not in run.stdin.getvalue(), (
+        f"07:00's run, its claim being written as the service checked at 10:00:30, was asked to stop: "
+        f"{run.stdin.getvalue()!r}; told: {told_you}")
+    assert run.returncode is None, f"07:00's run, which claimed its time, did not go on: it ended ({run.returncode})"
     ran = begins(for_time(fake_runs.of("hourly"), clock("07:00")))
     assert ran == utc([clock("07:00")]), f"07:00 did not run once: runs began for it {ran}; told: {told_you}"
 
