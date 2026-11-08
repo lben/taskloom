@@ -64,7 +64,8 @@ class Run(FakeRun):
     """FakeRun (see there), which claims at this PC's clock as the test has it (Runs.clock): a run whose time has
     passed by then claims it then, as `taskloom run --start-at` claims a time that has passed at once. One asked to
     stop (on its stdin) before it began ends without beginning and records nothing, as the real one does. One of a
-    flow in Runs.speaking says what the real run says as it begins (said_it_began)."""
+    flow in Runs.speaking says what the real run says as it begins (said_it_began). The next one of a flow in
+    Runs.loading is still loading until the test says it has loaded (reach_its_time): its process waits meanwhile."""
 
     def __init__(self, args: list[str], runs: "Runs", home: Path):
         super().__init__(args, runs, home)
@@ -88,7 +89,7 @@ class Run(FakeRun):
         return True
 
     def poll(self):
-        if self.returncode is None and not self.reached:
+        if self.returncode is None and not self.reached and not self.waits:
             self.reach_its_time()  # (asked to stop before it: it ends without beginning)
         return super().poll()
 
@@ -98,11 +99,16 @@ class Runs(FakeRuns):
         super().__init__()
         self.clock: dt.datetime | None = None  # this PC's clock now: the clock of the service's latest check
         self.speaking: set[str] = set()
+        self.loading: set[str] = set()
 
     def popen(self, args, *rest, **kwargs):
         if not (isinstance(args, list) and "run" in map(str, args) and "--start-at" in map(str, args)):
             return REAL_POPEN(args, *rest, **kwargs)
         run = Run([str(a) for a in args], self, Path((kwargs.get("env") or os.environ)["TASKLOOM_HOME"]))
+        if run.flow in self.loading:
+            self.loading.discard(run.flow)
+            self.holding.add(run.flow)  # (its process goes on until it has loaded)
+            run.waits = True
         self.started.append(run)
         return run
 
@@ -228,6 +234,52 @@ def test_a_run_whose_program_loads_as_the_pc_sleeps_follows_misfire_when_the_pc_
     if misfire == "skip":
         assert [m for m in about(told_you, "nightly") if re.search(r"miss", m, re.IGNORECASE)], \
             f"not told that nightly's 07:00:00 was missed: {told_you}"
+
+
+@pytest.mark.invariant("SCH-9")
+@pytest.mark.invariant("SCH-11")
+@pytest.mark.parametrize("misfire, overlap, ran", [
+    ("skip", "skip", ["10:00"]), ("run_once", "skip", ["10:00"]),
+    ("catch_up", "skip", ["07:00", "08:00", "09:00", "10:00"]), ("run_once", "queue", ["10:00"])],
+    ids=["Skip", "Run once", "Catch up", "Run once, Overlap queue"])
+def test_a_run_whose_program_still_loads_as_the_pc_wakes_is_stopped_then_its_times_follow_misfire(env, fake_runs,
+                                                                                                 misfire, overlap, ran):
+    """hourly runs at minute 0 (Overlap skip, or queue). At 07:00:00 the service starts its run's process; while its
+    program loads, the PC sleeps, and on waking the service checks at 10:00:30, before that program has claimed its
+    time. It can never begin (it is still loading more than 2 minutes after its process started), so the service asks
+    it to stop (on its stdin) and decides none of hourly's times until it has ended, at 10:00:31. Then 07:00 to 10:00
+    follow Misfire (SCH-9): Skip runs 10:00 (less than 2 minutes late) and tells you 3 were missed; Run once runs
+    10:00; Catch up runs each, oldest first. No run began before 10:00, so none is skipped as the previous run still
+    going (SCH-11)."""
+    schedule(env.home, env.root, {"hourly": flow_yaml({"cron": "0 * * * *", "misfire": misfire}, overlap=overlap)})
+    told_you = []
+    service = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
+    check(service, fake_runs, clock("06:59:30"))
+    fake_runs.loading.add("hourly")
+    check(service, fake_runs, clock("07:00:00"))  # 07:00's run's process starts: its program loads
+    (program,) = fake_runs.of("hourly")
+    assert not program.reached and program.returncode is None, f"not arranged: {told_you}"
+    check(service, fake_runs, clock("10:00:30"))  # the PC wakes, and the service checks: the program still loads
+    asked_to_stop = "cancel" in program.stdin.getvalue()
+    fake_runs.clock = clock("10:00:31")  # the program has loaded (asked to stop, it ends without beginning)
+    if program.returncode is None:
+        program.reach_its_time()
+    fake_runs.holding.discard("hourly")
+    for moment in ("10:00:45", "10:01:00"):
+        check(service, fake_runs, clock(moment))
+
+    assert program.not_begun is not None, f"07:00's run, its program loading 07:00:00 to 10:00:31, began: {told_you}"
+    ran_for = begins(fake_runs.of("hourly"))
+    assert ran_for == utc([clock(t) for t in ran]), (
+        f"the PC slept from 07:00 to 10:00:30 while 07:00's program loaded ({misfire}, Overlap {overlap}): runs began "
+        f"for {ran_for}, not {ran}; told: {told_you}")
+    if misfire == "skip":
+        missed = [m for m in about(told_you, "hourly") if re.search(r"miss", m, re.IGNORECASE)]
+        assert [m for m in missed if says(m, 3)], f"not told that 3 runs of hourly were missed: {told_you}"
+    still_going = [m for m in told_you if "still going" in m]
+    assert still_going == [], f"a time was skipped as the previous run still going, yet none began: {still_going}"
+    assert asked_to_stop, ("at 10:00:30, 07:00's program, still loading since 07:00:00, was not asked to stop (on its "
+                           "stdin): one that never loads would hold hourly for ever")
 
 
 # --- SCH-4: turning the service off a few seconds before a time, with a run of its flow going --------------------------
