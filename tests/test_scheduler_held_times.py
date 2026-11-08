@@ -282,6 +282,35 @@ def test_a_run_whose_program_still_loads_as_the_pc_wakes_is_stopped_then_its_tim
                            "stdin): one that never loads would hold hourly for ever")
 
 
+@pytest.mark.invariant("SCH-9")
+def test_a_run_that_began_just_before_the_pc_slept_is_not_stopped_when_it_wakes(env, fake_runs):
+    """hourly runs at minute 0 (Overlap skip). At 07:00:00 the service starts its run's process; at 07:01:50 its program
+    has loaded, claims its time and begins (its saved row is gone), and is about to say so when the PC sleeps. On
+    waking, the service checks at 10:00:30, before it has heard that the run began. That run has claimed its time: it
+    is not asked to stop and goes on, and 07:00 runs once."""
+    schedule(env.home, env.root, {"hourly": flow_yaml({"cron": "0 * * * *"})})
+    told_you = []
+    service = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
+    check(service, fake_runs, clock("06:59:30"))
+    fake_runs.loading.add("hourly")
+    check(service, fake_runs, clock("07:00:00"))  # 07:00's run's process starts: its program loads
+    (run,) = fake_runs.of("hourly")
+    fake_runs.clock = clock("07:01:50")
+    run.beginning = []  # (it has not said yet that it began)
+    assert run.reach_its_time(), f"not arranged: 07:00's run did not begin at 07:01:50: {run.not_begun}"
+    check(service, fake_runs, clock("10:00:30"))  # the PC wakes, and the service checks
+    run.stdout.say(json.dumps({"event": "run_started", "run_id": 10 ** 6}) + "\n")  # it says it began
+    for moment in ("10:00:45", "10:01:00"):
+        check(service, fake_runs, clock(moment))
+
+    assert "cancel" not in run.stdin.getvalue(), (
+        f"07:00's run, begun at 07:01:50 (its row gone), was asked to stop when the PC woke at 10:00:30: "
+        f"{run.stdin.getvalue()!r}; told: {told_you}")
+    assert run.returncode is None, f"07:00's run, begun at 07:01:50, did not go on: it ended ({run.returncode})"
+    ran = begins(for_time(fake_runs.of("hourly"), clock("07:00")))
+    assert ran == utc([clock("07:00")]), f"07:00 did not run once: runs began for it {ran}; told: {told_you}"
+
+
 # --- SCH-4: turning the service off a few seconds before a time, with a run of its flow going --------------------------
 
 @pytest.mark.invariant("SCH-4")
