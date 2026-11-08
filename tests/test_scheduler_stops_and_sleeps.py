@@ -1,14 +1,15 @@
 """What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml) when it stops, other
-than by your turning it off, in the seconds before a time whose run it started early, or the PC sleeps across that time
-(SCH-9); when the editor records a crashed scheduled run just before the service checks (SCH-13); when a run started
-from a terminal is going as the PC's time zone changes (SCH-13); and what the service says when it stops with runs
-going (SCH-4, SCH-16).
+than by your turning it off, in the seconds before a time, or while the programs of runs it started at their time are
+still loading, or the PC sleeps across a time (SCH-5, SCH-6, SCH-8, SCH-9); when the editor records a crashed scheduled
+run just before the service checks (SCH-13); when a run started from a terminal is going as the PC's time zone changes
+(SCH-13); and what the service says when it stops with runs going (SCH-4, SCH-16).
 
 Each test uses the real service (`taskloom scheduler --headless`), real run processes and the real editor window where
 the behaviour crosses processes. Only what cannot happen in a test is arranged: a schedule's next time a few seconds
 away (a service before this one first saw it a minute earlier: next_time_in); the service being killed or stopped, as
 by a crash, the editor's Restart the scheduler service? or a PC shutting down (signals to its process); the PC
-sleeping, as its processes suspended (SIGSTOP) and resumed (SIGCONT); a service that is back more than 2 minutes after
+sleeping, as the service's process suspended (SIGSTOP) and resumed (SIGCONT); a run's program slow to load, as a
+block file in the Taskloom folder slow to import; a service that is back more than 2 minutes after
 a time, as the service's checks (Scheduler.tick) at that clock time, its runs replaced by stand-ins (FakeRuns); the
 service's check falling between the editor's two steps, by the editor's own run history connection, which lets the
 service check once the editor has recorded the crash and closed it; and the PC's time zone, as the TZ each process
@@ -34,6 +35,7 @@ from taskloom import __version__  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.scheduler import Scheduler, runs_going  # noqa: E402
+from tests.test_scheduler_at_its_time import SLOW_LOAD  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import STAMP, headless, printed, told  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, FakeRuns, begins, drain, end_runs, flow_yaml,  # noqa: E402
                                                going, history, hold_until, one_at_a_time, pump, says, schedule,
@@ -76,37 +78,48 @@ def end_service(env, service: subprocess.Popen, killed: bool):
     service.wait(timeout=15)
 
 
+def started_before(starts: Path, path: Path, due: dt.datetime) -> list[float]:
+    """How many seconds before `due` each process of the flow's run for `due` was started, of those started before it
+    (SCH-5: none is), as the processes started with record_process_starts wrote them down."""
+    found = []
+    for record in starts.glob("*-*[0-9]"):
+        args = json.loads(record.read_text(encoding="utf-8"))["args"]
+        if ("run" in args and "--as-of" in args and Path(args[args.index("run") + 1]) == path
+                and dt.datetime.fromisoformat(args[args.index("--as-of") + 1]) == due):
+            found.append(round(due.timestamp() - json.loads(record.read_text(encoding="utf-8"))["time"], 2))
+    return [seconds for seconds in found if seconds > 0.02]
+
+
 def ran(home: Path, flow: str | None = None) -> list[tuple[str, dt.datetime | None]]:
     """(status, the time it ran for) of each run (of `flow`), in the order they started."""
     return [(r["status"], r["when"] and dt.datetime.fromisoformat(r["when"])) for r in history(home)
             if flow is None or r["flow"] == flow]
 
 
-# --- SCH-9: the service stops just before a time whose run it started early ------------------------------------------
+# --- SCH-9: the service stops just before a time ------------------------------------------------------------------
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-6")
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.parametrize("misfire, stop",
                          [("run_once", "killed"), ("skip", "asked to stop"), ("run_once", "restarted")],
                          ids=["killed, Run once, back 3 s after its time",
                               "asked to stop (as a PC shutting down), Skip, back 3 s after its time",
                               "restarted by the editor, back before its time"])
-def test_a_time_whose_run_did_not_begin_as_the_service_stopped_just_before_it_runs_once_when_it_is_back(
-        env, misfire, stop):
-    """nightly runs every minute, its next time T a few seconds away, and the service has started T's run's process
-    early. Before T the service stops, not turned off by you: it is killed 3 s before T (as by a crash), or asked to
-    stop 3 s before T (as a PC shutting down asks it), and is back 3 s after T; or the editor restarts it (it asks it
-    to stop, then starts a new one once it has ended) just after T's run's process started, and it is back before T.
-    Back 3 s after T: T's run did not begin (no service was on at T), so T is a missed time, 3 s late, so on time: Run
-    once runs it, and so does Skip. Back before T: T runs. Either way T runs exactly once."""
+def test_a_time_that_came_as_the_service_stopped_just_before_it_runs_once_when_it_is_back(env, misfire, stop):
+    """nightly runs every minute, its next time T a few seconds away. Before T the service stops, not turned off by
+    you: it is killed 3 s before T (as by a crash), or asked to stop 3 s before T (as a PC shutting down asks it), and
+    is back 3 s after T; or the editor restarts it (it asks it to stop, then starts a new one once it has ended) 6 s
+    before T, and it is back before T. No run's process is started for T before T (SCH-5). Back 3 s after T: no service
+    was on at T, so T is a missed time, 3 s late, so on time: Run once runs it, and so does Skip. Back before T: T
+    runs. Either way T runs exactly once."""
     starts = record_process_starts(env)
     flows = schedule(env.home, env.root, {"nightly": flow_yaml({**EVERY_MINUTE, "misfire": misfire})})
     due = next_time_in(env.home, 10)
     services = [start_service(env, tray=False)]
     not_begun = None
     try:
-        assert run_processes(starts, flows, due, until=due - dt.timedelta(seconds=3)), \
-            f"no run process was started early for {due:%H:%M:%S}"
+        sleep_until(due - dt.timedelta(seconds=6 if stop == "restarted" else 3))
         if stop == "restarted":
             end_service(env, services[0], killed=False)
             restarted = dt.datetime.now()
@@ -123,41 +136,38 @@ def test_a_time_whose_run_did_not_begin_as_the_service_stopped_just_before_it_ru
             services.append(start_service(env, tray=False))  # it is back
         wait_until(lambda: [r for r in history(env.home) if r["status"] != "running"], 15)
         time.sleep(2)  # (a second run for that time would have begun by now)
-        runs = ran(env.home)
+        runs, early = ran(env.home), started_before(starts, flows["nightly"], due)
     finally:
         for service in services:
             stop_service(env, service)
         end_runs(env.home)
 
+    assert early == [], f"run processes were started this many seconds before {due:%H:%M:%S}: {early}"
     assert not_begun in (None, []), f"T's run began with no service on: {not_begun}"
     assert runs == [("success", due)], (
         f"the service {stop} before {due:%H:%M:%S} and back, the runs are {runs}, not one run for {due:%H:%M:%S}: "
-        f"{'that time, whose run did not begin as the service stopped just before it, is lost' if not runs else ''}")
+        f"{'that time, which came as the service stopped just before it, is lost' if not runs else ''}")
 
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-6")
 @pytest.mark.parametrize("misfire, ran_k, missed", [("skip", [2], 2), ("catch_up", [0, 1, 2], None)],
                          ids=["Skip", "Catch up"])
-def test_a_time_whose_run_did_not_begin_as_the_service_was_killed_is_missed_when_it_is_back_over_2_minutes_later(
-        env, misfire, ran_k, missed):
-    """nightly runs every minute, its next time T a few seconds away, and the service has started T's run's process
-    early; the service is killed 3 s before T, so that run does not begin. The service is back 2.5 minutes after T:
-    T, T + 1 min and T + 2 min are due, and only T + 2 min is under 2 minutes late. Skip runs only T + 2 min and tells
-    you 2 were missed (T among them); Catch up runs T, T + 1 min and T + 2 min, oldest first, one at a time. No time
-    runs twice."""
-    starts = record_process_starts(env)
-    flows = schedule(env.home, env.root, {"nightly": flow_yaml({**EVERY_MINUTE, "misfire": misfire})})
+def test_a_time_after_the_service_was_killed_is_missed_when_it_is_back_over_2_minutes_later(env, misfire, ran_k,
+                                                                                             missed):
+    """nightly runs every minute, its next time T a few seconds away; the service is killed 3 s before T, so no run
+    begins for T. The service is back 2.5 minutes after T: T, T + 1 min and T + 2 min are due, and only T + 2 min is
+    under 2 minutes late. Skip runs only T + 2 min and tells you 2 were missed (T among them); Catch up runs T, T + 1
+    min and T + 2 min, oldest first, one at a time. No time runs twice."""
+    schedule(env.home, env.root, {"nightly": flow_yaml({**EVERY_MINUTE, "misfire": misfire})})
     due = next_time_in(env.home, 10)
     service = start_service(env, tray=False)
     try:
-        assert run_processes(starts, flows, due, until=due - dt.timedelta(seconds=3)), \
-            f"no run process was started early for {due:%H:%M:%S}"
         sleep_until(due - dt.timedelta(seconds=3))
         end_service(env, service, killed=True)
         ahead = due.timestamp() - time.time()
         assert ahead > 0.5, f"killed only {ahead:.2f} s before {due:%H:%M:%S}: too late to tell"
-        sleep_until(due + dt.timedelta(seconds=3))  # (T's run has reached its time with no service on)
+        sleep_until(due + dt.timedelta(seconds=3))  # (T has come with no service on)
         not_begun = history(env.home)
     finally:
         stop_service(env, service)
@@ -181,35 +191,35 @@ def test_a_time_whose_run_did_not_begin_as_the_service_was_killed_is_missed_when
     if missed:
         about = [t for t in told_back if "nightly" in t]
         assert [t for t in about if says(t, missed)] and not [t for t in about if says(t, missed - 1)], (
-            f"not told that {missed} runs were missed (T, whose run did not begin as the service was killed just "
-            f"before it, among them): {about}")
+            f"not told that {missed} runs were missed (T, which came after the service was killed, among them): "
+            f"{about}")
 
 
-# --- SCH-8: runs started early for the same time, and no service on at that time -------------------------------------
+# --- SCH-8, SCH-6: runs for the same time, still loading as the service is killed -------------------------------------
 
 SHARED = [f"flow_{letter}" for letter in "abcdefghijklmnop"]  # (no digits: a flow's name in a message is never a count)
-TRIES = 3  # (whether two runs reach their time at the very same instant is chance: each try is another chance)
+TRIES = 3  # (whether two runs claim at the very same instant is chance: each try is another chance)
 
 
-def killed_before_a_shared_time(env, folder: Path) -> tuple[dt.datetime, list[tuple[str, str]]]:
-    """In a Taskloom folder of its own (in `folder`): the SHARED flows run every minute, all due at the same time T a
-    few seconds away; the service starts each one's run process early and is killed 3 s before T. T, and the runs
-    that began (flow, status) by 3 s after T."""
+def killed_while_they_load(env, folder: Path) -> tuple[dt.datetime, list[tuple[str, str]]]:
+    """In a Taskloom folder of its own (in `folder`), whose block file is slow to import (each run's program takes 4 s
+    to load): the SHARED flows run every minute, all due at the same time T a few seconds away; the service starts
+    each one's run at T and is killed while their programs load. T, and the runs that began (flow, status) once they
+    have all loaded."""
     place = types.SimpleNamespace(root=folder, home=folder / "home")
     place.home.mkdir(parents=True)
     place.env = {**env.env, "TASKLOOM_HOME": str(place.home)}
+    write(place.home / "blocks" / "slow_load.py", SLOW_LOAD)
     starts = record_process_starts(place)
     flows = schedule(place.home, place.root, {name: flow_yaml(EVERY_MINUTE) for name in SHARED})
     due = next_time_in(place.home, 10)
     service = start_service(place, tray=False)
     try:
-        early = run_processes(starts, flows, due, until=due - dt.timedelta(seconds=3))
-        assert set(early) == set(SHARED), f"not every run for {due:%H:%M:%S} was started early: {sorted(early)}"
-        sleep_until(due - dt.timedelta(seconds=3))
+        loading = run_processes(starts, flows, due, until=due + dt.timedelta(seconds=3))
+        assert set(loading) == set(SHARED), f"not every run for {due:%H:%M:%S} was started: {sorted(loading)}"
         end_service(place, service, killed=True)
-        ahead = due.timestamp() - time.time()
-        assert ahead > 0.5, f"killed only {ahead:.2f} s before {due:%H:%M:%S}: too late to tell"
-        sleep_until(due + dt.timedelta(seconds=3))  # (the runs have reached T with no service on)
+        assert time.time() < min(loading.values()) + 3, "killed too late: their programs may have loaded by then"
+        sleep_until(dt.datetime.fromtimestamp(max(loading.values())) + dt.timedelta(seconds=10))  # (all have loaded)
         return due, [(r["flow"], r["status"]) for r in history(place.home)]
     finally:
         stop_service(place, service)
@@ -217,131 +227,64 @@ def killed_before_a_shared_time(env, folder: Path) -> tuple[dt.datetime, list[tu
 
 
 @pytest.mark.invariant("SCH-8")
-def test_runs_started_early_for_the_same_time_none_begins_when_the_service_was_killed_just_before_it(env):
-    """Sixteen flows run every minute, all due at the same time T a few seconds away, and the service has started each
-    one's run process early. The service is killed 3 s before T (as by a crash), so no service is on at T: the sixteen
-    runs reach T together, and none of them begins, and nothing is recorded for any of them. Tried up to three times,
-    each in a Taskloom folder of its own."""
+@pytest.mark.invariant("SCH-6")
+def test_runs_still_loading_for_the_same_time_none_begins_when_the_service_was_killed_meanwhile(env):
+    """Sixteen flows run every minute, all due at the same time T a few seconds away; the service starts each one's run
+    at T, and their programs take a few seconds to load. The service is killed meanwhile (as by a crash), so no service
+    is on as they have loaded: the sixteen runs claim together, and none of them begins, and nothing is recorded for
+    any of them (the service back on sees to T itself: one run each). Tried up to three times, each in a Taskloom folder
+    of its own."""
     for attempt in range(1, TRIES + 1):
-        due, began = killed_before_a_shared_time(env, env.root / f"try-{attempt}")
+        due, began = killed_while_they_load(env, env.root / f"try-{attempt}")
         if began:
             break
 
     assert began == [], (
-        f"with no service on at {due:%H:%M:%S} (it was killed 3 s before; try {attempt} of {TRIES}), {len(began)} of "
-        f"the {len(SHARED)} runs started early for that time began: {began}")
+        f"with no service on as they had loaded (it was killed while they loaded; try {attempt} of {TRIES}), "
+        f"{len(began)} of the {len(SHARED)} runs for {due:%H:%M:%S} began: {began}")
 
 
-# --- SCH-9: the PC sleeps across a time whose run was started early --------------------------------------------------
+# --- SCH-9: the PC sleeps across a time -------------------------------------------------------------------------------
 
-# A sitecustomize module for the processes started with env.env: each `taskloom run` process they start (with
-# --start-at) is written down in the folder TEST_RUN_PIDS, as a file named by its process id holding its command line.
-RUN_PIDS = """
-import json, os, subprocess
-
-if os.environ.get("TEST_RUN_PIDS"):
-    class Recorded(subprocess.Popen):
-        def __init__(self, args, *rest, **kwargs):
-            super().__init__(args, *rest, **kwargs)
-            if isinstance(args, list) and "--start-at" in map(str, args):
-                path = os.path.join(os.environ["TEST_RUN_PIDS"], str(self.pid))
-                with open(path + ".part", "w", encoding="utf-8") as f:
-                    json.dump([str(a) for a in args], f)
-                os.replace(path + ".part", path)  # (never read half-written)
-
-    subprocess.Popen = Recorded
-"""
-
-
-def record_run_pids(env) -> Path:
-    """The folder where the run processes the service starts are written down (see RUN_PIDS)."""
-    probe, folder = env.root / "pids-probe", env.root / "run-pids"
-    write(probe / "sitecustomize.py", RUN_PIDS)
-    folder.mkdir()
-    env.env.update(PYTHONPATH=os.pathsep.join(filter(None, [str(probe), env.env.get("PYTHONPATH")])),
-                   TEST_RUN_PIDS=str(folder))
-    return folder
-
-
-def early_runs(folder: Path, flows: dict[str, Path], due: dt.datetime, until: dt.datetime) -> dict[str, int]:
-    """The process id of each flow's run for the time `due`; waits for them until the clock says `until`."""
-    found = {}
-    while len(found) < len(flows) and dt.datetime.now() < until:
-        for record in folder.iterdir():
-            if not record.name.isdigit():
-                continue
-            args = json.loads(record.read_text(encoding="utf-8"))
-            for name, path in flows.items():
-                if (Path(args[args.index("run") + 1]) == path
-                        and dt.datetime.fromisoformat(args[args.index("--as-of") + 1]) == due):
-                    found.setdefault(name, int(record.name))
-        time.sleep(0.05)
-    return found
-
-
-def has_ended(pid: int) -> bool:
-    """Whether the process has ended: gone, or ended and not yet reaped by its parent (suspended here)."""
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-    return not state or state.startswith("Z")
-
-
-# name: (Misfire, which wakes first: its run started early, or the service (its run wakes once the service checked))
-SLEEPERS = {"audit": ("skip", "run"), "billing": ("skip", "service"),
-            "cleanup": ("run_once", "run"), "digest": ("run_once", "service")}
+SLEEPERS = {"audit": "skip", "cleanup": "run_once"}  # name: Misfire
 
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-11")
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.skipif(sys.platform == "win32",
-                    reason="the PC sleeping is its processes suspended and resumed, which a test can do only on POSIX "
-                           "(SIGSTOP, SIGCONT)")
-def test_a_run_started_early_whose_time_the_pc_slept_across_does_not_begin_and_its_time_is_missed(env):
-    """Four flows run every minute (Overlap skip, the default), their next time T a few seconds away, and the service
-    has started T's runs' processes early. The PC sleeps 3 s before T (the service and those processes are suspended)
-    and wakes 130 s after T: T and T + 1 min are more than 2 minutes late, T + 2 min is on time. As the PC wakes,
-    audit's and cleanup's runs wake before the service checks; billing's and digest's only after it has checked. T's
-    runs do not begin, and nothing late runs. audit and billing (Skip) run T + 2 min, which is not refused as "the
-    previous run is still going", and you are told 2 were missed (T and T + 1 min); cleanup and digest (Run once) run
-    only the latest, T + 2 min."""
-    folder = record_run_pids(env)
-    flows = schedule(env.home, env.root, {name: flow_yaml({**EVERY_MINUTE, "misfire": misfire})
-                                          for name, (misfire, _) in SLEEPERS.items()})
+                    reason="the PC sleeping is the service's process suspended and resumed, which a test can do only "
+                           "on POSIX (SIGSTOP, SIGCONT)")
+def test_a_time_the_pc_slept_across_does_not_run_late_and_is_missed(env):
+    """Two flows run every minute (Overlap skip, the default), their next time T a few seconds away. The PC sleeps 3 s
+    before T (the service is suspended) and wakes 130 s after T: T and T + 1 min are more than 2 minutes late, T + 2
+    min is on time. No run's process was started for T before the PC slept (SCH-5), and nothing late runs. audit (Skip)
+    runs T + 2 min, which is not refused as "the previous run is still going", and you are told 2 were missed (T and T
+    + 1 min); cleanup (Run once) runs only the latest, T + 2 min."""
+    schedule(env.home, env.root, {name: flow_yaml({**EVERY_MINUTE, "misfire": misfire})
+                                  for name, misfire in SLEEPERS.items()})
     due = next_time_in(env.home, 10)
     log = env.root / "service.log"
     service = headless(env, log)
     suspended = []
     try:
-        runs = early_runs(folder, flows, due, until=due - dt.timedelta(seconds=3))
-        assert set(runs) == set(SLEEPERS), f"the runs for {due:%H:%M:%S} were not all started early: {runs}"
         sleep_until(due - dt.timedelta(seconds=3))
-        suspended = [service_pid(env), *runs.values()]  # the PC sleeps
-        for pid in suspended:
-            os.kill(pid, signal.SIGSTOP)
+        suspended = [service_pid(env)]  # the PC sleeps
+        os.kill(suspended[0], signal.SIGSTOP)
         ahead = due.timestamp() - time.time()
         assert ahead > 1, f"the PC slept only {ahead:.2f} s before {due:%H:%M:%S}: too late to tell"
         sleep_until(due + dt.timedelta(seconds=130))
-        first, last = ([runs[name] for name, (_, wakes) in SLEEPERS.items() if wakes == which]
-                       for which in ("run", "service"))
-        for pid in first:  # the PC wakes: these runs before the service
-            os.kill(pid, signal.SIGCONT)
-        assert wait_until(lambda: all(has_ended(pid) for pid in first), 15), "the runs that woke first did not end"
         woke = dt.datetime.now()
-        os.kill(suspended[0], signal.SIGCONT)
-        suspended = last
+        os.kill(suspended.pop(), signal.SIGCONT)  # the PC wakes
         assert checked_after(env, woke, until=woke + dt.timedelta(seconds=10)), "the service did not check on waking"
-        for pid in last:  # the others once it has checked
-            os.kill(pid, signal.SIGCONT)
-        suspended = []
         on_time = due + 2 * MINUTE
         wait_until(lambda: all((("success", on_time) in ran(env.home, name)) for name in SLEEPERS), 20)
         time.sleep(2)  # (a run for T beginning late would show by now)
         runs_now = {name: ran(env.home, name) for name in SLEEPERS}
     finally:
         for pid in suspended:
-            try:
+            with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGCONT)
-            except OSError:
-                pass
         stop_service(env, service)
         end_runs(env.home)
 
@@ -351,10 +294,9 @@ def test_a_run_started_early_whose_time_the_pc_slept_across_does_not_begin_and_i
         f"{on_time:%H:%M:%S}'s for each flow; told: {messages}")
     refused = [m for m in messages if "still going" in m]
     assert refused == [], f"the on-time run was refused as the previous run still going: {refused}"
-    for name in ("audit", "billing"):
-        about = [m for m in messages if name in m]
-        assert [m for m in about if says(m, 2)] and not [m for m in about if says(m, 1)], \
-            f"{name}: not told that 2 runs were missed (T and T + 1 min): {about}"
+    about = [m for m in messages if "audit" in m]
+    assert [m for m in about if says(m, 2)] and not [m for m in about if says(m, 1)], \
+        f"audit: not told that 2 runs were missed (T and T + 1 min): {about}"
 
 
 # --- SCH-13: the editor records a crash just before the service checks ----------------------------------------------
@@ -528,13 +470,14 @@ def stopped_message(log: Path) -> str:
 @pytest.mark.invariant("SCH-4")
 @pytest.mark.invariant("SCH-16")
 def test_when_the_service_stops_with_runs_going_it_counts_only_the_runs_that_have_begun(env):
-    """going's run has begun and goes on (until a file appears); soon's run, due a few seconds later, has been started
-    early and has not begun. The service is stopped then, before soon's time (Ctrl+C in its console; on a server, as
-    kill or the system stops it). It says 1 run is still going and continues on its own, not 2: soon's run, which will
-    not begin, is not a run going."""
+    """going's run has begun and goes on (until a file appears); soon's run has been started at its time, a few seconds
+    later, and its program is still loading (a block file slow to import): it has not begun. The service is stopped
+    then (Ctrl+C in its console; on a server, as kill or the system stops it). It says 1 run is still going and
+    continues on its own, not 2: soon's run, which will not begin, is not a run going."""
+    write(env.home / "blocks" / "slow_load.py", SLOW_LOAD)
     starts = record_process_starts(env)
     soon = schedule(env.home, env.root, {"soon": flow_yaml(EVERY_MINUTE)})
-    due = next_time_in(env.home, 12)
+    due = next_time_in(env.home, 15)
     schedule(env.home, env.root, {"going": flow_yaml(HOURLY, work=hold_until("going"))})  # it runs as soon as seen
     log, stop = env.root / "service.log", env.root / "stop"
     with open(log, "w", encoding="utf-8") as out:
@@ -544,12 +487,11 @@ def test_when_the_service_stops_with_runs_going_it_counts_only_the_runs_that_hav
     try:
         assert wait_until(lambda: going(env.home) == {"going"}, 20) and checked_since_it_began(env, "going"), \
             f"going's run did not begin: {history(env.home)}\n{printed(log)}"
-        assert run_processes(starts, soon, due, until=due - dt.timedelta(seconds=3)), \
-            f"soon's run for {due:%H:%M:%S} was not started early"
+        loading = run_processes(starts, soon, due, until=due + dt.timedelta(seconds=3))
+        assert loading, f"soon's run for {due:%H:%M:%S} was not started"
         write(stop, "stop")
         assert wait_until(lambda: service.poll() is not None, 5), "the service did not stop"
-        ahead = due.timestamp() - time.time()
-        assert ahead > 0.5, f"the service stopped only {ahead:.2f} s before {due:%H:%M:%S}: too late to tell"
+        assert time.time() < loading["soon"] + 3, "the service stopped too late: soon's program may have loaded"
         message = stopped_message(log)
         live = going(env.home)
     finally:
@@ -559,5 +501,5 @@ def test_when_the_service_stops_with_runs_going_it_counts_only_the_runs_that_hav
 
     assert live == {"going"}, f"going's run did not go on after the service stopped: {live}"
     assert says(message, 1) and not says(message, 2), (
-        f"with 1 run going and 1 started early that will not begin, the service said as it stopped: {message!r}\n"
+        f"with 1 run going and 1 still loading that will not begin, the service said as it stopped: {message!r}\n"
         f"{printed(log)}")

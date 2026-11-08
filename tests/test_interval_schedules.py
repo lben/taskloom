@@ -72,8 +72,8 @@ def scheduled(env, text: str) -> tuple[Path, Home]:
 @pytest.fixture
 def fake_runs(monkeypatch):
     """The run processes the scheduler starts, each replaced by a stand-in (FakeRuns; .started: in the order it starts
-    them): the service checks at the test's clock times, so a run it starts early reaches its time and claims it on
-    that clock, as `taskloom run --if-scheduled` does."""
+    them): the service checks at the test's clock times, so a run it starts claims on that clock, as `taskloom run
+    --if-scheduled` does."""
     runs = FakeRuns()
     monkeypatch.setattr(subprocess, "Popen", runs.popen)
     yield runs
@@ -109,9 +109,9 @@ def outcomes(started: list[FakeRun]) -> list[str]:
 
 @pytest.mark.parametrize("every, checks, expected", [
     # the user's case: switched on at second 14, then each minute at second 14 (not at :00, nor at the minute marks)
-    ("1 minute", ["10:00:14", "10:00:29", "10:01:00", "10:01:10", "10:01:25", "10:02:10"],
+    ("1 minute", ["10:00:14", "10:00:29", "10:01:00", "10:01:10", "10:01:25", "10:02:15"],
      ["10:00:14", "10:01:14", "10:02:14"]),
-    ("2 hours", ["09:30:40", "10:00:00", "11:00:00", "11:30:36", "11:30:50", "13:30:36"],
+    ("2 hours", ["09:30:40", "10:00:00", "11:00:00", "11:30:36", "11:30:50", "13:30:41"],
      ["09:30:40", "11:30:40", "13:30:40"]),
 ], ids=["1 minute", "2 hours"])
 @pytest.mark.invariant("SCH-6")
@@ -124,7 +124,7 @@ def test_an_every_n_schedule_runs_when_first_seen_then_every_n_from_that_second(
     for clock in checks:
         tick(scheduler, clock)
 
-    assert clocks(started) == expected, scheduler.told  # the later ones requested early, to begin at their time
+    assert clocks(started) == expected, scheduler.told
     assert outcomes(started) == ["began"] * len(expected)
 
 
@@ -133,7 +133,7 @@ def test_a_cron_line_typed_by_hand_stays_on_the_clock_next_to_an_every_n_minutes
     started = fake_runs.started
     scheduled(env, flow_with(every_five={"every": "5 minutes"}, on_the_clock={"cron": "*/5 * * * *"}))
     scheduler = service(fake_runs, Home(env.home))
-    for clock in ("10:02:14", "10:04:56", "10:07:10", "10:09:56"):
+    for clock in ("10:02:14", "10:05:01", "10:07:15", "10:10:01"):
         tick(scheduler, clock)
 
     assert [(run.block, f"{start_at_clock(run.start_at):%H:%M:%S}") for run in started] == [
@@ -156,13 +156,13 @@ def test_turning_the_service_off_and_on_keeps_the_starting_point_and_follows_mis
     started = fake_runs.started
     _, home = scheduled(env, flow_with(check={"every": "5 minutes", "misfire": misfire}))
     before = service(fake_runs, home)
-    for clock in ("10:00:14", "10:05:10"):
+    for clock in ("10:00:14", "10:05:15"):
         tick(before, clock)
     assert clocks(started) == ["10:00:14", "10:05:14"], before.told
 
     # off after 10:05:14, on again at 10:23:00: 10:10:14, 10:15:14 and 10:20:14 were missed
     after = service(fake_runs, home)
-    for clock in ("10:23:00", "10:23:15", "10:25:10"):
+    for clock in ("10:23:00", "10:23:15", "10:25:15"):
         tick(after, clock)
 
     assert clocks(started) == ["10:00:14", "10:05:14"] + after_restart + ["10:25:14"], after.told  # from 10:00:14
@@ -189,8 +189,8 @@ def test_changing_n_or_turning_the_schedule_off_and_on_starts_it_again_from_then
         tick(scheduler, "10:02:00")
         home.set_scheduled(flow, True)
     # Seen again at 10:03:40: it runs then, and counts from then (10:05:14, from the old start, does not run).
-    next_check, next_run = ("10:05:36", "10:05:40") if change == "every changed" else ("10:08:36", "10:08:40")
-    for clock in ("10:03:40", "10:05:10", next_check):
+    next_check, next_run = ("10:05:41", "10:05:40") if change == "every changed" else ("10:08:41", "10:08:40")
+    for clock in ("10:03:40", "10:05:15", next_check):
         tick(scheduler, clock)
 
     assert clocks(started) == ["10:00:14", "10:03:40", next_run], scheduler.told
@@ -224,7 +224,8 @@ def finished_runs(env, count: int, until: float) -> list[dict]:
 def test_saved_while_the_service_is_on_every_minute_runs_at_once_then_each_minute_at_that_second(env):
     """The user's case, with the tray service (as on Windows): a scheduled flow's Schedule block changed to every
     1 minute and saved. The service notices within about a second (it used to take up to 15 s), the first run
-    begins right then, and the next begins exactly a minute after that moment, on time."""
+    begins right then, and the next is for exactly a minute after that moment, and begins on time (SCH-5: never before
+    it, at most 5 s after it)."""
     starts = record_process_starts(env)
     flow, _ = scheduled(env, flow_with(check={"cron": "0 2 1 1 *"}))  # (once a year: never during the test)
     service = start_service(env, tray=True)
@@ -252,9 +253,11 @@ def test_saved_while_the_service_is_on_every_minute_runs_at_once_then_each_minut
         f"switched on {switched_on.timestamp() - saved_to:+.2f} s after the save"
     # 2: the first run begins right then, within a few seconds of the save
     assert first["started"].timestamp() - saved_to <= 5, f"the first run began {first['started']}, saved {saved_to}"
-    # 2: the next one minute after that moment, to the second, begun on time: its process started early
+    # 2: the next one minute after that moment, to the second, begun on time (SCH-5): its process started not before
+    # its time, and it began at most 5 s after it
     assert second_time == switched_on + dt.timedelta(minutes=1), (switched_on, second_time)
-    assert second_process < second_time.timestamp(), "the second run's process started only at its time"
+    assert second_process >= second_time.timestamp() - 0.02, \
+        f"the second run's process started {second_time.timestamp() - second_process:.2f} s before its time"
     assert_began_at(env, second, second_time)
 
 

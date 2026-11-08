@@ -1,7 +1,8 @@
 """What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml) about times and runs
 while it is off, asleep, starting or restarting: more missed Catch up times found before you answer the question about
 them (SCH-9), a scheduled run whose process is gone told exactly once, by the editor or the service, whichever finds it
-first (SCH-13), a time whose run was started early when you turned the service off just before it (SCH-9, SCH-8), a
+first (SCH-13), a time that comes just after you turned the service off, a missed time when it is on again (SCH-9,
+SCH-8), a
 turn-off asked for while the service starts (SCH-4), a run going across a time zone change and a restart of the
 service (SCH-11, SCH-16), and a run that began just before the service crashed, before the service checked again
 (SCH-11, SCH-12).
@@ -52,20 +53,19 @@ from tests.test_scheduler_turn_off_and_restart import EVERY_MINUTE, block_errors
 # --- stand-ins for run processes -------------------------------------------------------------------------------------
 
 class Runs(FakeRuns):
-    """FakeRuns, where the next run of a flow in `early` started early waits for its time until the test says it has
-    come (at_its_time): its process waits meanwhile (its flow is held), then claims its time as `taskloom run
-    --if-scheduled` does (FakeRun.reach_its_time). It begins (it says run_started, then run_finished, and goes on until
-    its flow is let go), or it does not, e.g. as the service was turned off before its time: it prints why, records
-    nothing, and ends with the exit code NOT_DUE."""
+    """FakeRuns, where the next run of a flow in `loading` is still loading until the test says it has loaded
+    (has_loaded): its process waits meanwhile (its flow is held), then claims as `taskloom run --if-scheduled` does
+    (FakeRun.reach_its_time). It begins (it says run_started, then run_finished, and goes on until its flow is let
+    go), or it does not: it prints why, records nothing, and ends with the exit code NOT_DUE."""
 
     def __init__(self):
         super().__init__()
-        self.early: set[str] = set()
+        self.loading: set[str] = set()
 
     def popen(self, args, *rest, **kwargs):
         run = super().popen(args, *rest, **kwargs)
-        if isinstance(run, FakeRun) and run.claims and run.flow in self.early:
-            self.early.discard(run.flow)
+        if isinstance(run, FakeRun) and run.claims and run.flow in self.loading:
+            self.loading.discard(run.flow)
             self.holding.add(run.flow)
             run.waits = True
             run.beginning = [json.dumps(event) + "\n" for event in ({"event": "run_started", "run_id": 10 ** 6},
@@ -73,8 +73,8 @@ class Runs(FakeRuns):
         return run
 
 
-def at_its_time(runs: Runs, run: FakeRun) -> bool:
-    """The run started early reaches its time: whether it began (it goes on until its flow is let go: here, it
+def has_loaded(runs: Runs, run: FakeRun) -> bool:
+    """The run's program has loaded, and it claims: whether it began (it goes on until its flow is let go: here, it
     finishes); one that did not has ended."""
     began = run.reach_its_time()
     if not began:
@@ -291,7 +291,7 @@ def test_a_scheduled_run_whose_process_is_gone_is_recorded_crashed_and_told_exac
     assert adhoc_told == [], f"the run the editor started (not scheduled) was told: {adhoc_told}"
 
 
-# --- SCH-9, SCH-8: a time whose run was started early, and the service turned off just before it ------------------
+# --- SCH-9, SCH-8: turning the service off just before a time, and on again ------------------------------------------
 
 TODAY = dt.datetime(2026, 1, 5)
 
@@ -301,25 +301,29 @@ def clock(text: str) -> dt.datetime:
     return dt.datetime.combine(TODAY, dt.time.fromisoformat(text))
 
 
-def turned_off_before_its_time(env, runs: Runs, schedule_config: dict, began: bool) -> list[str]:
-    """report runs on this schedule; the service first saw it at 06:59:30. At 06:59:56 its run for 07:00 is started
-    early. You turn the service off (Proceed) at 06:59:57 if the run does not begin, else at 07:00:02, once it has
-    begun (Let it finish); the service turns off once that run has ended. What the service told."""
+def turned_off_around_its_time(env, runs: Runs, schedule_config: dict, began: bool) -> list[str]:
+    """report runs on this schedule; the service first saw it at 06:59:30, and checks at 06:59:56. If the run for 07:00
+    is not to begin, you turn the service off (Proceed) at 06:59:57, before 07:00: no run's process has been started for
+    07:00 (SCH-5), and none is. Else the service starts it at 07:00:00, it begins, and you turn the service off at
+    07:00:02 (Let it finish). The service turns off once nothing is going. What the service told."""
     path = schedule(env.home, env.root, {"report": flow_yaml(schedule_config)})["report"]
     told = []
     service = runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     service.tick(clock("06:59:30"))
-    runs.early.add("report")
+    runs.loading.add("report")
     service.tick(clock("06:59:56"))
-    (early,) = runs.of("report")
-    assert begins([early]) == utc([clock("07:00")]), "the run for 07:00 was not started early"
+    assert runs.of("report") == [], f"a run's process was started at 06:59:56, before its time 07:00: {told}"
     if not began:
         request_turn_off(Home(env.home), {})  # Proceed (no runs going: it only asked to confirm)
-        service.tick(clock("06:59:58"))
-    assert at_its_time(runs, early) == began, \
-        f"at its time, the run for 07:00 {'did not begin' if began else 'began'}: {early.not_begun}"
-    service.tick(clock("07:00:01"))
-    if began:
+        for moment in ("06:59:58", "07:00:00", "07:00:01"):
+            service.tick(clock(moment))
+        assert runs.of("report") == [], f"a run started after you turned the service off: {told}"
+    else:
+        service.tick(clock("07:00:00"))
+        (run,) = runs.of("report")
+        assert begins([run]) == utc([clock("07:00")]) and has_loaded(runs, run), \
+            f"the run for 07:00 did not begin at its time: {run.not_begun}"
+        service.tick(clock("07:00:01"))
         request_turn_off(Home(env.home), {str(path): "finish"})  # Proceed, Let it finish (the default)
         service.tick(clock("07:00:03"))
         runs.holding.discard("report")  # it finishes
@@ -330,6 +334,7 @@ def turned_off_before_its_time(env, runs: Runs, schedule_config: dict, began: bo
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-8")
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.parametrize("cron, misfire, on, ran, missed", [
     ("0 7 * * *", "run_once", "08:00", ["07:00"], None),
     ("0 7 * * *", "catch_up", "08:00", ["07:00"], None),
@@ -338,13 +343,14 @@ def turned_off_before_its_time(env, runs: Runs, schedule_config: dict, began: bo
     ("* * * * *", "skip", "07:04:30", ["07:04"], 4),
 ], ids=["daily 07:00, Run once", "daily 07:00, Catch up", "daily 07:00, Skip", "every minute, Catch up",
         "every minute, Skip"])
-def test_a_time_whose_run_did_not_begin_as_you_turned_the_service_off_just_before_is_missed_not_lost(
+def test_a_time_that_came_after_you_turned_the_service_off_just_before_it_is_missed_not_lost(
         env, fake_runs, cron, misfire, on, ran, missed):
-    """report's run for 07:00 has been started early; you turn the service off (Proceed) at 06:59:57: the run does not
-    begin, and the service turns off. You turn it on again later (`on`): 07:00 is a missed time like the others, under
-    the schedule's Misfire: Run once runs it (a daily 07:00 turned on at 08:00 runs 07:00's run), Catch up includes
-    it (oldest first, one at a time), Skip counts it in the number of missed runs you are told. No time runs twice."""
-    told = turned_off_before_its_time(env, fake_runs, {"cron": cron, "misfire": misfire}, began=False)
+    """You turn the service off (Proceed) at 06:59:57, 3 s before report's time 07:00: no run begins for it, and the
+    service turns off. You turn it on again later (`on`): 07:00 came while the service was off, so it is a missed time
+    like the others, under the schedule's Misfire: Run once runs it (a daily 07:00 turned on at 08:00 runs 07:00's
+    run), Catch up includes it (oldest first, one at a time), Skip counts it in the number of missed runs you are told.
+    No time runs twice."""
+    told = turned_off_around_its_time(env, fake_runs, {"cron": cron, "misfire": misfire}, began=False)
     set_paused(Home(env.home), False)  # you turn it on: a new service starts
     before = len(fake_runs.started)
     service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
@@ -353,8 +359,8 @@ def test_a_time_whose_run_did_not_begin_as_you_turned_the_service_off_just_befor
     after = fake_runs.started[before:]
     began = begins(after)
     assert began == utc([clock(t) for t in ran]), (
-        f"turned on at {on}, the runs that began are for {[hhmm(run) for run in after]}, not {ran}: 07:00, whose run "
-        f"did not begin as you turned the service off just before it, is lost; told: {told}")
+        f"turned on at {on}, the runs that began are for {[hhmm(run) for run in after]}, not {ran}: 07:00, which came "
+        f"after you turned the service off just before it, is lost; told: {told}")
     assert len(set(began)) == len(began) and one_at_a_time(after) == []
     if missed:
         about = [t for t in told if "report" in t]
@@ -367,10 +373,9 @@ def test_a_time_whose_run_did_not_begin_as_you_turned_the_service_off_just_befor
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.parametrize("misfire", ["run_once", "catch_up", "skip"])
 def test_a_time_whose_run_began_before_you_turned_the_service_off_never_runs_again(env, fake_runs, misfire):
-    """As above, but you turn the service off at 07:00:02, after report's run for 07:00 has begun (Let it finish): it
-    finishes, and the service turns off. Turned on again at 08:00, 07:00 does not run again, and is not counted as
-    missed."""
-    told = turned_off_before_its_time(env, fake_runs, {"cron": "0 7 * * *", "misfire": misfire}, began=True)
+    """report's run for 07:00 begins at its time; you turn the service off at 07:00:02 (Let it finish): it finishes,
+    and the service turns off. Turned on again at 08:00, 07:00 does not run again, and is not counted as missed."""
+    told = turned_off_around_its_time(env, fake_runs, {"cron": "0 7 * * *", "misfire": misfire}, began=True)
     set_paused(Home(env.home), False)
     before = len(fake_runs.started)
     service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
@@ -382,22 +387,25 @@ def test_a_time_whose_run_began_before_you_turned_the_service_off_never_runs_aga
 
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.invariant("SCH-8")
+@pytest.mark.invariant("SCH-5")
 def test_the_real_service_turned_off_just_before_a_time_runs_that_time_once_when_turned_on_again(env):
-    """nightly runs every minute (Misfire Run once, the default), its next time a few seconds away, and the service
-    (`taskloom scheduler --headless`) has started its run's process early. You turn the service off (Proceed) before
-    that time: the run does not begin, and the service turns off. You turn it on again a few seconds after that time,
-    before the next: that time was missed, so Run once runs it, once."""
+    """nightly runs every minute (Misfire Run once, the default), its next time a few seconds away. You turn the
+    service (`taskloom scheduler --headless`) off (Proceed) 3 s before that time: no run's process is started for it,
+    and the service turns off. You turn it on again a few seconds after that time, before the next: that time was
+    missed, so Run once runs it, once."""
     starts = record_process_starts(env)
     flows = schedule(env.home, env.root, {"nightly": flow_yaml(EVERY_MINUTE)})
     due = next_time_in(env.home, 10)
     services = [start_service(env, tray=False)]
     try:
-        assert run_processes(starts, flows, due, until=due), f"no run process was started early for {due:%H:%M:%S}"
+        wait_until(lambda: dt.datetime.now() >= due - dt.timedelta(seconds=3), 15)
         request_turn_off(Home(env.home), {})  # Proceed (no runs going: it only asked to confirm)
         ahead = due.timestamp() - time.time()
         assert ahead > 0.5, f"turned off only {ahead:.2f} s before {due:%H:%M:%S}: too late to tell"
         assert wait_until(lambda: services[0].poll() is not None, 20), "the service did not turn off"
+        wait_until(lambda: dt.datetime.now() >= due + dt.timedelta(seconds=3), 15)
         not_begun = history(env.home)
+        early = run_processes(starts, flows, due, until=dt.datetime.now() + dt.timedelta(seconds=0.1))
         on_again = dt.datetime.now()
         services.append(start_service(env, tray=False))  # you turn it on again (as the editor's button starts it)
         wait_until(lambda: [r for r in history(env.home) if r["status"] != "running"], 15)
@@ -408,12 +416,13 @@ def test_the_real_service_turned_off_just_before_a_time_runs_that_time_once_when
             stop_service(env, service)
         end_runs(env.home)
 
-    assert not_begun == [], f"the run started early began although you turned the service off: {not_begun}"
+    assert early == {} and not_begun == [], \
+        f"turned off before {due:%H:%M:%S}, a run's process was started for it ({early}), or a run began: {not_begun}"
     ran = [(r["status"], r["when"] and dt.datetime.fromisoformat(r["when"])) for r in runs]
     assert ran == [("success", due)], (
         f"turned on again {(on_again - due).total_seconds():.1f} s after {due:%H:%M:%S}, the runs are "
-        f"{ran}, not one run for {due:%H:%M:%S}: that time, whose run did not begin as you turned the service off "
-        f"just before it, is lost")
+        f"{ran}, not one run for {due:%H:%M:%S}: that time, which came after you turned the service off just before "
+        f"it, is lost")
 
 
 # --- SCH-4: a turn-off asked for while the service starts -----------------------------------------------------------

@@ -96,8 +96,8 @@ def about(told: list[str], flow: str) -> list[str]:
 
 
 def checks_around(service, runs: FakeRuns, due: dt.datetime):
-    """The service checks as the time `due` comes: when it first sees the schedule, within its early start before
-    `due`, at `due` and just after it."""
+    """The service checks as the time `due` comes: when it first sees the schedule, a few seconds before `due`, at
+    `due` and just after it."""
     assert dt.datetime.now() < due - 20 * SECONDS, "not arranged: the run you started took too long to begin"
     for moment in (due - 20 * SECONDS, due - 4 * SECONDS, due, due + SECONDS):
         drain(service, moment, runs)

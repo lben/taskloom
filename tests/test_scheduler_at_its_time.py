@@ -1,11 +1,11 @@
 """What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml), around a run's time:
-a run waiting its turn that the service starts before its time does not begin if, before then, you turn the service off
-or its schedule goes off (SCH-4, SCH-8), nor does a run started at its time that is still loading as you turn the
-service off (SCH-4); a schedule turned off and on again while the service is off starts afresh
-(SCH-10); with Overlap skip, a time is skipped only if a run of its flow is going at that time (SCH-11); a time less
-than 2 minutes late still runs when the schedule's next time is a few seconds away (SCH-9); a mistake in the settings
-never stops the keeper, and is told once, saying what the service does meanwhile (SCH-14); the list of scheduled flows
-is never read half-written (SCH-6, SCH-7); and the README explains these cases (SCH-17).
+a run waiting its turn starts in its turn, is dropped if its schedule goes off, and waits, saved, while you turn the
+service off (SCH-4, SCH-10, SCH-12); a run whose program is still loading as you turn the service off does not begin,
+whether it was started at its time or from the line (SCH-4, SCH-8); a schedule turned off and on again while the
+service is off starts afresh (SCH-10); with Overlap skip, a time is skipped only if a run of its flow is going at that
+time (SCH-11); a time less than 2 minutes late still runs when the schedule's next time is a few seconds away (SCH-9);
+a mistake in the settings never stops the keeper, and is told once, saying what the service does meanwhile (SCH-14);
+the list of scheduled flows is never read half-written (SCH-6, SCH-7); and the README explains these cases (SCH-17).
 
 What crosses processes at a run's time uses the real service (`taskloom scheduler --headless`) and real run processes,
 in real time. Where a test needs chosen clock times, it drives the service's checks (Scheduler.tick) on that clock, with
@@ -36,7 +36,7 @@ from tests.test_interval_schedules import run_processes_of  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, FakeRuns, begins, drain, end_runs, flow_yaml,  # noqa: E402
                                                history, hold_until, says, schedule, schedules_prose, statuses, utc,
                                                wait_until, write)
-from tests.test_scheduler_start_at import record_process_starts, run_processes, stop_service  # noqa: E402
+from tests.test_scheduler_start_at import record_process_starts, stop_service  # noqa: E402
 from tests.test_scheduler_start_at import wait_until as clock_reaches  # noqa: E402
 
 TODAY = dt.date(2026, 1, 5)
@@ -71,9 +71,9 @@ def runs_for(home, flow: str, moment: dt.datetime) -> list[dict]:
             if r["flow"] == flow and r["when"] and dt.datetime.fromisoformat(r["when"]) == moment]
 
 
-def began_within_2_seconds(run: dict, moment: dt.datetime) -> bool:
-    """SCH-5: recorded as started at `moment`, never before it (to a clock tick) and at most 2 s after it."""
-    return -0.02 <= (run["started"] - moment).total_seconds() <= 2.0
+def began_within_5_seconds(run: dict, moment: dt.datetime) -> bool:
+    """SCH-5: recorded as started at `moment`, never before it (to a clock tick) and at most 5 s after it."""
+    return -0.02 <= (run["started"] - moment).total_seconds() <= 5.0
 
 
 def first_check(env, service, log, before: dt.datetime):
@@ -84,114 +84,95 @@ def first_check(env, service, log, before: dt.datetime):
     assert dt.datetime.now() < before, "the service took too long to start: the test cannot be set up in time"
 
 
-# --- SCH-4, SCH-8: a run from the waiting line, started before its time ---------------------------------------------
+# --- SCH-4, SCH-8, SCH-10, SCH-12: a run waiting its turn, and the service or its schedule turned off -----------------
 
 @pytest.mark.invariant("SCH-4")
-@pytest.mark.invariant("SCH-8")
-@pytest.mark.invariant("SCH-5")
+@pytest.mark.invariant("SCH-10")
+@pytest.mark.invariant("SCH-12")
 @pytest.mark.parametrize("change", ["nothing", "the service turned off", "Active unticked"])
-def test_a_run_from_the_waiting_line_started_before_its_time_begins_only_if_its_time_is_still_its_own(env, monkeypatch,
-                                                                                                     change):
-    """max_concurrent_runs 1. alpha's run (every 60 minutes: it runs as the service first sees it) holds the only slot
-    when beta's one-off time T (Misfire Skip) comes within the service's early start, so beta's run waits its turn.
-    alpha finishes about 4 s before T, and the service starts beta's run from the line, before T. Then, 1.2 s before T,
-    you turn the service off (Proceed: with no runs going it only asked you to confirm), or you untick beta's Active
-    and save (its only schedule: the editor takes the flow off scheduled.yaml), or nothing changes. Turned off or
-    unticked, nothing is recorded for beta: its run does not begin (SCH-4: once you click Proceed nothing new starts;
-    SCH-8). With nothing changed, beta's run begins at T, once (SCH-5).
+def test_a_run_waiting_for_a_free_slot_starts_in_its_turn_unless_its_schedule_goes_off_and_waits_while_off(
+        env, fake_runs, change):
+    """max_concurrent_runs 1. alpha's run (every 60 minutes: it runs as the service first sees it, at 07:00:00) holds
+    the only slot when beta's one-off time 07:00:10 (Misfire Skip) comes, so beta's run waits its turn (SCH-12). At
+    07:00:11 you turn the service off (Proceed: the dialog lists alpha, whose run is going, with Let it finish, the
+    default; beta has no run going and is not listed), or you untick beta's Active and save (its only schedule: the
+    editor takes the flow off scheduled.yaml), or nothing changes. alpha's run then finishes at 07:00:12.
 
-    Turned off, beta had no run going, so the dialog did not list it, and SCH-4 says: "Flows not listed keep their
-    waiting runs: they are saved and start when you turn the service back on." So when you turn the service on again,
-    3 minutes after T (on a chosen clock from then on, its run's process stood in for), beta's saved run starts, once.
-    It is not a missed time: with Skip, a time missed by more than 2 minutes would not run, and you would be told."""
+    Nothing changed: beta's run starts once the slot is free, once. Active unticked: beta's waiting run is dropped (it
+    would not run as it was) and nothing is recorded for it. Turned off: once you click Proceed nothing new starts, so
+    beta's run does not start, and the service turns off once alpha's run is done; but beta is a flow not listed, and
+    SCH-4 says: "Flows not listed keep their waiting runs: they are saved and start when you turn the service back
+    on". Turned on again 3 minutes later, beta's saved run starts, once, and it is not a missed time: with Skip, a time
+    missed by more than 2 minutes would not run, and you would be told."""
     write(env.home / "settings.yaml", "max_concurrent_runs: 1\n")
-    starts = record_process_starts(env)
-    due = (dt.datetime.now() + dt.timedelta(seconds=14)).replace(microsecond=0)
-    paths = schedule(env.home, env.root, {"alpha": flow_yaml(HOURLY, work=hold_until("alpha")),
-                                          "beta": flow_yaml(one_off(due, misfire="skip"))})
-    log = env.root / "service.log"
-    service = headless(env, log)
-    try:
-        first_check(env, service, log, before=due - 7 * SECONDS)
-        assert wait_until(lambda: statuses(env.home, "alpha") == ["running"], 5), \
-            f"alpha's run did not begin as the service first saw it:\n{printed(log)}"
-        clock_reaches(due - 4.2 * SECONDS)  # beta's time came within the early start while alpha's run went: it waits
-        assert statuses(env.home, "alpha") == ["running"], "alpha's run did not hold the slot until now"
-        (env.root / "alpha.go").write_text("go", encoding="utf-8")  # alpha's run finishes: the slot is free
-        clock_reaches(due - 1.2 * SECONDS)
-        assert statuses(env.home, "alpha") == ["success"], "alpha's run did not finish in time: the test is not set up"
-        if change == "the service turned off":
-            request_turn_off(Home(env.home), {})  # Proceed, as the editor's button and the tray icon send it
-        elif change == "Active unticked":  # saved, as the editor saves it
-            write(paths["beta"], flow_yaml(one_off(due, misfire="skip", active=False)))
-            Home(env.home).set_scheduled(paths["beta"], False)
-        changed = dt.datetime.now()
-        early = run_processes(starts, {"beta": paths["beta"]}, due, until=dt.datetime.now() + 0.2 * SECONDS)
-        clock_reaches(due + 5 * SECONDS)
-        beta = [r for r in history(env.home) if r["flow"] == "beta"]
-    finally:
-        stop_service(env, service)
-        end_runs(env.home)
-
-    assert changed < due - 0.5 * SECONDS, "changed too late to tell"
-    if change == "nothing":
-        assert len(beta) == 1 and beta[0]["status"] == "success" and began_within_2_seconds(beta[0], due), (
-            f"beta's run, from the waiting line, did not begin once at {due:%H:%M:%S}: {beta}\n{printed(log)}")
-    else:
-        started = (f"its run's process was started {due.timestamp() - early['beta']:.1f} s before its time"
-                   if early.get("beta", changed.timestamp()) < changed.timestamp()
-                   else "no run process was started for it before then")
-        recorded = [(r["status"], f"started {r['started']:%H:%M:%S.%f}") for r in beta]
-        assert beta == [], (f"{change} 1.2 s before {due:%H:%M:%S} ({started}), yet beta's run began and was "
-                            f"recorded: {recorded}\n{printed(log)}")
+    due = clock("07:00:10")
+    paths = schedule(env.home, env.root, {"alpha": flow_yaml(HOURLY), "beta": flow_yaml(one_off(due, misfire="skip"))})
+    told = []
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
+    fake_runs.holding.add("alpha")  # its run goes on until let go
+    for moment in ("07:00:00", "07:00:05", "07:00:10"):
+        service.tick(clock(moment))
+    assert [r.flow for r in fake_runs.started] == ["alpha"], f"not arranged: beta's run did not wait its turn: {told}"
     if change == "the service turned off":
-        runs = FakeRuns()  # (from here on, on a chosen clock: the run processes are stood in for)
-        monkeypatch.setattr(subprocess, "Popen", runs.popen)
-        set_paused(Home(env.home), False)  # you turn the service on again, 3 minutes after T
-        told = []
-        try:
-            drain(runs.service(env.home, lambda title, message: told.append(f"{title}: {message}")), due + LATER, runs)
-        finally:
-            runs.end()
-        assert begins(runs.of("beta")) == utc([due]), (
-            f"turned on again {LATER} after {due:%H:%M:%S}, beta's saved waiting run did not start once: runs began "
-            f"for {[r.start_at for r in runs.of('beta') if r.not_begun is None]}; told: {told}")
-        assert [t for t in told if re.search(r"missed|skipped", t, re.IGNORECASE)] == [], told
+        request_turn_off(Home(env.home), {str(paths["alpha"]): "finish"})  # Proceed, as the dialog sends it
+    elif change == "Active unticked":  # saved, as the editor saves it
+        write(paths["beta"], flow_yaml(one_off(due, misfire="skip", active=False)))
+        Home(env.home).set_scheduled(paths["beta"], False)
+    service.tick(clock("07:00:11"))
+    fake_runs.holding.discard("alpha")  # alpha's run finishes: the slot is free
+    for moment in ("07:00:12", "07:00:13", "07:00:14", "07:00:20"):
+        service.tick(clock(moment))
+
+    beta = begins(fake_runs.of("beta"))
+    if change == "nothing":
+        assert beta == utc([due]), f"beta's waiting run did not start once when the slot was free: {beta}; {told}"
+        return
+    assert beta == [], f"{change} at 07:00:11, yet beta's waiting run began: {beta}; told: {told}"
+    if change == "Active unticked":
+        return
+    assert service.off, "the service did not turn off once the run you let finish was done"
+    set_paused(Home(env.home), False)  # you turn the service on again, 3 minutes after beta's time
+    drain(fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}")), due + LATER,
+          fake_runs)
+    assert begins(fake_runs.of("beta")) == utc([due]), (
+        f"turned on again {LATER} after {due:%H:%M:%S}, beta's saved waiting run did not start once: runs began for "
+        f"{begins(fake_runs.of('beta'))}; told: {told}")
+    assert [t for t in told if re.search(r"missed|skipped", t, re.IGNORECASE)] == [], told
 
 
 @pytest.mark.invariant("SCH-4")
 @pytest.mark.invariant("SCH-8")
 @pytest.mark.parametrize("turned_off", [False, True], ids=["nothing changes", "the service turned off"])
-def test_a_run_waiting_for_its_flows_run_and_started_before_its_time_does_not_begin_once_the_service_is_off(
+def test_a_waiting_run_still_loading_when_you_turn_the_service_off_does_not_begin_and_starts_when_it_is_on_again(
         env, fake_runs, turned_off):
-    """Overlap queue: report has one-off times 07:00 and 07:02 (two Schedule blocks; 07:02's Misfire is Skip). At
-    07:01:56, 07:02 comes within the service's early start while the 07:00 run is still going: it waits for that run.
-    The 07:00 run finishes at 07:01:57, and the service starts the 07:02 run from the line, before its time. You turn
-    the service off (Proceed: no runs going, so report is not listed) at once: the 07:02 run does not begin (SCH-4,
+    """Overlap queue: report has one-off times 07:00 and 07:02 (two Schedule blocks; 07:02's Misfire is Skip). 07:02
+    comes while the 07:00 run is still going: it waits for that run. The 07:00 run finishes just after 07:02, and the
+    service starts the 07:02 run from the line; its program is still loading when you turn the service off (Proceed:
+    no run is going, so report is not listed). It does not begin (SCH-4: once you click Proceed nothing new starts;
     SCH-8), and it stays a saved waiting run ("Flows not listed keep their waiting runs: they are saved and start when
     you turn the service back on"): turned on again at 07:05, it starts, once, and is not a missed time (with Skip, a
-    time missed by more than 2 minutes would not run, and you would be told). With nothing changed, it begins at
-    07:02."""
+    time missed by more than 2 minutes would not run, and you would be told). With nothing changed, it begins then."""
     schedule(env.home, env.root, {"report": flow_yaml(one_off(clock("07:00")), one_off(clock("07:02"), misfire="skip"),
                                                       overlap="queue")})
     told = []
     service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     fake_runs.holding.add("report")  # its runs go on until let go
-    for moment in ("06:59:30", "06:59:57", "07:00:00", "07:01:56"):
+    for moment in ("06:59:30", "07:00:00", "07:01:56", "07:02:00"):
         service.tick(clock(moment))
     first = fake_runs.of("report")[0]
-    assert begins([first]) == utc([clock("07:00")]) and first.returncode is None, \
-        f"the 07:00 run did not begin and go on: {told}"
+    assert begins([first]) == utc([clock("07:00")]) and first.returncode is None and len(fake_runs.of("report")) == 1, \
+        f"the 07:00 run did not begin and go on, with 07:02 waiting for it: {told}"
     fake_runs.holding.discard("report")  # the 07:00 run finishes
-    service.tick(clock("07:01:57"))
+    service.tick(clock("07:02:01"))  # (the 07:02 run starts from the line: its program loads until the next check)
+    assert len(fake_runs.of("report")) == 2, f"not arranged: the 07:02 run was not started from the line: {told}"
     if turned_off:
         request_turn_off(Home(env.home), {})
-    for moment in ("07:01:58", "07:02:00", "07:02:01", "07:02:05"):
+    for moment in ("07:02:02", "07:02:03", "07:02:05"):
         service.tick(clock(moment))
 
     ran = ["07:00"] if turned_off else ["07:00", "07:02"]
     assert begins(fake_runs.of("report")) == utc([clock(t) for t in ran]), (
-        f"{'turned off at 07:01:57' if turned_off else 'nothing changed'}: the runs that began are for "
+        f"{'turned off at 07:02:01' if turned_off else 'nothing changed'}: the runs that began are for "
         f"{[r.start_at for r in fake_runs.of('report') if r.not_begun is None]}, not {ran}; told: {told}")
     if turned_off:
         assert service.off, "the service did not turn off"
@@ -317,7 +298,7 @@ def test_a_schedule_turned_off_and_on_again_while_the_service_is_off_starts_afre
 def test_with_overlap_skip_a_time_is_skipped_only_if_a_run_of_its_flow_is_going_at_that_time(env):
     """Two flows with Overlap skip, each with the one-off times T1 and T2 = T1 + 9 s; their T1 runs go on until let go.
     early_end's T1 run is let finish 3 s before T2, late_end's 3 s after T2. At T2 a run of late_end is going: its T2 is
-    skipped, and you are told. No run of early_end is going at T2: its T2 run begins then (at most 2 s late, SCH-5),
+    skipped, and you are told. No run of early_end is going at T2: its T2 run begins then (at most 5 s late, SCH-5),
     and nothing is told about it."""
     t1 = (dt.datetime.now() + dt.timedelta(seconds=12)).replace(microsecond=0)
     t2 = t1 + 9 * SECONDS
@@ -350,7 +331,7 @@ def test_with_overlap_skip_a_time_is_skipped_only_if_a_run_of_its_flow_is_going_
     assert len(early_end) == 1 and early_end[0]["status"] == "success" and skipped["early_end"] == [], (
         f"early_end's T1 run finished {ahead:.1f} s before T2 {t2:%H:%M:%S}, yet its T2 run did not run: {early_end}; "
         f"told: {skipped['early_end']}")
-    assert began_within_2_seconds(early_end[0], t2), f"early_end's T2 run did not begin at {t2:%H:%M:%S}: {early_end}"
+    assert began_within_5_seconds(early_end[0], t2), f"early_end's T2 run did not begin at {t2:%H:%M:%S}: {early_end}"
     assert late_end == [] and skipped["late_end"], \
         f"late_end's T2, with its T1 run going then, was not skipped and told: {late_end}; told: {said}"
 
@@ -362,7 +343,7 @@ def test_with_overlap_skip_a_time_is_skipped_only_if_a_run_of_its_flow_is_going_
 def test_a_time_less_than_2_minutes_late_still_runs_when_the_next_time_is_a_few_seconds_away(env, fake_runs,
                                                                                            misfire):
     """An every-minute cron line. The service saw it at 10:00:30 and was then off; it is back at 10:01:56, when 10:01
-    is 56 s late (less than 2 minutes) and 10:02 is 4 s away (its run's process starts early, to begin on time). Skip:
+    is 56 s late (less than 2 minutes) and 10:02 is 4 s away. Skip:
     a time less than 2 minutes late still runs, so 10:01 runs and none is told as missed. Run once: one run, for the
     latest missed time, 10:01. Either way 10:02 runs at its time too (it is not missed)."""
     schedule(env.home, env.root, {"minutely": flow_yaml({"cron": "* * * * *", "misfire": misfire})})
@@ -535,20 +516,40 @@ def test_the_service_never_reads_the_list_of_scheduled_flows_half_written(env, f
     ("a mail server that doesn't answer is told, and the service goes on (SCH-14)",
      [r"mail server|smtp", r"(doesn't|does not|never|not) answer|unreachable|cannot be reached|can't be reached",
       r"\btold\b|notif|message", r"goes on|keeps (running|going|checking)|continues|holds nothing up"]),
-    ("turned off with Stop now, a run started early is dropped: its time neither runs later nor counts as missed "
-     "(SCH-4, SCH-9)",
-     [r"\bstop now\b", r"\bearly\b",
-      r"(?=[^.]*\bstop)(?=[^.]*(?:\bneither|\bnot|\bnever|n't)\s+(?:runs?|be run)\b)"
-      r"[^.]*(?:\bnor|\bnot|\bnever|n't)\s+(?:counts?|counted|be counted)\b[^.]*\bmissed\b"]),
-    ("turned off, a run started early for a flow not stopped: its time is not lost, it is a missed time (SCH-4, SCH-9)",
-     [r"\bearly\b", r"\b(?:not|never) lost\b", r"\bmissed (?:time|one)\b|\bcounts? as missed\b",
-      r"let it finish|\bother flows\b|\bnot (?:in the list|listed|stopped)\b"]),
+    ("a schedule on the clock saved or turned on while the service is off: its times after the save that the service "
+     "did not see come follow Misfire, while Every N counts from when the service first sees it (SCH-7, SCH-9, SCH-10)",
+     [r"\bservice (?:is|was) off\b", r"\b(?:after|since) (?:you )?(?:sav|switch|turn|tick)\w*",
+      r"\bmisfire\b|\bmissed\b", r"\bevery n\b|\bevery few\b", r"\bfirst (?:sees|saw)\b|\bpicks? it up\b"]),
+    ("a run you start yourself while a scheduled run of the flow is still loading: the scheduled run follows Overlap "
+     "(SCH-11)",
+     [r"\byourself\b|\bby hand\b", r"\bload", r"\boverlap\b", r"\bskip", r"\bqueue|\bwaits?\b"]),
+    ("turned off and on again while a run's program is loading: it does not begin, and its time follows Misfire "
+     "(SCH-8, SCH-9)",
+     [r"\bturn\w* (?:the service |it )?off\b",
+      r"\bload\w*\b[^.]*\b(?:on again|back on)\b|\b(?:on again|back on)\b[^.]*\bload",
+      r"\bdoes not begin\b|\bdoesn't begin\b|\bnot begin\b|\bnever begins?\b", r"\bmisfire\b|\bmissed\b"]),
+    ("Stop now holds when you turn the service on again before it has looked, and when no service is running as you "
+     "click Proceed: the flow's waiting runs are dropped, its runs going are stopped and recorded as cancelled (SCH-4)",
+     [r"\bstop now\b", r"\bno (?:scheduler )?service (?:is )?(?:on|running)\b|\bcrash\w*|\bnot running\b",
+      r"\bwaiting runs?\b", r"\bdropped\b|\bnever (?:begin|start|run)s?\b", r"\bcancelled\b"]),
 ], ids=["one service per folder", "an entry not a flow", "a list that cannot be read", "a mistake in the settings",
-        "a mail server that does not answer", "Stop now drops a time started early",
-        "a time started early is not lost for other flows"])
+        "a mail server that does not answer", "a schedule saved while the service is off",
+        "a run by hand while a scheduled run loads", "turned off and on while a run loads",
+        "Stop now, then on again or with no service running"])
 def test_the_readme_explains_one_service_per_folder_and_what_a_mistake_does(case, patterns):
     """README.md's Schedules section (also the editor's guide) explains, in one paragraph each, these cases where the
     scheduler might surprise you, as the user asked that edge cases be clearly documented."""
     explained = [p for p in schedules_prose() if all(re.search(pattern, p) for pattern in patterns)]
 
     assert explained, f"no paragraph of the README's Schedules section explains {case} (looked for {patterns})"
+
+
+@pytest.mark.invariant("SCH-17")
+@pytest.mark.invariant("SCH-5")
+def test_the_readme_does_not_say_a_runs_program_is_started_early():
+    """A run begins at its time, never before it, and no run's program is started before its time (SCH-5): no
+    paragraph of the README's Schedules section says the service starts a run's program (or process) early."""
+    early = [p for p in schedules_prose()
+             if re.search(r"\b(?:start|load)\w*\b[^.]*\bearly\b|\bearly\b[^.]*\b(?:start|load)\w*\b", p)]
+
+    assert early == [], f"the README's Schedules section still says runs are started early: {early}"

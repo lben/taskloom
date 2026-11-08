@@ -37,8 +37,8 @@ def test_the_countdown_moves_on_with_the_clock(proof, env, win, qtbot, monkeypat
     p.alternative("Counting from the exact time of each refresh, not from the start of its second",
                   "It removes one of the two seconds, not the other: between refreshes, the countdown would still "
                   "say up to a second too much.")
-    p.fits("The scheduler service begins a run on the second its schedule gives (the change “Scheduled runs begin "
-           "at their time”); the countdown now reaches 0 on that same second.")
+    p.fits("The scheduler service begins a run at the time its schedule gives, never before it and at most 5 seconds "
+           "after it; the countdown now reaches 0 on the second of that time.")
     p.fits("It is one timer for the whole window: the countdowns under every Schedule block of the flow on screen, "
            "of every line, move on together.")
 
@@ -88,12 +88,12 @@ def test_the_countdown_moves_on_with_the_clock(proof, env, win, qtbot, monkeypat
         (run,) = [r for r in runs(env) if r["flow"] == "daily-report"]
         qtbot.waitUntil(lambda: f"run #{run['id']} success" in win.log.text.toPlainText(), timeout=10_000)
         log = win.log.text
-        p.shot(win, f"As the countdown reached 0 the run began: the Log, under the canvas, says run #{run['id']} "
-                    f"started at {due:%H:%M:%S}, and make_report wrote down when it began: "
+        p.shot(win, f"Once the countdown reached 0 the run began: the Log, under the canvas, says run #{run['id']} "
+                    f"started at {run['started']:%H:%M:%S}, and make_report wrote down when it began: "
                     f"{tab.scene.values['make_report']['output'].removeprefix('began at ')}.",
                zoom=[(log, f"run #{run['id']} "), (log, "[make_report]")])
-        p.check(f"The run started at {due:%H:%M:%S}, within half a second",
-                -0.02 <= (run["started"] - due).total_seconds() <= 0.5)
+        p.check(f"The run started at {due:%H:%M:%S}, never before it and at most 5 seconds after it",
+                -0.02 <= (run["started"] - due).total_seconds() <= 5.0)
     finally:
         stop_service(env, service)
         wait_until_finished(env)

@@ -12,7 +12,7 @@ import pytest
 
 from taskloom.config import Home
 from taskloom.history import History
-from taskloom.scheduler import EARLY_START, Scheduler, acquire_lock
+from taskloom.scheduler import Scheduler, acquire_lock
 from tests.test_scheduler_promises import on
 
 DAY = dt.date(2026, 1, 5)
@@ -237,8 +237,9 @@ def test_an_edited_schedule_starts_from_now(env):
 # --- 1: how long the scheduler waits before its next check --------------------------------------
 
 
-def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_a_second(env):
-    """It wakes EARLY_START before a due time: that run's process starts then, to begin at its time."""
+def test_the_scheduler_waits_until_the_next_due_time_and_at_most_a_second(env):
+    """It wakes at a due time, never after it (and checks at least every second): that run's process starts then, and
+    the run begins at its time (SCH-5)."""
     home = Home(env.home)
     with on(env):
         scheduler = Scheduler(home)
@@ -287,7 +288,7 @@ def test_the_scheduler_waits_until_just_before_the_next_due_time_and_at_most_a_s
             ("10:29:59.400", 0.6),  # the Schedule block at 10:30
             ("10:29:59.999", 0.001),
         ]:
-            now = at(clock) - EARLY_START  # each clock as long before as its runs' processes start early
+            now = at(clock)
             scheduler.tick(now)
             waited = scheduler.seconds_to_next_check(now)
             assert seconds <= waited + 1e-6 and waited <= min(seconds + 0.01, 1), (clock, waited)  # never before
@@ -398,7 +399,18 @@ run_cli(["scheduler"])
 """
 
 
-def test_the_tray_scheduler_starts_a_runs_process_a_few_seconds_before_its_time(env, process_starts):
+def assert_at_its_time(env, due: dt.datetime, process_started: float):
+    """SCH-5: the run's process started never before its time, and the run began at most 5 s after it."""
+    (run,) = [r for r in runs(env) if r["when"] and dt.datetime.fromisoformat(r["when"]) == due]
+    began = dt.datetime.fromisoformat(run["started"]).timestamp() - due.timestamp()
+    assert process_started >= due.timestamp() - 0.02, \
+        f"its process started {due.timestamp() - process_started:.2f} s before {due}"
+    assert -0.02 <= began <= 5.02, f"the run began {began:+.2f} s after {due}"
+
+
+@pytest.mark.invariant("SCH-5")
+def test_the_tray_scheduler_starts_a_runs_process_at_its_time_not_before_and_the_run_begins_within_5_seconds(
+        env, process_starts):
     """The reported case: the countdown reached 0 at hh:mm:00 but the run started at about hh:mm:13."""
     schedule(env, every_minute())
     service = subprocess.Popen([sys.executable, "-c", TRAY_SCHEDULER], env={**env.env, "QT_QPA_PLATFORM": "offscreen"},
@@ -413,12 +425,13 @@ def test_the_tray_scheduler_starts_a_runs_process_a_few_seconds_before_its_time(
     assert found, "no run started"
     (as_of, process_started), = found
     assert as_of == due
-    ahead = due.timestamp() - process_started  # a few seconds early: loaded by its time, it begins then
-    assert 0 < ahead < 15, f"its process started {ahead:.2f} s before {due}"
+    assert_at_its_time(env, due, process_started)
 
 
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.skipif(sys.platform == "win32", reason="stops the scheduler with SIGTERM")
-def test_the_headless_scheduler_starts_a_runs_process_a_few_seconds_before_its_time(env, process_starts):
+def test_the_headless_scheduler_starts_a_runs_process_at_its_time_not_before_and_the_run_begins_within_5_seconds(
+        env, process_starts):
     schedule(env, every_minute())
     wait_for_clock(lambda second: 2 <= second <= 50)  # it starts (and first checks) well before the minute
     service = env.popen("scheduler", "--headless")
@@ -432,8 +445,7 @@ def test_the_headless_scheduler_starts_a_runs_process_a_few_seconds_before_its_t
     assert found, "no run started"
     (as_of, process_started), = found
     assert as_of == due
-    ahead = due.timestamp() - process_started  # a few seconds early: loaded by its time, it begins then
-    assert 0 < ahead < 15, f"its process started {ahead:.2f} s before {due}"
+    assert_at_its_time(env, due, process_started)
 
 
 def _release(env):
@@ -469,19 +481,17 @@ def _hold_until_released(misfire: str) -> str:
     # The minute before it is 56 s late at the check: less than 2 minutes, so it still runs (SCH-9), and Run once runs
     # it as the latest missed time. Skip misses the one before that (1 min 56 s late: only the newest such time runs).
     ("run_once", [-1, 0], None),
-    ("skip", [-1, 0], 1),  # the on-time run is started early
+    ("skip", [-1, 0], 1),
     ("catch_up", [-2, -1, 0], None),
 ])
 @pytest.mark.invariant("SCH-9")
-def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expected, skipped):
+def test_a_check_a_few_seconds_before_a_time_keeps_the_on_time_run(env, misfire, expected, skipped):
     """A check a few seconds before the minute used to start the previous minute and then skip this one.
 
-    The previous run had just been requested, overlap skip (the default) refused the on-time run, and `last`
-    had already moved past it, so that minute never ran.
-
     The service is on (this test holds its lock, as `taskloom scheduler` does) and first saw the schedule 3 minutes
-    before the minute ahead (`expected`: the minutes that run, counted from that one); its check comes 4 s before that
-    minute, at this PC's time, so the run it starts early reaches its time as such a run does.
+    before the minute ahead (`expected`: the minutes that run, counted from that one); after a gap, its check comes 4 s
+    before that minute, at this PC's time, and its next check at that minute: the minute's run is not skipped (as the
+    previous run still going), nor lost.
     """
     notes = []
     home = schedule(env, every_minute(misfire))
@@ -491,7 +501,10 @@ def test_a_check_in_the_early_window_keeps_the_on_time_run(env, misfire, expecte
         scheduler = Scheduler(home, lambda title, message: notes.append((title, message)))
         scheduler.tick(due - dt.timedelta(minutes=3))  # first sight: nothing is due yet
         time.sleep(max(0.0, (due - dt.timedelta(seconds=4) - dt.datetime.now()).total_seconds()))
-        scheduler.tick(dt.datetime.now())  # 5 s early window reaches the minute; the two before it are already due
+        scheduler.tick(dt.datetime.now())  # the two minutes before it are due
+        scheduler.wait_for_runs()
+        time.sleep(max(0.0, (due - dt.datetime.now()).total_seconds()))
+        scheduler.tick(dt.datetime.now())  # the minute itself
         scheduler.wait_for_runs()
     finally:
         lock.close()

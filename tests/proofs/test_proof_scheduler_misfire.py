@@ -1,5 +1,7 @@
-"""Proofs (pull request #1): after a gap, a check just before a run's time keeps the on-time run; catch-up keeps
-every missed time, also behind a run still going. How proofs are written: README.md here."""
+"""Proof (pull request #1): catch-up keeps every missed time, also behind a run still going. How proofs are written:
+README.md here. (Its proof "After a gap, a check just before a run's time keeps the on-time run", of a check that
+started a run's program 5 seconds before its time, was withdrawn on 2026-11-07: no run's program is started before its
+time now.)"""
 
 import datetime as dt
 import os
@@ -8,33 +10,12 @@ import pytest
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QComboBox, QFileDialog, QLabel, QToolBar
 
-from proofs.test_proof_scheduler_start import ONE, click_block, click_tab, clock, file_menu, reaches_zero
+from proofs.test_proof_scheduler_start import click_block, click_tab, file_menu
 from taskloom import __version__
-from taskloom.scheduler import EARLY_START, Scheduler, acquire_lock
+from taskloom.scheduler import Scheduler, acquire_lock
 from tests.test_scheduler_start_at import runs, write
 
 ASKED = "a different agent found this ... Review it and verify if it is correct indeed, if so worth merging no?"
-MINUTE = dt.timedelta(minutes=1)
-MISFIRES = ("run_once", "skip", "catch_up")
-REPORT = """\
-params:
-  when: {{type: datetime, expr: "now()"}}
-blocks:
-  every_minute:
-    type: trigger.schedule
-    config: {{cron: "* * * * *", misfire: {misfire}}}
-    ui: {{x: 0, y: 0}}
-  report:
-    type: logic.python
-    config:
-      inputs: []
-      code: |
-        output = "the run for " + params["when"].strftime("%H:%M")
-        print(output)
-    ui: {{x: 260, y: 0}}
-edges:
-  - every_minute.start -> report.after
-"""
 LONG = """\
 params:
   when: {type: datetime, expr: "now()"}
@@ -62,8 +43,8 @@ edges:
 
 class Service:
     """The scheduler service, run inside the proof so that the proof says when it checks: as `taskloom scheduler`
-    does (scheduler.serve), it holds the lock and says which Taskloom it is (so the editor shows it on, and a run
-    started early begins), then checks with the same scheduler. Its notifications are kept, with each check's time."""
+    does (scheduler.serve), it holds the lock and says which Taskloom it is (so the editor shows it on, and a run it
+    starts begins), then checks with the same scheduler. Its notifications are kept, with each check's time."""
 
     def __init__(self, home, qtbot):
         self.qtbot, self.notices, self.clock, self.next_check = qtbot, [], None, None
@@ -132,14 +113,6 @@ def select_schedule(win, qtbot, tab):
                     and tab.scene.nodes["every_minute"].countdown.startswith("next run in"), timeout=5_000)
 
 
-def switch_to(win, qtbot, tab):
-    """Click the flow's tab: Properties shows its every_minute again."""
-    click_tab(win.tabs, tab)
-    misfire = tab.doc.blocks["every_minute"]["config"]["misfire"]
-    qtbot.waitUntil(lambda: win.current is tab and [w.text() if isinstance(w, QLabel) else w.currentText()
-                                                    for w in misfire_row(win)] == ["Misfire", misfire], timeout=5_000)
-
-
 def history_rows(win) -> list[list[str]]:
     table = win.history_panel.table
     return [[table.item(r, c).text() for c in range(table.columnCount())] for r in range(table.rowCount())]
@@ -176,174 +149,6 @@ def editor_shows(env, tab) -> bool:
     """The editor has taken in the flow's latest finished run (it reads them every 2 seconds)."""
     done = finished(env, tab.doc.path.stem)
     return bool(done) and tab.last is not None and tab.last["id"] == done[-1]["id"]
-
-
-def test_a_check_just_before_a_runs_time_keeps_the_on_time_run(proof, env, win, qtbot, monkeypatch, service):
-    p = proof("After a gap, a check just before a run's time keeps the on-time run", ASKED)
-    p.idea("When the computer wakes from sleep, or the scheduler service starts again, a few seconds before a "
-           "scheduled run's time, that run is no longer lost: with run_once or skip it begins on time, and catch_up "
-           "runs it after the missed ones. Before, the service started the run it had missed while the computer "
-           "slept, and then refused the on-time one: “Run skipped: the previous run is still going”.")
-    p.idea("Another agent found this case by checking a model of the scheduler (pull request #1). It was confirmed "
-           "here: the new tests fail without the change, and pass with it.")
-    p.idea("The service checks at least every 15 seconds. At each check it takes the times that came since its "
-           "previous check, and the ones of the next 5 seconds: it starts a run's program 5 seconds early, so that "
-           "the run begins at its time. After a gap, one check can find both: times missed while the computer "
-           "slept, and the time about to come.")
-    p.idea("The Misfire setting of the Schedule block now chooses among all of these together, as the README "
-           "promises: run_once, “one run, for the most recent time”, which is the one about to come; skip, “only "
-           "the on-time run”, with one notification that says how many were missed; catch_up, “one run for each "
-           "time, oldest first, one after another”.")
-    p.idea("Before, the setting chose only among the times already passed, and the time about to come was started "
-           "on top of them. Its run found the missed run just started, and the flow's setting “If a scheduled run "
-           "starts while the last one is still going” (skip the new run, unless you change it) refused it. So "
-           "run_once ran the missed time instead of the most recent, skip could run a missed time instead of the "
-           "on-time one, and catch_up lost its newest time.")
-    p.why_simplest("The time about to come is simply one more time for the Misfire setting to choose from. The "
-                   "three settings keep the rules the README gives; only the list they choose from is now complete. "
-                   "Nothing new to set, and no extra wait.")
-    p.why_simplest("The run chosen is started as before: one about to come is started early, to begin at its time; "
-                   "a missed one begins at once. A catch-up of several times queues them, so they run one after "
-                   "another.")
-    p.alternative("Leave the time about to come for the next check",
-                  "The next check comes up to 15 seconds later, after that time: the run would begin late, which is "
-                  "what starting its program 5 seconds early is there to prevent.")
-    p.alternative("Let the run about to come wait behind the missed one, instead of being refused",
-                  "With run_once that is two runs where it promises one, and the on-time run would begin only once "
-                  "the late one had ended.")
-    p.alternative("Run the missed time and the on-time one side by side",
-                  "Two runs of the same flow at the same time, which the setting “If a scheduled run starts while "
-                  "the last one is still going” is there to decide. You chose skip for it, or kept that default.")
-    p.fits("It is the same Misfire setting as in Properties, with the same three choices and the same 2-minute rule "
-           "for what counts as on time. The tray service and the headless one (on servers) check the same way.")
-    p.fits("The setting “If a scheduled run starts while the last one is still going” still decides when a run of "
-           "the flow really is still going: a run that has not ended by the next time.")
-    paths = {m: write(env.root / f"report-{m.replace('_', '-')}.yaml", REPORT.format(misfire=m)) for m in MISFIRES}
-    names = {m: path.stem for m, path in paths.items()}
-
-    p.step("Open report-run-once.yaml, report-skip.yaml and report-catch-up.yaml (File > Open…) and save each "
-           "(File > Save). In each, the Schedule block every_minute runs the flow every minute, and report writes "
-           "down which time the run is for. They differ only in every_minute's Misfire: run_once, skip and "
-           "catch_up. Saved, they are scheduled.")
-    tabs = {}
-    for misfire, path in paths.items():
-        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, _path=path, **k: (str(_path), ""))
-        file_menu(win, "Open…")
-        tabs[misfire] = win.current
-        file_menu(win, "Save")
-        select_schedule(win, qtbot, tabs[misfire])
-    switch_to(win, qtbot, tabs["run_once"])
-    p.shot(win, "① The three flows, each in its tab. ② report-run-once's every_minute, with Misfire: run_once (the "
-                "default). ③ The scheduler service is on.",
-           highlight=[win.tabs.tabBar(), misfire_row(win), service_button(win)], badges=True,
-           zoom=[misfire_row(win)])
-    p.check("The three flows are scheduled, with Misfire run_once, skip and catch_up",
-            all(tab.scheduled and tab.doc.blocks["every_minute"]["config"]["misfire"] == m for m, tab in tabs.items()))
-
-    now = dt.datetime.now()
-    if (now + EARLY_START + dt.timedelta(seconds=1)).minute != now.minute:  # it would start the next minute's run
-        wait_till(qtbot, now.replace(second=0, microsecond=0) + MINUTE + dt.timedelta(seconds=1))
-    service.check()
-    t0 = service.clock
-    missed = (t0 + EARLY_START).replace(second=0, microsecond=0) + MINUTE  # the first time after this check's
-    on_time = missed + MINUTE
-    wake = on_time - dt.timedelta(seconds=4)
-    p.step(f"Let the scheduler service check at {t0:%H:%M:%S}. Then put the computer to sleep until "
-           f"{wake:%H:%M:%S}, 4 seconds before {on_time:%H:%M}: the {missed:%H:%M} run is due while it sleeps.")
-    p.note("A proof cannot put the computer to sleep. Here, the scheduler service's own checks run inside the "
-           f"proof, at the real time, as the service makes them, and the proof holds them back from {t0:%H:%M:%S} "
-           f"to {wake:%H:%M:%S}, as sleep does. Its notifications are listed as text at the end: a tray "
-           "notification cannot be shot here.")
-    p.check(f"At {t0:%H:%M:%S} nothing was due: the service started no run",
-            not service.scheduler.runs and runs(env) == [])
-    wait_till(qtbot, wake - dt.timedelta(seconds=3))
-    click_tab(win.bottom_tabs, win.history_panel)
-    just_before, read = tabs["run_once"].scene.nodes["every_minute"].countdown, dt.datetime.now()
-    p.shot(win, f"Just before waking: {missed:%H:%M} has passed, and ② Run history is empty: nothing ran while the "
-                f"computer slept. ① every_minute counts down to {on_time:%H:%M}: “{just_before}”.",
-           highlight=["every_minute", win.history_panel.table], badges=True, zoom=["every_minute"])
-    p.check(f"Nothing ran for {missed:%H:%M} while the computer slept",
-            runs(env) == [] and win.history_panel.table.rowCount() == 0)
-    p.check(f"The countdown aims at {on_time:%H:%M}:00", abs(reaches_zero(just_before, read) - on_time) <= ONE)
-    wait_till(qtbot, wake)
-
-    service.check()
-    woke = service.clock
-    p.step(f"Wake the computer at {wake:%H:%M:%S}: the scheduler service checks at once. Wait until "
-           f"{on_time:%H:%M} has passed, then click the Run history tab.")
-    p.check(f"It checked at {clock(woke)}, in the 5 seconds before {on_time:%H:%M}",
-            on_time - EARLY_START < woke < on_time)
-    expected = {"run_once": [on_time], "skip": [on_time], "catch_up": [missed, on_time]}
-    service.run_until(lambda: all(len(finished(env, names[m])) >= len(times) for m, times in expected.items()),
-                      until=on_time + dt.timedelta(seconds=50))  # (at 55 s, it would start the next minute's runs)
-    done = {m: finished(env, names[m]) for m in MISFIRES}
-    qtbot.waitUntil(lambda: all(editor_shows(env, tab) for tab in tabs.values()), timeout=20_000)
-    click_tab(win.bottom_tabs, win.history_panel)
-    once = done["run_once"][-1]
-    p.shot(win, f"report-run-once (② Misfire: run_once): one run, for {on_time:%H:%M}, the most recent time. ③ It "
-                f"began at {on_time:%H:%M:%S}, on time (Parameters: when, the time it is for), and ① report says "
-                f"“the run for {on_time:%H:%M}”. The {missed:%H:%M} time, missed while the computer slept, does not "
-                "run.",
-           highlight=["report", misfire_row(win), history_outline(win)], badges=True,
-           zoom=[history_area(win, header=True)])
-    p.check(f"report-run-once ran once, for {on_time:%H:%M}", [r["when"] for r in done["run_once"]] == [on_time])
-    p.check(f"That run began on time: {(once['started'] - on_time).total_seconds():.2f} s after {on_time:%H:%M:%S}",
-            -0.02 <= (once["started"] - on_time).total_seconds() <= 0.5)
-    p.check(f"Run history shows it: started {on_time:%H:%M:%S}, by every_minute, success, when={on_time:%H:%M}",
-            [r[1:4] + r[5:] for r in history_rows(win)]
-            == [[f"{on_time:%Y-%m-%d %H:%M:%S}", "every_minute", "success", f"when={on_time:%Y-%m-%d %H:%M:%S}"]])
-    p.check(f"report says “the run for {on_time:%H:%M}”",
-            f"the run for {on_time:%H:%M}" in tabs["run_once"].scene.values.get("report", {}).get("output", ""))
-
-    p.step("Switch to report-skip.yaml.")
-    switch_to(win, qtbot, tabs["skip"])
-    click_tab(win.bottom_tabs, win.history_panel)
-    skipped = done["skip"][-1]
-    p.shot(win, f"report-skip (② Misfire: skip): ③ only the on-time run, for {on_time:%H:%M}, which began at "
-                f"{on_time:%H:%M:%S}. ① report says “the run for {on_time:%H:%M}”. The {missed:%H:%M} time was "
-                "missed, and is skipped: a notification says so (step 6).",
-           highlight=["report", misfire_row(win), history_outline(win)], badges=True,
-           zoom=[history_area(win, header=True)])
-    p.check(f"report-skip ran once, for {on_time:%H:%M}, and began on time",
-            [r["when"] for r in done["skip"]] == [on_time]
-            and -0.02 <= (skipped["started"] - on_time).total_seconds() <= 0.5)
-    p.check(f"Run history shows it: started {on_time:%H:%M:%S}, when={on_time:%H:%M}",
-            [(r[1], r[5]) for r in history_rows(win)]
-            == [(f"{on_time:%Y-%m-%d %H:%M:%S}", f"when={on_time:%Y-%m-%d %H:%M:%S}")])
-
-    p.step("Switch to report-catch-up.yaml.")
-    switch_to(win, qtbot, tabs["catch_up"])
-    click_tab(win.bottom_tabs, win.history_panel)
-    first, second = done["catch_up"][:2]
-    p.shot(win, f"report-catch-up (② Misfire: catch_up): ③ one run for each time, oldest first, one after another. "
-                f"The {missed:%H:%M} run, missed, began on waking, at {first['started']:%H:%M:%S}; the "
-                f"{on_time:%H:%M} run waited until it had ended, and began at the service's next check, at "
-                f"{second['started']:%H:%M:%S}. ① report shows the latest: “the run for {on_time:%H:%M}”.",
-           highlight=["report", misfire_row(win), history_outline(win)], badges=True,
-           zoom=[history_area(win, header=True)])
-    p.check(f"report-catch-up ran twice: for {missed:%H:%M}, then for {on_time:%H:%M}",
-            [r["when"] for r in done["catch_up"]] == [missed, on_time])
-    p.check(f"The {on_time:%H:%M} run began only once the {missed:%H:%M} run had ended",
-            second["started"] >= first["finished"])
-    p.check("Run history shows both, newest first, each with its time",
-            [r[5] for r in history_rows(win)] == [f"when={t:%Y-%m-%d %H:%M:%S}" for t in (on_time, missed)])
-
-    p.step("Read what the scheduler service told: its notifications. And the times, to the millisecond.")
-    p.text("The scheduler service's notifications, each with the time of the check that gave it",
-           "\n".join(service.notices) or "(none)")
-    p.check("No notification says “Run skipped”: no run was refused",
-            not any("Run skipped" in notice for notice in service.notices))
-    p.check(f"One notification, from the check on waking: report-skip missed 1 run ({missed:%H:%M})",
-            service.notices == [f"{woke:%H:%M:%S}  Missed runs skipped: report-skip: 1 run(s) were due while the "
-                                "scheduler was off"])
-    p.text("The times, to the millisecond",
-           "\n".join(f"{what:<44}{clock(when)}" for what, when in [
-               ("The service checked", t0), ("The computer woke, and the service checked", woke),
-               (f"report-run-once: its {on_time:%H:%M} run began", once["started"]),
-               (f"report-skip: its {on_time:%H:%M} run began", skipped["started"]),
-               (f"report-catch-up: its {missed:%H:%M} run began", first["started"]),
-               (f"report-catch-up: its {missed:%H:%M} run ended", first["finished"]),
-               (f"report-catch-up: its {on_time:%H:%M} run began", second["started"])]))
 
 
 def test_catch_up_keeps_every_missed_time_behind_a_run_still_going(proof, env, win, qtbot, monkeypatch, service):

@@ -98,10 +98,10 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
            "for the first time with it. Saving the flow again with the same timing does not move it. The service "
            "now checks every second (it used to check at least every 15 seconds), so it sees your save within a "
            "second, and the schedule counts from that second.")
-    p.idea("The first run begins at once, at the check that sees your save, and cannot be prepared ahead: its "
-           "program has to load then, so it may begin a second or two after the save (your second 16). The later "
-           "runs begin on the second itself, at second 14, not 16: the service starts each one's program 5 "
-           "seconds early, as for every scheduled run, so it has loaded by its time.")
+    p.idea("The first run begins at once, at the check that sees your save: its program has to load then, so it may "
+           "begin a second or two after the save (your second 16). The later runs are for second 14, not 16: the "
+           "service starts each one's program at that second, never before it, and the run begins once it has "
+           "loaded, at most 5 seconds later, as for every scheduled run.")
     p.idea("Under the block, the countdown counts to the next run as the service will run it, across the minute "
            "when it has to; its tooltip lists the next times, with seconds. Plans on the clock stay on the clock: "
            "every hour at :MM, every day, weekday, chosen days or month at a time, and a cron line. The cron line "
@@ -121,7 +121,7 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
     p.alternative("Counting from when the first run began (your second 16)",
                   "That moment depends on how long the run's program takes to load: on the computer, on what else "
                   "it is doing, on the flow. And the service needs the times at once: for the countdown, and to start "
-                  "each later run's program 5 seconds before its time. The second it saw the schedule is known at "
+                  "each later run's program at its time. The second it saw the schedule is known at "
                   "once, and is when you switched it on.")
     p.alternative("Writing the starting time into the flow file when you save",
                   "The editor would change the file at every save, and the time would be when you saved, even if "
@@ -236,8 +236,8 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
         p.shot(win, f"The service saw the save at its check in second {switched_on:%S}, {which}: the schedule "
                     f"counts from {switched_on:%H:%M:%S} (Run history, step 10, shows it). The first run began right "
                     f"then, {after_save:.1f} s after you saved (your “second 16”): {to_program:.1f} s until that "
-                    "check started its program, then the time the program took to load, as it could not be "
-                    f"prepared ahead (step 11 has the times). The Log, under the canvas: run #{first['id']} started "
+                    "check started its program, then the time the program took to load (step 11 has the "
+                    f"times). The Log, under the canvas: run #{first['id']} started "
                     f"at {first['started']:%H:%M:%S}, and test_note {first_note}.",
                zoom=[(log, f"run #{first['id']} "), (log, first_note)])
         p.check(f"The service saw the save at its next check: the schedule counts from {switched_on:%H:%M:%S}, "
@@ -281,9 +281,9 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
                     f"{tab.scene.values['clock_note']['output']}. ① minute_test goes on counting across the minute: "
                     f"“{test_left}”, to {next_run:%H:%M:%S}.",
                highlight=[TEST_LINE, CLOCK_LINE], badges=True, zoom=[TEST_LINE, CLOCK_LINE])
-        p.check(f"② on_the_clock's run began at {on_clock:%H:%M:%S}, within half a second",
+        p.check(f"② on_the_clock's run, for {on_clock:%H:%M:%S}, began never before it and at most 5 seconds after it",
                 started_by(env, by_clock) == "on_the_clock" and by_clock["status"] == "success"
-                and -0.02 <= (by_clock["started"] - on_clock).total_seconds() <= 0.5)
+                and -0.02 <= (by_clock["started"] - on_clock).total_seconds() <= 5.0)
         p.check(f"① minute_test still counts to {next_run:%H:%M:%S}",
                 abs(reaches_zero(test_left, test_read) - next_run) <= ONE)
 
@@ -296,13 +296,13 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
                         timeout=int(((next_run - dt.datetime.now()).total_seconds() + 30) * 1000))
         (second,) = second_run()
         second_note = tab.scene.values["test_note"]["output"]
-        p.shot(win, f"The next run began on that second, one minute later: run #{second['id']} started at "
-                    f"{second['started']:%H:%M:%S}, and test_note {second_note}. Its program was started 5 seconds "
-                    "early, so it had loaded by then (step 11).",
+        p.shot(win, f"The next run, for that second one minute later, began then: run #{second['id']} started at "
+                    f"{second['started']:%H:%M:%S}, and test_note {second_note}. Its program was started at that "
+                    "second, and the run began once it had loaded (step 11).",
                zoom=[(log, f"run #{second['id']} "), (log, second_note)])
-        p.check(f"Run #{second['id']} is for {next_run:%H:%M:%S}, started by minute_test, and began within half a "
-                "second of it", started_by(env, second) == "minute_test" and second["status"] == "success"
-                and -0.02 <= (second["started"] - next_run).total_seconds() <= 0.5)
+        p.check(f"Run #{second['id']} is for {next_run:%H:%M:%S}, started by minute_test, and began never before it "
+                "and at most 5 seconds after it", started_by(env, second) == "minute_test"
+                and second["status"] == "success" and -0.02 <= (second["started"] - next_run).total_seconds() <= 5.0)
 
         p.step("Click the Run history tab, under the canvas.")
         click_tab(win.bottom_tabs, win.history_panel)
@@ -333,19 +333,19 @@ def test_every_n_minutes_counts_from_when_you_switch_the_schedule_on(proof, env,
                    (f"run #{first['id']} (minute_test): began", first["started"], ""),
                    (f"run #{by_clock['id']} (on_the_clock): its program started",
                     dt.datetime.fromtimestamp(programs[on_clock]),
-                    f"   {on_clock.timestamp() - programs[on_clock]:.1f} s before {on_clock:%H:%M:%S}"),
+                    f"   {programs[on_clock] - on_clock.timestamp():+.1f} s after {on_clock:%H:%M:%S}"),
                    (f"run #{by_clock['id']} (on_the_clock): began", by_clock["started"], ""),
                    (f"run #{second['id']} (minute_test): its program started",
                     dt.datetime.fromtimestamp(programs[next_run]),
-                    f"   {next_run.timestamp() - programs[next_run]:.1f} s before {next_run:%H:%M:%S}"),
+                    f"   {programs[next_run] - next_run.timestamp():+.1f} s after {next_run:%H:%M:%S}"),
                    (f"run #{second['id']} (minute_test): began", second["started"], "")]))
-        p.check(f"Run #{first['id']}'s program started only once you had saved: it could not be prepared ahead",
+        p.check(f"Run #{first['id']}'s program started only once you had saved",
                 programs[switched_on] >= pressed.timestamp())
-        p.check(f"Run #{second['id']}'s program started at least a second before {next_run:%H:%M:%S}, so the run "
-                "began on that second", next_run.timestamp() - programs[next_run] >= 1.0)
+        p.check(f"Run #{second['id']}'s program started at {next_run:%H:%M:%S}, not before it: no run's program is "
+                "started before its time", programs[next_run] >= next_run.timestamp() - 0.02)
     finally:
         stop_service(env, service)
-        waiting = [at for _, at in run_processes_of(starts, path)]  # a program started early ends at its time
+        waiting = [at for _, at in run_processes_of(starts, path)]  # (a run's program still waiting ends at its time)
         if waiting:
             wait_until(max(waiting) + dt.timedelta(seconds=3))
         wait_until_finished(env)

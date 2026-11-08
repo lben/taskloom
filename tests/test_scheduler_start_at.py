@@ -1,7 +1,7 @@
-"""A scheduled run begins at its due time (README: Schedules): `taskloom run --start-at` loads everything first and
-then waits for that moment before it records and begins the run, and the scheduler service (tray and headless)
-starts each run's process a few seconds early, so even a run whose process takes long to load is recorded as
-started at its time. Everything else about scheduling stays as it is."""
+"""A scheduled run begins at its time (README: Schedules; SCH-5): never before it, and at most 5 seconds after it while
+the service is on. `taskloom run --start-at` loads everything first and then waits for that moment before it records
+and begins the run; the scheduler service (tray and headless) starts no run's process before the run's time, so a run
+whose process takes a second to load is recorded as started a little after its time."""
 
 import datetime as dt
 import json
@@ -21,7 +21,7 @@ from taskloom.history import History
 from taskloom.scheduler import set_paused
 
 TOLERANCE = 0.02  # clock ticks (~16 ms on Windows); start times are recorded to the millisecond
-EARLY = 10  # seconds between the service's first check and the run's due time: room to start its process early
+LEAD = 10  # seconds between the service's first check and the run's due time: room to set the test up
 # Like the packaged Taskloom on Windows, where the run's process took ~2 s to load before it recorded the run.
 SLOW_IMPORT = "import time\n\ntime.sleep(1.0)  # a block file whose libraries take long to import\n"
 NOTE_FLOW = "blocks:\n  note:\n    type: logic.python\n    config: {inputs: [], outputs: [], code: pass}\n"
@@ -166,14 +166,14 @@ def stop_service(env, proc: subprocess.Popen):
 
 
 def due_time(env, service: subprocess.Popen) -> dt.datetime:
-    """The first per-minute time at least EARLY seconds after the service's first check."""
+    """The first per-minute time at least LEAD seconds after the service's first check."""
     heartbeat = env.home / "scheduler.heartbeat"
     deadline = time.monotonic() + 60
     while not heartbeat.exists() and service.poll() is None and time.monotonic() < deadline:
         time.sleep(0.05)
     assert heartbeat.exists(), "the scheduler service did not check"
     first_check = dt.datetime.fromtimestamp(heartbeat.stat().st_mtime)
-    return (first_check + dt.timedelta(seconds=EARLY)).replace(second=0, microsecond=0) + dt.timedelta(minutes=1)
+    return (first_check + dt.timedelta(seconds=LEAD)).replace(second=0, microsecond=0) + dt.timedelta(minutes=1)
 
 
 def checked_after(env, moment: dt.datetime, until: dt.datetime) -> bool:
@@ -238,11 +238,20 @@ def run_processes(starts: Path, flows: dict[str, Path], due: dt.datetime, until:
 
 
 def assert_began_at(env, run: dict, due: dt.datetime):
-    """The run is recorded as started (what the Log's 'started' line says), and began, at its time."""
+    """SCH-5: the run is recorded as started (what the Log's 'started' line says) never before its time and at most 5 s
+    after it, and its first block began never before its time."""
     late = seconds_after(due, run["started"])
-    assert -TOLERANCE <= late <= 0.5 + TOLERANCE, f"{run['flow']} recorded as started {late:+.2f} s after {due}"
+    assert -TOLERANCE <= late <= 5 + TOLERANCE, f"{run['flow']} recorded as started {late:+.2f} s after {due}"
     begun = seconds_after(due, first_block_start(env, run["id"]))
-    assert -TOLERANCE <= begun <= 1.0, f"the first block of {run['flow']} started {begun:+.2f} s after {due}"
+    assert begun >= -TOLERANCE, f"the first block of {run['flow']} started {-begun:.2f} s before {due}"
+
+
+def started_before(starts: Path, flows: dict[str, Path], due: dt.datetime) -> dict[str, float]:
+    """The flows whose run's process for `due` the service started before `due` (SCH-5: none is), with how many
+    seconds before."""
+    found = run_processes(starts, flows, due, until=dt.datetime.now() + dt.timedelta(seconds=0.1))  # (looked once)
+    return {name: round(due.timestamp() - started, 2) for name, started in found.items()
+            if started < due.timestamp() - TOLERANCE}
 
 
 # --- 2: taskloom run --start-at ------------------------------------------------------------------------------------
@@ -305,23 +314,20 @@ def test_run_start_at_refuses_a_flow_with_a_mistake_once_loaded_not_at_that_mome
 # --- 1 and 3: the scheduler service, in real time -------------------------------------------------------------------
 
 @pytest.mark.invariant("SCH-5")
-@pytest.mark.invariant("SCH-8")
+@pytest.mark.invariant("SCH-10")
 def test_the_tray_service_begins_a_run_at_its_time_and_not_one_whose_schedule_went_off_before_it(env):
     """1, the reported case: the countdown reached 0 at hh:mm:00 and the Log said 'run #N started' at hh:mm:02, as
-    the run's process loaded before it recorded the run. 3: a schedule made inactive or taken off scheduled.yaml
-    before its time does not run: its run's process, started early, is stopped before it begins (nothing is
-    recorded, nothing is told)."""
+    the run's process loaded before it recorded the run: now a run begins at most 5 s after its time (SCH-5), and no
+    run's process is started before its time. 3: a schedule made inactive or taken off scheduled.yaml a few seconds
+    before its time does not run (nothing is recorded, nothing is told)."""
     write(env.home / "blocks" / "slow_import.py", SLOW_IMPORT)
     starts = record_process_starts(env)
     flows = scheduled(env, ["nightly", "unticked", "unlisted"])
     service = start_service(env, tray=True)
     try:
         due = due_time(env, service)
-        changed = {name: flows[name] for name in ("unticked", "unlisted")}
-        found = run_processes(starts, changed, due, until=due + dt.timedelta(seconds=16))
-        assert found.keys() == changed.keys(), f"no run process started for {due} of {set(changed) - set(found)}"
-        ahead = {name: round(due.timestamp() - t, 2) for name, t in found.items()}
-        assert all(seconds >= 1.0 for seconds in ahead.values()), f"started only this many seconds before {due}: {ahead}"
+        wait_until(due - dt.timedelta(seconds=3))
+        early = started_before(starts, flows, due)
         write(flows["unticked"], every_minute(active=False))  # its Schedule block's Active unticked, and saved
         Home(env.home).set_scheduled(flows["unlisted"], False)  # taken off scheduled.yaml
         assert time.time() < due.timestamp() - 0.5, "changed too late to tell"
@@ -330,10 +336,12 @@ def test_the_tray_service_begins_a_run_at_its_time_and_not_one_whose_schedule_we
         assert checked_after(env, due + dt.timedelta(seconds=1.5), until=due + dt.timedelta(seconds=17)), \
             f"the service did not check in the 15 s after {due}"
         ran = [(r["flow"], r["status"]) for r in runs(env) if r["flow"] != "nightly" and r["when"] >= due]
+        early.update(started_before(starts, flows, due))
     finally:
         stop_service(env, service)
         wait_until_finished(env)
 
+    assert early == {}, f"run processes started this many seconds before their time {due}: {early}"
     assert run is not None and run["status"] == "success", f"no successful run of nightly for {due}: {run}"
     assert_began_at(env, run, due)
     assert ran == [], f"runs of schedules that went off, recorded at or after {due}: {ran}"
@@ -342,7 +350,7 @@ def test_the_tray_service_begins_a_run_at_its_time_and_not_one_whose_schedule_we
 
 @pytest.mark.invariant("SCH-5")
 @pytest.mark.invariant("SCH-12")
-def test_the_headless_service_begins_a_run_at_its_time_and_its_early_process_counts_against_the_limit(env):
+def test_the_headless_service_begins_a_run_at_its_time_and_its_process_counts_against_the_limit(env):
     """1: also `taskloom scheduler --headless`. 3: max_concurrent_runs, "a run counts against the limit from when its
     process starts": of two runs due at once with a limit of 1, the second starts once the first has finished."""
     write(env.home / "blocks" / "slow_import.py", SLOW_IMPORT)
@@ -363,27 +371,28 @@ def test_the_headless_service_begins_a_run_at_its_time_and_its_early_process_cou
     assert first["finished"] <= second["started"], f"two runs at once with max_concurrent_runs: 1: {done}"
 
 
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.invariant("SCH-8")
 def test_turning_the_service_off_before_a_runs_time_means_that_run_does_not_happen(env):
-    """3, README: turn the scheduler service off (as the editor does) "then no scheduled flow runs"; a run whose
-    process it started early has not begun yet, so it does not happen."""
+    """3, README: turn the scheduler service off (as the editor does) a few seconds before a run's time: "then no
+    scheduled flow runs". No run's process is started for that time (none is before its time), and nothing is
+    recorded."""
     starts = record_process_starts(env)
     flows = scheduled(env, ["nightly"])
     service = start_service(env, tray=True)
     try:
         due = due_time(env, service)
-        found = run_processes(starts, flows, due, until=due + dt.timedelta(seconds=16))
-        assert found, f"no run process started for {due}"
-        ahead = round(due.timestamp() - found["nightly"], 2)
-        assert ahead >= 1.0, f"started only {ahead} s before {due}"
+        wait_until(due - dt.timedelta(seconds=3))
         set_paused(Home(env.home), True)  # as the editor turns it off
         turned_off = time.time()
         stop_service(env, service)
         assert turned_off < due.timestamp() - 0.5, "turned off too late to tell"
         wait_until(due + dt.timedelta(seconds=4))
         ran = [(r["flow"], r["status"]) for r in runs(env) if r["when"] >= due]
+        started = run_processes(starts, flows, due, until=dt.datetime.now() + dt.timedelta(seconds=0.1))
     finally:
         stop_service(env, service)
         wait_until_finished(env)
 
+    assert started == {}, f"a run process was started for {due} although the service was turned off before it"
     assert ran == [], f"runs recorded at or after {due} with the service off: {ran}"

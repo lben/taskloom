@@ -1,6 +1,7 @@
-"""What the scheduler service must always do (docs/promises/scheduler.yaml) where turning it off meets a run started
-early (SCH-8, SCH-4), the editor's view of a service turning off (SCH-2, SCH-4), a Stop now that has to be forced
-(SCH-4), and a service started again after a PC restart or with a run going (SCH-16, SCH-11, SCH-12, SCH-13).
+"""What the scheduler service must always do (docs/promises/scheduler.yaml) where turning it off meets a run's time or
+a run still loading (SCH-5, SCH-8, SCH-4, SCH-9), the editor's view of a service turning off (SCH-2, SCH-4), a Stop
+now that has to be forced (SCH-4), and a service started again after a PC restart or with a run going (SCH-16,
+SCH-11, SCH-12, SCH-13).
 
 Each test goes through the real service (`taskloom scheduler`, started from the editor's button or as a server's
 `--headless` service), real run processes, and turning off as the dialog's Proceed sends it (request_turn_off) or
@@ -13,6 +14,7 @@ import contextlib
 import datetime as dt
 import gc
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -29,12 +31,14 @@ from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from taskloom.config import Home  # noqa: E402
-from taskloom.scheduler import request_turn_off, runs_going  # noqa: E402
+from taskloom.scheduler import request_turn_off, runs_going, set_paused  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
 from tests.test_paths_scheduler import start_service as start_headless  # noqa: E402
-from tests.test_scheduler_new_promises import (HOURLY, TURN_OFF, FakeRuns, answer_when_shown, drain,  # noqa: E402
-                                               end_runs, ended, flow_yaml, going, history, hold_until, pump, schedule,
-                                               statuses, stop_the_service, wait_until, write)
+from tests.test_interval_schedules import run_processes_of  # noqa: E402
+from tests.test_scheduler_at_its_time import SLOW_LOAD  # noqa: E402
+from tests.test_scheduler_new_promises import (HOURLY, TURN_OFF, FakeRuns, answer_when_shown, begins,  # noqa: E402
+                                               drain, end_runs, ended, flow_yaml, going, history, hold_until, pump,
+                                               says, schedule, statuses, stop_the_service, utc, wait_until, write)
 from tests.test_scheduler_start_at import (checked_after, record_process_starts, run_processes,  # noqa: E402
                                            start_service, stop_service, tray_messages)
 
@@ -102,51 +106,65 @@ def on_screen(win, tab) -> tuple[str, str]:
     return win.scheduler_action.text(), tab.scene.nodes["s1"].countdown
 
 
-# --- SCH-8, SCH-4: a run started early, and turning the service off before its time ----------------------------------
+# --- SCH-5, SCH-8, SCH-4, SCH-9: turning the service off before a run's time, or while a run loads ------------------
 
+@pytest.mark.invariant("SCH-5")
 @pytest.mark.invariant("SCH-8")
-@pytest.mark.invariant("SCH-4")
-@pytest.mark.parametrize("listed", [True, False], ids=["listed as going, Let it finish (the default)",
-                                                       "not among the choices"])
-def test_a_run_started_early_does_not_begin_once_you_turn_the_service_off_before_its_time(env, listed):
-    """nightly is due in a few seconds; the service has started its run's process early, to be ready on time. Before
-    that time you turn the service off and click Proceed: once with nightly listed as going and the dialog's default
-    (Let it finish), once with nightly not among the choices. Its run does not begin, nothing is recorded for that
-    time, and the service turns off."""
+@pytest.mark.invariant("SCH-9")
+def test_turning_the_service_off_before_a_runs_time_starts_no_run_and_that_time_is_missed_when_on_again(env,
+                                                                                                    monkeypatch):
+    """nightly (Misfire Skip) is due in a few seconds. Before that time you turn the service off and click Proceed
+    (no runs are going: it only asked you to confirm). No run's process is started for that time (none is before its
+    time), nothing is recorded, and the service turns off. You turn it on again 3 minutes after that time (on a chosen
+    clock from then on, its runs' processes stood in for): that time came while the service was off, so it is a missed
+    one, as its Misfire says: Skip runs none, and tells you 1 was missed."""
     starts = record_process_starts(env)
-    flows = schedule(env.home, env.root, {"nightly": flow_yaml(EVERY_MINUTE)})
+    flows = schedule(env.home, env.root, {"nightly": flow_yaml({**EVERY_MINUTE, "misfire": "skip"})})
     due = next_time_in(env.home, 12)
-    choices = {str(flows["nightly"]): "finish"} if listed else {}
     service = start_service(env, tray=False)
     try:
-        found = run_processes(starts, flows, due, until=due)
-        assert found, f"the service started no run process for {due:%H:%M:%S} before that time"
-        request_turn_off(Home(env.home), choices)  # Proceed
+        wait_until(lambda: dt.datetime.now() >= due - dt.timedelta(seconds=3), 15)
+        request_turn_off(Home(env.home), {})  # Proceed
         ahead = due.timestamp() - time.time()
         assert ahead > 0.5, f"turned off only {ahead:.2f} s before {due:%H:%M:%S}: too late to tell"
-        deadline = due + dt.timedelta(seconds=12)
-        while ((service.poll() is None or dt.datetime.now() < due + dt.timedelta(seconds=3))
-               and dt.datetime.now() < deadline):
-            time.sleep(0.1)
-        runs, service_ended = history(env.home), service.poll() is not None
+        service_ended = wait_until(lambda: service.poll() is not None, 12)
+        wait_until(lambda: dt.datetime.now() >= due + dt.timedelta(seconds=3), 15)
+        runs = history(env.home)
+        started = run_processes(starts, flows, due, until=dt.datetime.now() + dt.timedelta(seconds=0.1))
     finally:
         stop_service(env, service)
         end_runs(env.home)
 
-    assert runs == [], (f"you turned the service off {ahead:.1f} s before {due:%H:%M:%S} (Proceed sent {choices}), "
-                        f"and the run started early for that time began: "
-                        f"{[(r['flow'], r['status'], r['when']) for r in runs]}")
-    assert service_ended, f"the service did not turn off by {deadline:%H:%M:%S}"
+    assert started == {} and runs == [], (
+        f"you turned the service off {ahead:.1f} s before {due:%H:%M:%S}, and a run process was started for that time "
+        f"({started}) or a run began: {[(r['flow'], r['status'], r['when']) for r in runs]}")
+    assert service_ended, "the service did not turn off"
+
+    stand_ins = FakeRuns()  # (from here on, on a chosen clock: the run processes are stood in for)
+    monkeypatch.setattr(subprocess, "Popen", stand_ins.popen)
+    set_paused(Home(env.home), False)  # you turn the service on again, 3 minutes after that time
+    told = []
+    try:
+        drain(stand_ins.service(env.home, lambda title, message: told.append(f"{title}: {message}")),
+              due + 3 * MINUTE + dt.timedelta(seconds=30), stand_ins)
+    finally:
+        stand_ins.end()
+    about = [m for m in told if "nightly" in m and re.search(r"missed", m, re.IGNORECASE)]
+    assert begins(stand_ins.of("nightly")) == utc([due + 3 * MINUTE]), (
+        f"turned on again 3.5 minutes after {due:%H:%M:%S} (Skip), runs began for {begins(stand_ins.of('nightly'))}, "
+        f"not only the on-time {due + 3 * MINUTE:%H:%M:%S}; told: {told}")
+    assert [m for m in about if says(m, 3)], f"not told that 3 were missed ({due:%H:%M:%S} among them): {told}"
 
 
 @pytest.mark.invariant("SCH-4")
-def test_a_run_started_early_is_not_a_run_going_so_turning_off_only_asks_to_confirm(win, tmp_path, monkeypatch):
-    """nightly is due in a few seconds and the service has started its run's process early; it has not begun. It is
-    not a run going: the flows with runs going do not list it, and the editor's button only asks you to confirm
-    turning the service off (answered No: it stays on)."""
+def test_a_run_still_loading_is_not_a_run_going_so_turning_off_only_asks_to_confirm(win, tmp_path, monkeypatch):
+    """nightly's run (every 60 minutes: it runs as the service first sees it) has been started, and its program is
+    still loading (a block file slow to import): it has not begun. It is not a run going: the flows with runs going do
+    not list it, and the editor's button only asks you to confirm turning the service off (answered No: it stays
+    on)."""
     home = win.home.root
-    flows = schedule(home, tmp_path, {"nightly": flow_yaml(EVERY_MINUTE)})
-    due = next_time_in(home, 12)
+    write(home / "blocks" / "slow_load.py", SLOW_LOAD)
+    flows = schedule(home, tmp_path, {"nightly": flow_yaml(HOURLY)})
     folder = types.SimpleNamespace(root=tmp_path, home=home,
                                    env={**os.environ, "TASKLOOM_HOME": str(home), "PYTHON_KEYRING_BACKEND": NO_KEYRING})
     starts = record_process_starts(folder)
@@ -156,22 +174,23 @@ def test_a_run_started_early_is_not_a_run_going_so_turning_off_only_asks_to_conf
     service = start_service(folder, tray=False)
     answer = {"timer": QTimer()}
     try:
-        found = run_processes(starts, flows, due, until=due)
-        assert found, f"the service started no run process for {due:%H:%M:%S} before that time"
+        assert wait_until(lambda: run_processes_of(starts, flows["nightly"]), 30), "no run process was started"
+        ((started, _),) = run_processes_of(starts, flows["nightly"])
         pump(lambda: False, 1.5)  # (a check later: the service has said which runs go)
         looked = time.time()
         listed = runs_going(Home(home))
         answer = answer_when_shown(TURN_OFF, ("nightly",), button="Cancel")
         win.toggle_scheduler()  # on: the button turns it off
-        before = due.timestamp() - time.time()
-        assert before > 0.2, f"looked only {before:.2f} s before {due:%H:%M:%S}: too late to tell"
+        loading = history(home) == []
+        assert loading and time.time() - started < 3.5, \
+            f"not arranged: nightly's run began, {time.time() - started:.1f} s after its program started"
     finally:
         stop_service(folder, service)
         end_runs(home)
         answer["timer"].stop()
 
-    assert listed == [], (f"{due.timestamp() - looked:.1f} s before its time, the run started early is listed as a run "
-                          f"going: {listed}")
+    assert listed == [], (f"{looked - started:.1f} s after its program started, the run still loading is listed as "
+                          f"a run going: {listed}")
     assert answer["seen"] is None and asked == [TURN_OFF], \
         f"turning off did not only ask to confirm: the dialog showed {answer['seen']}; asked {asked}"
 

@@ -163,20 +163,19 @@ def test_the_tray_service_started_with_an_empty_item_in_the_list_keeps_running_a
 
 @pytest.mark.invariant("SCH-14")
 @pytest.mark.parametrize("mistake", ["an empty item", "a number item"])
-def test_a_flow_listed_next_to_the_mistake_still_begins_at_its_time_when_its_run_starts_early(env, mistake):
+def test_a_flow_listed_next_to_the_mistake_still_begins_at_its_time(env, mistake):
     """The service on (this test holds its lock), and scheduled.yaml with an entry that is not a flow file's path
     before a flow listed right (every 1 minute). The service's checks go on, and that flow's run for its next time,
-    whose process the service starts a few seconds early so that it begins on time (it then checks the list before it
-    begins), begins at its time and succeeds."""
+    whose process the service starts at that time (it checks the list as it begins), begins and succeeds."""
     paths = schedule(env.home, env.root, {"listed": flow_yaml({"every": "1 minute"}, overlap="allow")})
     write(env.home / "scheduled.yaml", MISTAKES[mistake].format(listed=json.dumps(str(paths["listed"]))))
     told = []
     lock = acquire_lock(Home(env.home))  # the scheduler service is on: as `taskloom scheduler`, the lock first
     scheduler = Scheduler(Home(env.home), lambda title, message: told.append(f"{title}: {message}"))
-    seen = dt.datetime.now().replace(microsecond=0) - dt.timedelta(seconds=57)
+    seen = dt.datetime.now().replace(microsecond=0) - dt.timedelta(seconds=61)
     try:
         scheduler.tick(seen)  # first seen then: its run for that time begins at once
-        scheduler.tick(dt.datetime.now())  # its next time, a minute after, is 3 s away: that run's process starts now
+        scheduler.tick(dt.datetime.now())  # its next time, a minute after, came a second ago: that run starts now
         scheduler.wait_for_runs(timeout=60)
     except Exception as e:
         pytest.fail(f"the service's check stopped with {mistake} in scheduled.yaml: {type(e).__name__}: {e}")
@@ -185,8 +184,8 @@ def test_a_flow_listed_next_to_the_mistake_still_begins_at_its_time_when_its_run
 
     on_time = [r["status"] for r in history(env.home)
                if r["when"] and dt.datetime.fromisoformat(r["when"]) == seen + dt.timedelta(minutes=1)]
-    assert on_time == ["success"], (f"the run for {seen + dt.timedelta(minutes=1):%H:%M:%S}, started early, did not "
-                                    f"begin and succeed: {history(env.home)}; told: {told}")
+    assert on_time == ["success"], (f"the run for {seen + dt.timedelta(minutes=1):%H:%M:%S} did not begin and "
+                                    f"succeed: {history(env.home)}; told: {told}")
 
 
 # --- SCH-14, C10: the operating system refuses to start a run's process ---------------------------------------------
@@ -249,7 +248,7 @@ def test_when_the_system_refuses_to_start_a_runs_process_the_service_tells_you_a
 # --- SCH-9: 150 missed Catch up times, with one more on time or coming while you are asked ---------------------------
 
 ON_TIME = missed_times(151)[-1]  # 2026-01-06 01:10, the time after the 150 missed ones (01:00 the last of them)
-ASKED_AT = ON_TIME - dt.timedelta(seconds=3)  # the check that finds them: ON_TIME is within its 5 s early start
+ASKED_AT = ON_TIME - dt.timedelta(seconds=3)  # the check that finds them; ON_TIME comes at the next check
 
 
 def catch_up_service(env, runs: FakeRuns, someone_to_ask: bool) -> tuple[Scheduler, list, list]:
@@ -268,9 +267,9 @@ def catch_up_service(env, runs: FakeRuns, someone_to_ask: bool) -> tuple[Schedul
 @pytest.mark.invariant("SCH-9")
 @pytest.mark.parametrize("someone_to_ask", [True, False], ids=["asked: Run only the latest 100", "a server: no one"])
 def test_150_missed_and_one_on_time_the_latest_100_missed_run_and_the_on_time_one_too(env, fake_runs, someone_to_ask):
-    """A Catch up schedule missed 150 times (00:10 to 01:00 the next day, every 10 minutes); at the check that finds
-    them, 3 s before 01:10, 01:10 is on time (its run's process starts then, to begin at 01:10). The question says 150
-    were missed; Run only the latest 100. The latest 100 missed times run, oldest first, one at a time, and 01:10 runs
+    """A Catch up schedule missed 150 times (00:10 to 01:00 the next day, every 10 minutes); the check that finds them
+    is 3 s before 01:10, which comes at the next check, on time. The question says 150 were missed; Run only the
+    latest 100. The latest 100 missed times run, oldest first, one at a time, and 01:10 runs
     too, after them (it is not missed); you are told 50 were not run. With no one to ask (a server): the same runs
     without a question, and its log says 150 were missed and 50 not run."""
     scheduler, told, asked = catch_up_service(env, fake_runs, someone_to_ask)
@@ -299,8 +298,8 @@ def test_150_missed_and_one_on_time_the_latest_100_missed_run_and_the_on_time_on
 
 @pytest.mark.invariant("SCH-9")
 def test_times_that_come_while_you_are_asked_are_not_missed_and_run_after_the_chosen_missed_runs(env, fake_runs):
-    """As above: 150 missed, 01:10 on time at the check 3 s before it, which asks. The question stays open while 01:20
-    and 01:30 come (checks a few seconds before and at each). Then Run only the latest 100: the latest 100 missed times
+    """As above: 150 missed, found by the check 3 s before 01:10, which asks; 01:10 comes, on time, at the next check.
+    The question stays open while 01:20 and 01:30 come (checks a few seconds before and at each). Then Run only the latest 100: the latest 100 missed times
     run, oldest first, then 01:10, 01:20 and 01:30, one at a time; you are told 50 were not run (the times that came
     while you were asked are neither counted as missed nor dropped)."""
     scheduler, told, asked = catch_up_service(env, fake_runs, someone_to_ask=True)

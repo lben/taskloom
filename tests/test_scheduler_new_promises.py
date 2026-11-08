@@ -5,13 +5,13 @@ their turn surviving a stop (SCH-16), and the README explaining where the schedu
 Turning the service off, a crash and the server's log use the real service and real runs. Where a test counts
 hundreds of runs or drives the clock across a clock change, the run processes are replaced at the process boundary:
 subprocess.Popen, for `taskloom run` commands only, gives a stand-in that records the command and has finished by the
-service's next check; one started early has claimed its time by then, as the real run does (FakeRuns)."""
+service's next check; it has claimed what its command line names by then, as the real run does (FakeRuns)."""
 
+import argparse
 import contextlib
 import copy
 import datetime as dt
 import gc
-import inspect
 import io
 import json
 import os
@@ -35,12 +35,13 @@ from PySide6.QtCore import QCoreApplication, QPoint, QTimer  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QDialog, QGroupBox, QLabel, QMessageBox, QPushButton,  # noqa: E402
                                QRadioButton, QSpinBox, QSystemTrayIcon)
 
+from taskloom import cli  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor.safety import pid_alive  # noqa: E402
-from taskloom.flow import real_path  # noqa: E402
+from taskloom.flow import FlowError, load_flow, real_path  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.history import connect as history_connect  # noqa: E402
-from taskloom.scheduler import NOT_DUE, Scheduler, acquire_lock, claim_time, paused  # noqa: E402
+from taskloom.scheduler import NOT_DUE, Scheduler, acquire_lock, paused  # noqa: E402
 from taskloom.scheduler import _unlock as unlock  # noqa: E402
 from tests.test_editor import REAL_START_SCHEDULER  # noqa: E402
 from tests.test_scheduler_start_at import start_at_clock, start_service, stop_service  # noqa: E402
@@ -55,7 +56,6 @@ ANSWERS = "answers a dialog"  # (the name of answer_when_shown's timers)
 HOURLY = {"every": "60 minutes"}  # its first run is as soon as the service first sees it
 NAMES = ("nightly_load", "weekly_report", "monthly_backup")  # (the flows of the SCH-4 tests)
 WAIT_A_MINUTE = {"type": "logic.wait", "config": {"seconds": 60}}
-A_FEW_SECONDS = dt.timedelta(seconds=10)  # how early a run's process may start, to be ready at its time
 NO_TZ_ON_WINDOWS = pytest.mark.skipif(
     sys.platform == "win32", reason="the local time zone cannot be changed inside a running process on Windows")
 
@@ -374,22 +374,40 @@ def clock_shows(moment: dt.datetime):
         yield
 
 
-def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | None:
-    """What `taskloom run FLOW --trigger BLOCK --scheduled SCHEDULE --start-at T --if-scheduled SERVICE ROW` (its command
-    line: `args`) does when it reaches T, with this PC's clock showing `clock`: the claim the real run makes (claim_time),
-    started before T as the scheduler service starts such a run. Whether a service is on is told by the Taskloom folder
-    `home`, as the real run tells it. None: T is its own, and it begins; else why it does not begin."""
-    def option(name: str) -> str | None:
-        return args[args.index(name) + 1] if name in args else None
+def run_command_line(args: list[str], home: Path) -> argparse.Namespace:
+    """The command line the scheduler service gave a `taskloom run` process (`args`), read by `taskloom run`'s own
+    parser, as that process reads it."""
+    read = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("TASKLOOM_HOME", str(home))
+        patch.setattr(cli, "cmd_run", lambda arguments, _: read.append(arguments) or 0)
+        cli.main(args[args.index("run"):])
+    return read[0]
 
-    # (started before its time: where claim_time is told so, it is)
-    early = {"early": True} if "early" in inspect.signature(claim_time).parameters else {}
-    # (in one transaction, as the real run claims in the one that records its start: History.start_run)
-    with clock_shows(clock), contextlib.closing(history_connect(Home(home).history_db)) as db, db:
-        db.execute("BEGIN IMMEDIATE")
-        return claim_time(Home(home), real_path(Path(option("run"))), option("--trigger"), option("--scheduled"),
-                          dt.datetime.fromisoformat(option("--start-at")), option("--if-scheduled"),
-                          int(args[args.index("--if-scheduled") + 2]), db, **early)
+
+def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | None:
+    """What a `taskloom run` process the scheduler service started (its command line: `args`, whatever it names) does
+    as its run begins, with this PC's clock showing `clock`: the claim the real run makes, as its own code makes it from
+    its command line (taskloom.cli), in one transaction, as the real run claims in the one that records its start
+    (History.start_run). Whether a service is on is told by the Taskloom folder `home`, as the real run tells it.
+    None: it begins; else why it does not begin."""
+    arguments = run_command_line(args, home)
+    try:
+        flow = load_flow(real_path(Path(arguments.flow)))
+    except FlowError as e:
+        return f"{arguments.flow} cannot be read: {e}"
+    start_at = dt.datetime.fromisoformat(arguments.start_at) if arguments.start_at else None
+    claim = cli._claim(Home(home), flow, arguments, start_at)
+    said = io.StringIO()
+    with clock_shows(clock), contextlib.redirect_stderr(said), \
+            contextlib.closing(history_connect(Home(home).history_db)) as db:
+        try:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                claim(db)
+        except SystemExit:  # (refused: nothing is written)
+            return said.getvalue().strip().removeprefix("not begun: ") or "refused"
+    return None
 
 
 def seen_then(home: Path, moment: dt.datetime):
@@ -407,10 +425,10 @@ def seen_then(home: Path, moment: dt.datetime):
 
 class FakeRun:
     """A stand-in for one `taskloom run` process the scheduler starts: it records the command, and has finished by
-    the service's next check (unless its flow is held). One started early, to claim its time (--if-scheduled), has
-    reached that time by then too (unless it `waits` for the test to say so: reach_its_time): it claims it as the real
-    run does (claim_its_time), and begins only if it has it; else it prints why, records nothing and ends with the exit
-    code NOT_DUE."""
+    the service's next check (unless its flow is held). One that claims (--if-scheduled) has loaded by then too (unless
+    it `waits`: its program is still loading until the test says it has loaded: reach_its_time), and claims what its
+    command line names as the real run does (claim_its_time); it begins only if it has it, else it prints why, records
+    nothing and ends with the exit code NOT_DUE."""
 
     def __init__(self, args: list[str], runs: "FakeRuns", home: Path):
         self.args, self._runs, self.home = args, runs, home
@@ -422,14 +440,14 @@ class FakeRun:
         self.returncode = None
         self.stdin = io.StringIO()
         self.claims = "--if-scheduled" in args
-        self.waits = False  # (started early: it reaches its time only when the test says so)
+        self.waits = False  # (still loading: it claims only when the test says so)
         self.not_begun: str | None = None  # why it did not begin
         self.beginning = [FINISHED]  # what it prints once it has begun
         self.stdout = Said() if self.claims else io.StringIO(FINISHED)
         self.reached = not self.claims
 
     def reach_its_time(self) -> bool:
-        """Started early, it reaches its time (its --start-at) and claims it; whether it began."""
+        """It has loaded, and claims as it begins, at its time (its --start-at, which has come); whether it began."""
         self.reached = True
         self.not_begun = claim_its_time(self.args, self.home, instant(self.start_at)[0])
         if self.not_begun:
@@ -533,8 +551,8 @@ def instant(text: str) -> tuple[dt.datetime, str | None]:
 
 
 def begins(runs: list[FakeRun]) -> list[str]:
-    """When each run begins (its --start-at), as a moment in UTC; one started early that did not begin (it could not
-    claim its time) is not among them."""
+    """The time each run is for (its --start-at), as a moment in UTC, of the runs that began; one that did not begin
+    (it could not claim its time) is not among them."""
     return [f"{instant(r.start_at)[0]:%Y-%m-%d %H:%M:%S}" for r in runs if r.not_begun is None]
 
 
@@ -918,10 +936,10 @@ def run_through(scheduler: Scheduler, runs: FakeRuns, start: dt.datetime, end: d
 
 
 def off_time(started: list, every: int) -> list[str]:
-    """Runs whose process started more than a few seconds before their time, or not at the first check at or after
+    """Runs whose process started before their time (SCH-5: never before it), or not at the first check at or after
     it (late, or in a burst)."""
     return [f"{run.start_at} started at {moment:%H:%M:%S} UTC" for run, moment in started
-            if not -dt.timedelta(seconds=every) < instant(run.start_at)[0] - moment <= A_FEW_SECONDS]
+            if not -dt.timedelta(seconds=every) < instant(run.start_at)[0] - moment <= dt.timedelta(0)]
 
 
 def missed_said(told: list[str]) -> list[str]:
