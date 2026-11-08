@@ -585,3 +585,40 @@ def test_stop_now_stops_a_run_the_service_before_a_restart_started_and_the_servi
         end_runs(env.home)
 
     assert off and stopped, f"Stop now did not stop the run from before the restart: {history(env.home)}"
+
+
+# A scheduled run's process that ends at once when asked to stop, as on Windows (there SIGTERM ends a process before
+# it could record anything): here it ignores the request, and records nothing itself, so what the history says of it
+# is what Stop now recorded.
+ENDS_WITHOUT_RECORDING = """
+import signal, sys, time
+from pathlib import Path
+from taskloom.history import History
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+history = History(Path(sys.argv[1]))
+history.start_run("nightly", sys.argv[2], {}, "2026-01-05T10:00:00", schedule="every 60 minutes")
+history.close()
+print("began", flush=True)
+time.sleep(60)
+"""
+
+
+@pytest.mark.invariant("SCH-4")
+def test_stop_now_records_a_stopped_scheduled_run_as_cancelled_also_where_it_cannot_record_it_itself(env):
+    """With no service running, you choose Stop now for nightly, whose scheduled run goes: its process is told to stop
+    and the run is recorded as cancelled at once, when it is stopped, also where its process ends before it could
+    record that itself (as on Windows)."""
+    paths = schedule(env.home, env.root, {"nightly": flow_yaml(HOURLY)})
+    proc = subprocess.Popen([sys.executable, "-c", ENDS_WITHOUT_RECORDING, str(env.home / "history.db"),
+                             str(real_path(paths["nightly"]))], env=env.env, stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "began"
+        request_turn_off(Home(env.home), {str(paths["nightly"]): "stop"})
+        recorded = statuses(env.home, "nightly")
+    finally:
+        proc.kill()
+        proc.wait(10)
+
+    assert recorded == ["cancelled"], recorded
+    (run,) = history(env.home)
+    assert run["finished"] is not None and abs(run["finished"] - dt.datetime.now()) < dt.timedelta(minutes=1), run
