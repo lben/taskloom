@@ -300,7 +300,7 @@ def _summary(produced: dict) -> str:
 def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=(), cancel: threading.Event | None = None,
              answers=None, as_of: dt.datetime | None = None, trigger: str | None = None,
              only: str | None = None, inputs_from: int | None = None, given: dict | None = None,
-             run_from: str | None = None, before_start=None, scheduled: bool = False) -> RunResult:
+             run_from: str | None = None, before_start=None, scheduled: str | None = None, claim=None) -> RunResult:
     """Run a flow. `answers` (with a wait(ask_id, ctx) method) lets blocks ask the user questions.
 
     `trigger` is the Schedule block that started a scheduled run; None means a manual run.
@@ -309,8 +309,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     `run_from` runs that block (with the inputs it got in run `inputs_from`) and every block after it;
     the blocks before them are not run again: what they held in run `inputs_from` is used.
     `before_start` is called once the flow is loaded and checked, just before its run is recorded and begins
-    (`taskloom run --start-at` waits there for its time). `scheduled`: the scheduler service started it (its run
-    history says so: see History.start_run).
+    (`taskloom run --start-at` waits there for its time). `scheduled`: the schedule the scheduler service started it for;
+    `claim(db)`, done as its run is recorded, may refuse it (its run history says both: see History.start_run).
     """
     fired = _fired_triggers(flow, registry, trigger)
     part = run_part(flow, registry, trigger, only, run_from)
@@ -352,7 +352,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
 
     history = History(home.history_db)
     run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps, flow.version,
-                               scheduled)
+                               scheduled is not None, scheduled, claim)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
     # Lines run at the same time tell their events one at a time, each whole and in the order they happen.

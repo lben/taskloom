@@ -38,9 +38,9 @@ from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, bl
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, run_alive, runner_command
-from ..scheduler import (counted_from, paused, request_turn_off, running_scheduler_version, runs_going,
-                         service_running, set_paused, set_start_at_login, startup_file, startup_script_outdated,
-                         tell_crashed, version_tuple)
+from ..scheduler import (counted_from, forget_schedules, paused, request_turn_off, running_scheduler_version,
+                         runs_going, service_running, set_paused, set_start_at_login, startup_file,
+                         startup_script_outdated, tell_crashed, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
@@ -1611,16 +1611,23 @@ class MainWindow(QMainWindow):
         self.flow_status.update_tab(tab)
 
     def _sync_schedule(self, tab: FlowTab):
-        """A saved flow with a Schedule block is run by the scheduler; without one it is not."""
-        scheduled = bool(schedules_of(tab.doc.data)[0])
+        """A saved flow with a Schedule block is run by the scheduler; without one it is not. The scheduler service
+        forgets the state of its schedules that are off now (also while it is off), so one turned on again starts
+        afresh (forget_schedules)."""
+        triggers = schedules_of(tab.doc.data)[0]
+        scheduled = bool(triggers)
         try:
             if scheduled != (tab.doc.path in self.home.scheduled_flows()):
                 self.home.set_scheduled(tab.doc.path, scheduled)
+            forget_schedules(self.home, tab.doc.path, triggers)
         except ValueError as e:  # e.g. edited by hand: writing it again would lose the flows it lists
             if scheduled:
                 QMessageBox.warning(self, "Flow not scheduled", f"This flow is saved, but not scheduled: {e}\n\n"
                                     "Put that file right, then save the flow again.")
             scheduled = False
+        except OSError as e:  # e.g. the list of scheduled flows kept open by another program: it is as it was
+            QMessageBox.warning(self, "Schedule not saved", f"This flow is saved, but the list of scheduled flows "
+                                f"could not be changed: {e}\n\nSave the flow again to try again.")
         self._refresh_schedule(tab)
         if scheduled and not self.scheduler_running():
             if paused(self.home):

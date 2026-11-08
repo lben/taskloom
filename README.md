@@ -1055,8 +1055,9 @@ A schedule repeats in one of two ways:
   off and on again does not move it: the times while it was off were missed (see `misfire`).
 - **On the clock**: every hour at :MM, every day, weekday, chosen days or month at a time,
   and a cron line (`*/5 * * * *` runs at :00, :05, :10, ...), plus one time (`at`), to the
-  minute or to the second (`2026-10-08 15:30:07`): a run begins on a whole second, so a time
-  with a fraction of a second is refused.
+  minute or to the second (`2026-10-08 15:30:07`), as this PC's clock shows it: a run begins
+  on a whole second, so a time with a fraction of a second is refused, and so is one written
+  with a UTC offset (a time zone).
 
 The **scheduler service** runs scheduled flows at their times. It is a program of its own
 that keeps running in the background (its icon is in the tray), also while the editor is
@@ -1088,17 +1089,19 @@ so `overlap` and **Scheduled runs at once** count it. The
 service checks every second and then rereads changed flow files, so a schedule applies within
 a second of saving it, without restarting the service; a new or changed schedule, or one turned
 back on (Active ticked again, the flow scheduled again), counts from that moment (nothing
-before it counts as missed).
+before it counts as missed), also when you turned it off and on again while the service was
+off: saving a flow with a schedule off makes the service forget that schedule.
 
-At each check, of the times that came since the previous check only the most recent can be
-on time, and only if it is at most 2 minutes old; the others were missed (the scheduler
-service was off, the computer asleep, ...). `misfire` (**Misfire** on the Schedule block)
-says what runs:
+At each check, the time about to come (in the next few seconds) runs at its time. Of the
+times that came since the previous check, only the most recent can be on time, and only if
+it is less than 2 minutes late; the others were missed (the scheduler service was off, the
+computer asleep, ...). `misfire` (**Misfire** on the Schedule block) says what runs of
+those that came:
 
-- `run_once` (the default): one run, for the most recent time, on time or missed;
-- `skip`: only the on-time run, if there is one; one **Missed runs skipped** notification
+- `run_once` (the default): one run, for the most recent, on time or missed;
+- `skip`: only the on-time one, if there is one; one **Missed runs skipped** notification
   says how many were missed;
-- `catch_up`: a run for every missed time, oldest first, one at a time.
+- `catch_up`: a run for every one, oldest first, one at a time.
 
 A run's parameters are computed for the time it was due (that is what `now()` means).
 
@@ -1127,8 +1130,11 @@ an email if the flow's notifications include skipped runs.
 **Overlaps.** If a flow's time comes while its previous run is still going, its `overlap`
 decides what happens (in the editor: Flow settings, **If a scheduled run starts while the
 last one is still going**). `skip`, the default, does not start the new run, and a **Run
-skipped** notification tells you. `queue` makes the new run wait; it starts once the run
-going has finished. `allow` runs both at the same time. A catch-up is the exception: the
+skipped** notification tells you; this is decided at the time itself, so a run that ends a
+few seconds before the next time does not hold that time up. A run of the flow that is
+waiting its turn counts as going: then the notification says that the previous run is still
+waiting its turn. `queue` makes the new run wait; it starts once the run going has
+finished. `allow` runs both at the same time. A catch-up is the exception: the
 missed runs of a `catch_up` schedule always go one at a time, even with `allow`.
 
 **Runs at once.** **Scheduled runs at once** in Tools → Settings (`max_concurrent_runs` in
@@ -1147,23 +1153,51 @@ whose program the service started early, to begin on time, has not begun yet: it
 listed, and it does not begin; its time is not lost: when you turn the service on again, it
 is a missed time like the others (see `misfire`). **Cancel** keeps it on and changes nothing.
 Flows not in the list keep their waiting runs: they are saved, and start when you turn the
-service on again. The tray icon's **Turn off the scheduler service** shows the same window.
+service on again, also one whose program the service had already started (to begin on time,
+or as its turn came) and that had not begun. The tray icon's **Turn off the scheduler service** shows the same window.
 From **Proceed**, the editor shows the service off, also while the runs you let finish go;
 click the button to turn it on again before they are done, and it stays on: they go on, and
 scheduled times run again.
 
 **Waiting runs are saved.** Runs waiting their turn are saved in the run history: behind
 their flow's run going, until fewer runs go than **Scheduled runs at once** allows, in a
-catch-up, or for your answer about missed times. However the service stops (the PC restarts,
-the service crashes or is ended), they are not lost: when it is back, each starts once, in
-the order they came. If only the service stops, the runs it started go on by themselves
-(each run is a program of its own), and they count as going once it is back. After a PC
+catch-up, or for your answer about missed times. Each stays saved until it begins, and takes
+its place then, only while the service that started it is on. However the service stops
+(the PC restarts, the service crashes or is ended), they are not lost: when it is back, each
+starts once, in the order they came, also one whose program had already started and had not
+begun (that program does not begin then). A waiting run whose schedule you turn off or
+change meanwhile is dropped: it would not run as it was. If only the service stops, the runs
+it started go on by themselves (each run is a program of its own), and they count as going
+once it is back: every run records itself in the run history as it begins, so also one that
+began just before the service stopped, or as it started again. After a PC
 restart, a run that was going has ended, and its program's number may be another program's
 by then: a run records when it began (in a way no clock or time zone change alters), and it
 counts as going only if its program began before that, so the service never waits for, or
 stops, another program. A run whose program has gone is recorded as crashed, and you are told
 (see below). A service that stops (other than by your turning it off) says how many runs it
 leaves going; a run it started early that has not begun is not one of them.
+
+**One service per Taskloom folder.** Only one scheduler service runs for a Taskloom folder
+(the folder that holds your settings and run history; normally a PC has one). Starting
+another while one runs (clicking On, logging in, opening the editor, `taskloom scheduler`)
+does nothing, so no scheduled run ever starts twice.
+
+**Mistakes in the list of scheduled flows.** An entry in `scheduled.yaml` that is not a flow
+file's path (an empty item or a number, e.g. after a hand edit) is left out, and you are told
+once; the other flows listed run as usual.
+
+If `scheduled.yaml` cannot be read at all (e.g. a hand edit broke it), you are told, and no
+scheduled flow starts until it is put right; the runs going go on. The editor saves it whole,
+so the service never reads it half-written.
+
+**A mistake in the settings.** If `settings.yaml` has a mistake (a setting Taskloom does not
+know, **Scheduled runs at once** not a whole number, a keeper setting that is not a list of
+servers), the service goes on without the settings: you are told once, until the file
+changes, and meanwhile Scheduled runs at once is not applied and the keeper checks no server.
+
+**A mail server that does not answer.** Emails are sent on their own, so a mail server that
+does not answer (or answers slowly) holds nothing up: you are told that the email could not
+be sent, and the service goes on.
 
 **A run that crashes.** If a run's program stops unexpectedly (it crashed, or something
 ended it), the run is recorded as crashed: it counts as failed, and its error says "crashed:

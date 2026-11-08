@@ -374,8 +374,8 @@ def clock_shows(moment: dt.datetime):
 
 
 def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | None:
-    """What `taskloom run FLOW --trigger BLOCK --start-at T --if-scheduled SCHEDULE SERVICE` (its command line: `args`)
-    does when it reaches T, with this PC's clock showing `clock`: the claim of T the real run makes (claim_time),
+    """What `taskloom run FLOW --trigger BLOCK --scheduled SCHEDULE --start-at T --if-scheduled SERVICE ROW` (its command
+    line: `args`) does when it reaches T, with this PC's clock showing `clock`: the claim the real run makes (claim_time),
     started before T as the scheduler service starts such a run. Whether a service is on is told by the Taskloom folder
     `home`, as the real run tells it. None: T is its own, and it begins; else why it does not begin."""
     def option(name: str) -> str | None:
@@ -384,9 +384,9 @@ def claim_its_time(args: list[str], home: Path, clock: dt.datetime) -> str | Non
     # (started before its time: where claim_time is told so, it is)
     early = {"early": True} if "early" in inspect.signature(claim_time).parameters else {}
     with clock_shows(clock):
-        return claim_time(Home(home), real_path(Path(option("run"))), option("--trigger"), option("--if-scheduled"),
-                          dt.datetime.fromisoformat(option("--start-at")), args[args.index("--if-scheduled") + 2],
-                          **early)
+        return claim_time(Home(home), real_path(Path(option("run"))), option("--trigger"), option("--scheduled"),
+                          dt.datetime.fromisoformat(option("--start-at")), option("--if-scheduled"),
+                          int(args[args.index("--if-scheduled") + 2]), **early)
 
 
 def seen_then(home: Path, moment: dt.datetime):

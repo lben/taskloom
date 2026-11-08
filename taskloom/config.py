@@ -71,6 +71,28 @@ def before_now(number: int, unit: str) -> dt.datetime:
         return dt.datetime.min
 
 
+def _write_whole(path: Path, text: str):
+    """Writes the file whole: written beside it first, then put in its place in one step, so a reader sees it as it was
+    or as it is now. On Windows a file another program has open just then cannot be replaced: it tries again for a
+    second, then raises OSError saying so (the file is as it was)."""
+    import tempfile
+    import time
+
+    fd, part = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".part")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        for attempt in range(20):
+            try:
+                os.replace(part, path)
+                return
+            except PermissionError:  # (Windows: open in another program this instant)
+                time.sleep(0.05)
+        raise OSError(f"{path} could not be saved: another program kept it open; nothing was changed, try again")
+    finally:
+        Path(part).unlink(missing_ok=True)
+
+
 def _load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -125,9 +147,12 @@ class Home:
         return [Path(p) for p in listed], [p for p in flows if p not in listed]
 
     def set_scheduled(self, flow_path: Path, enabled: bool):
+        """Schedules the flow, or takes it off. scheduled.yaml is written whole: the scheduler service, which reads it
+        every second, sees it as it was or as it is now, never half-written. OSError if it cannot be saved (it is then
+        as it was)."""
         flows = [p for p in self.scheduled_flows() if p != flow_path] + ([flow_path] if enabled else [])
         self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / "scheduled.yaml").write_text(yaml.safe_dump({"flows": [str(p) for p in flows]}), encoding="utf-8")
+        _write_whole(self.root / "scheduled.yaml", yaml.safe_dump({"flows": [str(p) for p in flows]}))
 
     def settings(self) -> dict:
         data = _load_yaml(self.root / "settings.yaml")

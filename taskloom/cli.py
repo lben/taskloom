@@ -130,8 +130,8 @@ def _stdin_lines():
 
 def _stdin_control(args, cancel: threading.Event) -> StdinControl | None:
     """What a run reads on stdin: from the editor (--interactive), cancel requests and answers, and closing it cancels
-    the run; from the scheduler service (--stoppable), cancel requests only."""
-    if args.interactive or args.stoppable:
+    the run; from the scheduler service (--scheduled), cancel requests only."""
+    if args.interactive or args.scheduled:
         return StdinControl(cancel, closing_cancels=args.interactive)
     return None
 
@@ -148,10 +148,6 @@ def _parse_overrides(items) -> dict:
 
 def cmd_run(args, home: Home) -> int:
     start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None  # (local, or with a UTC offset)
-    if args.if_scheduled:  # (it claims that time as it begins: see wait_for_start)
-        if start_at is None:
-            raise ValueError("--if-scheduled claims the --start-at time: give --start-at too")
-        from .scheduler import NOT_DUE, claim_time
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
     os.chdir(flow.path.parent)
@@ -205,18 +201,14 @@ def cmd_run(args, home: Home) -> int:
         while (left := start_at.timestamp() - time.time()) > 0:
             if cancel.wait(min(left, 1)):
                 raise KeyboardInterrupt  # stopped before it began: nothing is recorded
-        why = (claim_time(home, flow.path, args.trigger, args.if_scheduled[0], start_at, args.if_scheduled[1])
-               if args.if_scheduled else None)
-        if why:
-            _print(f"not begun: {why}", sys.stderr)
-            raise SystemExit(NOT_DUE)
 
+    claim = _claim(home, flow, args, start_at) if args.if_scheduled else None
     try:
         result = run_flow(flow, registry, home, overrides, sinks=sinks, cancel=cancel,
                           answers=answers, as_of=as_of, trigger=args.trigger, only=args.only, inputs_from=args.inputs_from,
                           given=dict(i.split("=", 1) for i in args.input) if args.only or args.run_from else None,
                           run_from=args.run_from, before_start=wait_for_start if start_at else None,
-                          scheduled=args.scheduled)
+                          scheduled=args.scheduled, claim=claim)
     except FlowError:  # refused: e.g. a block file that did not load is why its block type is unknown
         for message in registry.warnings:
             print(f"warning: {message}", file=sys.stderr)
@@ -224,6 +216,25 @@ def cmd_run(args, home: Home) -> int:
     if args.notify and result.status in ("success", "failed"):
         _notify(home, flow, result)
     return {"success": EXIT_OK, "failed": EXIT_FAILED, "cancelled": EXIT_CANCELLED}[result.status]
+
+
+def _claim(home: Home, flow, args, start_at):
+    """What a run the scheduler service started claims as its run is recorded (History.start_run): the row the service
+    saved for it (--if-scheduled). Refused, it says why, ends with exit code 3 (scheduler.NOT_DUE), and nothing is
+    recorded (see claim_time)."""
+    service, row = args.if_scheduled
+    if start_at is None or args.scheduled is None or not row.isdigit():
+        raise ValueError("--if-scheduled claims, for its --start-at time, the row ROW the scheduler service saved for "
+                         "the run of its schedule (--scheduled): give --start-at and --scheduled, and a whole number "
+                         "for ROW")
+    from .scheduler import NOT_DUE, claim_time  # (now: at its time, it claims at once)
+
+    def claim(db):
+        if why := claim_time(home, flow.path, args.trigger, args.scheduled, start_at, service, int(row), db):
+            _print(f"not begun: {why}", sys.stderr)
+            raise SystemExit(NOT_DUE)
+
+    return claim
 
 
 def _notify(home: Home, flow, result):
@@ -366,23 +377,23 @@ def main(argv=None) -> int:
                    help="load the flow and check it, then wait until this local time (YYYY-MM-DDTHH:MM:SS, or with "
                         "its UTC offset, e.g. +01:00) to begin the run; at once if it has passed (the scheduler starts "
                         "each run a few seconds early so)")
-    p.add_argument("--if-scheduled", nargs=2, metavar=("SCHEDULE", "SERVICE"),
-                   help="claim the --start-at time of the flow's schedule (its --trigger) SCHEDULE (e.g. 'cron 0 7 * "
-                        "* *') for the scheduler service SERVICE that started the run, as it begins, so that time runs "
-                        "once: begin only if that service is the one on then, it is at most 2 minutes past that time, "
-                        "that schedule is unchanged and still has that time, and no other run has begun for it; else "
-                        "end with exit code 3 (the scheduler sets it)")
+    p.add_argument("--if-scheduled", nargs=2, metavar=("SERVICE", "ROW"),
+                   help="as it begins, claim the row ROW that the scheduler service SERVICE saved for this run of the "
+                        "flow's schedule (--scheduled, its --trigger) at the --start-at time, so it runs once: begin "
+                        "only if that service is the one on (turned off: only a run waiting its turn for a flow you let "
+                        "finish), that schedule is unchanged, the row is still there, and, for a run started before its "
+                        "time, it is at most 2 minutes past that time; else end with exit code 3 (the scheduler sets "
+                        "it)")
     p.add_argument("--trigger", metavar="BLOCK", help="the Schedule block that started this run (the scheduler sets it)")
-    p.add_argument("--scheduled", action="store_true",
-                   help="the scheduler service started this run: its run history says so, and if its process stops "
-                        "unexpectedly, whoever finds it gone tells you (the scheduler sets it)")
+    p.add_argument("--scheduled", metavar="SCHEDULE",
+                   help="the scheduler service started this run for the flow's schedule (its --trigger) SCHEDULE (e.g. "
+                        "'cron 0 7 * * *'): its run history says so; it reads cancel requests as JSON lines on stdin "
+                        "and goes on if stdin closes; and if its process stops unexpectedly, whoever finds it gone "
+                        "tells you (the scheduler sets it)")
     p.add_argument("--notify", action="store_true",
                    help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",
                    help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
-    p.add_argument("--stoppable", action="store_true",
-                   help="read cancel requests as JSON lines on stdin; the run goes on if stdin closes (used by the "
-                        "scheduler service)")
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
