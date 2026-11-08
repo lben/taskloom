@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QComboBox, QFileDialog, QLabel, QToolBar
 from proofs.test_proof_scheduler_start import click_block, click_tab, file_menu
 from taskloom import __version__
 from taskloom.scheduler import Scheduler, acquire_lock
+from tests.test_scheduler_new_promises import clock_shows
 from tests.test_scheduler_start_at import runs, write
 
 ASKED = "a different agent found this ... Review it and verify if it is correct indeed, if so worth merging no?"
@@ -192,7 +193,8 @@ def test_catch_up_keeps_every_missed_time_behind_a_run_still_going(proof, env, w
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
     file_menu(win, "Open…")
     tab = win.current
-    file_menu(win, "Save")
+    with clock_shows(at("06:29:50")):  # (saved as the service's clock has it: before its checks below)
+        file_menu(win, "Save")
     select_schedule(win, qtbot, tab)
     p.shot(win, "① every_minute, with Misfire: catch_up. ② long_work, the long piece of work.",
            highlight=[misfire_row(win), "long_work"], badges=True, zoom=[misfire_row(win)])
@@ -203,7 +205,8 @@ def test_catch_up_keeps_every_missed_time_behind_a_run_still_going(proof, env, w
            "it starts the 06:31 run, which keeps going.")
     p.note("Here the scheduler service's own checks run inside the proof, at times it chooses, yesterday morning: a "
            "proof cannot put the computer to sleep, nor wait for hours. The runs it starts are real, and the editor "
-           "shows them as it shows every scheduled run. So Run history's Started is when the proof ran them; when, "
+           "shows them as it shows every scheduled run. The save above is dated 06:29:50 yesterday for the service, "
+           "so that its checks come after it. So Run history's Started is when the proof ran them; when, "
            "under Parameters, is the time each run is for. The countdown under every_minute reads the computer's "
            "clock.")
     service.check(at("06:30:00"))

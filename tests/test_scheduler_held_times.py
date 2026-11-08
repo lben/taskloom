@@ -39,7 +39,7 @@ from tests.test_paths_editor_editing import field, select_only  # noqa: E402
 from tests.test_paths_scheduler import heartbeat  # noqa: E402
 from tests.test_scheduler_mistakes_and_counts import checks_on, headless, printed, python_words, told  # noqa: E402
 from tests.test_scheduler_new_promises import (HOURLY, REAL_POPEN, FakeRun, FakeRuns, Said, begins,  # noqa: E402
-                                               claim_its_time, drain, flow_yaml, hhmm, instant, pump, says, schedule,
+                                               claim_its_time, clock_shows, drain, flow_yaml, hhmm, instant, pump, says, schedule,
                                                tray_service, utc, wait_until)
 from tests.test_scheduler_start_at import stop_service  # noqa: E402
 
@@ -216,7 +216,8 @@ def test_a_run_whose_program_loads_as_the_pc_sleeps_follows_misfire_when_the_pc_
     service = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
     check(service, fake_runs, clock("06:59:30"))
     fake_runs.clock = clock("07:00:00")
-    service.tick(clock("07:00:00"))  # its run's process starts: its program loads
+    with clock_shows(clock("07:00:00")):  # (this PC's clock, as every process reads it)
+        service.tick(clock("07:00:00"))  # its run's process starts: its program loads
     assert [r.reached for r in fake_runs.of("nightly")] == [False], f"not arranged: {told_you}"
     check(service, fake_runs, clock("08:00:00"))  # the PC wakes: the program has loaded, and the service checks
     check(service, fake_runs, clock("08:00:05"))

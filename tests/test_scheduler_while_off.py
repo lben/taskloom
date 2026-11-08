@@ -318,6 +318,7 @@ def turned_off_around_its_time(env, runs: Runs, schedule_config: dict, began: bo
         for moment in ("06:59:58", "07:00:00", "07:00:01"):
             service.tick(clock(moment))
         assert runs.of("report") == [], f"a run started after you turned the service off: {told}"
+        runs.loading.discard("report")  # (no run of it was started: the next one loads at once)
     else:
         service.tick(clock("07:00:00"))
         (run,) = runs.of("report")
