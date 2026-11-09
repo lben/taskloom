@@ -495,8 +495,8 @@ class Scheduler:
         its turn, its Overlap says what happens: skip, it is skipped (you are told); queue, it is saved and waits for
         them; allow, it goes on as if none did (`behind`: it waits for them whatever its Overlap, as a catch-up runs one
         at a time). Then, `on_time` (not missed), it starts now for its time unless the slots are all taken
-        (max_concurrent_runs) by the runs going and the runs waiting their turn before it that could start now; saved,
-        to claim its time as it begins (claim_time). Else (missed, or the slots are taken) it is saved and waits its
+        (max_concurrent_runs) by the runs going and the runs waiting their turn before it that could start now (those
+        that may start now start first, in the order they came); saved, to claim its time as it begins (claim_time). Else (missed, or the slots are taken) it is saved and waits its
         turn: it starts in the order it came (at once if it can), and claims its place as it begins. A run waiting its
         turn counts as going. `came`: for a time due again, the row it had: it keeps its place, before the runs that
         came after it."""
@@ -511,7 +511,9 @@ class Scheduler:
         # (for a free slot: also one that waits only for a time of its flow due again, decided later in this check)
         ahead = [w for w in self._line() if (came is None or w.id < came) and self._may_start(w, deciding=True)]
         if on_time and not self._at_limit(len(ahead)):
-            self._start(self._save(path, [as_of], block, schedule, "now", came)[0])
+            saved = self._save(path, [as_of], block, schedule, "now", came)[0]
+            self._next_in_line(before=saved.id)  # (the runs before it that may start now start first)
+            self._start(saved)
         else:
             self._put_in_line(self._save(path, [as_of], block, schedule, "slot", came)[0])
 
@@ -713,14 +715,17 @@ class Scheduler:
         finally:
             history.close()
 
-    def _next_in_line(self):
+    def _next_in_line(self, before: int | None = None):
         """Runs waiting their turn start in the order they came, each once it may (_may_start) and a slot is free. Each
         stays saved until it begins (it claims its place then: see claim_time). While the list of scheduled flows
-        cannot be read, none does (they would not begin)."""
+        cannot be read, none does (they would not begin). `before`: only those that came before that row (a run for
+        its time about to start: _request)."""
         if self._list_error and self._list_error[0] == LIST_UNREADABLE:
             return
         self._drop_gone()
         for entry in self._line():
+            if before is not None and entry.id >= before:
+                return
             if self._may_start(entry):
                 if self._at_limit():
                     return
