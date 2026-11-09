@@ -1,7 +1,8 @@
-"""What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml), in cases CI found on
-Windows: a run whose recorded process is not the one the service started, as when a venv's python.exe is a launcher
-(SCH-12); and scheduled.yaml held open for a moment as the editor replaces it, which Windows does not let a reader
-read (SCH-14, SCH-16). The file held open is a stand-in: its reads raise PermissionError, as on Windows.
+"""What the scheduler service must always do and does not do yet (docs/promises/scheduler.yaml), in cases CI found: on
+Windows, a run whose recorded process is not the one the service started, as when a venv's python.exe is a launcher
+(SCH-12), and scheduled.yaml held open for a moment as the editor replaces it, which Windows does not let a reader
+read (SCH-14, SCH-16; the file held open is a stand-in: its reads raise PermissionError, as on Windows); and a service
+that holds the lock before it says which process and Taskloom it is (SCH-1).
 
 The times use the service's checks (Scheduler.tick) at chosen clock times, the service made as `taskloom scheduler`
 makes it (FakeRuns.service), with each run's process replaced at the process boundary by a stand-in that claims as the
@@ -11,6 +12,7 @@ import contextlib
 import datetime as dt
 import io
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -19,11 +21,11 @@ from pathlib import Path
 
 import pytest
 
-from taskloom import cli
+from taskloom import __version__, cli
 from taskloom.config import Home
 from taskloom.flow import load_flow, real_path
 from taskloom.history import History
-from taskloom.scheduler import LIST_UNREADABLE, set_paused
+from taskloom.scheduler import LIST_UNREADABLE, _unlock, acquire_lock, running_scheduler_version, set_paused
 from tests.test_scheduler_held_times import Runs, check, clock, for_time
 from tests.test_scheduler_new_promises import (REAL_POPEN, FakeRun, begins, clock_shows, flow_yaml, run_command_line,
                                                schedule, utc)
@@ -158,3 +160,21 @@ def test_a_waiting_run_refused_while_the_list_cannot_be_read_is_kept_and_runs_la
     assert ran == utc([clock("07:01:00")]), (
         f"nightly's waiting 07:01 run, whose process ended while the list could not be read, did not run once the list "
         f"read again: {ran}; told: {told_you}")
+
+
+@pytest.mark.invariant("SCH-1")
+def test_a_service_holding_the_lock_says_which_process_and_taskloom_it_is(env):
+    """A service takes the Taskloom folder's lock first, as `taskloom scheduler` does (acquire_lock). As soon as it
+    holds it, whoever sees a service running sees which process it is (scheduler.pid) and which Taskloom (its
+    version): the editor can stop or restart it, and does not take it for an older one."""
+    home = Home(env.home)
+    lock = acquire_lock(home)
+    try:
+        pid_file = env.home / "scheduler.pid"
+        said = pid_file.read_text(encoding="utf-8").strip() if pid_file.exists() else None
+        version = running_scheduler_version(home)
+    finally:
+        _unlock(lock)
+
+    assert said == str(os.getpid()), f"the service holds the lock, but scheduler.pid says {said!r}, not its process"
+    assert version == __version__, f"the service holds the lock, but its Taskloom version reads as {version!r}"
