@@ -514,8 +514,12 @@ class Scheduler:
             if policy == "queue":
                 self._put_in_line(self._save(path, [as_of], block, schedule, "flow", came)[0])
                 return
-        # (for a free slot: also one that waits only for a time of its flow due again, decided later in this check)
-        ahead = [w for w in self._line() if (came is None or w.id < came) and self._may_start(w, deciding=True)]
+        # (for a free slot: also one that waits only for a time of its flow due again, decided later in this check;
+        # each as _next_in_line would start them, those counted before it going: not a later run of a flow counted)
+        ahead: list[_Waiting] = []
+        for w in self._line():
+            if (came is None or w.id < came) and self._may_start(w, deciding=True, ahead=ahead):
+                ahead.append(w)
         if on_time and not self._at_limit(len(ahead)):
             saved = self._save(path, [as_of], block, schedule, "now", came)[0]
             self._next_in_line(before=saved.id)  # (the runs before it that may start now start first)
@@ -738,18 +742,19 @@ class Scheduler:
                 (self.queued[entry.flow] if entry.waits == "flow" else self.waiting).remove(entry)
                 self._start(entry)
 
-    def _may_start(self, entry: _Waiting, deciding: bool = False) -> bool:
+    def _may_start(self, entry: _Waiting, deciding: bool = False, ahead: list[_Waiting] | tuple = ()) -> bool:
         """Whether the run waiting its turn would begin now (see claim_time), given a free slot: while turning off,
         only one of a flow you let finish; not before a time of its flow due again that came before it (decided first,
         at the check: _check; `deciding`, the check still deciding them: as if they did not run); and while a run of
-        its flow goes (also one you started yourself), only one waiting for a slot whose flow's Overlap is allow."""
+        its flow goes (also one you started yourself, or one `ahead`: taken to start before it), only one waiting for a
+        slot whose flow's Overlap is allow."""
         if self.turning_off is not None:
             if self.turning_off.get(entry.flow) != "finish":
                 return False
         elif not deciding and any(w.flow == entry.flow and w.id < entry.id
                                   for line in self.again.values() for w in line):
             return False
-        if entry.flow not in self.yours and not any(r.flow == entry.flow for r in self.runs):
+        if entry.flow not in self.yours and not any(r.flow == entry.flow for r in [*self.runs, *ahead]):
             return True
         flow = self._load(Path(entry.flow))
         return entry.waits == "slot" and flow is not None and flow.overlap == "allow"
