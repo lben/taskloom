@@ -1,6 +1,8 @@
 """The mutation testing result of a feature, from mutmut's own records: its score and each mutant the tests missed.
 
     python packaging/mutants.py PROJECT_DIR --explained docs/promises/scheduler.mutants.yaml [--out mutants.json]
+    python packaging/mutants.py . --run [--part K/N] --explained docs/promises/scheduler.mutants.yaml [--out ...]
+    python packaging/mutants.py PROJECT_DIR --parts PART_DIR [PART_DIR ...] --explained ... [--out mutants.json]
 
 PROJECT_DIR is where `mutmut run` ran (it holds mutants/). A mutant is a small bug planted in the code on purpose:
 - caught: a test failed, or the tests did not finish in time (the bug made them hang);
@@ -15,13 +17,23 @@ outer function's), or of single mutants by name (e.g. a Windows-only line, which
 line reason: why mutation testing leaves them out, and which tests and proofs cover them instead. Their mutants
 count in neither the score, the missed nor the could-not-judge ones; each such function is listed, in the output and
 the JSON (not_tested: function, reason, number of mutants), so none is left out unseen.
+
+--run first runs `mutmut run` (configured in pyproject.toml) here, on every mutant that counts: all mutmut plants in
+the files it mutates (listed by mutmut's own code, so none is missed) but the not_tested ones. It takes hours, so CI
+runs it in parts on several machines: --part K/N runs only the Kth of N parts, every Nth of those mutants (so each
+part has some of every function's and the parts take about as long), and gives no score, as one part proves nothing.
+Its exit code is 1 when mutmut failed or left one of the part's mutants without a verdict. --parts then scores the
+parts as one run: PROJECT_DIR/mutants gets mutmut's records of the first part (each PART_DIR holds one part's
+mutants/), with each mutant's verdict from the part that judged it. A mutant no part judged could not be judged.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +71,58 @@ def change(project: Path, name: str) -> str:
     return " → ".join(lines) or name
 
 
+def counted(project: Path, explained: dict) -> list[str]:
+    """The mutants that count, in mutmut's order (file, function, number): every one mutmut plants in the files it
+    mutates in `project`, named as it names them, but those not_tested lists (or whose function it lists)."""
+    from mutmut.mutation.file_mutation import mutate_file_contents
+    from mutmut.utils.file_utils import walk_mutatable_files
+    from mutmut.utils.format_utils import get_mutant_name
+
+    not_tested = explained.get("not_tested") or {}
+    with contextlib.chdir(project):  # (mutmut reads its configuration and the files from there)
+        planted = [get_mutant_name(path, name) for path in sorted(walk_mutatable_files())
+                   for name in mutate_file_contents(str(path), path.read_text(encoding="utf-8")).mutant_names]
+    return [name for name in planted if name not in not_tested and where(name) not in not_tested]
+
+
+def run(project: Path, explained: dict, part: tuple[int, int]) -> int:
+    """`mutmut run` on part k of n of the mutants that count (1 of 1: all of them); 1 if it failed or left one of
+    them without a verdict."""
+    k, n = part
+    names = counted(project, explained)
+    mine = names[k - 1::n]
+    print(f"part {k} of {n}: {len(mine):,} of the {len(names):,} mutants that count", flush=True)
+    if not mine:  # (mutmut run without names would run them all)
+        return 0
+    shutil.rmtree(project / "mutants", ignore_errors=True)  # (mutmut keeps a copied file it finds there: maybe old)
+    code = subprocess.run([sys.executable, "-m", "mutmut", "run", *mine], cwd=project).returncode
+    codes = results(project)
+    left = [name for name in mine if codes.get(name) is None]
+    print(f"part {k} of {n}: mutmut ended with exit {code}; {len(mine) - len(left):,} of its {len(mine):,} mutants "
+          f"have a verdict" + (f", these do not: {', '.join(left)}" if left else ""), flush=True)
+    return 1 if code or left else 0
+
+
+def take_parts(project: Path, parts: list[Path]):
+    """Into project/mutants: mutmut's records of the first part that has them (its copy of the code, every mutant
+    planted, judged or not), with each mutant's verdict from the part that judged it."""
+    parts = [part for part in parts if (part / "mutants").is_dir()]
+    if not parts:
+        return
+    target = project / "mutants"
+    shutil.copytree(parts[0] / "mutants", target, dirs_exist_ok=True)
+    for meta in sorted(target.rglob("*.meta")):
+        data = json.loads(meta.read_text(encoding="utf-8"))
+        codes = data["exit_code_by_key"]
+        for part in parts:
+            theirs = part / "mutants" / meta.relative_to(target)
+            if theirs.is_file():
+                codes |= {name: code for name, code in
+                          json.loads(theirs.read_text(encoding="utf-8"))["exit_code_by_key"].items()
+                          if code is not None and name in codes and codes[name] is None}
+        meta.write_text(json.dumps(data), encoding="utf-8")
+
+
 def summary(project: Path, explained: dict) -> dict:
     not_tested = explained.get("not_tested") or {}
     codes = {}
@@ -89,8 +153,24 @@ def main(argv=None) -> int:
     p.add_argument("project", type=Path)
     p.add_argument("--explained", type=Path, required=True)
     p.add_argument("--out", type=Path)
+    p.add_argument("--run", action="store_true")
+    p.add_argument("--part", metavar="K/N")
+    p.add_argument("--parts", nargs="+", type=Path, metavar="PART_DIR")
     a = p.parse_args(argv)
+    part = re.fullmatch(r"(\d+)/(\d+)", a.part or "1/1")
+    if not part or not 1 <= int(part[1]) <= int(part[2]) or (a.part and not a.run) or (a.run and a.parts):
+        p.error("--part K/N (1 <= K <= N) goes with --run, and --parts without it")
     explained = (yaml.safe_load(a.explained.read_text(encoding="utf-8")) or {}) if a.explained.exists() else {}
+    ran = 0
+    if a.run:
+        ran = run(a.project, explained, (int(part[1]), int(part[2])))
+        if a.part:
+            return ran
+    for folder in a.parts or []:
+        judged = sum(code is not None for code in results(folder).values()) if (folder / "mutants").is_dir() else 0
+        print(f"{folder.as_posix()}: {judged:,} verdicts" + ("" if judged else " (no mutmut records)"))
+    if a.parts:
+        take_parts(a.project, a.parts)
     result = summary(a.project, explained)
     if a.out:
         a.out.write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -104,7 +184,7 @@ def main(argv=None) -> int:
     print(("PASSED: " if result["passed"] else "FAILED: ") + f"mutation score {result['score']:g}%: the tests caught "
           f"{result['killed']:,} of {result['total']:,} (bar {THRESHOLD}%); {len(result['survivors'])} missed, "
           f"{len(result['unexplained'])} without a reason; {len(result['unjudged'])} could not be judged")
-    return 0 if result["passed"] else 1
+    return 0 if result["passed"] and not ran else 1
 
 
 if __name__ == "__main__":

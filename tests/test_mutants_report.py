@@ -74,3 +74,35 @@ def test_a_single_mutant_listed_as_not_tested_is_left_out_and_its_functions_othe
     assert (result["killed"], result["total"]) == (1, 2)
     assert result["unexplained"] == [f"{start}47"]
     assert result["not_tested"] == [{"function": f"{start}46", "reason": windows[f"{start}46"], "mutants": 1}]
+
+
+def test_the_parts_verdicts_count_as_one_run_and_a_mutant_no_part_judged_fails_it(tmp_path):
+    """CI runs mutation testing in parts on several machines (--run --part K/N); --parts takes each mutant's verdict
+    from the part that judged it (each part's mutmut records hold every mutant, judged or not) and scores them as one
+    run. Without one part, its mutants could not be judged and the run fails: none is dropped unseen."""
+    claim = "taskloom.scheduler.x_claim_time__mutmut_"
+    codes = {f"{claim}{i}": 1 for i in range(1, 10)} | {f"{claim}10": 0}
+    parts = []
+    for k in (1, 2):  # part 1 judged the odd ones, part 2 the even ones
+        part = tmp_path / f"part-{k}"
+        (part / "mutants" / "taskloom").mkdir(parents=True)
+        (part / "mutants" / "taskloom" / "scheduler.py.meta").write_text(json.dumps({"exit_code_by_key": {
+            name: code if int(name.rsplit("_", 1)[1]) % 2 == k % 2 else None for name, code in codes.items()}}),
+            encoding="utf-8")
+        parts.append(part)
+    explained = tmp_path / "explained.yaml"
+    explained.write_text(yaml.safe_dump({f"{claim}10": "It changes nothing you see."}), encoding="utf-8")
+
+    def scored(project: Path, *with_parts: Path):
+        done = subprocess.run([sys.executable, str(SCRIPT), str(project), "--parts", *map(str, with_parts),
+                               "--explained", str(explained), "--out", str(project / "mutants.json")],
+                              capture_output=True, text=True, timeout=300)
+        return done, json.loads((project / "mutants.json").read_text(encoding="utf-8"))
+
+    done, result = scored(tmp_path / "both", *parts)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (result["score"], result["killed"], result["total"], result["unjudged"]) == (90.0, 9, 10, [])
+
+    done, result = scored(tmp_path / "one", parts[0])
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert result["unjudged"] == [f"{claim}{i} (exit None)" for i in (10, 2, 4, 6, 8)]
