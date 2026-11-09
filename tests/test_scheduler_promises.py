@@ -748,6 +748,28 @@ SAVED_WHILE_OFF = [{"flows": [{"schedules": [(("cron", "* * * * *"), "catch_up")
                     "limit": None, "first_check": 0, "steps": [(200_000, ("saved", 0, (timing, "catch_up")))],
                     "older_first": False, "after_check": False, "outlive": False}
                    for timing in (("cron", "*/2 * * * *"), ("every", "2 minutes"))]
+# Found on CI (Linux). Every minute, Misfire Skip: flow0 (its program loads for a check) and flow1 (two schedules,
+# Overlap queue), checked every 2 minutes. At 06:04:00.2 flow0's run for 06:04 is on time, but it is saved as waiting
+# for a slot behind flow1's waiting run, with no Max concurrent runs; its process starts at once. You start flow0
+# yourself at 06:05:00.2, so its claim at 06:06:00.2 is refused. Then it must not run, 2 minutes late (SCH-9).
+SKIP_REFUSED_BEHIND_A_WAITING_RUN = {
+    "flows": [{"schedules": [(("cron", "* * * * *"), "skip")], "overlap": "skip", "lasts": 1, "loads": 1},
+              {"schedules": [(("cron", "* * * * *"), "skip"), (("cron", "* * * * *"), "skip")], "overlap": "queue",
+               "lasts": 1, "loads": 0}],
+    "limit": None, "steps": [(200, None), (120_000, None), (120_000, None), (120_000, ("by hand", 0, 1))],
+    "first_check": 0, "older_first": False, "after_check": False, "outlive": False}
+# Found on CI (Windows). The same, with the claim refused as you turn the service off and on again before it checks
+# (06:12:00.001): flow1's run for 06:11, saved as waiting for a slot behind flow0's, must not run at 06:13 (SCH-9).
+SKIP_REFUSED_AFTER_OFF_AND_ON = {
+    "flows": [{"schedules": [(("cron", "* * * * *"), "skip"), (("cron", "* * * * *"), "skip")], "overlap": "queue",
+               "lasts": 1, "loads": 0},
+              {"schedules": [(("cron", "* * * * *"), "skip"), (("cron", "* * * * *"), "skip")], "overlap": "skip",
+               "lasts": 1, "loads": 1}],
+    "limit": None,
+    "steps": [(200, None), (1874, None), (2999, None), (5690, None), (6067, None), (6091, None), (22901, None),
+              (611059, None), (3120, ("saved", 0, (("cron", "* * * * *"), "skip"))),
+              (120_000, ("off and on", [False, False, False], "not seen"))],
+    "first_check": 0, "older_first": False, "after_check": False, "outlive": False}
 
 
 @pytest.mark.invariant("SCH-6")
@@ -977,6 +999,8 @@ def test_generated_a_time_is_skipped_only_if_a_run_of_its_flow_goes_at_that_time
 @pytest.mark.invariant("SCH-9")
 @GENERATED
 @given(scenario=scenarios())
+@example(scenario=SKIP_REFUSED_BEHIND_A_WAITING_RUN)
+@example(scenario=SKIP_REFUSED_AFTER_OFF_AND_ON)
 def test_generated_with_misfire_skip_no_run_starts_more_than_2_minutes_after_its_time(tmp_path_factory, scenario):
     """Skip runs none of the times missed, and a time less than 2 minutes late still runs: with Misfire Skip, the
     service starts no run (its process) more than 2 minutes after its time, unless that run waited its turn: behind its
