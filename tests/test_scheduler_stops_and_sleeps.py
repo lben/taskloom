@@ -31,6 +31,7 @@ import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import taskloom  # noqa: E402
 from taskloom import __version__  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.history import History  # noqa: E402
@@ -461,6 +462,19 @@ run_cli(["scheduler", "--headless"])
 """
 
 
+def running_this_taskloom(environment: dict) -> dict:
+    """The environment for a process that is to run the Taskloom this test imports: also under mutation testing,
+    mutmut's copy, with the mutant MUTANT_UNDER_TEST names. Its run that records which code each test reaches
+    ("stats") records in the test's process only: in another process it cannot (it does not find its settings there),
+    so that process runs the code as it is."""
+    imported = str(Path(taskloom.__file__).resolve().parents[1])
+    path = os.pathsep.join(filter(None, [imported, environment.get("PYTHONPATH")]))
+    environment = {**environment, "PYTHONPATH": path}
+    if environment.get("MUTANT_UNDER_TEST") == "stats":
+        del environment["MUTANT_UNDER_TEST"]
+    return environment
+
+
 def stopped_message(log: Path) -> str:
     """What the headless service said as it stopped ("Scheduler stopped: ..."); empty if it did not."""
     messages = [part.strip() for part in STAMP.split(printed(log))[1:]]
@@ -483,7 +497,7 @@ def test_when_the_service_stops_with_runs_going_it_counts_only_the_runs_that_hav
     with open(log, "w", encoding="utf-8") as out:
         service = subprocess.Popen([sys.executable, "-c", STOPPED_ON_REQUEST], cwd=env.root,
                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                                   env={**env.env, "TEST_STOP_FILE": str(stop)})
+                                   env=running_this_taskloom({**env.env, "TEST_STOP_FILE": str(stop)}))
     try:
         assert wait_until(lambda: going(env.home) == {"going"}, 20) and checked_since_it_began(env, "going"), \
             f"going's run did not begin: {history(env.home)}\n{printed(log)}"
