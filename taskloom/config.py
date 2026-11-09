@@ -94,14 +94,24 @@ def _write_whole(path: Path, text: str):
 
 
 def _load_yaml(path: Path) -> dict:
+    """The file's mapping; {} if there is no file. On Windows a file being replaced this instant (_write_whole) cannot
+    be read: it is read again for a second, as its writer tries again, then PermissionError."""
+    import time
+
     if not path.exists():
         return {}
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except UnicodeDecodeError as e:  # e.g. UTF-16, as Windows PowerShell writes
-        raise ValueError(f"{path}: not UTF-8 text, save it as UTF-8 ({e})") from None
-    except yaml.YAMLError as e:
-        raise ValueError(f"{path}: {e}") from None
+    for attempt in range(20):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            break
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
+        except UnicodeDecodeError as e:  # e.g. UTF-16, as Windows PowerShell writes
+            raise ValueError(f"{path}: not UTF-8 text, save it as UTF-8 ({e})") from None
+        except yaml.YAMLError as e:
+            raise ValueError(f"{path}: {e}") from None
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a mapping at the top level")
     return data

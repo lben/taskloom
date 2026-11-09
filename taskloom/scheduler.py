@@ -749,11 +749,14 @@ class Scheduler:
 
     def _still_waiting(self, entry: _Waiting) -> bool:
         """The run waiting its turn is still saved, and its schedule is on as it was (its flow listed, with that
-        schedule)."""
+        schedule), or the list of scheduled flows cannot be read (you are told): it keeps its place until it can be,
+        and the check then decides (see tick)."""
         if self._db.execute("SELECT 1 FROM waiting_runs WHERE id=?", (entry.id,)).fetchone() is None:
             return False
+        if (listed := self._scheduled_flows()) is None:
+            return True
         flow = self._load(Path(entry.flow))
-        return (flow is not None and entry.flow in map(str, self._scheduled_flows() or [])
+        return (flow is not None and entry.flow in map(str, listed)
                 and (entry.block, entry.schedule) in {(t.block, t.text) for t in flow.triggers})
 
     def _tell(self, flow, event: str, title: str, message: str):
