@@ -8,6 +8,12 @@ PROJECT_DIR is where `mutmut run` ran (it holds mutants/). A mutant is a small b
 The score is the share caught. It passes at 90% or more when every missed mutant has a one-line reason in the
 --explained file (mutant name: why it changes nothing a user could notice). It fails, too, when mutmut could not
 judge a mutant (the tests crashed or ended in a way it does not know): such a run proves nothing.
+
+The --explained file may also have a not_tested: mapping, of functions as where() names them (e.g.
+`taskloom/scheduler.py serve`, `taskloom/scheduler.py Scheduler.check_servers`; a nested function's mutants are its
+outer function's) to a one-line reason: why mutation testing leaves them out, and which tests and proofs cover them
+instead. Their mutants count in neither the score, the missed nor the could-not-judge ones; each such function is
+listed, in the output and the JSON (not_tested: function, reason, number of mutants), so none is left out unseen.
 """
 
 from __future__ import annotations
@@ -53,7 +59,14 @@ def change(project: Path, name: str) -> str:
 
 
 def summary(project: Path, explained: dict) -> dict:
-    codes = results(project)
+    not_tested = explained.get("not_tested") or {}
+    codes = {}
+    left_out = dict.fromkeys(not_tested, 0)
+    for name, code in results(project).items():
+        if where(name) in left_out:
+            left_out[where(name)] += 1
+        else:
+            codes[name] = code
     unjudged = sorted(name for name, code in codes.items() if code not in CAUGHT | MISSED)
     missed = sorted(name for name, code in codes.items() if code in MISSED)
     killed = sum(code in CAUGHT for code in codes.values())
@@ -65,7 +78,9 @@ def summary(project: Path, explained: dict) -> dict:
     passed = bool(judged) and score >= THRESHOLD and not unexplained and not unjudged
     return {"score": round(score, 1), "killed": killed, "total": judged, "threshold": THRESHOLD, "passed": passed,
             "survivors": survivors, "unexplained": unexplained,
-            "unjudged": [f"{name} (exit {codes[name]})" for name in unjudged]}
+            "unjudged": [f"{name} (exit {codes[name]})" for name in unjudged],
+            "not_tested": [{"function": function, "reason": reason, "mutants": left_out[function]}
+                           for function, reason in not_tested.items()]}
 
 
 def main(argv=None) -> int:
@@ -83,6 +98,8 @@ def main(argv=None) -> int:
                                                       else " — NO REASON GIVEN"))
     for name in result["unjudged"]:
         print(f"could not judge {name}")
+    for n in result["not_tested"]:
+        print(f"not tested {n['function']} ({n['mutants']:,} mutants, left out of the score) — {n['reason']}")
     print(("PASSED: " if result["passed"] else "FAILED: ") + f"mutation score {result['score']:g}%: the tests caught "
           f"{result['killed']:,} of {result['total']:,} (bar {THRESHOLD}%); {len(result['survivors'])} missed, "
           f"{len(result['unexplained'])} without a reason; {len(result['unjudged'])} could not be judged")
