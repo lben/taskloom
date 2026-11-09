@@ -84,6 +84,11 @@ def checker(name: str, kind: str, exit_code: int, commit: str = SHA) -> dict:
 AMBER = {"enforced": "Tests of the service.", "not_green": "Tests try the cases we thought of."}
 # Alpha (4 rows: 2 green, 1 amber, 1 red), its checkers listed with the model check before the trace validation.
 ALPHA_CHECKERS = [checker("tlc", "model", 0), checker("trace", "trace", 0), checker("pytest", "tests", 1, OTHER_SHA)]
+# What Alpha's mutation testing leaves out (mutants.json's not_tested): a function, and a single mutant.
+NOT_TESTED = [{"function": "alpha/service.py serve", "mutants": 212,
+               "reason": "The service process itself: tests start it as a process and see it run on time."},
+              {"function": "alpha.service.x_lock__mutmut_3", "mutants": 1,
+               "reason": "Windows only: no run where mutation testing runs can execute it."}]
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +105,8 @@ def built(tmp_path_factory) -> dict:
         [result("t1", "A-1"), result("t2", "A-2", every="every second of a day"), result("t3", "A-3"),
          result("t4", "A-4", "failed", why=WHY_RED)], ["test_proof_alpha"], ALPHA_CHECKERS)
     write(evidence / "alpha" / "statechart.mmd", "stateDiagram-v2\n  [*] --> Off\n  Off --> On: you turn it on\n")
+    write(evidence / "alpha" / "mutants.json", {"score": 95.0, "killed": 38, "total": 40, "threshold": 90,
+                                                "survivors": [], "not_tested": NOT_TESTED})
     feature(promises, evidence, "beta", "Beta retention", {
         "B-1": ("Old runs are deleted.", AMBER), "B-2": ("A run going is never deleted.", AMBER),
         "B-3": ("No flow is ever deleted.", AMBER)},
@@ -202,6 +209,18 @@ def test_trace_validation_comes_before_the_model_check(built):
     pdf = built["features"]
     text = " ".join(flat(pdf[i]) for i in feature_pages(pdf, 1))
     assert text.index("evidence/alpha/trace.log") < text.index("evidence/alpha/tlc.log")
+
+
+def test_what_mutation_testing_leaves_out_is_listed_with_its_number_of_mutants_and_what_checks_it(built):
+    """Under its own heading, each function or single mutant mutants.json lists as not tested: its number of mutants
+    and its reason (which tests and proofs check it instead), so none is left out unseen."""
+    pdf = built["features"]
+    text = " ".join(flat(pdf[i]) for i in feature_pages(pdf, 1))
+    assert "Not mutation-tested, and what checks it instead" in text, text
+    listed = text[text.index("Not mutation-tested, and what checks it instead"):]
+    for n in NOT_TESTED:
+        count = f"{n['mutants']:,} mutant{'s' * (n['mutants'] != 1)}"
+        assert re.search(rf"{re.escape(n['function'])} {count}\b.*? {re.escape(n['reason'])}", listed), listed
 
 
 def test_a_blocked_feature_says_blocked_with_its_question_and_options(built):

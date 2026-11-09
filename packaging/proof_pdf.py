@@ -638,6 +638,14 @@ def survivors(mutants: dict | None, path: Path) -> str:
             "</p>" + (lines or "<p style=\"font-size: 11pt\">None: the tests caught every one.</p>"))
 
 
+def not_mutation_tested(mutants: dict | None) -> list:
+    """Each function or mutant that mutation testing leaves out (its mutants are not in the score): how many mutants,
+    and why, with the tests and proofs that check it instead. One paragraph each."""
+    return [f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\"><b>{esc(n['function'])}</b>"
+            f"&nbsp;&nbsp;{n['mutants']:,} mutant{'s' * (n['mutants'] != 1)}. {esc(n['reason'])}</p>"
+            for n in (mutants or {}).get("not_tested") or []]
+
+
 def leaks(leak: dict | None, path: Path) -> str:
     if leak is None:
         return f"<p>{mark(False, f'Not found: {path.as_posix()}')}</p>"
@@ -679,11 +687,14 @@ def feature_page(index: int, total: int, feature: dict, changes: list, images: d
                             folder / "statechart.mmd"))
     rest = (section("Memory and leaks", space=0) + leaks(feature["leak"], folder / "leak.json")
             + section("It works on screen") + on_screen(changes))
+    left_out = not_mutation_tested(feature["mutants"])
     return "".join([heading(f"Feature {index} of {total}", feature["name"], anchor=f"feature-{index}"), opening,
                     asked_and_agreed(feature),
                     kept("Evidence ledger", ledger_rows((feature["ledger"] or {}).get("rows", []))),
                     kept("Checker output", boxes, "(final lines, this commit)"),
                     kept("Surviving mutants, one line each", [survivors(feature["mutants"], folder / "mutants.json")]),
+                    kept("Not mutation-tested, and what checks it instead", left_out, "(not in the score)")
+                    if left_out else "",
                     columns(statechart, rest, 58)])
 
 
