@@ -210,7 +210,9 @@ def test_the_words_this_proof_uses_come_after_the_summary_and_before_the_c4_view
     for term in ("A test", "A proof on screen", "A promise", "Mutation testing", "A surviving mutant", "A model check",
                  "Trace validation"):
         assert term in text, term
-    assert "a surviving mutant never means it has a bug" in text, text
+    assert "a survivor is never a bug in your code" in text, text
+    # A change that does nothing, shown on a real line of the code: the user asked for examples, not abstractions.
+    assert "SELECT id FROM service_on" in text and "select id from service_on" in text, text
     assert "Design health" not in text  # no feature here ran one
 
 

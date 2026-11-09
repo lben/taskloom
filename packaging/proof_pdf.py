@@ -52,7 +52,8 @@ OK, FAILED = "#1a7f37", "#c62828"
 ASKED_TINT, IDEA_TINT, IDEA_BAR, CARD_TINT = "#fff4e6", "#edf3fc", "#3b6fb6", "#f6f8fa"
 FONTS = ["Segoe UI", "Helvetica Neue", "Arial", "DejaVu Sans"]
 SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Apple Symbols'"
-MONO = "font-family: Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New'; font-size: 8pt; white-space: pre-wrap"
+MONO_FONT = "font-family: Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New'"
+MONO = f"{MONO_FONT}; font-size: 8pt; white-space: pre-wrap"
 FOOTER = 28  # under each page's text: the footer line
 MAX_ZOOM = 1.5  # a close-up is shown at most this much bigger than on the screen
 MIN_SCALE = 0.5  # a page is shrunk at most this much to fit on fewer pages
@@ -573,29 +574,43 @@ def blocked_banner(blocked: dict) -> str:
                f"<ol type=\"A\">{options}</ol>", STATUS["AMBER"][1], AMBER)
 
 
-# The words this proof uses, so that the reader and the proof mean the same; a checker's only when a feature ran one.
+# The words this proof uses, in plain words with an example each, so that the reader and the proof mean the same; a
+# checker's only when a feature ran one. The texts are HTML.
 CONCEPTS = [
-    (None, "A test", "A small program that runs Taskloom's real code in one situation and checks what happens. It "
-     "proves that situation works; a situation no test tries is not checked."),
-    (None, "A proof on screen", "The real app on Windows, driven step by step, with a screenshot of each step; the "
-     "orange box shows what to look at."),
-    (None, "A promise", "Something that must always be true, agreed with you in chat before the code was written. "
-     "Each one is a row of its feature's evidence ledger: how it is enforced, what checks it, and its colour."),
-    ("mutation", "Mutation testing", "It tests the tests. It makes many copies of the code, each with one small bug "
-     "planted on purpose (a mutant: < made <=, or made and, a line taken out), and runs the tests on each. Caught: a "
-     "test failed, so a bug like it could not reach you. Survived: every test still passed."),
-    ("mutation", "A surviving mutant", "A mutant is a broken copy made on purpose; the code you run does not contain "
-     "that change, so a surviving mutant never means it has a bug. It means either that the tests have a blind spot "
-     "there (a real bug in that spot would get through) or that the change makes no difference anyone could see. "
-     "Each survivor in this proof says which, in one line."),
-    ("model", "A model check", "A short description of the design (not the code), checked in every order events can "
-     "happen in, within small limits. It proves the design, not the code."),
-    ("trace", "Trace validation", "Real runs of the code, recorded and replayed through the model, to show the code "
-     "behaves as the model does. It checks a sample of runs, not every one."),
-    ("leak", "A leak check", "The service runs for many simulated minutes; its memory, threads and open files must "
-     "stop growing."),
-    ("charter", "Design health", "How many functions are very long or have very many branches; the number must not "
-     "grow from one release to the next."),
+    (None, "A test", "A small program that runs Taskloom's real code in one situation and checks the result. For "
+     "example: a flow scheduled for 9:00, a fake clock moved to 9:00, then a check that the flow ran once. It proves "
+     "that one situation works. A situation no test tries is not checked."),
+    (None, "A proof on screen", "The real Taskloom app on Windows, clicked through step by step as you would, with a "
+     "screenshot of each step. The orange box on a screenshot shows what to look at."),
+    (None, "A promise", "A rule that must always hold, agreed with you in chat before the code was written. For "
+     "example: “If you turn the service off, it stays off.” Each promise is one row of its feature's evidence ledger, "
+     "with a colour: <b>green</b>, checked in every case; <b>amber</b>, checked by tests that all pass, but a case "
+     "they don't try could still hide a bug; <b>red</b>, not checked, or a check failed."),
+    ("mutation", "Mutation testing", "It checks that the tests are good. A tool makes many copies of the code, each "
+     "with one small change planted on purpose, for example “late by more than 2 minutes” turned into “late by 2 "
+     "minutes or more”. Then it runs all the tests on every copy. <b>Caught</b>: some test failed, so the tests "
+     "noticed the change. <b>Survived</b>: every test still passed. The score is the share caught."),
+    ("mutation", "A surviving mutant", "A planted change that no test noticed. Your code does not contain that "
+     "change, so a survivor is never a bug in your code. It is one of two things:<br>1. A change that does nothing. "
+     f"For example, the scheduler asks the database <span style=\"{MONO_FONT}\">SELECT id FROM service_on</span>, "
+     f"and one copy asks <span style=\"{MONO_FONT}\">select id from service_on</span> instead. The database reads "
+     "both the same way, so that copy works exactly like the real code and no test could ever fail on it. The tool "
+     "can't tell a harmless change from a harmful one, so it still counts it as missed: that is why 100% is out of "
+     "reach.<br>2. A gap in the tests: the "
+     "change does matter, and no test checks it. These are fixed by adding a test.<br>So a feature is certified only "
+     "when every survivor left has a one-line note saying why it changes nothing you could see."),
+    ("model", "A model check", "A small, simplified copy of the design, written for a checking tool; not the code "
+     "itself. The tool tries every order in which things can happen, such as the service turned off while a run is "
+     "starting, but only with a few of each (for example 2 flows). It proves the design has no bad order within "
+     "those limits."),
+    ("trace", "Trace validation", "The real code runs while every step it takes is recorded, and each recording is "
+     "checked against the model: every step must be one the model allows. It shows the code behaves like the checked "
+     "design, for the runs recorded, not for every possible one."),
+    ("leak", "A leak check", "The service runs for many minutes on a fake clock while its memory, threads and open "
+     "files are measured. They must level off, not keep growing: something that keeps growing would slow down or "
+     "crash a service left on for weeks."),
+    ("charter", "Design health", "Counts the functions that are very long or have very many branches, the kind of "
+     "code where bugs hide. The count must not grow from one release to the next."),
 ]
 
 
@@ -603,7 +618,7 @@ def concepts_page(features: list) -> str:
     kinds = {c["kind"] for f in features for c in f["checkers"] or []} | ({"mutation"} if any(f["mutants"] for f in
                                                                                             features) else set())
     rows = "".join(f"<tr><td width=\"20%\" valign=\"top\" style=\"padding: 8px 18px 8px 0; font-weight: 600\">"
-                   f"{esc(term)}</td><td style=\"padding: 8px 0; line-height: 135%\">{esc(text)}</td></tr>"
+                   f"{esc(term)}</td><td style=\"padding: 8px 0; line-height: 135%\">{text}</td></tr>"
                    for kind, term, text in CONCEPTS if kind is None or kind in kinds)
     return (heading("Before you read", "The words this proof uses")
             + f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"font-size: 11pt\">{rows}</table>")
