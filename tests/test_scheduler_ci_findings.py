@@ -178,3 +178,31 @@ def test_a_service_holding_the_lock_says_which_process_and_taskloom_it_is(env):
 
     assert said == str(os.getpid()), f"the service holds the lock, but scheduler.pid says {said!r}, not its process"
     assert version == __version__, f"the service holds the lock, but its Taskloom version reads as {version!r}"
+
+
+@pytest.mark.invariant("SCH-9")
+@pytest.mark.parametrize("limit", [None, 3], ids=["no limit", "Max concurrent runs 3"])
+def test_an_on_time_run_beside_a_catch_up_whose_runs_wait_for_one_another_is_not_held_for_a_free_slot(
+        env, fake_runs, limit):
+    """alpha (every 10 minutes, Catch up) has 06:40, 06:50 and 07:00 to catch up, one at a time; beta (07:00, Misfire
+    Skip) comes on time at the same check, with slots free (no limit, or 3 with none going): alpha's later runs wait
+    for its first, so they do not take a slot, and beta starts for its time. Its program is still loading when you
+    turn the service off and on, so its claim is refused: its time is then decided by Misfire Skip, and it does not run
+    3 minutes late as a run that waited its turn would (SCH-9)."""
+    if limit:
+        (env.home / "settings.yaml").write_text(f"max_concurrent_runs: {limit}\n", encoding="utf-8")
+    schedule(env.home, env.root, {"alpha": flow_yaml({"cron": "*/10 * * * *", "misfire": "catch_up"}),
+                                  "beta": flow_yaml({"cron": "0 7 * * *", "misfire": "skip"})})
+    told = []
+    fake_runs.holding.add("alpha")
+    service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
+    check(service, fake_runs, clock("06:30:00"))
+    fake_runs.loading.add("beta")
+    check(service, fake_runs, clock("07:00:05"))
+    (beta,) = fake_runs.of("beta")
+    set_paused(Home(env.home), True)
+    set_paused(Home(env.home), False)
+    assert not beta.reach_its_time(), f"not arranged: beta's 07:00 run began though the service was turned off: {told}"
+    check(service, fake_runs, clock("07:03:00"))
+    ran = begins(for_time(fake_runs.of("beta"), clock("07:00:00")))
+    assert ran == [], f"beta (Misfire Skip) began for 07:00 at 07:03, 3 minutes late (limit {limit}): {ran}; {told}"
