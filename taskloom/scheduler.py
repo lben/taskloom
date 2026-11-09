@@ -491,10 +491,12 @@ class Scheduler:
         """A run of the flow's schedule for the moment `as_of`, which has come. While a run of the flow goes or waits
         its turn, its Overlap says what happens: skip, it is skipped (you are told); queue, it is saved and waits for
         them; allow, it goes on as if none did (`behind`: it waits for them whatever its Overlap, as a catch-up runs one
-        at a time). Then, `on_time` (not missed), it starts now if it can, for its time, saved, to claim its time as it
-        begins (claim_time). Else (missed, or it cannot start now) it is saved and waits its turn: it starts in the
-        order it came (at once if it can), and claims its place as it begins. A run waiting its turn counts as going.
-        `came`: for a time due again, the row it had: it keeps its place, before the runs that came after it."""
+        at a time). Then, `on_time` (not missed), it starts now for its time unless the slots are all taken
+        (max_concurrent_runs) by the runs going and the runs waiting their turn before it that could start now; saved,
+        to claim its time as it begins (claim_time). Else (missed, or the slots are taken) it is saved and waits its
+        turn: it starts in the order it came (at once if it can), and claims its place as it begins. A run waiting its
+        turn counts as going. `came`: for a time due again, the row it had: it keeps its place, before the runs that
+        came after it."""
         if busy := self._busy(path, came):
             policy = "queue" if behind else flow.overlap
             if policy == "skip":
@@ -505,16 +507,17 @@ class Scheduler:
                 return
         # (for a free slot: also one that waits only for a time of its flow due again, decided later in this check)
         ahead = [w for w in self._line() if (came is None or w.id < came) and self._may_start(w, deciding=True)]
-        if on_time and not ahead and not self._at_limit():
+        if on_time and not self._at_limit(len(ahead)):
             self._start(self._save(path, [as_of], block, schedule, "now", came)[0])
         else:
             self._put_in_line(self._save(path, [as_of], block, schedule, "slot", came)[0])
 
-    def _at_limit(self) -> bool:
-        """As many runs are going as max_concurrent_runs allows (none, while the settings have a mistake: _settings)."""
+    def _at_limit(self, ahead: int = 0) -> bool:
+        """As many runs are going, with `ahead` runs to start before the next, as max_concurrent_runs allows (none,
+        while the settings have a mistake: _settings)."""
         settings = self._settings()
         limit = settings and settings["max_concurrent_runs"]
-        return bool(limit) and len(self.runs) >= int(limit)
+        return bool(limit) and len(self.runs) + ahead >= int(limit)
 
     def _settings(self) -> dict | None:
         """The settings; None while settings.yaml has a mistake. The service goes on without them meanwhile (Scheduled
