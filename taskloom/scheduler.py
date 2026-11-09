@@ -983,9 +983,14 @@ def acquire_lock(home: Home):
     """Hold an exclusive lock for the life of this process, so only one scheduler runs per home. Taking it ends the term
     of the service before (it has gone, or is ending: it let go of the lock): a run it started does not begin from now
     on, also before this process's service is made the one on (Scheduler: see claim_time); one that began before is
-    in the run history, for the next service (Scheduler._adopt)."""
+    in the run history, for the next service (Scheduler._adopt). Holding it, it says at once, in turn (_taking_turns),
+    which process it is (scheduler.pid: the keeper checks it, and the editor stops it so) and which Taskloom
+    (scheduler.version, with that process: an older Taskloom's service writes none, and the editor offers a restart)."""
     with _taking_turns(home):
         handle = _lock(home.root / "scheduler.lock")
+        if handle is not None:
+            (home.root / "scheduler.pid").write_text(str(os.getpid()))
+            (home.root / "scheduler.version").write_text(f"{__version__} {os.getpid()}")
     if handle is not None:
         db = history_connect(home.history_db)
         try:
@@ -1255,11 +1260,7 @@ def _stop_runs_going(home: Home, flows: set[str]):
 def serve(home: Home, headless: bool) -> int:
     """The scheduler service, until you turn it off (from its first check on, also if you did while it started) or it
     is stopped."""
-    with acquire_lock(home):  # held until the scheduler stops
-        # The keeper checks this PID, however the scheduler was started.
-        (home.root / "scheduler.pid").write_text(str(os.getpid()))
-        # The editor checks which Taskloom this is (with the PID: an older scheduler writes no version).
-        (home.root / "scheduler.version").write_text(f"{__version__} {os.getpid()}")
+    with acquire_lock(home):  # held until the scheduler stops (it says its process and Taskloom: scheduler.pid)
         stop = threading.Event()
         if not headless and _tray_available():
             return _serve_tray(home, stop)
