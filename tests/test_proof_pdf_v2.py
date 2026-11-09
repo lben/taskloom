@@ -83,6 +83,12 @@ def checker(name: str, kind: str, exit_code: int, commit: str = SHA, key: str | 
 
 
 AMBER = {"enforced": "Tests of the service.", "not_green": "Tests try the cases we thought of."}
+# The bugs proving Alpha found (alpha.found.yaml), and where it is checked more lightly.
+FOUND = [{"what": "Two services could run at once after a restart.", "found_by": "the model check",
+          "fixed_in": "abc1234", "guarded_by": "tests/test_x.py::t1"},
+         {"what": "A run began a second late.", "found_by": "review", "fixed_in": "def5678",
+          "guarded_by": "tests/test_x.py::t2"}]
+LIGHTER = "A real PC going to sleep: tests use a fake clock."
 # Alpha (4 rows: 2 green, 1 amber, 1 red), its checkers listed with the model check before the trace validation.
 # tlc's key is its line 13, among its final lines; trace's matches none of them.
 ALPHA_CHECKERS = [checker("tlc", "model", 0, key=r"^tlc line 13$"), checker("trace", "trace", 0, key="no such line"),
@@ -96,8 +102,8 @@ NOT_TESTED = [{"function": "alpha/service.py serve", "mutants": 212,
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory) -> dict:
-    """The PDF of four features (Alpha: a red row; Beta: blocked; Gamma: certified; Delta: its mutation testing
-    result missing) and three proofs on screen,
+    """The PDF of five features (Alpha: a red row; Beta: blocked; Gamma: certified; Delta: its mutation testing
+    result missing; Epsilon: a checker failed, no red row) and three proofs on screen,
     and the PDF of the same proofs without features."""
     root = tmp_path_factory.mktemp("v2")
     promises, evidence, proofs = root / "promises", root / "evidence", root / "proofs"
@@ -108,6 +114,7 @@ def built(tmp_path_factory) -> dict:
         "A-4": ("Missed times follow the Misfire setting.", AMBER)},
         [result("t1", "A-1"), result("t2", "A-2", every="every second of a day"), result("t3", "A-3"),
          result("t4", "A-4", "failed", why=WHY_RED)], ["test_proof_alpha"], ALPHA_CHECKERS)
+    write(promises / "alpha.found.yaml", {"found": FOUND, "lighter": [LIGHTER]})
     write(evidence / "alpha" / "mutants.json", {"score": 95.0, "killed": 38, "total": 40, "threshold": 90,
                                                 "survivors": [], "not_tested": NOT_TESTED})
     feature(promises, evidence, "beta", "Beta retention", {
@@ -120,6 +127,8 @@ def built(tmp_path_factory) -> dict:
     feature(promises, evidence, "delta", "Delta export", {"D-1": ("An export is written once.", AMBER)},
             [result("d1", "D-1")], [])
     (evidence / "delta" / "mutants.json").unlink()
+    feature(promises, evidence, "epsilon", "Epsilon import", {"E-1": ("An import reads each file once.", AMBER)},
+            [result("e1", "E-1")], [], [checker("leaks", "leak", 1)])
     write(evidence / "release.json", {
         "version": "0.38.0", "commit": SHA, "mutation": {"score": 93.5, "killed": 432, "total": 462},
         "tests": {"passed": 2412, "failed": 1, "skipped": 9,
@@ -142,10 +151,10 @@ def built(tmp_path_factory) -> dict:
         assert done.returncode == 0, f"proof_pdf.py failed:\n{done.stdout}\n{done.stderr}"
         return pages(root / out)
 
-    features = [arg for stem in ("alpha", "beta", "gamma", "delta") for arg in ("--feature", f"promises/{stem}.yaml")]
+    features = [arg for stem in ("alpha", "beta", "gamma", "delta", "epsilon") for arg in ("--feature", f"promises/{stem}.yaml")]
     return {"features": pdf("features.pdf", "--evidence", "evidence", *features), "plain": pdf("plain.pdf"), "root": root,
             "ledgers": {stem: json.loads((evidence / stem / "ledger.json").read_text(encoding="utf-8"))
-                        for stem in ("alpha", "beta", "gamma", "delta")}}
+                        for stem in ("alpha", "beta", "gamma", "delta", "epsilon")}}
 
 
 def pages(path: Path) -> list:
@@ -176,17 +185,50 @@ def first_page_of_change(pdf: list, title: str) -> int:
 def test_the_cover_counts_each_features_rows_from_its_ledger_and_gives_its_verdict(built):
     """The first page: each feature's invariants, green, amber and red counted from its ledger, and its verdict:
     Not certified: N red; BLOCKED: needs your decision (blocked.json); Not certified when its mutation testing or
-    leak check result is missing; Certified (no red, not blocked, nothing missing)."""
+    leak check result is missing, or when one of its checkers failed; Certified (no red, not blocked, nothing missing,
+    every checker passed)."""
     cover = flat(built["features"][0])
     assert "Read this page if you read nothing else" in cover, cover
     verdicts = {"alpha": "Not certified: 1 red", "beta": "BLOCKED: needs your decision", "gamma": "Certified",
-                "delta": "Not certified: no mutation testing result"}
-    for number, stem in enumerate(("alpha", "beta", "gamma", "delta"), 1):
+                "delta": "Not certified: no mutation testing result", "epsilon": "Not certified: leaks failed"}
+    for number, stem in enumerate(("alpha", "beta", "gamma", "delta", "epsilon"), 1):
         ledger = built["ledgers"][stem]
         counts = [len(ledger["rows"]), *(ledger["counts"][s] for s in ("GREEN", "AMBER", "RED"))]
         assert re.search(rf"\b{number} {re.escape(ledger['feature'])} {' '.join(map(str, counts))} "
                          rf"{re.escape(verdicts[stem])}", cover), f"{stem}: {counts}, {verdicts[stem]}: {cover}"
     assert built["ledgers"]["alpha"]["counts"] == {"GREEN": 2, "AMBER": 1, "RED": 1}  # the case meant
+
+
+def test_the_words_this_proof_uses_come_after_the_summary_and_before_the_c4_view(built):
+    """So that the reader and the proof mean the same: what a test, a proof on screen, a promise, mutation testing and
+    a surviving mutant are (one never means the code has a bug), and each kind of checker a feature here ran."""
+    pdf = built["features"]
+    at = {words: next(i for i, page in enumerate(pdf) if words in flat(page))
+          for words in ("Read this page if you read nothing else", "The words this proof uses", "How Taskloom is built")}
+    assert list(at.values()) == sorted(at.values()) and len(set(at.values())) == 3, at
+    text = flat(pdf[at["The words this proof uses"]])
+    for term in ("A test", "A proof on screen", "A promise", "Mutation testing", "A surviving mutant", "A model check",
+                 "Trace validation"):
+        assert term in text, term
+    assert "a surviving mutant never means it has a bug" in text, text
+    assert "Design health" not in text  # no feature here ran one
+
+
+def test_a_feature_opens_with_what_its_proof_shows_before_the_details(built):
+    """Before what you asked and the evidence, in a highlighted box: what its mutation score means, how many real bugs
+    proving it found and what found them, and where it is checked more lightly. After the ledger, each bug, what found
+    it, its fix and the test that now guards it."""
+    pdf = built["features"]
+    text = " ".join(flat(pdf[i]) for i in feature_pages(pdf, 1))
+    shows, asked = text.index("What this proof shows"), text.index("You asked")
+    assert shows < asked, text[:600]
+    box = text[shows:asked]
+    assert "The tests caught 38 of the 40 bugs planted in the code on purpose (95%)" in box, box
+    assert "2 real bugs were found while proving it, and fixed: 1 by the model check, 1 by review" in box, box
+    assert "Checked more lightly" in box and LIGHTER in box, box
+    listed = text[text.index("Bugs found while proving it"):]
+    for bug in FOUND:
+        assert all(bug[k] in listed for k in ("what", "found_by", "fixed_in", "guarded_by")), (bug, listed[:800])
 
 
 def test_a_red_row_says_why_it_is_red(built):

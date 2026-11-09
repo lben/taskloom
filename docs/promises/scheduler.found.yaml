@@ -1,0 +1,64 @@
+# The bugs proving the scheduler service found, each fixed and guarded by a test since (the proof PDF counts and lists
+# them before the details; tests/test_promises_found.py checks each test exists), and where it is checked more lightly.
+found:
+  - what: A schedule changed while the service was off could run times from before you saved it, instead of following its Misfire setting.
+    found_by: the model check
+    fixed_in: 4db9b31
+    guarded_by: tests/test_scheduler_model_fixes.py::test_a_cron_line_changed_while_the_service_is_off_follows_misfire_for_its_times_after_the_save
+  - what: A run you started yourself while a scheduled run of the same flow was still loading could go beside it, against its Overlap setting.
+    found_by: the model check
+    fixed_in: 4db9b31
+    guarded_by: tests/test_scheduler_model_fixes.py::test_a_scheduled_run_still_loading_as_you_start_a_run_of_its_flow_yourself_follows_its_overlap
+  - what: Turning the service off and on again while a run's program was loading could run that time twice.
+    found_by: the model check
+    fixed_in: 4db9b31
+    guarded_by: tests/test_scheduler_model_fixes.py::test_a_run_loading_as_you_turn_the_service_off_and_on_again_does_not_begin_and_its_time_runs_once
+  - what: Stop now with no service running left the flow's runs going and kept its waiting runs.
+    found_by: the model check
+    fixed_in: 4db9b31
+    guarded_by: tests/test_scheduler_model_fixes.py::test_stop_now_with_no_service_running_stops_the_flows_runs_and_drops_its_waiting_ones
+  - what: After a schedule change or Stop now, the service acted on its old memory of saved runs; it could skip a new time as waiting its turn, or start a run that had been dropped.
+    found_by: the trace replays
+    fixed_in: 3bfd317
+    guarded_by: tests/test_scheduler_trace_findings.py::test_a_time_after_a_changed_schedule_is_not_skipped_as_waiting_its_turn_when_nothing_waits
+  - what: A run whose program was still loading when the PC went to sleep counted as going when it woke, so its Misfire setting was not followed.
+    found_by: review
+    fixed_in: 98a44d4
+    guarded_by: tests/test_scheduler_held_times.py::test_a_run_whose_program_still_loads_as_the_pc_wakes_is_stopped_then_its_times_follow_misfire
+  - what: With Max concurrent runs 2 or more, an on-time run could wait for a free slot behind runs that would not start.
+    found_by: review
+    fixed_in: 21dcc42
+    guarded_by: tests/test_scheduler_ci_findings.py::test_an_on_time_run_beside_a_catch_up_whose_runs_wait_for_one_another_is_not_held_for_a_free_slot
+  - what: A time exactly 2 minutes late counted as on time instead of missed.
+    found_by: mutation testing
+    fixed_in: 125dcaf
+    guarded_by: tests/test_scheduler_mutants_times.py::test_a_time_exactly_2_minutes_late_waits_its_turn_and_still_runs_once_the_service_is_back
+  - what: With Catch up and Overlap allow, a time that came on time waited for the schedule's run still going instead of starting beside it.
+    found_by: mutation testing
+    fixed_in: f751a0e
+    guarded_by: tests/test_scheduler_mutants_times.py::test_a_catch_up_schedule_with_allow_starts_a_time_that_comes_alongside_its_run_going
+  - what: A Catch up question stayed open after its missed runs were dropped, and answering it could still act on them.
+    found_by: mutation testing
+    fixed_in: 10f08fc
+    guarded_by: tests/test_scheduler_question_dropped.py::test_the_tray_closes_the_window_of_a_catch_up_question_whose_missed_runs_were_dropped
+  - what: On Windows, the list of scheduled flows read while it was being saved was reported as unreadable, and its run did not start.
+    found_by: CI
+    fixed_in: 23e1544
+    guarded_by: tests/test_scheduler_ci_findings.py::test_the_list_held_open_for_a_moment_is_not_told_as_unreadable_and_the_flow_runs
+  - what: The editor could find a running service it could not identify or stop.
+    found_by: CI
+    fixed_in: 3b5b703
+    guarded_by: tests/test_scheduler_ci_findings.py::test_a_service_holding_the_lock_says_which_process_and_taskloom_it_is
+  - what: On Windows, a run counted twice against Max concurrent runs, as its python.exe is a launcher with a child process.
+    found_by: CI
+    fixed_in: a3b453a
+    guarded_by: tests/test_scheduler_ci_findings.py::test_a_run_whose_recorded_process_is_a_launchers_child_counts_once_for_max_concurrent_runs
+  - what: An on-time run waited for a free slot even when one was free.
+    found_by: CI
+    fixed_in: 58cc42e
+    guarded_by: tests/test_scheduler_ci_findings.py::test_an_on_time_run_beside_a_catch_up_whose_runs_wait_for_one_another_is_not_held_for_a_free_slot
+lighter:
+  - "Real-world events the tests only simulate: a PC going to sleep, a real daylight-saving change and a real crash run on a fake clock or stand-ins."
+  - "The outer shell: the tray icon, the service's main loop and the server checks over SSH are covered by tests but not mutation-tested (see Not mutation-tested)."
+  - "Lines that run only on Windows: the Windows tests run them, but mutation testing ran on Linux."
+  - "One suspicion not reproduced: a run might begin up to 5 seconds late in one case (the service waits up to 5 seconds for a finished run's output)."

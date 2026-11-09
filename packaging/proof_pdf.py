@@ -378,7 +378,8 @@ def load_feature(promises: Path, evidence: Path) -> dict:
     found = {name: read(folder / f"{name}.json") for name in ("ledger", "checkers", "mutants", "leak", "blocked")}
     return {**found, "name": agreed["feature"], "agreed": agreed["agreed"], "asked": agreed.get("asked") or [],
             "proofs": tuple(agreed.get("proofs") or ()), "folder": folder,
-            "design": read(promises.with_name(promises.stem + ".design.yaml"))}
+            "design": read(promises.with_name(promises.stem + ".design.yaml")),
+            "found": read(promises.with_name(promises.stem + ".found.yaml"))}
 
 
 def by_feature(proofs: list, features: list) -> list:
@@ -463,7 +464,10 @@ def verdict(feature: dict) -> tuple[str, str]:
     if missing:
         return FAILED, f"Not certified: no {' or '.join(missing)} result"
     red = sum(row["status"] == "RED" for row in feature["ledger"]["rows"])
-    return (FAILED, f"Not certified: {red} red") if red else (OK, "Certified")
+    if red:
+        return FAILED, f"Not certified: {red} red"
+    failed = [c["name"] for c in feature["checkers"] or [] if c["exit"] != 0]
+    return (FAILED, f"Not certified: {', '.join(failed)} failed") if failed else (OK, "Certified")
 
 
 def tally(feature: dict) -> list:
@@ -567,6 +571,82 @@ def blocked_banner(blocked: dict) -> str:
                f"<p style=\"font-size: 12pt; margin-top: 4px\">I can't certify this until you choose.</p>"
                f"<p style=\"font-size: 12pt; font-weight: 600; margin-top: 10px\">{esc(blocked['question'])}</p>"
                f"<ol type=\"A\">{options}</ol>", STATUS["AMBER"][1], AMBER)
+
+
+# The words this proof uses, so that the reader and the proof mean the same; a checker's only when a feature ran one.
+CONCEPTS = [
+    (None, "A test", "A small program that runs Taskloom's real code in one situation and checks what happens. It "
+     "proves that situation works; a situation no test tries is not checked."),
+    (None, "A proof on screen", "The real app on Windows, driven step by step, with a screenshot of each step; the "
+     "orange box shows what to look at."),
+    (None, "A promise", "Something that must always be true, agreed with you in chat before the code was written. "
+     "Each one is a row of its feature's evidence ledger: how it is enforced, what checks it, and its colour."),
+    ("mutation", "Mutation testing", "It tests the tests. It makes many copies of the code, each with one small bug "
+     "planted on purpose (a mutant: < made <=, or made and, a line taken out), and runs the tests on each. Caught: a "
+     "test failed, so a bug like it could not reach you. Survived: every test still passed."),
+    ("mutation", "A surviving mutant", "A mutant is a broken copy made on purpose; the code you run does not contain "
+     "that change, so a surviving mutant never means it has a bug. It means either that the tests have a blind spot "
+     "there (a real bug in that spot would get through) or that the change makes no difference anyone could see. "
+     "Each survivor in this proof says which, in one line."),
+    ("model", "A model check", "A short description of the design (not the code), checked in every order events can "
+     "happen in, within small limits. It proves the design, not the code."),
+    ("trace", "Trace validation", "Real runs of the code, recorded and replayed through the model, to show the code "
+     "behaves as the model does. It checks a sample of runs, not every one."),
+    ("leak", "A leak check", "The service runs for many simulated minutes; its memory, threads and open files must "
+     "stop growing."),
+    ("charter", "Design health", "How many functions are very long or have very many branches; the number must not "
+     "grow from one release to the next."),
+]
+
+
+def concepts_page(features: list) -> str:
+    kinds = {c["kind"] for f in features for c in f["checkers"] or []} | ({"mutation"} if any(f["mutants"] for f in
+                                                                                            features) else set())
+    rows = "".join(f"<tr><td width=\"20%\" valign=\"top\" style=\"padding: 8px 18px 8px 0; font-weight: 600\">"
+                   f"{esc(term)}</td><td style=\"padding: 8px 0; line-height: 135%\">{esc(text)}</td></tr>"
+                   for kind, term, text in CONCEPTS if kind is None or kind in kinds)
+    return (heading("Before you read", "The words this proof uses")
+            + f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"font-size: 11pt\">{rows}</table>")
+
+
+def shows(feature: dict) -> str:
+    """What the feature's proof shows, in a few lines, highlighted before its details: what its mutation score means,
+    the bugs proving it found (and what found them), and where it is checked more lightly."""
+    lines = []
+    m = feature["mutants"]
+    if m:
+        missed, unexplained = m["total"] - m["killed"], len(m.get("unexplained") or [])
+        line = (f"The tests caught {m['killed']:,} of the {m['total']:,} bugs planted in the code on purpose "
+                f"({round(m['score'], 1):g}%)")
+        if m["score"] >= m["threshold"]:
+            line += ", so almost every line's behaviour is checked by some test"
+        line += (f". The {missed:,} they missed each change nothing anyone could see; each says why, under Surviving "
+                 "mutants." if not unexplained else f". {unexplained:,} of the {missed:,} they missed {'has' if unexplained == 1 else 'have'} no reason yet.")
+        lines.append(f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 8px\">{esc(line)}</p>")
+    found = (feature["found"] or {}).get("found") or []
+    if found:
+        by = {}
+        for bug in found:
+            by[bug["found_by"]] = by.get(bug["found_by"], 0) + 1
+        many = len(found) != 1
+        line = (f"{len(found)} real bug{'s' * many} {'were' if many else 'was'} found while proving it, and fixed: "
+                + ", ".join(f"{n} by {who}" for who, n in by.items())
+                + ". Each now has a test that guards it; they are listed under Bugs found while proving it.")
+        lines.append(f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 8px\">{esc(line)}</p>")
+    lighter = (feature["found"] or {}).get("lighter") or []
+    if lighter:
+        lines.append("<p style=\"font-size: 11pt; margin-bottom: 4px\">Checked more lightly, so a bug is likeliest to "
+                     "remain here:</p><ul>" + "".join(f"<li style=\"font-size: 11pt; line-height: 135%\">{esc(x)}</li>"
+                                                     for x in lighter) + "</ul>")
+    return kept("What this proof shows", [box("".join(lines), ASKED_TINT, ACCENT)]) if lines else ""
+
+
+def bugs_found(feature: dict) -> list:
+    """Each bug proving the feature found: what it did, what found it, the commit that fixed it, the test that guards
+    it now."""
+    return [f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\"><b>{esc(b['what'])}</b> Found by "
+            f"{esc(b['found_by'])}; fixed in {esc(str(b['fixed_in']))}; guarded by {esc(b['guarded_by'])}.</p>"
+            for b in (feature["found"] or {}).get("found") or []]
 
 
 def asked_and_agreed(feature: dict) -> str:
@@ -699,9 +779,11 @@ def feature_page(index: int, total: int, feature: dict, changes: list, evidence:
     rest = (section("Memory and leaks") + leaks(feature["leak"], folder / "leak.json")
             + section("It works on screen") + on_screen(changes))
     left_out = not_mutation_tested(feature["mutants"])
+    found = bugs_found(feature)
     return "".join([heading(f"Feature {index} of {total}", feature["name"], anchor=f"feature-{index}"), opening,
-                    asked_and_agreed(feature),
+                    shows(feature), asked_and_agreed(feature),
                     kept("Evidence ledger", ledger_rows((feature["ledger"] or {}).get("rows", []))),
+                    kept("Bugs found while proving it", found, "(and fixed)") if found else "",
                     kept("Checker output", boxes, "(final lines, this commit)"),
                     kept("Surviving mutants, one line each", [survivors(feature["mutants"], folder / "mutants.json")]),
                     kept("Not mutation-tested, and what checks it instead", left_out, "(not in the score)")
@@ -906,7 +988,8 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     first = [sum(counts[:i]) for i in range(len(counts))]
     # With features, the summary and the C4 view come first, then the list of the changes; else the cover.
     front = [fitted(text, rows=True) for text in (summary(title, loaded, release, records, sessions, ci_url),
-                                                   c4_page(drawings, room, evidence))] if loaded else []
+                                                   concepts_page(loaded), c4_page(drawings, room, evidence))
+             ] if loaded else []
 
     def listed(pages: list) -> str:
         if not loaded:
