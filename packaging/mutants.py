@@ -10,10 +10,11 @@ The score is the share caught. It passes at 90% or more when every missed mutant
 judge a mutant (the tests crashed or ended in a way it does not know): such a run proves nothing.
 
 The --explained file may also have a not_tested: mapping, of functions as where() names them (e.g.
-`taskloom/scheduler.py serve`, `taskloom/scheduler.py Scheduler.check_servers`; a nested function's mutants are
-its outer function's), or of single mutants by name (e.g. a Windows-only line, which no run here can execute), to
-a one-line reason: why mutation testing leaves them out, and which tests and proofs cover them instead. Their mutants count in neither the score, the missed nor the could-not-judge ones; each such function is
-listed, in the output and the JSON (not_tested: function, reason, number of mutants), so none is left out unseen.
+`taskloom/scheduler.py serve`, `taskloom/scheduler.py Scheduler.check_servers`; a nested function's mutants are its
+outer function's), or of single mutants by name (e.g. a Windows-only line, which no run here can execute), to a one-
+line reason: why mutation testing leaves them out, and which tests and proofs cover them instead. Their mutants
+count in neither the score, the missed nor the could-not-judge ones; each such function is listed, in the output and
+the JSON (not_tested: function, reason, number of mutants), so none is left out unseen.
 """
 
 from __future__ import annotations
