@@ -190,8 +190,9 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
+          # A feature is its agreed list, <feature>.yaml; its other files are <feature>.<kind>.yaml.
           for promises in docs/promises/*.yaml; do
-            case "$promises" in *.evidence.yaml|*.design.yaml|*.mutants.yaml) continue;; esac
+            case "$promises" in *.*.yaml) continue;; esac
             stem=$(basename "$promises" .yaml)
             mkdir -p "proof/$stem"
             uv run python packaging/ledger.py "$promises" results/*.json --checkers "proof/$stem/checkers.json" \
@@ -205,7 +206,7 @@ jobs:
         shell: bash
         run: |
           features=(); for promises in docs/promises/*.yaml; do
-            case "$promises" in *.evidence.yaml|*.design.yaml|*.mutants.yaml) continue;; esac
+            case "$promises" in *.*.yaml) continue;; esac
             features+=(--feature "$promises")
           done
           uv run python packaging/proof_pdf.py "$PROOF_DIR" proofs-linux "Taskloom-proof-${GITHUB_REF_NAME//\//-}.pdf" \

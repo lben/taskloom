@@ -9,6 +9,7 @@ Each PDF is built by the real script, as CI builds it, from proof records like t
 test repository made with the real git program (Git config of the test's own); it is read back with QtPdf: the text
 of each page and the links on the cover."""
 
+import fnmatch
 import json
 import os
 import re
@@ -379,3 +380,18 @@ def test_ci_builds_the_pdf_from_a_checkout_with_its_history_and_tags():
     for name in builders:
         checkout = next(step for step in jobs[name]["steps"] if step.get("uses", "").startswith("actions/checkout"))
         assert checkout.get("with", {}).get("fetch-depth") == 0, f"CI job {name}: {checkout}"
+
+
+def test_ci_takes_for_features_only_their_agreed_lists_not_their_other_files():
+    """CI builds a ledger and a PDF section for each docs/promises/*.yaml it does not skip; a feature's other files
+    (its evidence, design, mutants, bugs found) taken for a feature failed both (scheduler.found.yaml, CI run
+    42692811767). Each file the loops keep must be an agreed list, with its feature's name."""
+    jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
+    loops = [step["run"] for job in jobs.values() for step in job["steps"]
+             if "for promises in docs/promises/*.yaml" in step.get("run", "")]
+    assert len(loops) == 2, "the ledger's and the PDF's"
+    for run in loops:
+        skipped = re.search(r'case "\$promises" in (\S+)\) continue;; esac', run)[1].split("|")
+        for promises in sorted((REPO / "docs" / "promises").glob("*.yaml")):
+            if not any(fnmatch.fnmatchcase(f"docs/promises/{promises.name}", glob) for glob in skipped):
+                assert "feature" in yaml.safe_load(promises.read_text(encoding="utf-8")), promises.name
