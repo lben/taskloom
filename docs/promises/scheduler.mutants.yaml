@@ -124,6 +124,7 @@ taskloom.scheduler.xǁSchedulerǁtick__mutmut_53: "SQLite reads keywords and tab
 taskloom.scheduler.xǁSchedulerǁtick__mutmut_64: "SQLite reads keywords and table and column names in any case: the statement is the same (its quoted values and parameters are not changed)."
 taskloom.scheduler.xǁSchedulerǁtick__mutmut_65: "SQLite reads keywords and table and column names in any case: the statement is the same (its quoted values and parameters are not changed)."
 taskloom.scheduler.xǁSchedulerǁwait_for_runs__mutmut_1: "Only tests call Scheduler.wait_for_runs (no Taskloom code does): nothing a user runs changes."
+taskloom.scheduler.xǁSchedulerǁwait_for_runs__mutmut_5: "Only tests call Scheduler.wait_for_runs (no Taskloom code does): nothing a user runs changes."
 taskloom.scheduler.xǁSchedulerǁwait_for_runs__mutmut_8: "Only tests call Scheduler.wait_for_runs (no Taskloom code does): nothing a user runs changes."
 taskloom.scheduler.xǁSchedulerǁwait_for_runs__mutmut_10: "Only tests call Scheduler.wait_for_runs (no Taskloom code does): nothing a user runs changes."
 taskloom.scheduler.xǁ_Adoptedǁpoll__mutmut_9: "A run from before a restart has its run id, so it is never taken for one that did not begin (exit code NOT_DUE), and its crash is told as 'the run process stopped unexpectedly', without the code: its exit code is never used or shown."
