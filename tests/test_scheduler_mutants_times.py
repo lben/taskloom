@@ -19,9 +19,9 @@ import pytest
 from taskloom.flow import load_flow, real_path
 from taskloom.history import History
 from tests.test_scheduler_held_times import Runs, about, check, clock, one_off
-from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, FakeRun, FakeRuns, check_after,
-                                               clock_shows, flow_yaml, missed_times, one_at_a_time, says, schedule,
-                                               write)
+from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, FakeRun, FakeRuns, begins, check_after,
+                                               clock_shows, drain, flow_yaml, missed_times, one_at_a_time, says,
+                                               schedule, utc, write)
 from tests.test_scheduler_start_at import start_at_clock
 
 EVERY_MINUTE = {"cron": "* * * * *", "misfire": "catch_up"}
@@ -381,3 +381,22 @@ def test_a_run_whose_program_takes_exactly_2_minutes_to_load_still_begins_for_it
     check(service, fake_runs, clock("07:02:01"))
 
     assert began(fake_runs.of("nightly")) == ["s1 07:00:00"], f"told: {said}"
+
+
+@pytest.mark.invariant("SCH-11")
+@pytest.mark.parametrize("late", [0, 1], ids=["checked at its second", "checked a second after it"])
+def test_a_catch_up_schedule_with_allow_starts_a_time_that_comes_alongside_its_run_going(env, fake_runs, late):
+    """tenly (every 10 minutes, Catch up, Overlap allow): each run goes on longer than 10 minutes. Its 00:20 time
+    comes while its 00:10 run goes, and the service checks at 00:20 or a second after it: that time is not missed, so
+    it starts at once beside the run going, as Overlap allow says (README: allow runs both at the same time; only the
+    missed times of a Catch up schedule go one at a time)."""
+    schedule(env.home, env.root, {"tenly": flow_yaml({"cron": "*/10 * * * *", "misfire": "catch_up"},
+                                                     overlap="allow")})
+    service = fake_runs.service(env.home)
+    fake_runs.holding.add("tenly")  # (each run goes on longer than 10 minutes)
+    drain(service, dt.datetime(2026, 1, 5, 0, 0, 30), fake_runs)
+    drain(service, dt.datetime(2026, 1, 5, 0, 10, 0), fake_runs)
+    drain(service, dt.datetime(2026, 1, 5, 0, 20, late), fake_runs)
+    assert begins(fake_runs.of("tenly")) == utc([dt.datetime(2026, 1, 5, 0, 10), dt.datetime(2026, 1, 5, 0, 20)]), \
+        f"tenly's 00:20 time, checked {late} s after it while its 00:10 run went, did not start beside it"
+
