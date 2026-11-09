@@ -280,12 +280,13 @@ def test_an_every_that_is_not_n_minutes_or_hours_is_refused_with_examples(writte
 def test_a_trigger_that_is_not_exactly_one_of_cron_every_or_at_is_refused_with_an_example_of_each(data):
     """No time, two kinds of time, or not a mapping at all (a flow-level `triggers:` entry written by hand): the
     message reads "a trigger looks like A, B or C", where A, B and C are triggers that work, with a cron line, an
-    every and an at."""
+    every and an at. The cron line is the README's own example, written as the README writes it."""
     message = refused(data)
     found = re.fullmatch(r"a trigger looks like (\{.*?\}\}), (\{.*?\}\}) or (\{.*?\}\})", message)
     assert found, message
     examples = [yaml.safe_load(example) for example in found.groups()]
     assert [set(example["schedule"]) for example in examples] == [{"cron"}, {"every"}, {"at"}], message
+    assert examples[0]["schedule"]["cron"] == "0 7 * * MON-FRI", message  # (README: cron: "0 7 * * MON-FRI")
     for example in examples:
         Trigger(example)  # (raises if the example does not work)
 

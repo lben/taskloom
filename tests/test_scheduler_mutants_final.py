@@ -221,3 +221,22 @@ def test_stop_now_asks_a_run_going_on_its_stdin_and_forces_it_only_seconds_later
     tick(service, runs, clock("07:00:13"))
     assert run.signals == ["SIGKILL"], f"still going {STOP_SECONDS} s after it was asked, it was sent {run.signals}"
     assert statuses(env.home, "nightly") == ["cancelled"], statuses(env.home, "nightly")
+
+
+@pytest.mark.invariant("SCH-1")
+def test_a_service_starting_while_another_process_takes_its_turn_waits_for_it_and_starts_just_after(env):
+    """Whoever takes the Taskloom folder's lock takes it in turn (scheduler.turn): a service starting while another
+    process holds its turn for a moment (e.g. a run's claim looking whether the service is on) waits for it, without
+    failing, and has the lock as soon as the turn is free: not a second later."""
+    import threading
+
+    from taskloom.scheduler import _lock, _unlock, acquire_lock
+
+    other = _lock(env.home / "scheduler.turn")  # (another process holding its turn)
+    assert other is not None, "not arranged: the turn was taken"
+    threading.Timer(0.1, _unlock, [other]).start()
+    began = time.monotonic()
+    lock = acquire_lock(Home(env.home))
+    waited = time.monotonic() - began
+    lock.close()
+    assert 0.05 <= waited < 0.6, f"the service had the lock {waited:.2f} s after it asked, the turn free after 0.1 s"
