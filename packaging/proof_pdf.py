@@ -17,7 +17,7 @@ shallow checkout) or a base tag, nothing is said to be new.
     python packaging/proof_pdf.py <proof_dir>... <out.pdf> --evidence proof/<release> --feature docs/promises/X.yaml...
 
 With features, the PDF is the evidence CI gathered in proof/<release>/ for each (the ledger, the checkers' output,
-the mutants, the leak check, the statechart, a question that blocks it), never written by hand. It opens with the
+the mutants, the leak check, a question that blocks it), never written by hand. It opens with the
 page to read if nothing else (each feature's verdict, the release-wide numbers, how to read the colours) and the C4
 view; then each feature in the order given: what you asked, what must always be true, the design, the evidence, then
 its changes (the proofs whose module starts with one of its `proofs`); then the other changes.
@@ -459,6 +459,9 @@ def verdict(feature: dict) -> tuple[str, str]:
         return AMBER, "BLOCKED: needs your decision"
     if feature["ledger"] is None:
         return FAILED, "Not certified: no ledger"
+    missing = [what for name, what in (("mutants", "mutation testing"), ("leak", "leak check")) if feature[name] is None]
+    if missing:
+        return FAILED, f"Not certified: no {' or '.join(missing)} result"
     red = sum(row["status"] == "RED" for row in feature["ledger"]["rows"])
     return (FAILED, f"Not certified: {red} red") if red else (OK, "Certified")
 
@@ -541,8 +544,8 @@ def summary(title: str, features: list, release: dict | None, records: list, ses
             + section("Release-wide numbers") + f"{table}>{numbers}</table>"
             + section("How to read the colors") + f"{table}>{key}</table>"
             + f"<p style=\"color: {MUTED}; margin-top: 10px\">Each checker's output shows the log it is from, the "
-              "commit it ran on and its exit code (0: it passed). The diagrams are generated from the code and the "
-              "model, never drawn by hand.</p>")
+              "commit it ran on and its exit code (0: it passed). The diagrams are generated from the code, never drawn "
+              "by hand.</p>")
 
 
 def c4_page(images: dict, room: QSizeF, evidence: Path) -> str:
@@ -668,8 +671,7 @@ def on_screen(changes: list) -> str:
                 f"{esc(r['system'])}</span></p>" for n, r in changes))
 
 
-def feature_page(index: int, total: int, feature: dict, changes: list, images: dict, room: QSizeF,
-                 evidence: Path) -> str:
+def feature_page(index: int, total: int, feature: dict, changes: list, evidence: Path) -> str:
     """The feature's pages, before its changes' (`changes`: (number, record) each)."""
     folder = feature["folder"]
     order = list(KINDS)
@@ -680,12 +682,7 @@ def feature_page(index: int, total: int, feature: dict, changes: list, images: d
     # A blocked feature opens with its question; any other with its verdict.
     opening = (blocked_banner(feature["blocked"]) if feature["blocked"] is not None else
                f"<p style=\"font-size: 13pt; font-weight: 600; color: {colour}\">{esc(phrase)}</p>")
-    # The statechart, and beside it the rest: on one page.
-    statechart = (section("Statechart", "(generated from the model, not drawn by hand)", 0)
-                  + drawing(f"statechart{index}", images[f"statechart{index}"], QSizeF(room.width() * 0.56,
-                                                                                         room.height()),
-                            folder / "statechart.mmd"))
-    rest = (section("Memory and leaks", space=0) + leaks(feature["leak"], folder / "leak.json")
+    rest = (section("Memory and leaks") + leaks(feature["leak"], folder / "leak.json")
             + section("It works on screen") + on_screen(changes))
     left_out = not_mutation_tested(feature["mutants"])
     return "".join([heading(f"Feature {index} of {total}", feature["name"], anchor=f"feature-{index}"), opening,
@@ -695,7 +692,7 @@ def feature_page(index: int, total: int, feature: dict, changes: list, images: d
                     kept("Surviving mutants, one line each", [survivors(feature["mutants"], folder / "mutants.json")]),
                     kept("Not mutation-tested, and what checks it instead", left_out, "(not in the score)")
                     if left_out else "",
-                    columns(statechart, rest, 58)])
+                    rest])
 
 
 def cuts_a_box(doc: QTextDocument) -> bool:
@@ -868,9 +865,8 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
         return doc
 
     # The features' diagrams, drawn once.
-    drawings = {f"statechart{i}": mermaid(f["folder"] / "statechart.mmd") for i, f in enumerate(loaded, 1)}
-    drawings.update({f"c4/{name}": mermaid(evidence / "c4" / f"{name}.mmd")
-                     for name in ("context", "containers")} if loaded else {})
+    drawings = {f"c4/{name}": mermaid(evidence / "c4" / f"{name}.mmd")
+                for name in ("context", "containers")} if loaded else {}
     resources.update({name: image for name, image in drawings.items() if image is not None})
     room = QSizeF(body.width() - 24, body.height() * 0.8)
 
@@ -880,7 +876,7 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     for index, part in sections:  # each feature's page, then its changes'; then the other changes'
         if index is not None:
             changes = [(number + k, record) for k, (_, record) in enumerate(part, 1)]
-            pages.append((feature_page(index + 1, len(loaded), loaded[index], changes, drawings, room, evidence),
+            pages.append((feature_page(index + 1, len(loaded), loaded[index], changes, evidence),
                           f"Feature {index + 1}: {loaded[index]['name']}",
                           (f"feature-row-{index + 1}", "Back to the summary"), True))
         for folder, record in part:

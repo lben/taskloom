@@ -93,7 +93,8 @@ NOT_TESTED = [{"function": "alpha/service.py serve", "mutants": 212,
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory) -> dict:
-    """The PDF of three features (Alpha: a red row; Beta: blocked; Gamma: certified) and three proofs on screen,
+    """The PDF of four features (Alpha: a red row; Beta: blocked; Gamma: certified; Delta: its mutation testing
+    result missing) and three proofs on screen,
     and the PDF of the same proofs without features."""
     root = tmp_path_factory.mktemp("v2")
     promises, evidence, proofs = root / "promises", root / "evidence", root / "proofs"
@@ -104,7 +105,6 @@ def built(tmp_path_factory) -> dict:
         "A-4": ("Missed times follow the Misfire setting.", AMBER)},
         [result("t1", "A-1"), result("t2", "A-2", every="every second of a day"), result("t3", "A-3"),
          result("t4", "A-4", "failed", why=WHY_RED)], ["test_proof_alpha"], ALPHA_CHECKERS)
-    write(evidence / "alpha" / "statechart.mmd", "stateDiagram-v2\n  [*] --> Off\n  Off --> On: you turn it on\n")
     write(evidence / "alpha" / "mutants.json", {"score": 95.0, "killed": 38, "total": 40, "threshold": 90,
                                                 "survivors": [], "not_tested": NOT_TESTED})
     feature(promises, evidence, "beta", "Beta retention", {
@@ -114,6 +114,9 @@ def built(tmp_path_factory) -> dict:
         blocked={"question": QUESTION, "options": OPTIONS})
     feature(promises, evidence, "gamma", "Gamma mail", {"G-1": ("A mail is sent once.", AMBER)},
             [result("g1", "G-1")], [])
+    feature(promises, evidence, "delta", "Delta export", {"D-1": ("An export is written once.", AMBER)},
+            [result("d1", "D-1")], [])
+    (evidence / "delta" / "mutants.json").unlink()
     write(evidence / "release.json", {
         "version": "0.38.0", "commit": SHA, "mutation": {"score": 93.5, "killed": 432, "total": 462},
         "tests": {"passed": 2412, "failed": 1, "skipped": 9,
@@ -136,10 +139,10 @@ def built(tmp_path_factory) -> dict:
         assert done.returncode == 0, f"proof_pdf.py failed:\n{done.stdout}\n{done.stderr}"
         return pages(root / out)
 
-    features = [arg for stem in ("alpha", "beta", "gamma") for arg in ("--feature", f"promises/{stem}.yaml")]
+    features = [arg for stem in ("alpha", "beta", "gamma", "delta") for arg in ("--feature", f"promises/{stem}.yaml")]
     return {"features": pdf("features.pdf", "--evidence", "evidence", *features), "plain": pdf("plain.pdf"),
             "ledgers": {stem: json.loads((evidence / stem / "ledger.json").read_text(encoding="utf-8"))
-                        for stem in ("alpha", "beta", "gamma")}}
+                        for stem in ("alpha", "beta", "gamma", "delta")}}
 
 
 def pages(path: Path) -> list:
@@ -169,11 +172,13 @@ def first_page_of_change(pdf: list, title: str) -> int:
 
 def test_the_cover_counts_each_features_rows_from_its_ledger_and_gives_its_verdict(built):
     """The first page: each feature's invariants, green, amber and red counted from its ledger, and its verdict:
-    Not certified: N red; BLOCKED: needs your decision (blocked.json); Certified (no red, not blocked)."""
+    Not certified: N red; BLOCKED: needs your decision (blocked.json); Not certified when its mutation testing or
+    leak check result is missing; Certified (no red, not blocked, nothing missing)."""
     cover = flat(built["features"][0])
     assert "Read this page if you read nothing else" in cover, cover
-    verdicts = {"alpha": "Not certified: 1 red", "beta": "BLOCKED: needs your decision", "gamma": "Certified"}
-    for number, stem in enumerate(("alpha", "beta", "gamma"), 1):
+    verdicts = {"alpha": "Not certified: 1 red", "beta": "BLOCKED: needs your decision", "gamma": "Certified",
+                "delta": "Not certified: no mutation testing result"}
+    for number, stem in enumerate(("alpha", "beta", "gamma", "delta"), 1):
         ledger = built["ledgers"][stem]
         counts = [len(ledger["rows"]), *(ledger["counts"][s] for s in ("GREEN", "AMBER", "RED"))]
         assert re.search(rf"\b{number} {re.escape(ledger['feature'])} {' '.join(map(str, counts))} "
