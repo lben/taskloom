@@ -398,10 +398,10 @@ class Scheduler:
             else:
                 planned = self._misfire(flow, trigger, due, now)
                 # A catch-up of more than one time runs one after another, including behind a run that is already
-                # going. With Overlap allow, a missed time also waits for this schedule's catch-up still going:
-                # catch-up runs go one at a time.
+                # going. With Overlap allow, a missed time (ON_TIME_GRACE late, or later) also waits for this
+                # schedule's catch-up still going: catch-up runs go one at a time; one on time starts beside it.
                 behind = trigger.misfire == "catch_up" and (len(planned) > 1 or (
-                    flow.overlap == "allow" and due[0] < now and self._catching_up(schedule)))
+                    flow.overlap == "allow" and now - due[0] >= ON_TIME_GRACE and self._catching_up(schedule)))
                 came = {entry.as_of: entry.id for entry in again}  # (a time due again keeps its place: _request)
                 for as_of in planned:  # (one on time starts for its time; a missed one waits its turn)
                     self._request(path, flow, as_of, trigger.block, trigger.text, behind, now - as_of < ON_TIME_GRACE,
