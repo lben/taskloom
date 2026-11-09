@@ -136,3 +136,27 @@ SCH-17:
     saved runs and clock changes.
   not_green: >-
     Docs are words: the test checks each case has its explanation, and a reviewer reads them.
+# The checkers (run by packaging/checkers.py, each command by the shell from the repository, {out} its folder under
+# proof/<release>/scheduler, its whole output in logs/ there). The trace validation comes before the model check: it
+# shows the model behaves as the code does. TLC is the tla2tools.jar packaging/tla_trace.py runs ($TLA2TOOLS_JAR or
+# ~/.local/share/tlaplus/1.7.4). On CI they run in parallel jobs (.github/workflows/build.yml), mutation testing in 3
+# parts (packaging/mutants.py --part) that are scored together as this one (--parts).
+checkers:
+  - name: TLA+ trace validation
+    kind: trace
+    command: python packaging/tla_trace.py --out {out}/trace
+  - name: TLA+ model check
+    kind: model
+    command: >-
+      cd specs/formal && java -XX:+UseParallelGC -Xmx10g
+      -cp "${TLA2TOOLS_JAR:-$HOME/.local/share/tlaplus/1.7.4/tla2tools.jar}" tlc2.TLC -workers auto
+      -metadir {out}/tlc-states SchedulerService
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/scheduler.mutants.yaml --out {out}/mutants.json
+  - name: Leak check
+    kind: leak
+    command: python packaging/leak_check.py --out {out}/leak.json
+  - name: Design health
+    kind: charter
+    command: python packaging/design_health.py

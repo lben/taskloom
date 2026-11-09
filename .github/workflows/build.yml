@@ -36,11 +36,22 @@ jobs:
         if: ${{ !cancelled() }}  # also when a test failed: the ledger shows which row it breaks
         with: {name: "test-results-${{ runner.os }}", path: "results-${{ runner.os }}.json"}
 
-  # The checkers of each feature with agreed rows (docs/promises): model checks, mutation testing, the leak check. Each
-  # one's whole output and result go to proof/, which the proof job turns into the feature's pages.
+  # The checkers of the scheduler feature (docs/promises/scheduler.evidence.yaml): each one's whole output and result
+  # go to proof/, which the proof job turns into the feature's pages. A GitHub job runs at most 6 hours, so they run in
+  # parallel jobs: the model check alone (about 2 h 10 min; 1 h 24 min on a 10-core laptop with 4 workers); the trace
+  # validation, the leak check and design health together (about 20 min); mutation testing in 3 parts, in the mutation
+  # job. The evidence job puts their results together.
   checkers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: model
+            only: '--only "TLA+ model check"'
+          - group: trace-leak-design
+            only: '--only "TLA+ trace validation" --only "Leak check" --only "Design health"'
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330  # (packaging/checkers.py stops a checker after 5 hours, so its log is kept)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -55,9 +66,75 @@ jobs:
       - name: Qt libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - run: uv sync --python 3.12
-      - run: uv run python packaging/checkers.py docs/promises/scheduler.yaml proof
+      - run: uv run python packaging/checkers.py docs/promises/scheduler.yaml proof ${{ matrix.only }}
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}  # also when a checker failed: the proof shows its output
+        with:
+          name: checkers-${{ matrix.group }}
+          path: |
+            proof
+            !proof/**/tlc-states
+
+  # Mutation testing of the scheduler in 3 parts at once, each every 3rd mutant that counts (packaging/mutants.py
+  # --part; about 2 h 15 min each, 3.8 h for all on a 10-core laptop with 4 workers). The evidence job scores them.
+  mutation:
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: astral-sh/setup-uv@v6
+      - name: Qt libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - run: uv sync --python 3.12
+      - name: Mutation testing, part ${{ matrix.part }} of 3 (its whole output goes to proof/scheduler/logs)
+        run: |
+          set -o pipefail
+          mkdir -p proof/scheduler/logs
+          uv run python packaging/mutants.py . --run --part ${{ matrix.part }}/3 \
+            --explained docs/promises/scheduler.mutants.yaml 2>&1 \
+            | tee proof/scheduler/logs/mutation-part-${{ matrix.part }}.log
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}  # also when it failed: the evidence job says which mutants have no verdict
+        with:
+          name: mutation-part-${{ matrix.part }}
+          path: |
+            mutants
+            proof
+            !mutants/**/__pycache__
+
+  # The checkers' results together, where the proof job reads them (proof-evidence: proof/scheduler/ with
+  # checkers.json, every checker in its listed order, their logs, mutants.json and leak.json): mutation testing's
+  # parts scored as one run, then every job's results merged (packaging/checkers.py --merge).
+  evidence:
+    needs: [checkers, mutation]
+    if: ${{ !cancelled() }}  # also when a checker failed or ran out of time: the proof shows which
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --python 3.12
+      - uses: actions/download-artifact@v4
+        with: {pattern: "checkers-*", path: jobs}
+      - uses: actions/download-artifact@v4
+        if: ${{ !cancelled() }}
+        with: {pattern: "mutation-part-*", path: mutation-parts}
+      - name: Mutation testing, its parts scored as one run
+        if: ${{ !cancelled() }}
+        run: |
+          uv run python packaging/checkers.py docs/promises/scheduler.yaml jobs/mutation --only "Mutation testing" \
+            --command "python packaging/mutants.py . --parts mutation-parts/* --explained docs/promises/scheduler.mutants.yaml --out {out}/mutants.json"
+      - name: Every checker's result, in proof/
+        if: ${{ !cancelled() }}
+        run: uv run python packaging/checkers.py docs/promises/scheduler.yaml proof --merge jobs/* mutation-parts/*/proof
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with: {name: proof-evidence, path: proof}
 
   # The proofs Windows cannot show (marked linux_proof, each saying why), on Linux: the proof job puts them in its PDF.
@@ -82,7 +159,7 @@ jobs:
   # The proof: each feature and fix shown working in the app, on Windows (or on Linux, by the proof-linux job, those
   # Windows cannot show), as one PDF of screenshots and checks.
   proof:
-    needs: [proof-linux, test, checkers]
+    needs: [proof-linux, test, evidence]
     if: ${{ !cancelled() }}  # also when a Linux proof, a test or a checker failed: the PDF shows what failed
     runs-on: windows-latest
     timeout-minutes: 45  # the proofs alone take about 28 minutes on Windows
