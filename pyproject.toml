@@ -86,6 +86,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_scheduler_mutants_ends.py",
     "tests/test_scheduler_mutants_state.py",
     "tests/test_scheduler_mutants_times.py",
+    "tests/test_scheduler_ci_findings.py",
     # (from files whose other tests are slow)
     "tests/test_scheduler_promises.py::test_an_every_n_schedule_has_its_times_every_n_from_when_first_seen_through_2028",
     "tests/test_scheduler_promises.py::test_skip_still_runs_a_time_less_than_2_minutes_late",
@@ -107,6 +108,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_paths_scheduler.py::test_the_keeper_checks_and_starts_the_scheduler_of_the_taskloom_folder_set_for_the_server",
     "tests/test_paths_scheduler.py::test_the_keeper_does_not_say_it_started_a_server_scheduler_whose_command_does_not_exist",
     "tests/test_triggers.py::test_scheduler_runs_the_schedule_block_branch",
+    "tests/test_scheduler_stops_and_sleeps.py::test_when_the_service_stops_with_runs_going_it_counts_only_the_runs_that_have_begun",
+    "tests/test_scheduler_question_dropped.py::test_an_answer_to_a_question_whose_missed_runs_were_dropped_is_applied_to_nothing",
     "-k", """not (tray or editor or countdown or when_builders or stays_a_custom or while_the_service_is_off \
         or saving_a_flow or clicking_run or stops_the_flows_runs_and_drops or process_is_gone or real_service \
         or headless or saved_while_the_service_is_on or keeps_the_starting_point or misfire_policy or on_time_runs \
