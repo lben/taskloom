@@ -18,7 +18,9 @@ service, its run processes and the user within small bounds, against the promise
     not begin, by Misfire, then requests them by Overlap and the limit. Each time is started, skipped and told,
     or saved in `waiting_runs` as `queue` (waiting for its flow) or `slot` (waiting for a free slot). A time on
     time starts now only if no saved run that came before it could start now (`Ahead`: its flow is free, or it waits
-    for a slot and its Overlap is allow).
+    for a slot and its Overlap is allow). With the cfg's `Limit = 1` this is the code's rule: the code waits only
+    when the runs going and those ahead take every slot, and then starts those ahead first (`_request`); with a
+    larger limit the two differ, and a larger limit is not modelled (see Not covered).
   - `StartNext(d)` starts one saved run when a slot is free and, unless Overlap is allow, no run of its flow
     is going. While turning off, it starts only Let-it-finish flows.
 - **Run processes** load, then `Claim`: one transaction. The claim checks the lock, the service-on record, the

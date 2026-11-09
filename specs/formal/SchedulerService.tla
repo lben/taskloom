@@ -202,7 +202,8 @@ BusyIn(L, f, st) == FlowGoingIn(L, f, st.loading) \/ \E d \in Dues : F(d) = f /\
 \* A saved run in line (no process of this life runs it) that could start now, given a free slot: no run of its flow
 \* is going, or it waits for a slot and its Overlap is allow (_request's `ahead`, _may_start). A new time waits
 \* behind one; a time due again only behind one that came before it. The model has no order, so the time due again
-\* that is on time may or may not have come first (`first`).
+\* that is on time may or may not have come first (`first`). At Limit = 1 (the cfg) this is the code's rule, which
+\* waits only when the runs going and those ahead take every slot (_request, _at_limit(len(ahead))).
 Ahead(L, st) == \E d \in Dues : /\ st.row[d] \in WaitKinds
                                 /\ ~\E p \in st.loading : p.d = d /\ p.l = L
                                 /\ ~FlowGoingIn(L, F(d), st.loading) \/ (st.row[d] = "slot" /\ overlap[F(d)] = "allow")

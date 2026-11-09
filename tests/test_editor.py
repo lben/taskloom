@@ -1127,6 +1127,7 @@ def test_an_older_scheduler_running_is_offered_a_restart(win, monkeypatch):
 
     lock = acquire_lock(win.home)  # a scheduler from an older Taskloom: it writes no version
     try:
+        (win.home.root / "scheduler.version").unlink()  # (this Taskloom's lock writes one: an older one does not)
         (win.home.root / "scheduler.pid").write_text(str(os.getpid()))
         win._show_scheduler_state(True)
         win._show_scheduler_state(True)  # once per session, not every few seconds
