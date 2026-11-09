@@ -1128,6 +1128,8 @@ checking); other flows run as usual. Those times are never dropped or counted as
 run with the missed runs you chose, oldest first, one at a time. Times missed before you
 answer (the computer slept, or the service was off) are missed times too: a new window, in
 place of the first, says how many were missed in all, and your answer is about all of them.
+If those missed runs are dropped before you answer (you change or turn off the schedule, or
+choose **Stop now** for its flow), the window closes and asks nothing more.
 If the service stops before you answer, it asks once when it is back, with the times missed
 meanwhile. On a server, with no screen to ask on (`taskloom scheduler --headless`), the
 latest 100 missed times run, oldest first, then the times that are not missed. The service's

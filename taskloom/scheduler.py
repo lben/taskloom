@@ -129,15 +129,19 @@ def _moment(text: str) -> dt.datetime:
 
 
 class Scheduler:
-    def __init__(self, home: Home, notify=None, ask=None):
+    def __init__(self, home: Home, notify=None, ask=None, withdraw=None):
         """`ask(flow name, count, answer)`, when more than ASK_OVER times of a Catch up schedule were missed: it
-        returns at once, and answer(limit) is called later: None runs them all, N only the latest N. Without it (a
-        server, no one to ask), the latest ASK_OVER run, and you are told how many were missed. Made, it is the service
-        on (the table service_on): the runs a service before it started no longer begin (see claim_time)."""
+        returns at once, and answer(limit) is called later: None runs them all, N only the latest N. Asked again (more
+        were missed meanwhile), the question comes with the same answer function, and replaces the one shown. Once its
+        missed runs are dropped (the schedule changed or turned off, or Stop now), the question no longer applies:
+        withdraw(answer) is called (its window closes), and that answer function does nothing from then on; asked about
+        later, it is a new question, with a new answer function. Without `ask` (a server, no one to ask), the latest
+        ASK_OVER run, and you are told how many were missed. Made, it is the service on (the table service_on): the
+        runs a service before it started no longer begin (see claim_time)."""
         self.home = home
         self.id = uuid.uuid4().hex  # (the runs it starts say it, to claim what they are for: see claim_time)
         self.notify = notify or (lambda title, message: None)
-        self.ask = ask
+        self.ask, self.withdraw = ask, withdraw
         self.runs: list[_Run] = []
         self.yours: set[str] = set()  # the flows with a run going that you started yourself (see _adopt)
         self.queued: dict[str, list[_Waiting]] = {}  # per flow, waiting for its runs going (in the order they came)
@@ -360,7 +364,8 @@ class Scheduler:
             dropped += self.again.pop(schedule)
         for schedule in [schedule for schedule, entries in self.asking.items() if entries and which(entries[0])]:
             dropped += self.asking.pop(schedule)
-            self._questions.pop(schedule, None)
+            if (answer := self._questions.pop(schedule, None)) and self.withdraw:  # (its question no longer applies)
+                self.withdraw(answer)
         if dropped:
             self.waiting = [w for w in self.waiting if not which(w)]
             self.queued = {path: [w for w in line if not which(w)] for path, line in self.queued.items()}
@@ -440,8 +445,9 @@ class Scheduler:
             self._answer(schedule, ASK_OVER)
             return
 
-        def answer(limit: int | None):  # (applied at the next check)
-            self._answers[schedule] = limit
+        def answer(limit: int | None):  # (applied at the next check; to nothing once the question no longer applies)
+            if self._questions.get(schedule) is answer:
+                self._answers[schedule] = limit
 
         count = sum(entry.waits == "missed" for entry in self.asking[schedule])
         self.ask(self._name(schedule[0]), count, self._questions.setdefault(schedule, answer))
@@ -1335,15 +1341,18 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     tray.setToolTip("Taskloom scheduler service: runs your scheduled flows at their times")
     questions = []  # the catch-up questions shown (kept: Python would free one still open)
 
-    def ask(flow_name, count, answer):  # (it returns at once: the service goes on while the question is open)
-        for question in [q for q in questions if q.answer is answer]:  # asked again, with a new count: it replaces it
+    def withdraw(answer):  # the question with this answer function no longer applies: its window closes
+        for question in [q for q in questions if q.answer is answer]:
             questions.remove(question)
             question.hide()
+
+    def ask(flow_name, count, answer):  # (it returns at once: the service goes on while the question is open)
+        withdraw(answer)  # (asked again, with a new count: it replaces the window shown)
         questions.append(CatchUpDialog(flow_name, count, answer))
         questions[-1].show()
         questions[-1].activateWindow()
 
-    scheduler = Scheduler(home, lambda title, message: tray.showMessage(title, message), ask)
+    scheduler = Scheduler(home, lambda title, message: tray.showMessage(title, message), ask, withdraw)
     menu = QMenu()
     open_editor = QAction("Open editor", menu)
     open_editor.triggered.connect(lambda: subprocess.Popen(windowed_command() + ["editor"],
