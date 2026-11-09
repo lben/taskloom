@@ -7,7 +7,8 @@ The checkers are listed in the feature's <name>.evidence.yaml under `checkers:`,
 green_by), a kind (trace, model, mutation, leak, charter, tests) and a command, run by the shell from the repository
 with {out} replaced by proof/<release>/<name> (where a checker writes its own result, e.g. leak.json). Each one's
 whole output goes to proof/<release>/<name>/logs/; checkers.json there says, for each, its command, exit code,
-commit, log, final lines and last line (its summary). Exit 1 when any checker failed.
+commit, log, final lines, last line (its summary) and key (the pattern of the lines that show its verdict, which
+the proof PDF boxes in orange). Exit 1 when any checker failed.
 
 CI runs them in parallel jobs, as a GitHub job runs at most 6 hours. --only runs the checkers named (checkers.json
 lists those); with one, --command runs CMD in place of its listed command and records CMD (CI scores the mutation
@@ -51,7 +52,7 @@ def run(checker: dict, out: Path, evidence: Path) -> dict:
     lines = [line for line in output.splitlines() if line.strip()]
     return {"name": checker["name"], "kind": checker["kind"], "command": command, "exit": code, "commit": commit(),
             "log": log.relative_to(evidence).as_posix(), "summary": lines[-1] if lines else "(it printed nothing)",
-            "tail": lines[-12:]}
+            "tail": lines[-12:], "key": checker.get("key")}
 
 
 def merge(listed: list, out: Path, jobs: list[Path]) -> list:

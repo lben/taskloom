@@ -19,6 +19,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QRectF, QSize  # noqa: E402
 from PySide6.QtPdf import QPdfDocument  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -75,15 +76,17 @@ def result(name: str, row: str, outcome: str = "passed", every: str = "", why: s
             "outcome": outcome, "why": why}
 
 
-def checker(name: str, kind: str, exit_code: int, commit: str = SHA) -> dict:
+def checker(name: str, kind: str, exit_code: int, commit: str = SHA, key: str | None = None) -> dict:
     return {"name": name, "kind": kind, "command": f"run-{name} --all", "exit": exit_code, "commit": commit,
             "log": f"alpha/{name}.log", "summary": f"{name} summary line.",
-            "tail": [f"{name} line {i}" for i in range(1, 15)]}
+            "tail": [f"{name} line {i}" for i in range(1, 15)], "key": key}
 
 
 AMBER = {"enforced": "Tests of the service.", "not_green": "Tests try the cases we thought of."}
 # Alpha (4 rows: 2 green, 1 amber, 1 red), its checkers listed with the model check before the trace validation.
-ALPHA_CHECKERS = [checker("tlc", "model", 0), checker("trace", "trace", 0), checker("pytest", "tests", 1, OTHER_SHA)]
+# tlc's key is its line 13, among its final lines; trace's matches none of them.
+ALPHA_CHECKERS = [checker("tlc", "model", 0, key=r"^tlc line 13$"), checker("trace", "trace", 0, key="no such line"),
+                  checker("pytest", "tests", 1, OTHER_SHA)]
 # What Alpha's mutation testing leaves out (mutants.json's not_tested): a function, and a single mutant.
 NOT_TESTED = [{"function": "alpha/service.py serve", "mutants": 212,
                "reason": "The service process itself: tests start it as a process and see it run on time."},
@@ -140,7 +143,7 @@ def built(tmp_path_factory) -> dict:
         return pages(root / out)
 
     features = [arg for stem in ("alpha", "beta", "gamma", "delta") for arg in ("--feature", f"promises/{stem}.yaml")]
-    return {"features": pdf("features.pdf", "--evidence", "evidence", *features), "plain": pdf("plain.pdf"),
+    return {"features": pdf("features.pdf", "--evidence", "evidence", *features), "plain": pdf("plain.pdf"), "root": root,
             "ledgers": {stem: json.loads((evidence / stem / "ledger.json").read_text(encoding="utf-8"))
                         for stem in ("alpha", "beta", "gamma", "delta")}}
 
@@ -207,6 +210,48 @@ def test_each_checker_box_shows_its_log_commit_and_exit_code(built):
         after = " ".join(lines[lines.index(top[0]) + 1:])
         shown = " ".join([f"$ {c['command']}", *c["tail"][-12:]])
         assert after.startswith(shown + " "), f"{c['name']}: {after[:400]}"
+
+
+def test_a_checkers_key_line_is_boxed_in_orange_as_on_the_screenshots(built):
+    """The line of a checker's output that its key matches (what to look at, as the box on a screenshot) has an
+    orange box around it, in the screenshots' orange, and only that line is inside the box."""
+    doc = QPdfDocument()
+    assert doc.load(str(built["root"] / "features.pdf")) == QPdfDocument.Error.None_
+    pdf = built["features"]
+    page = next(i for i in feature_pages(pdf, 1) if "tlc line 13" in pdf[i])
+    scale = 2
+    size = doc.pagePointSize(page)
+    image = doc.render(page, QSize(round(size.width() * scale), round(size.height() * scale)))
+    dark = [(x, y) for y in range(0, image.height(), 2) for x in range(0, image.width(), 2)
+            if image.pixelColor(x, y).name() == "#0d1117"]  # the terminals' background
+    assert dark, "no terminal on the page"
+    left, right = min(x for x, _ in dark), max(x for x, _ in dark)
+    top, bottom = min(y for _, y in dark), max(y for _, y in dark)
+
+    def orange(x, y):
+        c = image.pixelColor(x, y)
+        return c.red() > 180 and 50 < c.green() < 130 and c.blue() < 70
+
+    box = [(x, y) for y in range(top, bottom) for x in range(left, right) if orange(x, y)]
+    assert box, "no orange box in the checkers' output"
+    x0, x1 = min(x for x, _ in box) / scale, max(x for x, _ in box) / scale
+    y0, y1 = min(y for _, y in box) / scale, max(y for _, y in box) / scale
+    frame = QRectF(x0, y0, x1 - x0, y1 - y0)
+    text = doc.getAllText(page).text()
+
+    def where(line: str) -> QRectF:  # where the line's text is on the page, in points
+        return doc.getSelectionAtIndex(page, re.search(rf"{line}(?!\d)", text).start(), len(line)).boundingRectangle()
+
+    around = {line: where(line) for line in ("tlc line 12", "tlc line 13", "tlc line 14")}
+    doc.close()
+    assert frame.contains(around["tlc line 13"]), (frame, around)
+    assert not frame.intersects(around["tlc line 12"]) and not frame.intersects(around["tlc line 14"]), (frame, around)
+
+
+def test_a_checker_whose_key_matches_none_of_its_final_lines_says_so(built):
+    """No box is drawn round nothing: when no shown line matches a checker's key, its box says so in red."""
+    text = " ".join(flat(built["features"][i]) for i in feature_pages(built["features"], 1))
+    assert "✗ None of its final lines shows what to look for (no such line)" in text, text
 
 
 def test_trace_validation_comes_before_the_model_check(built):

@@ -618,15 +618,29 @@ def terminal(checker: dict, evidence: Path) -> str:
     top = (f"{html.escape((evidence / checker['log']).as_posix())}&nbsp;&nbsp;&nbsp;commit "
            f"{html.escape(str(checker['commit'])[:7])}&nbsp;&nbsp;&nbsp;<span style=\"color: "
            f"{'#3fb950' if ok else '#ff7b72'}\">exit {checker['exit']}</span>")
-    lines = (f"<span style=\"color: {TERMINAL_DIM}\">$ {html.escape(checker['command'])}</span>\n"
-             + html.escape("\n".join(checker["tail"][-12:])))
+    # Its final lines, each run of lines its key matches (what to look at) in an orange box, as on the screenshots.
+    key, shown = checker.get("key"), checker["tail"][-12:]
+    runs: list[tuple[bool, list[str]]] = []
+    for line in shown:
+        boxed = bool(key and re.search(key, line))
+        if runs and runs[-1][0] == boxed:
+            runs[-1][1].append(line)
+        else:
+            runs.append((boxed, [line]))
+    text = f"<p style=\"{MONO}; color: {TERMINAL_INK}\">"
+    lines = (f"<p style=\"{MONO}; color: {TERMINAL_DIM}\">$ {html.escape(checker['command'])}</p>"
+             + "".join(f"<table width=\"100%\" border=\"1.5\" cellspacing=\"0\" cellpadding=\"2\" style=\"border-color: "
+                       f"{ACCENT}; border-style: solid; border-collapse: collapse\"><tr><td>{text}"
+                       f"{html.escape(chr(10).join(group))}</p></td></tr></table>" if boxed
+                       else f"{text}{html.escape(chr(10).join(group))}</p>" for boxed, group in runs))
+    if key and not any(boxed for boxed, _ in runs):
+        lines += f"<p style=\"font-size: 9pt\">{mark(False, f'None of its final lines shows what to look for ({key})')}</p>"
     name, gloss = KINDS.get(checker["kind"], (checker["kind"], ""))
     about = name + (f" ({gloss})" if gloss else "") + f": {checker['summary']}"
     return (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 14px\">"
             f"<tr><td style=\"padding-bottom: 6px; font-size: 11pt\">{mark(ok, about)}</td></tr>"
             f"<tr><td bgcolor=\"{TERMINAL_TOP}\" style=\"padding: 6px 12px; {MONO}; color: {TERMINAL_DIM}\">{top}</td>"
-            f"</tr><tr><td bgcolor=\"{TERMINAL}\" style=\"padding: 8px 12px 10px\"><p style=\"{MONO}; color: "
-            f"{TERMINAL_INK}\">{lines}</p></td></tr></table>")
+            f"</tr><tr><td bgcolor=\"{TERMINAL}\" style=\"padding: 8px 12px 10px\">{lines}</td></tr></table>")
 
 
 def survivors(mutants: dict | None, path: Path) -> str:

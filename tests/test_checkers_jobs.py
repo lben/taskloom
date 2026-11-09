@@ -13,7 +13,8 @@ import yaml
 SCRIPT = Path(__file__).resolve().parents[1] / "packaging" / "checkers.py"
 # Each checker leaves a mark in {out}, where the job keeps its results, so a test can see which ones ran.
 CHECKERS = [
-    {"name": "Trace", "kind": "trace", "command": "echo traced > {out}/trace.txt && echo all traces match"},
+    {"name": "Trace", "kind": "trace", "command": "echo traced > {out}/trace.txt && echo all traces match",
+     "key": "all traces match"},
     {"name": "Model", "kind": "model", "command": "echo checked > {out}/model.txt && echo no error found"},
     {"name": "Leak", "kind": "leak", "command": "echo '{\"passed\": true}' > {out}/leak.json && echo no leak"},
     {"name": "Design", "kind": "charter", "command": "echo designed > {out}/design.txt && echo no worse"},
@@ -42,6 +43,7 @@ def test_only_runs_the_checkers_named_and_command_runs_another_command_for_the_o
     assert done.returncode == 0, done.stdout + done.stderr
     assert [(e["name"], e["exit"], e["summary"]) for e in entries] == [("Trace", 0, "all traces match"),
                                                                        ("Leak", 0, "no leak")]
+    assert [e["key"] for e in entries] == ["all traces match", None]  # what the PDF boxes in its output
     assert sorted(p.name for p in (job / "alpha").iterdir()) == ["checkers.json", "leak.json", "logs", "trace.txt"]
 
     other = tmp_path / "scored"
