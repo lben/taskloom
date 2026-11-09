@@ -65,12 +65,13 @@ def runs_of(home: Path, flow: str) -> list[tuple[str, bool, int | None]]:
 
 def started_by_hand(env, path: Path) -> subprocess.Popen:
     """`taskloom run FLOW` from a terminal; it has begun (it is recorded as running in the run history, not as a run
-    the scheduler service started) when this returns."""
+    the scheduler service started) when this returns. The process its run records may not be this one: on Windows a
+    venv's python.exe is a launcher, and the run is its child."""
     flow = path.stem
     before = len(runs_of(env.home, flow))
     proc = REAL_POPEN([sys.executable, "-m", "taskloom.cli", "run", str(path)], env=env.env, cwd=env.root,
                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    began = wait_until(lambda: runs_of(env.home, flow)[before:] == [("running", False, proc.pid)]
+    began = wait_until(lambda: [r[:2] for r in runs_of(env.home, flow)[before:]] == [("running", False)]
                        or proc.poll() is not None, 60)
     assert began and proc.poll() is None, f"your run of {flow} did not begin: {runs_of(env.home, flow)}"
     return proc
@@ -165,13 +166,14 @@ def test_a_run_you_started_that_is_over_no_longer_counts_for_overlap(env, fake_r
     due = soon()
     path = schedule(env.home, env.root, {"nightly": flow_text(one_off(due), "skip", "nightly")})["nightly"]
     mine = started_by_hand(env, path)
+    ((_, _, pid),) = runs_of(env.home, "nightly")  # the process your run records (see started_by_hand)
     if how == "it finished":
         let_go(env, "nightly", mine)
-        assert runs_of(env.home, "nightly") == [("success", False, mine.pid)], runs_of(env.home, "nightly")
+        assert runs_of(env.home, "nightly") == [("success", False, pid)], runs_of(env.home, "nightly")
     else:
-        os.kill(mine.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         mine.wait(timeout=30)
-        assert runs_of(env.home, "nightly") == [("running", False, mine.pid)], runs_of(env.home, "nightly")
+        assert runs_of(env.home, "nightly") == [("running", False, pid)], runs_of(env.home, "nightly")
     told = []
     service = fake_runs.service(env.home, lambda title, message: told.append(f"{title}: {message}"))
     checks_around(service, fake_runs, due)
