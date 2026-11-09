@@ -229,16 +229,19 @@ class Scheduler:
     def _adopt(self):
         """The runs going that a service started and this one does not know of, as the run history has them (each run
         records itself there as it begins): a service before this one's, also one that began just before this one
-        started. Ours are known by their run ids, and those that have not said theirs yet by their processes. They count
-        as going, for Overlap, Max concurrent runs and catching up one at a time. One whose process has gone, or is
-        another program's now (after a restart), is recorded as crashed at the next check, and you are told. Also the
-        flows with a run going that you started yourself (its process still going): they count for Overlap only
-        (`yours`, see _busy); whoever started them sees to them. (Done at each check.)"""
+        started. Ours are known by their run ids, and those that have not said theirs yet by the flow file and schedule
+        they record (not by their processes: on Windows the process a run records may be the child of the one this
+        service started, a venv's python.exe being a launcher). They count as going, for Overlap, Max concurrent runs
+        and catching up one at a time. One whose process has gone, or is another program's now (after a restart), is
+        recorded as crashed at the next check, and you are told. Also the flows with a run going that you started
+        yourself (its process still going): they count for Overlap only (`yours`, see _busy); whoever started them sees
+        to them. (Done at each check.)"""
         ids = {run.run_id for run in self.runs}
-        pids = {run.proc.pid for run in self.runs if run.as_of is not None}  # (the processes this service started)
+        unsaid = {(str(real_path(run.flow)), run.schedule) for run in self.runs if run.run_id is None}
         listed, self.yours = _listed_spellings(self.home), set()
         for run in _running(self.home):
-            if run["id"] in ids or run["pid"] in pids or not (run["scheduled"] or run_alive(run["pid"], run["began"])):
+            if (run["id"] in ids or (run["scheduled"] and (run["flow_path"], run["schedule"]) in unsaid)
+                    or not (run["scheduled"] or run_alive(run["pid"], run["began"]))):
                 continue
             flow = listed.get(run["flow_path"], run["flow_path"])
             if run["scheduled"]:
