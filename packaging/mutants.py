@@ -10,9 +10,9 @@ The score is the share caught. It passes at 90% or more when every missed mutant
 judge a mutant (the tests crashed or ended in a way it does not know): such a run proves nothing.
 
 The --explained file may also have a not_tested: mapping, of functions as where() names them (e.g.
-`taskloom/scheduler.py serve`, `taskloom/scheduler.py Scheduler.check_servers`; a nested function's mutants are its
-outer function's) to a one-line reason: why mutation testing leaves them out, and which tests and proofs cover them
-instead. Their mutants count in neither the score, the missed nor the could-not-judge ones; each such function is
+`taskloom/scheduler.py serve`, `taskloom/scheduler.py Scheduler.check_servers`; a nested function's mutants are
+its outer function's), or of single mutants by name (e.g. a Windows-only line, which no run here can execute), to
+a one-line reason: why mutation testing leaves them out, and which tests and proofs cover them instead. Their mutants count in neither the score, the missed nor the could-not-judge ones; each such function is
 listed, in the output and the JSON (not_tested: function, reason, number of mutants), so none is left out unseen.
 """
 
@@ -63,8 +63,8 @@ def summary(project: Path, explained: dict) -> dict:
     codes = {}
     left_out = dict.fromkeys(not_tested, 0)
     for name, code in results(project).items():
-        if where(name) in left_out:
-            left_out[where(name)] += 1
+        if (key := name if name in left_out else where(name)) in left_out:
+            left_out[key] += 1
         else:
             codes[name] = code
     unjudged = sorted(name for name, code in codes.items() if code not in CAUGHT | MISSED)

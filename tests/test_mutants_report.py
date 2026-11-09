@@ -61,3 +61,16 @@ def test_a_function_not_listed_as_not_tested_still_counts(tmp_path):
     assert sorted(result["unexplained"]) == ["taskloom.scheduler.x__serve_tray__mutmut_1",
                                              "taskloom.scheduler.xǁSchedulerǁ_check__mutmut_1"]
     assert {n["function"]: n["mutants"] for n in result["not_tested"]} == {f: 0 for f in SHELL}
+
+
+def test_a_single_mutant_listed_as_not_tested_is_left_out_and_its_functions_other_mutants_still_count(tmp_path):
+    """A mutant named on its own under not_tested (e.g. a Windows-only line no run here can execute) is left out of
+    the score and listed with its reason; the other mutants of its function still count."""
+    start = "taskloom.scheduler.xǁSchedulerǁ_start__mutmut_"
+    windows = {f"{start}46": "Windows only: a console window per run, which no run on Linux or macOS can show."}
+    done, result = report(tmp_path, {f"{start}46": 0, f"{start}47": 0, f"{start}48": 1}, {"not_tested": windows})
+
+    assert done.returncode == 1
+    assert (result["killed"], result["total"]) == (1, 2)
+    assert result["unexplained"] == [f"{start}47"]
+    assert result["not_tested"] == [{"function": f"{start}46", "reason": windows[f"{start}46"], "mutants": 1}]
