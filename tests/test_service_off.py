@@ -222,6 +222,8 @@ def test_an_older_service_that_cannot_be_restarted_is_not_called_paused(win, qtb
     assert not (win.home.root / "scheduler.pid").exists()  # its PID file is gone: it cannot be stopped
     lock = acquire_lock(win.home)  # a scheduler service from an older Taskloom (it writes no version)
     try:
+        for name in ("scheduler.pid", "scheduler.version"):  # (this Taskloom's lock writes both: here they are gone)
+            (win.home.root / name).unlink()
         qtbot.waitUntil(lambda: bool(warned), timeout=10_000)
     finally:
         lock.close()

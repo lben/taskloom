@@ -31,6 +31,12 @@ from tests.test_scheduler_new_promises import (HOURLY, REAL_POPEN, begins, flow_
                                                wait_until)
 from tests.test_scheduler_promises import at, on
 
+# (a program that ignores SIGTERM, on POSIX only)
+SIGTERM_IGNORABLE = pytest.mark.skipif(sys.platform == "win32", reason=(
+    "Windows has no SIGTERM a program can ignore: there it ends the program at once (TerminateProcess), so a "
+    "run that does not stop when asked cannot happen this way"))
+
+
 SLEEPS = "import time; time.sleep(60)"
 IGNORES_SIGTERM = "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint('ready', flush=True)\n" \
                   "time.sleep(60)"
@@ -244,7 +250,9 @@ def test_a_run_from_before_of_a_flow_taken_off_the_schedule_is_recorded_crashed_
 
 
 @pytest.mark.invariant("SCH-4")
-@pytest.mark.parametrize("its_program", ["does not stop when asked", "ends just as it is asked to stop"])
+@pytest.mark.parametrize("its_program", [
+    pytest.param("does not stop when asked", marks=SIGTERM_IGNORABLE),
+    "ends just as it is asked to stop"])
 def test_stop_now_ends_a_run_from_a_service_before_this_one_and_then_the_service_turns_off(env, fake_runs,
                                                                                            monkeypatch, its_program):
     """nightly's run, which a service before this one started, is going; its program does not stop on SIGTERM. You

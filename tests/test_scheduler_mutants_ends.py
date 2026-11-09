@@ -30,6 +30,12 @@ from tests.test_scheduler_held_times import Run, Runs, check, clock, for_time, o
 from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, REAL_POPEN, begins, check_after, clock_shows,
                                                flow_yaml, says, schedule, statuses, utc, write)
 
+# (a program that ignores SIGTERM, on POSIX only)
+SIGTERM_IGNORABLE = pytest.mark.skipif(sys.platform == "win32", reason=(
+    "Windows has no SIGTERM a program can ignore: there it ends the program at once (TerminateProcess), so a "
+    "run that does not stop when asked cannot happen this way"))
+
+
 T = clock("07:00:00")
 FAILURE_EMAILS = {"when": ["failure"], "to": ["team@example.com"]}
 
@@ -220,6 +226,7 @@ def test_a_crash_that_was_recorded_and_told_first_elsewhere_is_not_told_again(en
 # --- a run's end: stopped ------------------------------------------------------------------------------------------
 
 @pytest.mark.invariant("SCH-4")
+@SIGTERM_IGNORABLE
 def test_a_run_that_does_not_stop_after_stop_now_is_recorded_as_cancelled_before_it_is_forced_to_end(env, runs,
                                                                                                      monkeypatch):
     """README (Turning the service off): Stop now: its runs going stop and are recorded as cancelled (a run that does
