@@ -1,7 +1,8 @@
-"""A table's look in an HTML Template, and {name:html} (docs/promises/table-styles.yaml, STY-1..6): a rule in the
+"""A table's look in an HTML Template, and {name:html} (docs/promises/table-styles.yaml, STY-1..7): a rule in the
 template's own <style> wins over the table's built-in look, property by property, with no !important; what it does not
 set keeps the built-in look; with no <style> the table is as it was; {name:html} puts text in as HTML, with the <style>
-block inside it applied, and stops the run on anything that is not text. Through the real `taskloom run`: a table (or
+block inside it applied, and stops the run on anything that is not text; the template's rules style what the template
+shows, not the email's own frame. Through the real `taskloom run`: a table (or
 the text) into an HTML Template into Send Email and a local mail server, then the email's HTML. An element is judged
 by its style as it applies (the last declaration of a property wins, and a shorthand such as `border` replaces what
 was set before it), never by the text of its style attribute, so the built-in look and the template's rules may be
@@ -116,7 +117,7 @@ def styled_email(env, smtp, text: str) -> str:
 
 SIDES = ("top", "right", "bottom", "left")
 LINE_STYLES = {"none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset"}
-COLOUR_NAMES = {"black": "#000000", "white": "#ffffff", "green": "#008000"}
+COLOUR_NAMES = {"black": "#000000", "white": "#ffffff", "green": "#008000", "red": "#ff0000"}
 LOOK_ATTRIBUTES = ("align", "bgcolor", "border", "cellpadding", "cellspacing", "height", "valign", "width")
 VOID = {"br", "col", "hr", "img", "input", "link", "meta"}
 
@@ -444,3 +445,64 @@ def test_html_from_another_template_with_html_is_passed_as_it_is_with_its_pictur
     assert [(p.text, [b.text for b in p.all("b")]) for p in email.all("p")] == [("Inner part", ["Inner"])]
     [picture] = email.all("img")
     assert [f"cid:{cid}" for cid in inline_images(msg)] == [picture.attrs["src"]]
+
+
+# --- STY-7: the template's own rules style what the template shows, not the email's own frame -----------------------
+
+OWN_TABLE = '<table id="mine"><tr><td>my own cell</td></tr></table>'  # a table the user wrote in the Template
+TABLE_RULE = "<style>table {{border: 2px solid red; width: 400px}}</style>"
+
+
+def frame(html: str) -> list:
+    """The email's own frame: the layout table that wraps the whole body, and its one cell."""
+    [layout] = [t for t in document(html).all("table") if t.attrs.get("role") == "presentation"]
+    return [layout, layout.all("td")[0]]
+
+
+def own_look(element: Element) -> tuple:
+    """An element as it looks itself: (its attributes that set a look, its style as it applies)."""
+    return {k: v for k, v in element.attrs.items() if k in LOOK_ATTRIBUTES}, element.style
+
+
+def bordered(style: dict) -> bool:
+    return any(line not in (None, "none", "hidden") and width != "0" for width, line, _ in borders(style))
+
+
+def own_table(html: str) -> Element:
+    [table] = [t for t in document(html).all("table") if t.attrs.get("id") == "mine"]
+    return table
+
+
+def without_and_with(env, smtp, rule: str) -> tuple:
+    """The HTML of two emails, each showing a table the user wrote and my_table: one with no <style> of the user's
+    own, one with `rule`."""
+    plain = table_email(env, smtp, OWN_TABLE + "{my_table}")
+    smtp.messages.clear()
+    return plain, table_email(env, smtp, rule + OWN_TABLE + "{my_table}")
+
+
+@pytest.mark.invariant("STY-7")
+def test_a_td_rule_leaves_the_emails_own_frame_as_it_is_and_styles_the_tables_cells_and_a_cell_you_wrote(env, smtp):
+    plain, html = without_and_with(env, smtp, TD_RULE)
+
+    _, cell = frame(html)
+    assert not bordered(cell.style), f"the email's frame took the td rule: {cell.attrs.get('style')}"
+    assert (paddings(cell.style), cell.style.get("font-size")) == (["16px"] * 4, "14px"), cell.attrs.get("style")
+    assert [own_look(e) for e in frame(html)] == [own_look(e) for e in frame(plain)]
+    assert len(cells_with_the_td_rule(html)) == 12
+    [mine] = own_table(html).all("td")
+    assert (mine.text, paddings(mine.style), borders(mine.style), mine.style.get("font-size")) == (
+        "my own cell", ["15px"] * 4, [("1px", "solid", "#000000")] * 4, "15px"), mine.attrs.get("style")
+
+
+@pytest.mark.invariant("STY-7")
+def test_a_table_rule_styles_the_generated_table_and_a_table_you_wrote_and_not_the_emails_frame(env, smtp):
+    plain, html = without_and_with(env, smtp, TABLE_RULE)
+
+    layout, _ = frame(html)
+    assert not bordered(layout.style) and "width" not in layout.style, (
+        f"the email's frame took the table rule: {layout.attrs.get('style')}")
+    assert [own_look(e) for e in frame(html)] == [own_look(e) for e in frame(plain)]
+    for table in (my_table(html), own_table(html)):
+        assert (borders(table.style), table.style.get("width")) == ([("2px", "solid", "#ff0000")] * 4, "400px"), (
+            table.attrs.get("id"), table.attrs.get("style"))
