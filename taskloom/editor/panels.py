@@ -2541,7 +2541,9 @@ class FrameModel(QAbstractTableModel):
 
 
 class PreviewPanel(QWidget):
-    """What the selected block produced in the run on screen: tables as a grid, anything else as text."""
+    """What the selected block produced in the run on screen: tables as a grid, anything else as text. A failed block's
+    error, and why a table cannot be shown, are text in the box too, never in the label: the window cannot be narrower
+    than a label's text, so a long error there made it wider than the screen."""
 
     PREVIEW_ROWS = 200
     HINT = "Select a block to see what it produced in the last run (run the flow first)."
@@ -2589,11 +2591,13 @@ class PreviewPanel(QWidget):
         if not names:
             self.view.setModel(None)
             self.find_bar.refresh()
-            self.text.hide()
-            self.view.show()
             status = info.get("status")
-            self.label.setText(self.HINT if not block_id or not status else
-                               f"{block_id}: {status}, no output" + (f" ({info['error']})" if info.get("error") else ""))
+            self.label.setText(self.HINT if not block_id or not status else f"{block_id}: {status}, no output")
+            if info.get("error"):
+                self._show_text(info["error"])
+            else:
+                self.text.hide()
+                self.view.show()
             return
         self._load(names[0])
 
@@ -2601,26 +2605,29 @@ class PreviewPanel(QWidget):
         if not port:
             return
         if port not in self.tables:
-            self.view.hide()
-            self.text.show()
-            self.text.setPlainText(self.previews[port])
+            self._show_text(self.previews[port])
             self.label.setText(f"{self.block_id}.{port}:")
             return
-        self.text.hide()
-        self.view.show()
         try:
             lazy = pl.scan_parquet(self.tables[port])
             total = lazy.select(pl.len()).collect().item()
             df = lazy.head(self.PREVIEW_ROWS).collect()
         except Exception as e:
-            self.view.setModel(None)
-            self.find_bar.refresh()
-            self.label.setText(f"Cannot preview: {e} (runs are cleaned up as Keep runs or keep_runs_for says)")
+            self.label.setText("Cannot preview")
+            self._show_text(f"{e}\n(runs are cleaned up as Keep runs or keep_runs_for says)")
             return
+        self.text.hide()
+        self.view.show()
         self.view.setModel(FrameModel(df))
         self.find_bar.refresh()
         self.label.setText(f"{self.block_id}.{port}: {total:,} rows × {df.width} columns"
                            + (f" (showing first {self.PREVIEW_ROWS})" if total > self.PREVIEW_ROWS else ""))
+
+    def _show_text(self, text: str):
+        """`text` in the box under the label, in place of the grid: whole and as written, to scroll, select and copy."""
+        self.view.hide()
+        self.text.show()
+        self.text.setPlainText(text)
 
 
 # --- Run history --------------------------------------------------------------------

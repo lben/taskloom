@@ -33,7 +33,8 @@ class Safety:
     # --- crash log ---------------------------------------------------------------
 
     def install_crash_log(self, on_error=None):
-        """Low-level crashes, uncaught Python errors and Qt's own fatal messages go to crash.log."""
+        """Low-level crashes, uncaught Python errors and Qt's own fatal messages go to crash.log; the errors and
+        messages are also printed in the terminal the editor was started from."""
         self._log_file = open(self.root / CRASH_LOG, "a", encoding="utf-8")
         faulthandler.enable(file=self._log_file, all_threads=True)
 
@@ -61,6 +62,11 @@ class Safety:
         if self._log_file is not None:
             self._log_file.write(f"--- {dt.datetime.now():%Y-%m-%d %H:%M:%S} (process {os.getpid()})\n{text}\n")
             self._log_file.flush()
+        if sys.stderr is not None:  # (None: started without a terminal, from a shortcut)
+            try:
+                print(text, file=sys.stderr, flush=True)
+            except OSError:  # the terminal was closed since: crash.log has it, and the box still appears
+                pass
 
     # --- this editor is running -----------------------------------------------------
 

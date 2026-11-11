@@ -168,7 +168,20 @@ class NewFlowButton(QToolButton):
         painter.fillRect(x + (side - stroke) // 2, y, stroke, side, colour)
 
 
-class FlowTabBar(QTabBar):
+class MarkedTabBar(QTabBar):
+    """A tab bar whose current tab has a strip in the accent colour along its bottom edge. The strip is painted over
+    the tabs as Qt draws them, so their sizes and colours stay Qt's (a style sheet would change both)."""
+
+    STRIP = 3  # pixels high
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        strip = self.tabRect(self.currentIndex())  # (no tabs: an empty rect, nothing is painted)
+        strip.setTop(strip.bottom() - self.STRIP + 1)
+        QPainter(self).fillRect(strip, self.palette().color(QPalette.Accent))
+
+
+class FlowTabBar(MarkedTabBar):
     """The open flows' tabs, in `tabs`, with a + button just right of the last one (a new flow), as tall as the tabs'
     row. Room is kept for the + right of the tabs' row: it sits there when the tabs do not all fit (they scroll), so
     never over a tab."""
@@ -417,6 +430,7 @@ class MainWindow(QMainWindow):
         self.parameters = ParametersPanel(self.home)
         self.flow_settings = FlowSettingsPanel(self.home)
         self.right_tabs = QTabWidget()
+        self.right_tabs.setTabBar(MarkedTabBar())
         self.right_tabs.addTab(self.properties, "Properties")
         self.right_tabs.addTab(self.parameters, "Parameters")
         self.right_tabs.addTab(self.flow_settings, "Flow")
@@ -431,6 +445,7 @@ class MainWindow(QMainWindow):
         self.preview = PreviewPanel(toggles)
         self.history_panel = HistoryPanel(toggles)
         self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setTabBar(MarkedTabBar())
         self.bottom_tabs.addTab(self.log, "Log")
         self.bottom_tabs.addTab(self.preview, "Data preview")
         self.bottom_tabs.addTab(self.history_panel, "Run history")
