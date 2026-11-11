@@ -1550,8 +1550,8 @@ def test_data_preview_of_a_run_whose_files_were_cleaned_up_says_so(win, qtbot, t
 
     _select(tab, "q")
 
-    assert win.preview.label.text().startswith("Cannot preview:")
-    assert "keep_runs_for" in win.preview.label.text()
+    assert win.preview.label.text() == "Cannot preview"  # the reason is in the box below, never in the label
+    assert not win.preview.text.isHidden() and "keep_runs_for" in win.preview.text.toPlainText()
 
 
 def test_data_preview_shows_a_timestamp_with_a_time_zone(win, qtbot, tmp_path):
