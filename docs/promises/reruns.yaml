@@ -1,0 +1,54 @@
+# What must always be true of running a block again, as agreed with the maintainer in chat on 2026-11-11.
+# Each row is checked by the tests marked @pytest.mark.invariant("RR-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+# The examples use one flow, load_orders -> clean -> report -> send. Run #5 is a full run. "Re-run alone" means
+# right-click, Run only this block, with the same inputs.
+feature: A re-run is seen by the blocks after it
+agreed: 2026-11-11
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    # About a block that would not run although the block before it, re-run alone, had succeeded.
+    words: "probably happens in other places"
+  - date: 2026-11-11
+    # Asked whether a failed result that is old turns grey like the others or stays red (RR-7).
+    words: "gray, keeps its x"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_rerun_carries_on]
+rows:
+  RR-1: >-
+    A block that failed, then succeeded when re-run alone, is seen. Run #5: load_orders fails. You fix the query and
+    re-run it alone (run #6, 12 rows). Re-run clean alone: it runs with those 12 rows, instead of being refused with
+    "clean would not run: load_orders, before it, failed".
+  RR-2: >-
+    Never the old output without a word. Run #5: all succeed, load_orders gave 10 rows. You change the query and
+    re-run it alone (#6, 12 rows). Re-run clean alone: it gets the 12 rows, not the 10.
+  RR-3: >-
+    Every re-run carries on from the newest one, on any branch. clean and prices both feed report. Re-run clean alone
+    (#6), then prices alone (#7), then report alone: report gets both new results.
+  RR-4: >-
+    All four menu entries use that same run and name it. After #6, clean's menu reads "Run only this block, with the
+    same inputs (run #6 · 2026-11-11 09:14:02)", and the same for Run from this block on. "…with inputs I choose"
+    opens filled in with the 12 rows of run #6.
+  RR-5: >-
+    What a re-run keeps from before also comes from the newest run: a Loop's items that already succeeded, a Merger's
+    lines, a Session's login cookies. A Loop over 5 files; in run #5 file 3 failed. Re-run the Loop alone (#6 runs
+    only file 3, the other four are kept). The block after the Loop, re-run alone, gets all five results.
+  RR-6: >-
+    A re-run that failed again is reported as it is now. load_orders, re-run alone, fails again (#6). Re-running
+    clean says "clean would not run: load_orders, before it, failed", which is then true.
+  RR-7: >-
+    A result made before an earlier block ran again is marked old. After #6, clean, report and send show "old · "
+    before their result on the canvas, in grey with a grey border; a failed result is marked the same way and keeps
+    its ✕. Hovering says "Old: made before load_orders ran again (run #6). Right-click → Run only this block to bring
+    it up to date." Data preview's label says "clean.result (old): 10 rows × 3 columns". After clean is re-run alone
+    (#7), clean is no longer old; report and send still are.
+  RR-8: >-
+    An old block in between is never passed over silently. After #6, re-run report alone without re-running clean:
+    refused with "clean still holds what it made from older data: retry clean first". Run from this block on, chosen
+    on clean, does clean, report and send in order.
+  RR-9: >-
+    A run you opened from Run history is used as it is. Double-click run #5 there: the canvas shows run #5, the menu
+    names run #5, and a re-run takes run #5 itself, not #6.
+  RR-10: >-
+    A full run starts afresh. After Run now (#8) every block shows run #8, nothing is old, and re-runs take #8.

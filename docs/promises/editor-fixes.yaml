@@ -1,0 +1,39 @@
+# What must always be true of Data preview with a long error, the current tab's mark and errors the editor does not
+# catch, as agreed with the maintainer in chat on 2026-11-11.
+# Each row is checked by the tests marked @pytest.mark.invariant("DP-<n>"), ("TAB-<n>") or ("ERR-<n>"); the proof's
+# ledger is built from their results. Changing a row's words needs the maintainer's approval first.
+feature: Data preview, the current tab and errors in the terminal
+agreed: 2026-11-11
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    # About marking the current tab.
+    words: "do what the entire industry does"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_preview_long_error, test_proof_current_tab]
+rows:
+  DP-1: >-
+    Opening Data preview on a failed block never changes the window's size, and the blocks stay where they were, in
+    this flow's tab and every other: with an error of 3,000 characters on one line, and with an error of 80 lines.
+  DP-2: >-
+    The label is short and the whole error is in the scrolling box below it. The label reads "load_orders: failed, no
+    output". The box holds every character, as written, to select and copy.
+  DP-3: >-
+    The same for a preview that cannot be read. The label reads "Cannot preview", and the reason (for example the
+    run's files were cleaned up) is in the box.
+  TAB-1: >-
+    The current tab of each of the three bars has a 3-pixel strip in the accent colour along its bottom edge: the flow
+    tabs, Properties / Parameters / Flow, and Log / Data preview / Run history, in the light and the dark theme.
+  TAB-2: >-
+    The strip follows the current tab. Click another tab, close the current one, drag it elsewhere, open a flow: after
+    each, exactly one tab per bar has the strip, the current one.
+  TAB-3: >-
+    Nothing else about the tabs changes. Their sizes are the same to the pixel, a failed flow's tab stays red, the +
+    and close buttons stay in place.
+  ERR-1: >-
+    An error the editor does not catch is printed in the terminal the editor was started from, with the same text as
+    crash.log, and the box still appears: "uncaught error:" followed by the traceback ending in "ValueError: …".
+  ERR-2: >-
+    The same for an error in a background thread and for Qt's own critical messages ("Qt: …").
+  ERR-3: >-
+    Started without a terminal (a shortcut), nothing breaks: crash.log has it.

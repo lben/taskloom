@@ -1,0 +1,29 @@
+# What must always be true of a table's look in an HTML Template, as agreed with the maintainer in chat on 2026-11-11.
+# Each row is checked by the tests marked @pytest.mark.invariant("STY-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+# Checked in the email's HTML (the style on each cell), not in Outlook itself.
+feature: A template's own styles win, and {name:html}
+agreed: 2026-11-11
+# The maintainer's own words that led to these rows, with the date they were said.
+asked: []
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_table_styles]
+rows:
+  STY-1: >-
+    A rule in the template's own <style> wins over the table's built-in look, property by property, without
+    !important. With <style>td {padding: 15px; border: 1px solid black; font-size: 15px}</style> and then {my_table},
+    every cell in the email has 15px padding, a 1px black border and 15px text.
+  STY-2: >-
+    What you do not set keeps the built-in look. In that example the header stays dark with white text, the rows stay
+    striped, numbers stay right-aligned.
+  STY-3: >-
+    With no <style> of your own, the table is as it is today.
+  STY-4: >-
+    {name:html} puts text in as HTML, as it is. A Python block returns df.style.apply(colour, axis=1).to_html():
+    {styled:html} shows the coloured table; {styled} shows the tags as text.
+  STY-5: >-
+    The <style> block inside that HTML is applied (pandas writes one) and moved into each cell's style="" for Outlook,
+    like your own.
+  STY-6: >-
+    {name:html} on something that is not text stops the run with "Template: {my_table:html}: html applies only to
+    text". That covers a table, a number, a list and a picture. HTML from another template is passed as it is.
