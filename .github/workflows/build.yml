@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tests:
+        description: "Only these tests, on Windows and Linux, and nothing else (pytest arguments, for example
+          tests/test_scheduler.py -k overlap). Empty: the whole run."
+        default: ""
 
 env:
   QT_QPA_PLATFORM: offscreen
@@ -32,6 +37,7 @@ jobs:
       - run: uv run pytest -q --ignore=tests/proofs  # the proofs run in the proof jobs
         env:  # which agreed row or charter rule each test checks, and how every test ended: for the proof's ledger
           TASKLOOM_LEDGER: ${{ github.workspace }}/results-${{ runner.os }}.json
+          PYTEST_ADDOPTS: ${{ inputs.tests }}  # (run by hand with tests: only those; pytest splits them on both OSes)
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}  # also when a test failed: the ledger shows which row it breaks
         with: {name: "test-results-${{ runner.os }}", path: "results-${{ runner.os }}.json"}
@@ -50,6 +56,7 @@ jobs:
             only: '--only "TLA+ model check"'
           - group: trace-leak-design
             only: '--only "TLA+ trace validation" --only "Leak check" --only "Design health"'
+    if: ${{ !inputs.tests }}  # (run by hand with tests: only those tests run)
     runs-on: ubuntu-latest
     timeout-minutes: 330  # (packaging/checkers.py stops a checker after 5 hours, so its log is kept)
     steps:
@@ -86,6 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         part: [1, 2, 3]
+    if: ${{ !inputs.tests }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -117,7 +125,7 @@ jobs:
   # parts scored as one run, then every job's results merged (packaging/checkers.py --merge).
   evidence:
     needs: [checkers, mutation]
-    if: ${{ !cancelled() }}  # also when a checker failed or ran out of time: the proof shows which
+    if: ${{ !cancelled() && !inputs.tests }}  # also when a checker failed or ran out of time: the proof shows which
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -143,6 +151,7 @@ jobs:
 
   # The proofs Windows cannot show (marked linux_proof, each saying why), on Linux: the proof job puts them in its PDF.
   proof-linux:
+    if: ${{ !inputs.tests }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -164,7 +173,7 @@ jobs:
   # Windows cannot show), as one PDF of screenshots and checks.
   proof:
     needs: [proof-linux, test, evidence]
-    if: ${{ !cancelled() }}  # also when a Linux proof, a test or a checker failed: the PDF shows what failed
+    if: ${{ !cancelled() && !inputs.tests }}  # also when a Linux proof, a test or a checker failed: the PDF shows what failed
     runs-on: windows-latest
     timeout-minutes: 45  # the proofs alone take about 28 minutes on Windows
     env:
@@ -224,6 +233,7 @@ jobs:
 
   windows:
     needs: test
+    if: ${{ !inputs.tests }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -242,6 +252,7 @@ jobs:
 
   linux-runner:
     needs: test
+    if: ${{ !inputs.tests }}
     runs-on: ubuntu-latest
     # Built against glibc 2.28, so it runs on any Linux with glibc 2.28 or newer.
     container: almalinux:8
