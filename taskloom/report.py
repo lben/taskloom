@@ -57,28 +57,37 @@ def _cell(value) -> tuple[str, str]:
 
 
 def html_table(df: pl.DataFrame, max_rows: int = 500, total_rows: int | None = None) -> str:
-    """An inline-styled HTML table (header row, striped rows, numbers right-aligned)."""
-    border = f"border:1px solid {LINE};"
-    head = "".join(
-        f'<th align="left" bgcolor="{HEADER_BG}" style="{border}padding:6px 10px;background:{HEADER_BG};'
-        f'color:#ffffff;font-weight:bold;text-align:left;white-space:nowrap;">{html.escape(c)}</th>'
-        for c in df.columns)
+    """An HTML table (header row, striped rows, numbers right-aligned). Its look is TABLE_CSS, which email_document
+    moves into its style attributes."""
+    head = "".join(f'<th align="left" bgcolor="{HEADER_BG}">{html.escape(c)}</th>' for c in df.columns)
     rows = []
     for i, row in enumerate(df.head(max_rows).iter_rows()):
         bg = STRIPE if i % 2 else "#ffffff"
         cells = []
         for value in row:
             text, align = _cell(value)
-            cells.append(f'<td align="{align}" style="{border}padding:5px 10px;text-align:{align};">{html.escape(text)}</td>')
-        rows.append(f'<tr bgcolor="{bg}" style="background:{bg};">{"".join(cells)}</tr>')
+            cells.append(f'<td align="{align}">{html.escape(text)}</td>')
+        rows.append(f'<tr bgcolor="{bg}">{"".join(cells)}</tr>')
     total = df.height if total_rows is None else total_rows
     note = ""
     if total > min(max_rows, df.height):
         note = (f'<p style="font-family:{FONT};font-size:12px;color:{MUTED};margin:6px 0 0;">'
                 f"Showing {min(max_rows, df.height):,} of {total:,} rows.</p>")
-    return (f'<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;'
-            f'font-family:{FONT};font-size:13px;color:{INK};"><tr>{head}</tr>{"".join(rows)}</table>{note}')
+    return (f'<table cellpadding="0" cellspacing="0" border="0" data-taskloom-table><tr>{head}</tr>'
+            f'{"".join(rows)}</table>{note}')
 
+
+# The built-in look of the tables html_table writes; a cell's alignment and a row's stripe follow the attributes it
+# gives them. email_document applies it last, when the body's own rules are in the style attributes already, so a
+# rule of the body's own wins over it, property by property.
+TABLE_CSS = (
+    f"[data-taskloom-table]{{border-collapse:collapse;font-family:{FONT};font-size:13px;color:{INK}}}"
+    f"[data-taskloom-table] th{{border:1px solid {LINE};padding:6px 10px;background:{HEADER_BG};color:#ffffff;"
+    "font-weight:bold;text-align:left;white-space:nowrap}"
+    f"[data-taskloom-table] td{{border:1px solid {LINE};padding:5px 10px;text-align:left}}"
+    "[data-taskloom-table] td[align=right]{text-align:right}"
+    f'[data-taskloom-table] tr[bgcolor="#ffffff"]{{background:#ffffff}}'
+    f'[data-taskloom-table] tr[bgcolor="{STRIPE}"]{{background:{STRIPE}}}')
 
 # The look of what a template writes, in Outlook too: table cells get the font as well, because Outlook resets fonts in
 # nested tables. It comes first, so the body's own <style> rules and style attributes win.
@@ -88,16 +97,19 @@ BASE_CSS = (f"p{{margin:0 0 10px}}p,h2,li,td,th{{font-family:{FONT}}}"
 
 
 def email_document(body: str) -> str:
-    """Wrap body HTML in a table-based layout and move all CSS into style attributes."""
+    """Wrap body HTML in a table-based layout and move all CSS into style attributes: the body's own rules, then the
+    built-in look of tables where those rules left it."""
     if "<html" not in body.lower():
+        own = 'data-css-inline="ignore"'  # the layout is the email's own: css_inline gives such an element no rule
         body = (
             '<!DOCTYPE html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><style>{BASE_CSS}</style></head>'
             f'<body style="margin:0;padding:0;background:#ffffff;">'
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff">'
-            f'<tr><td align="left" style="padding:16px;font-family:{FONT};font-size:14px;line-height:1.45;color:{INK};">'
-            f"{body}</td></tr></table></body></html>")
-    return css_inline.inline(body, keep_style_tags=False, load_remote_stylesheets=False)
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" '
+            f'{own}><tbody {own}><tr {own}><td align="left" style="padding:16px;font-family:{FONT};font-size:14px;'
+            f'line-height:1.45;color:{INK};" {own}>{body}</td></tr></tbody></table></body></html>')
+    options = {"keep_style_tags": False, "load_remote_stylesheets": False}
+    return css_inline.inline(css_inline.inline(body, **options), extra_css=TABLE_CSS, **options)
 
 
 def image_tag(cid: str, path: Path, width: int | None = None) -> str:

@@ -108,10 +108,16 @@ def _text(text: str) -> Html:
 
 
 def _placed(value, name: str, spec: str, max_rows: int) -> Html:
-    """A value where a template says {name:spec} (spec empty: {name})."""
+    """A value where a template says {name:spec} (spec empty: {name}; spec html: text as the HTML it holds)."""
     if not spec or value is None:
         return _shown(value, max_rows)
     where = f"Template: {{{name}:{spec}}}"
+    if spec == "html":
+        if isinstance(value, Html):
+            return value
+        if not isinstance(value, str) or _is_picture(value):
+            raise ValueError(f"{where}: html applies only to text")
+        return Html(value)
     if isinstance(value, (Html, Table, pl.DataFrame, list, tuple)) or isinstance(value, str) and _is_picture(value):
         raise ValueError(f"{where}: a format applies only to text, numbers and dates")
     try:
@@ -145,8 +151,9 @@ class HtmlTemplate(Block):
             "it gets that name again."), examples=["chart", "my_table", "input1"]),
         "template": fields.Code("html", default="", help=(
             "The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
-            "date, e.g. {total:,.2f} or {day:%d %B %Y}; write {{ and }} for literal braces. Enter makes no new "
-            "line in the email: use <br> (New line). Empty: every input in turn."),
+            "date, e.g. {total:,.2f} or {day:%d %B %Y}; {name:html} puts text in as HTML, as it is; write {{ and }} "
+            "for literal braces. Enter makes no new line in the email: use <br> (New line). Empty: every input in "
+            "turn."),
                                 examples=["<b>Daily sales</b><br>Good morning, the figures are below.",
                                           "Hi team, please see below the chart<br>{chart}<br>thank you",
                                           "<h2>Sales</h2>{chart}"]),

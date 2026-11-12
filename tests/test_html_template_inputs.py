@@ -37,8 +37,9 @@ MAIL = {"type": "email.send", "config": {"connection": "mailer", "to": ["team@ex
 
 # Wording the spec gives (A4, B10, C11).
 TEMPLATE_HELP = ("The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
-                 "date, e.g. {total:,.2f} or {day:%d %B %Y}; write {{ and }} for literal braces. Enter makes no new "
-                 "line in the email: use <br> (New line). Empty: every input in turn.")
+                 "date, e.g. {total:,.2f} or {day:%d %B %Y}; {name:html} puts text in as HTML, as it is; write {{ and }} "
+                 "for literal braces. Enter makes no new line in the email: use <br> (New line). Empty: every input in "
+                 "turn.")
 HINT = ("Nothing is connected yet. Connect blocks (tables, charts, text…) to this block's data input; each one is "
         "listed here with a name, at first its block's name.")
 ROWS_NOTE = ("Write {name} in the Template where an input should go; flow parameters work the same way. An empty "

@@ -191,7 +191,8 @@ taskloom editor examples/daily-sales-report.yaml
   gives the full path of each table it produced, to copy; what a database driver or library
   prints shows as plain `OUTPUT`), **Data preview** shows
   everything the selected block produced (tables as a grid, other values as text; a table
-  inside a dict or list also on its own, by where it is, e.g. `output.combined`), and
+  inside a dict or list also on its own, by where it is, e.g. `output.combined`; for a block
+  that failed, its whole error, in a box that scrolls, to select and copy), and
   **Run history** lists every run of the flow as its own row, newest first, whoever started
   it (Run now, the scheduler service, a terminal): a run started while the flow is open
   comes in as it goes, also while an older run is shown or one of yours is going. The run you
@@ -354,7 +355,9 @@ taskloom editor examples/daily-sales-report.yaml
   none is left); built-in blocks cannot be deleted.
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
   the flows you had open come back with them after a crash or a restart. If the editor
-  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. The
+  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. An
+  error the editor does not catch is shown in a box, written to `crash.log` and, when you
+  started the editor from a terminal, printed in that terminal too. The
   list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
@@ -990,7 +993,11 @@ chart and an email body with the chart and the table, and emails them. Emails ar
 for desktop Outlook: table layout, CSS moved into `style=""` attributes, charts as inline images with
 explicit sizes (never `data:` URIs or SVG), plus a plain-text version (one line per
 list item). Headings, paragraphs, lists and table cells get their font and spacing inline;
-a style you write yourself wins.
+a style you write yourself wins, over a table's built-in look too, property by property and
+without `!important`: with `<style>td {{padding: 15px; border: 1px solid black}}</style>` in
+the Template, every cell of `{my_table}` gets that padding and border and keeps the rest (the
+dark header, the striped rows, numbers to the right). Your rules style what you show, not the
+email's own frame: that `td` rule puts no border around the whole body.
 
 - **Chart**: `x_label` and `y_label` name its axes, e.g. column `store_id` shown as `Store ID`
   (empty: the column names; a pie chart has no axes).
@@ -1004,8 +1011,12 @@ a style you write yourself wins.
   Each value is shown by its type: a table as an Outlook-safe table (at most **Max table
   rows**, 500 by default), a chart's picture inline, HTML from another template as it is, a
   list item by item, nothing for an empty value, and anything else as its text, escaped,
-  where you put it. Enter makes no new line in the email: write `<br>`, and put a table or
-  a chart between `<br>`s rather than inside a `<p>`. An empty Template shows every input in
+  where you put it. `{name:html}` puts text in as HTML instead, as it is, with the `<style>`
+  block inside it applied, e.g. what `df.style.apply(colour, axis=1).to_html()` gives in
+  Python Code; html applies only to text (and passes HTML from another template as it is):
+  on a table, a number, a date, a list or a picture it stops the run. Enter makes no new line
+  in the email: write `<br>`, and put a table or a chart between `<br>`s rather than inside
+  a `<p>`. An empty Template shows every input in
   turn. A comment, `<!-- ... -->`, is a note for you: it is left out of the email, and a
   `{name}` in it shows nothing; Outlook's conditional comments (`<!--[if mso]> ...
   <![endif]-->`) and `<style>` elements are kept as written. A name the Template does not
