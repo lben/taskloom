@@ -374,12 +374,6 @@ class FlowTab(QWidget):
         """The run the result a block shows comes from (None: it shows none)."""
         return (self.block_info.get(block) or {}).get("run_id")
 
-    def inputs_run(self, block: str) -> int | None:
-        """The run whose inputs "with the same inputs" gives a block: the run of the result it shows; showing none
-        (e.g. a block added since), the latest run among the results the blocks connected into it show."""
-        return self.result_run(block) or max(
-            filter(None, (self.result_run(src) for src, _, dst, _ in self.doc.edges() if dst == block)), default=None)
-
     def list_status(self) -> tuple[str | None, str]:
         if self.running:
             done = sum(1 for b in self.run_blocks if (self.block_info.get(b) or {}).get("status") not in (None, "running"))
@@ -918,7 +912,7 @@ class MainWindow(QMainWindow):
             self.right_tabs.setCurrentWidget(self.properties)
         self.log.set_filter(block_id)
         if block_id is not None:
-            self.preview.show_outputs(block_id, tab.block_info.get(block_id))
+            self.preview.show_outputs(block_id, tab.block_info.get(block_id), block_id in tab.scene.old)
 
     # --- copy and paste -------------------------------------------------------------
 
@@ -1122,6 +1116,27 @@ class MainWindow(QMainWindow):
         finally:
             history.close()
 
+    def inputs_run(self, tab: FlowTab, block_id: str) -> int | None:
+        """The run whose inputs "with the same inputs" gives a block, and "with inputs I choose…" is filled in with:
+        the newest run that carries on from the run of the result it shows, directly or through other re-runs (so
+        what a block before it made when it ran again is seen), whose files still exist; none: that run itself.
+        Showing no result (e.g. a block added since), or with none of those runs' files left, the same from the
+        latest run among the results the blocks connected into it show. While the canvas shows a run you opened from
+        Run history, that run as it is."""
+        into = max(filter(None, (tab.result_run(src) for src, _, dst, _ in tab.doc.edges() if dst == block_id)),
+                   default=None)
+        runs = [run_id for run_id in (tab.result_run(block_id), into) if run_id]
+        if runs and tab.following_latest:
+            history = self._history()
+            try:
+                for run_id in runs:
+                    for newest in (*history.carried_on(run_id), run_id):
+                        if (self.home.runs_dir / str(newest)).is_dir():
+                            return newest
+            finally:
+                history.close()
+        return runs[0] if runs else None  # (its files cleaned up: running with it says so)
+
     def _canvas_menu_for(self, tab: FlowTab, at) -> QMenu:
         menu = QMenu(self)
         menu.addAction("Add text here", lambda: self.add_text(tab, at))
@@ -1173,7 +1188,7 @@ class MainWindow(QMainWindow):
                 entry.setEnabled(False)
                 entry.setToolTip(why)
         else:
-            run_id = tab.inputs_run(block_id)
+            run_id = self.inputs_run(tab, block_id)
             shown = f" ({self._run_label(run_id)})" if run_id else ""
             rerun = menu.addAction(f"Run only this block, with the same inputs{shown}")
             rerun.setEnabled(run_id is not None and not tab.running)
@@ -1325,9 +1340,10 @@ class MainWindow(QMainWindow):
             self.show_history_run(dialog.run_id, tab)
 
     def rerun_block(self, tab: FlowTab, block_id: str, on: bool = False):
-        """Run one block again (`on`: and every block after it), with the inputs it got in the run of the result
-        it shows (e.g. after fixing it; showing none: see FlowTab.inputs_run); the blocks before it do not run."""
-        run_id = tab.inputs_run(block_id)
+        """Run one block again (`on`: and every block after it), with the inputs it got in the newest run that
+        carries on from the one its result comes from (e.g. after fixing it, or a block before it; see inputs_run);
+        the blocks before it do not run."""
+        run_id = self.inputs_run(tab, block_id)
         if run_id is None:
             QMessageBox.information(self, "Run the flow first", "Neither this block nor the blocks connected into it "
                                     "show a result to take the inputs from.")
@@ -1342,8 +1358,7 @@ class MainWindow(QMainWindow):
 
     def run_block_with_inputs(self, tab: FlowTab, block_id: str, on: bool = False):
         """Run one block (`on`: and the blocks after it) with input values you type for it (filled in with
-        what reached it in the run of the result it shows; showing none, in the latest run among the results
-        the blocks connected into it show)."""
+        what reached it in the newest run that carries on from the one its result comes from: see inputs_run)."""
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
@@ -1352,7 +1367,7 @@ class MainWindow(QMainWindow):
             return
         names = [name for name in input_ports(flow, self.registry, block_id)  # (a Loop's result: from inside it)
                  if name != AFTER and not (name == RESULT and flow.blocks[block_id].type == LOOP)]
-        run_id = tab.inputs_run(block_id)
+        run_id = self.inputs_run(tab, block_id)
         values, missing, typed = {}, {}, {}
         if run_id is not None:
             try:
@@ -1438,6 +1453,7 @@ class MainWindow(QMainWindow):
                 return
             self._end_waits(tab, [block])
             self._apply_block_result(tab, block, {**e, "finished": e["ts"]})
+            self._mark_old(tab)
             if e.get("tables") and not e.get("item"):  # (inside a Loop: once, over its items, as the history has it)
                 self._log(tab, _block_line(block, e["ts"], e))
         elif kind == "progress":  # a Loop's items, a Merger's lines (set to each line as it finishes)
@@ -1454,7 +1470,35 @@ class MainWindow(QMainWindow):
                                  "run_id": info.get("run_id")}
         tab.scene.show_result(block, info)
         if tab is self.current and block in tab.scene.selected_block_ids():
-            self.preview.show_outputs(block, tab.block_info[block])
+            self.preview.show_outputs(block, tab.block_info[block], block in tab.scene.old)
+
+    def _mark_old(self, tab: FlowTab):
+        """Mark as old each result on the canvas made before a block before it ran again: a block before it, at any
+        distance along the connections, shows a result of a newer run (of several, the first in the flow to show
+        the newest run is named). Done whenever the results on the canvas change. None is old after a full run, nor
+        while a run opened from Run history is shown: every result is that run's."""
+        shown = {block: info["run_id"] for block, info in tab.block_info.items()
+                 if info.get("run_id") and info.get("status") not in (None, "running")}
+        after: dict[str, list[str]] = {}
+        for src, _, dst, _ in tab.doc.edges():
+            after.setdefault(src, []).append(dst)
+        # From each block that shows a result, the newest run first (of one run: in the flow's order), to the blocks
+        # after it that none of those before reached: every connection is followed once.
+        newest: dict[str, str] = {}  # block -> the block before it that shows the newest run
+        for block in sorted((b for b in tab.doc.blocks if b in shown), key=lambda b: -shown[b]):
+            todo = [block]
+            while todo:
+                for dst in after.get(todo.pop(), ()):
+                    if dst not in newest:
+                        newest[dst] = block
+                        todo.append(dst)
+        old = {block: (by, shown[by]) for block, by in newest.items() if block in shown and shown[by] > shown[block]}
+        was = tab.scene.old
+        tab.scene.set_old(old)
+        if tab is self.current:
+            for block in tab.scene.selected_block_ids():
+                if (block in old) != (block in was):  # Data preview's label says it too
+                    self.preview.show_outputs(block, tab.block_info.get(block), block in old)
 
     def _ask(self, run: RunProcess, e: dict):
         dialog = AskDialog(e.get("block", ""), e.get("prompt", ""), e.get("kind", "text"),
@@ -1484,6 +1528,7 @@ class MainWindow(QMainWindow):
                 if info.get("status") == "running":  # the process died mid-block
                     self._apply_block_result(tab, block, {"status": "failed", "run_id": info["run_id"],
                                                           "error": "the run process stopped unexpectedly"})
+            self._mark_old(tab)
         self._load_last_run(tab)
         if tab is self.current:
             self._refresh_history(tab)
@@ -1874,6 +1919,7 @@ class MainWindow(QMainWindow):
         tab.scene.clear_statuses()
         for block, info in results.items():
             self._apply_block_result(tab, block, info)
+        self._mark_old(tab)
 
     def _show_log(self, tab: FlowTab, run_id: int, keep_log=False):
         """A past run's messages in the Log (after the earlier runs' messages with keep_log, else on their own)."""

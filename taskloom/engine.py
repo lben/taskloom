@@ -352,7 +352,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
 
     history = History(home.history_db)
     run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps, flow.version,
-                               scheduled, claim)
+                               scheduled, claim, inputs_from)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
     # Lines run at the same time tell their events one at a time, each whole and in the order they happen.

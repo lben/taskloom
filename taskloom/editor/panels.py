@@ -2575,12 +2575,13 @@ class PreviewPanel(QWidget):
         layout.addWidget(self.text_find_bar)
         self.tables: dict[str, str] = {}
         self.previews: dict[str, str] = {}
-        self.block_id = None
+        self.block_id, self.old_note = None, ""  # the block shown; " (old)" for the label (see show_outputs)
         self.ports.currentTextChanged.connect(self._load)
 
-    def show_outputs(self, block_id, info: dict | None):
+    def show_outputs(self, block_id, info: dict | None, old: bool = False):
+        """`old`: the result was made before a block before it ran again; the label says so after its name."""
         info = info or {}
-        self.block_id = block_id
+        self.block_id, self.old_note = block_id, " (old)" if old else ""
         self.tables, self.previews = info.get("tables") or {}, info.get("previews") or {}
         names = list(self.tables) + [p for p in self.previews if p not in self.tables]
         self.ports.blockSignals(True)
@@ -2592,7 +2593,8 @@ class PreviewPanel(QWidget):
             self.view.setModel(None)
             self.find_bar.refresh()
             status = info.get("status")
-            self.label.setText(self.HINT if not block_id or not status else f"{block_id}: {status}, no output")
+            self.label.setText(self.HINT if not block_id or not status
+                               else f"{block_id}: {status}, no output{self.old_note}")
             if info.get("error"):
                 self._show_text(info["error"])
             else:
@@ -2606,7 +2608,7 @@ class PreviewPanel(QWidget):
             return
         if port not in self.tables:
             self._show_text(self.previews[port])
-            self.label.setText(f"{self.block_id}.{port}:")
+            self.label.setText(f"{self.block_id}.{port}{self.old_note}:")
             return
         try:
             lazy = pl.scan_parquet(self.tables[port])
@@ -2620,7 +2622,7 @@ class PreviewPanel(QWidget):
         self.view.show()
         self.view.setModel(FrameModel(df))
         self.find_bar.refresh()
-        self.label.setText(f"{self.block_id}.{port}: {total:,} rows × {df.width} columns"
+        self.label.setText(f"{self.block_id}.{port}{self.old_note}: {total:,} rows × {df.width} columns"
                            + (f" (showing first {self.PREVIEW_ROWS})" if total > self.PREVIEW_ROWS else ""))
 
     def _show_text(self, text: str):
