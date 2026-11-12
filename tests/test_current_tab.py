@@ -232,8 +232,11 @@ def red_pixels(bar: QTabBar, index: int) -> int:
     settle()
     option = QStyleOptionTab()
     bar.initStyleOption(option, index)
-    text = bar.style().subElementRect(QStyle.SE_TabBarTabText, option, bar)
-    image = bar.grab(text.adjusted(bar.iconSize().width(), 0, 0, 0)).toImage()
+    text = bar.style().subElementRect(QStyle.SE_TabBarTabText, option, bar).adjusted(bar.iconSize().width(), 0, 0, 0)
+    close = bar.tabButton(index, QTabBar.RightSide)  # the current tab's is red: with a wide font the text reaches it
+    if close is not None and close.geometry().intersects(text):
+        text.setRight(close.geometry().left() - 1)
+    image = bar.grab(text).toImage()
     colours = [image.pixelColor(x, y) for y in range(image.height()) for x in range(image.width())]
     return sum(1 for c in colours if c.red() - max(c.green(), c.blue()) >= 50)
 
