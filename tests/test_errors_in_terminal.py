@@ -64,19 +64,28 @@ THREAD_ERROR = ("uncaught error in thread load_orders:", "RuntimeError: a bug in
 QT_MESSAGE = "Qt: a critical message from Qt"
 
 
-def start_editor(folder, mode: str) -> SimpleNamespace:
+def start_editor(folder, mode: str, terminal_closed: bool = False) -> SimpleNamespace:
     """Starts the editor above with ("terminal") or without ("no terminal") a terminal and waits until it has quit.
     Gives what it printed (stdout, stderr), its exit code, its crash.log and the boxes it showed (None if it never
-    got as far as telling)."""
+    got as far as telling). With `terminal_closed`, what it prints as errors goes into a pipe whose reading end is
+    closed, as into a terminal closed since the editor started: printing there fails, and nothing arrives."""
     script, results, home = folder / "editor.py", folder / "results.json", folder / "home"
     script.write_text(EDITOR, encoding="utf-8")
     env = {**os.environ, "TASKLOOM_HOME": str(home), "QT_QPA_PLATFORM": "offscreen",
            "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
-    proc = subprocess.run([sys.executable, str(script), str(results), mode], env=env, capture_output=True, text=True,
-                          timeout=180)
+    errors = subprocess.PIPE
+    if terminal_closed:
+        reading, errors = os.pipe()
+        os.close(reading)
+    try:
+        proc = subprocess.run([sys.executable, str(script), str(results), mode], env=env, stdout=subprocess.PIPE,
+                              stderr=errors, text=True, timeout=180)
+    finally:
+        if terminal_closed:
+            os.close(errors)
     log = home / "crash.log"
     return SimpleNamespace(
-        stdout=proc.stdout, stderr=proc.stderr, code=proc.returncode,
+        stdout=proc.stdout, stderr=proc.stderr or "", code=proc.returncode,
         log=log.read_text(encoding="utf-8") if log.exists() else "",
         boxes=json.loads(results.read_text(encoding="utf-8"))["boxes"] if results.exists() else None)
 
@@ -89,6 +98,11 @@ def in_terminal(tmp_path_factory):
 @pytest.fixture(scope="module")
 def no_terminal(tmp_path_factory):
     return start_editor(tmp_path_factory.mktemp("shortcut"), "no terminal")
+
+
+@pytest.fixture(scope="module")
+def terminal_closed(tmp_path_factory):
+    return start_editor(tmp_path_factory.mktemp("closed"), "terminal", terminal_closed=True)
 
 
 def logged(log: str, heading: str, last_line: str) -> str:
@@ -149,3 +163,16 @@ def test_started_without_a_terminal_nothing_breaks_crash_log_has_each_error_and_
     assert "in broken_slot" in logged(no_terminal.log, *SLOT_ERROR)
     assert "in broken_thread" in logged(no_terminal.log, *THREAD_ERROR)
     assert QT_MESSAGE + "\n" in no_terminal.log, no_terminal.log
+
+
+# --- ERR-1, ERR-3: the terminal was closed after the editor started ---------------------------------------------------
+
+@pytest.mark.invariant("ERR-1")
+@pytest.mark.invariant("ERR-3")
+def test_with_the_terminal_closed_since_crash_log_has_the_error_the_box_still_appears_and_the_editor_keeps_running(
+        terminal_closed):
+    assert "in broken_slot" in logged(terminal_closed.log, *SLOT_ERROR)
+    assert boxes_with(terminal_closed, SLOT_ERROR[1]) == ["Something went wrong"], terminal_closed.boxes
+    # It kept running: the error after it (in a background thread) is in crash.log and in a box too.
+    assert "in broken_thread" in logged(terminal_closed.log, *THREAD_ERROR)
+    assert boxes_with(terminal_closed, THREAD_ERROR[1]) == ["Something went wrong"], terminal_closed.boxes
