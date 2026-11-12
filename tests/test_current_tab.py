@@ -6,6 +6,8 @@ Driven through the real editor window (the `win` fixture). The strip is read fro
 pixel. "Nothing else changes" is measured against Qt's own tabs: a plain QTabWidget in Qt's own style, with the same
 tabs, icons and settings, beside the editor's."""
 
+from collections import Counter
+
 import pytest
 import yaml
 from PySide6.QtCore import QPoint, QRect, Qt
@@ -225,40 +227,22 @@ def test_the_plus_stays_just_right_of_the_last_flow_tab_and_as_tall_as_the_bar(w
         assert plus.isVisible() and plus.height() == bar.height()
 
 
-def red_pixels(bar: QTabBar, index: int) -> int:
-    """How many pixels of the tab's text are red (its red well above its green and blue), in a picture of the bar.
-    The tab's icon (a failed flow's is a red ✕) is left out: the style lets a narrow icon reach into the left of the
-    text's rectangle, by less than the bar's icon width."""
+def text_redness(bar: QTabBar, index: int) -> float:
+    """How red the tab's text is, in a picture of the bar: over its ink (the pixels far from the tab's background),
+    the average of red less the stronger of green and blue. About 100 for a failed flow's red, about 0 for ordinary
+    text: where a font is drawn with coloured edges (Linux), black text has single strongly red and blue pixels, which
+    even out over the ink. The tab's icon (a failed flow's is a red ✕) is left out: the style lets a narrow icon
+    reach into the left of the text's rectangle, by less than the bar's icon width."""
     settle()
     option = QStyleOptionTab()
     bar.initStyleOption(option, index)
     text = bar.style().subElementRect(QStyle.SE_TabBarTabText, option, bar).adjusted(bar.iconSize().width(), 0, 0, 0)
-    close = bar.tabButton(index, QTabBar.RightSide)  # the current tab's is red: with a wide font the text reaches it
-    if close is not None and close.geometry().intersects(text):
-        text.setRight(close.geometry().left() - 1)
-    return len(_red(bar, text))
-
-
-def _red(bar: QTabBar, rect: QRect) -> list:
-    """The red pixels (x, y in the bar) of a part of a picture of the bar."""
-    image = bar.grab(rect).toImage()
-    return [(rect.x() + x, rect.y() + y) for y in range(image.height()) for x in range(image.width())
-            if (c := image.pixelColor(x, y)).red() - max(c.green(), c.blue()) >= 50]
-
-
-def where_red(bar: QTabBar, index: int) -> str:
-    """For a failure's message: where the tab's red pixels are, beside what could be drawing them."""
-    option = QStyleOptionTab()
-    bar.initStyleOption(option, index)
-    red = _red(bar, bar.tabRect(index))
-    box = (min(x for x, _ in red), min(y for _, y in red), max(x for x, _ in red), max(y for _, y in red)) if red else None
-    sides = {side.name: (b.geometry().getRect() if (b := bar.tabButton(index, side)) else None)
-             for side in (QTabBar.LeftSide, QTabBar.RightSide)}
-    return (f"tab {index} {bar.tabText(index)!r} of {bar.count()} (current {bar.currentIndex()}): tab rect "
-            f"{bar.tabRect(index).getRect()}, text rect "
-            f"{bar.style().subElementRect(QStyle.SE_TabBarTabText, option, bar).getRect()}, icon size "
-            f"{bar.iconSize().width()}, buttons {sides}, text colour {bar.tabTextColor(index).name()}, "
-            f"{len(red)} red pixels in the whole tab within {box}, style {bar.style().objectName()!r}")
+    image = bar.grab(text).toImage()
+    pixels = [image.pixelColor(x, y).getRgb()[:3] for y in range(image.height()) for x in range(image.width())]
+    background = Counter(pixels).most_common(1)[0][0]
+    far = {pixel: sum(abs(a - b) for a, b in zip(pixel, background)) for pixel in set(pixels)}
+    ink = [pixel for pixel in pixels if far[pixel] >= max(far.values()) / 2 > 0]
+    return sum(r - max(g, b) for r, g, b in ink) / len(ink) if ink else 0.0
 
 
 @pytest.mark.invariant("TAB-3")
@@ -270,10 +254,9 @@ def test_a_failed_flows_tab_stays_red_while_it_is_the_current_tab_and_while_anot
         win.run_flow(tab)
         wait_done(qtbot, tab)
     bar = win.tabs.tabBar()
-    qtbot.waitUntil(lambda: red_pixels(bar, win.tabs.indexOf(failed)) > 0, timeout=5_000)
+    qtbot.waitUntil(lambda: text_redness(bar, win.tabs.indexOf(failed)) >= 60, timeout=5_000)
 
     for current in (failed, clean):
         win.tabs.setCurrentWidget(current)
-        assert red_pixels(bar, win.tabs.indexOf(failed)) >= 20, "the failed flow's tab is not red"
-        assert red_pixels(bar, win.tabs.indexOf(clean)) == 0, (
-            "the tab of the flow that ran well is red: " + where_red(bar, win.tabs.indexOf(clean)))
+        assert text_redness(bar, win.tabs.indexOf(failed)) >= 60, "the failed flow's tab is not red"
+        assert text_redness(bar, win.tabs.indexOf(clean)) <= 20, "the tab of the flow that ran well is red"
