@@ -16,7 +16,9 @@ from PySide6.QtWidgets import (QApplication, QProxyStyle, QStyle, QStyleFactory,
 
 from test_editor import wait_done
 from test_tab_plus import new_flow_button
-from tests.test_theme import as_found, choose, settle  # noqa: F401 (as_found: each test leaves the look as it found it)
+from tests.test_theme import as_found, choose, settle
+
+pytestmark = pytest.mark.usefixtures(as_found.__name__)  # each test leaves the look as it found it
 
 STRIP = 3  # pixels high
 ENDS = 2  # pixels at each end of the tab that the strip may leave out
