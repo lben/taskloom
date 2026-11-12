@@ -11,12 +11,23 @@ The score is the share caught. It passes at 90% or more when every missed mutant
 --explained file (mutant name: why it changes nothing a user could notice). It fails, too, when mutmut could not
 judge a mutant (the tests crashed or ended in a way it does not know): such a run proves nothing.
 
+Missed mutants of one kind may share one reason, in place of the same line for each: a kinds: list, each entry a
+kind (a few words), its why, and mutants: the names it explains.
+
 The --explained file may also have a not_tested: mapping, of functions as where() names them (e.g.
 `taskloom/scheduler.py serve`, `taskloom/scheduler.py Scheduler.check_servers`; a nested function's mutants are its
 outer function's), or of single mutants by name (e.g. a Windows-only line, which no run here can execute), to a one-
 line reason: why mutation testing leaves them out, and which tests and proofs cover them instead. Their mutants
 count in neither the score, the missed nor the could-not-judge ones; each such function is listed, in the output and
 the JSON (not_tested: function, reason, number of mutants), so none is left out unseen.
+
+A bug fix or small feature mutation-tests only what it changed. Its --explained file has a scope: mapping, of
+mutate: the functions as where() names them (or a file: every function in it), and tests: what pytest is to select
+(files, tests, -k and its expression, as pytest_add_cli_args_test_selection in pyproject.toml). mutmut then runs in
+PROJECT_DIR/build/mutation/<feature> (the --explained file's name up to its first dot; --run makes it anew): a copy
+of what pyproject.toml has mutmut copy, with the same settings but mutating only the scope's files and selecting its
+tests. Only the mutants of what the scope names count; what they were planted in is listed with how many each, and
+an entry nothing was planted in (misspelt, renamed, or not a function: mutmut plants in functions only) fails.
 
 --run first runs `mutmut run` (configured in pyproject.toml) here, on every mutant that counts: all mutmut plants in
 the files it mutates (listed by mutmut's own code, so none is missed) but the not_tested ones. It takes hours, so CI
@@ -36,6 +47,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -63,6 +75,36 @@ def where(name: str) -> str:
     return f"{module.replace('.', '/')}.py {function or f'{cls}.{method}'}"
 
 
+def inside(name: str, scope: dict | None) -> bool:
+    """Whether the mutant is of a function the scope names, or of a file it names whole (no scope: every mutant)."""
+    return scope is None or where(name) in scope["mutate"] or where(name).split(" ")[0] in scope["mutate"]
+
+
+def scoped(project: Path, feature: str, scope: dict, anew: bool) -> Path:
+    """Where mutmut runs for a feature with a scope, project/build/mutation/<feature>: a copy of what project's
+    pyproject.toml has mutmut copy (its source_paths and also_copy, and tests/), with a pyproject.toml of its own:
+    project's pytest and mutmut settings, but mutating only the scope's files and selecting its tests."""
+    work = project / "build" / "mutation" / feature
+    if anew:
+        shutil.rmtree(work, ignore_errors=True)
+    if not work.exists():
+        tool = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))["tool"]
+        mutmut = {**tool["mutmut"], "only_mutate": sorted({entry.split(" ")[0] for entry in scope["mutate"]}),
+                  "pytest_add_cli_args_test_selection": scope["tests"]}
+        for path in [*mutmut["source_paths"], *mutmut.get("also_copy", []), "tests"]:
+            if (project / path).is_dir():
+                shutil.copytree(project / path, work / path, ignore=shutil.ignore_patterns("__pycache__"))
+            else:
+                (work / path).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(project / path, work / path)
+        # (a string, a number or a list of strings is written in TOML as in JSON)
+        (work / "pyproject.toml").write_text("".join(
+            f"[{table}]\n" + "".join(f"{key} = {json.dumps(value)}\n" for key, value in settings.items())
+            for table, settings in (("tool.pytest.ini_options", tool["pytest"]["ini_options"]), ("tool.mutmut", mutmut))),
+            encoding="utf-8")
+    return work
+
+
 def change(project: Path, name: str) -> str:
     """The planted change, as its removed and added lines."""
     shown = subprocess.run([sys.executable, "-m", "mutmut", "show", name], cwd=project, capture_output=True,
@@ -73,7 +115,8 @@ def change(project: Path, name: str) -> str:
 
 def counted(project: Path, explained: dict) -> list[str]:
     """The mutants that count, in mutmut's order (file, function, number): every one mutmut plants in the files it
-    mutates in `project`, named as it names them, but those not_tested lists (or whose function it lists)."""
+    mutates in `project`, named as it names them, but those not_tested lists (or whose function it lists), and
+    of them only what the scope names, when there is one."""
     from mutmut.mutation.file_mutation import mutate_file_contents
     from mutmut.utils.file_utils import walk_mutatable_files
     from mutmut.utils.format_utils import get_mutant_name
@@ -82,7 +125,8 @@ def counted(project: Path, explained: dict) -> list[str]:
     with contextlib.chdir(project):  # (mutmut reads its configuration and the files from there)
         planted = [get_mutant_name(path, name) for path in sorted(walk_mutatable_files())
                    for name in mutate_file_contents(str(path), path.read_text(encoding="utf-8")).mutant_names]
-    return [name for name in planted if name not in not_tested and where(name) not in not_tested]
+    return [name for name in planted if inside(name, explained.get("scope")) and name not in not_tested
+            and where(name) not in not_tested]
 
 
 def run(project: Path, explained: dict, part: tuple[int, int]) -> int:
@@ -125,9 +169,16 @@ def take_parts(project: Path, parts: list[Path]):
 
 def summary(project: Path, explained: dict) -> dict:
     not_tested = explained.get("not_tested") or {}
+    scope = explained.get("scope")
+    kinds = {name: kind for kind in explained.get("kinds") or [] for name in kind["mutants"]}
     codes = {}
     left_out = dict.fromkeys(not_tested, 0)
+    planted = dict.fromkeys(scope["mutate"] if scope else [], 0)
     for name, code in results(project).items():
+        if not inside(name, scope):
+            continue
+        if scope:
+            planted[where(name) if where(name) in planted else where(name).split(" ")[0]] += 1
         if (key := name if name in left_out else where(name)) in left_out:
             left_out[key] += 1
         else:
@@ -138,12 +189,15 @@ def summary(project: Path, explained: dict) -> dict:
     judged = killed + len(missed)
     score = 100 * killed / judged if judged else 0.0
     survivors = [{"where": where(name), "name": name, "change": change(project, name),
-                  "why_equivalent": explained.get(name, "")} for name in missed]
+                  "kind": kinds[name]["kind"] if name in kinds else "",
+                  "why_equivalent": kinds[name]["why"] if name in kinds else explained.get(name, "")}
+                 for name in missed]
     unexplained = [s["name"] for s in survivors if not s["why_equivalent"]]
-    passed = bool(judged) and score >= THRESHOLD and not unexplained and not unjudged
+    passed = bool(judged) and score >= THRESHOLD and not unexplained and not unjudged and all(planted.values())
     return {"score": round(score, 1), "killed": killed, "total": judged, "threshold": THRESHOLD, "passed": passed,
             "survivors": survivors, "unexplained": unexplained,
             "unjudged": [f"{name} (exit {codes[name]})" for name in unjudged],
+            "scope": [{"function": function, "mutants": mutants} for function, mutants in planted.items()],
             "not_tested": [{"function": function, "reason": reason, "mutants": left_out[function]}
                            for function, reason in not_tested.items()]}
 
@@ -161,6 +215,8 @@ def main(argv=None) -> int:
     if not part or not 1 <= int(part[1]) <= int(part[2]) or (a.part and not a.run) or (a.run and a.parts):
         p.error("--part K/N (1 <= K <= N) goes with --run, and --parts without it")
     explained = (yaml.safe_load(a.explained.read_text(encoding="utf-8")) or {}) if a.explained.exists() else {}
+    if explained.get("scope"):
+        a.project = scoped(a.project, a.explained.name.split(".")[0], explained["scope"], anew=a.run)
     ran = 0
     if a.run:
         ran = run(a.project, explained, (int(part[1]), int(part[2])))
@@ -181,6 +237,11 @@ def main(argv=None) -> int:
         print(f"could not judge {name}")
     for n in result["not_tested"]:
         print(f"not tested {n['function']} ({n['mutants']:,} mutants, left out of the score) — {n['reason']}")
+    for n in result["scope"]:
+        if not n["mutants"]:
+            print(f"nothing planted in {n['function']}: misspelt, renamed, or not a function")
+    if result["scope"]:
+        print("planted in: " + ", ".join(f"{n['function']} ({n['mutants']:,})" for n in result["scope"]))
     print(("PASSED: " if result["passed"] else "FAILED: ") + f"mutation score {result['score']:g}%: the tests caught "
           f"{result['killed']:,} of {result['total']:,} (bar {THRESHOLD}%); {len(result['survivors'])} missed, "
           f"{len(result['unexplained'])} without a reason; {len(result['unjudged'])} could not be judged")

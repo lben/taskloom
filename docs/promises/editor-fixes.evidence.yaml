@@ -1,0 +1,64 @@
+# How each agreed row of docs/promises/editor-fixes.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A bug fix or small feature has no model to
+# check: its rows are amber, checked by tests only, and not_green says what the tests leave out.
+DP-1:
+  enforced: >-
+    PreviewPanel.show_outputs (taskloom/editor/panels.py) keeps the label short and puts the error in the scrolling
+    box (_show_text), so no text makes the window wider or taller.
+  not_green: >-
+    Tests open Data preview with the two errors the row names; no check tries every error or every window size.
+DP-2:
+  enforced: >-
+    PreviewPanel.show_outputs sets the label to the block's name and status only, and _show_text puts the whole
+    error in the box as plain text.
+  not_green: >-
+    Tests read the label and the box for the errors they make; no check tries every error.
+DP-3:
+  enforced: >-
+    PreviewPanel._load sets the label to "Cannot preview" and puts the reason in the box (_show_text).
+  not_green: >-
+    Tests remove a run's files and open its preview; no check tries every way a preview can fail to be read.
+TAB-1:
+  enforced: >-
+    MarkedTabBar.paintEvent (taskloom/editor/window.py) paints the strip on the current tab after Qt has drawn the
+    tabs; the flow tabs' bar is a MarkedTabBar, and MainWindow sets one on the two other tab widgets.
+  not_green: >-
+    Tests read the pixels of the three bars in the light and the dark theme; no check tries every theme or font size.
+TAB-2:
+  enforced: >-
+    MarkedTabBar.paintEvent takes the current tab from the bar each time it is painted, and Qt repaints the bar when
+    the current tab changes.
+  not_green: >-
+    Tests click, close, drag and open tabs; no check tries every order of them.
+TAB-3:
+  enforced: >-
+    MarkedTabBar only paints over the tabs Qt has drawn: it sets no style sheet and no size, so sizes, colours and
+    buttons stay Qt's.
+  not_green: >-
+    Tests compare the tabs with Qt's own for the flows they open; no check tries every number or length of tabs.
+ERR-1:
+  enforced: >-
+    Safety.log (taskloom/editor/safety.py) prints in the terminal the same text it writes to crash.log; the box is
+    shown as before.
+  not_green: >-
+    Tests raise an error the editor does not catch; no check tries every error.
+ERR-2:
+  enforced: >-
+    Errors in background threads and Qt's critical messages go through Safety.log too, so they are printed the same
+    way.
+  not_green: >-
+    Tests raise one error in a thread and one critical message of Qt; no check tries every source of them.
+ERR-3:
+  enforced: >-
+    Safety.log prints only when there is a terminal (sys.stderr is not None) and goes on when the terminal has been
+    closed; crash.log is written first.
+  not_green: >-
+    Tests start the editor without a terminal; a real shortcut on Windows is not run.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# editor-fixes.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/editor-fixes.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

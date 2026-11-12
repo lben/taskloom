@@ -383,15 +383,37 @@ def test_ci_builds_the_pdf_from_a_checkout_with_its_history_and_tags():
 
 
 def test_ci_takes_for_features_only_their_agreed_lists_not_their_other_files():
-    """CI builds a ledger and a PDF section for each docs/promises/*.yaml it does not skip; a feature's other files
-    (its evidence, design, mutants, bugs found) taken for a feature failed both (scheduler.found.yaml, CI run
-    42692811767). Each file the loops keep must be an agreed list, with its feature's name."""
+    """CI runs the checkers, puts their results together, builds a ledger and a PDF section for each
+    docs/promises/*.yaml it does not skip; a feature's other files (its evidence, design, mutants, bugs found) taken
+    for a feature failed the last two (scheduler.found.yaml, CI run 42692811767). Each file the loops keep must be an
+    agreed list, with its feature's name."""
     jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
     loops = [step["run"] for job in jobs.values() for step in job["steps"]
              if "for promises in docs/promises/*.yaml" in step.get("run", "")]
-    assert len(loops) == 2, "the ledger's and the PDF's"
+    assert len(loops) == 4, "the checkers', their results put together, the ledger's and the PDF's"
     for run in loops:
         skipped = re.search(r'case "\$promises" in (\S+)\) continue;; esac', run)[1].split("|")
         for promises in sorted((REPO / "docs" / "promises").glob("*.yaml")):
             if not any(fnmatch.fnmatchcase(f"docs/promises/{promises.name}", glob) for glob in skipped):
                 assert "feature" in yaml.safe_load(promises.read_text(encoding="utf-8")), promises.name
+
+
+def test_ci_runs_every_features_checkers_and_puts_their_results_where_the_proof_reads_them():
+    """A feature is certified on its own evidence: for each agreed list in docs/promises, some CI step runs its
+    checkers (packaging/checkers.py, by its name or in a loop over the agreed lists that does not skip it), and the
+    evidence job puts every feature's results together (--merge), so none is left without its checkers.json."""
+    jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
+    runs = [step["run"] for job in jobs.values() for step in job["steps"] if "packaging/checkers.py" in step.get("run", "")]
+
+    def reaches(run: str, name: str) -> bool:
+        if f"docs/promises/{name}" in run:
+            return True
+        skipped = re.search(r'case "\$promises" in (\S+)\) continue;; esac', run)
+        return ("for promises in docs/promises/*.yaml" in run and 'checkers.py "$promises"' in run and not any(
+            fnmatch.fnmatchcase(f"docs/promises/{name}", glob) for glob in skipped[1].split("|")))
+
+    features = [p.name for p in sorted((REPO / "docs" / "promises").glob("*.yaml")) if p.name.count(".") == 1]
+    assert len(features) >= 4, features
+    for name in features:
+        assert any(reaches(run, name) for run in runs if "--merge" not in run), f"no CI step runs the checkers of {name}"
+        assert any(reaches(run, name) for run in runs if "--merge" in run), f"no CI step merges the results of {name}"

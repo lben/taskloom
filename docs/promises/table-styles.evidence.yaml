@@ -1,0 +1,47 @@
+# How each agreed row of docs/promises/table-styles.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A bug fix or small feature has no model to
+# check: its rows are amber, checked by tests only, and not_green says what the tests leave out.
+STY-1:
+  enforced: >-
+    email_document (taskloom/report.py) first moves the body's own rules into each element's style attribute, then
+    applies the built-in look (TABLE_CSS) to the tables html_table wrote, which leaves a property the attribute has.
+  not_green: >-
+    Tests send emails with the rules the row names and a few more; no check tries every rule a template could have.
+STY-2:
+  enforced: >-
+    TABLE_CSS (taskloom/report.py) gives each property of the built-in look that the body's rules did not set;
+    html_table writes the align and bgcolor attributes that its rules for numbers and stripes follow.
+  not_green: >-
+    Tests read the header, stripes and alignment of the tables they send; no check tries every table or every rule.
+STY-3:
+  enforced: >-
+    html_table marks its table (data-taskloom-table) and email_document applies TABLE_CSS to it, in a template and
+    straight in Send Email's body alike.
+  not_green: >-
+    Tests compare the look of the tables they send with the look before the change; no check tries every table.
+STY-4:
+  enforced: >-
+    _placed (taskloom/blocks/reports.py) returns text as the HTML it holds where the template says {name:html};
+    without html the text is escaped, as before.
+  not_green: >-
+    Tests place the HTML a Python block returns; no check tries every HTML text.
+STY-5:
+  enforced: >-
+    email_document moves every <style> block of the body, also one inside text placed with {name:html}, into the
+    style attributes and leaves no style block.
+  not_green: >-
+    Tests send the style block pandas writes; no check tries every style block, and Outlook itself is not run.
+STY-6:
+  enforced: >-
+    _placed raises "Template: {name:html}: html applies only to text" for a value that is not text (a picture's path
+    is not text) and returns HTML from another template as it is.
+  not_green: >-
+    Tests try a table, a number, a list, a picture and a date; no check tries every kind of value.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# table-styles.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/table-styles.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

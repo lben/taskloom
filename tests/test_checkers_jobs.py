@@ -76,3 +76,16 @@ def test_merge_puts_the_jobs_results_together_in_listed_order_and_a_checker_no_j
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert [(e["name"], e["exit"]) for e in entries] == [(c["name"], 0) for c in CHECKERS]
+
+
+def test_a_feature_with_no_evidence_file_lists_no_checker(tmp_path):
+    """A feature that has only its agreed list so far (no <name>.evidence.yaml yet) has no checker to run or merge:
+    an empty checkers.json, which the ledger and the proof read, and no failure of the job that runs the others."""
+    listed = tmp_path / "promises" / "beta.yaml"
+    listed.parent.mkdir()
+    listed.write_text("feature: Beta\n", encoding="utf-8")
+    for args in ((), ("--merge", str(tmp_path / "job"))):
+        done = subprocess.run([sys.executable, str(SCRIPT), str(listed), str(tmp_path / "proof"), *args],
+                              capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert json.loads((tmp_path / "proof" / "beta" / "checkers.json").read_text(encoding="utf-8")) == []

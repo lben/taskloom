@@ -81,8 +81,9 @@ def main(argv=None) -> int:
     p.add_argument("--command", metavar="CMD")
     p.add_argument("--merge", nargs="+", type=Path, metavar="JOB_DIR")
     a = p.parse_args(argv)
-    listed = (yaml.safe_load(a.promises.with_name(a.promises.stem + ".evidence.yaml").read_text(encoding="utf-8"))
-              .get("checkers") or [])
+    evidence = a.promises.with_name(a.promises.stem + ".evidence.yaml")  # (not there yet: it lists no checker)
+    listed = ((yaml.safe_load(evidence.read_text(encoding="utf-8")) or {}).get("checkers") or []
+              if evidence.exists() else [])
     unknown = sorted(set(a.only) - {c["name"] for c in listed})
     if unknown:
         p.error(f"not listed under checkers: {', '.join(unknown)}")

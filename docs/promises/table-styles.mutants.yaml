@@ -1,0 +1,11 @@
+# Mutation testing of a template's own styles (read by packaging/mutants.py --explained). scope: what the bugs are
+# planted in, the functions the change touched (TABLE_CSS is a constant: mutmut plants in functions only), and the
+# tests run on each. The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the
+# mutants it explains) or one by one (mutant name: why it changes nothing a user could notice). None is explained yet.
+scope:
+  mutate:
+    - taskloom/report.py html_table
+    - taskloom/report.py email_document
+    - taskloom/blocks/reports.py _placed
+  tests:
+    - tests/test_template_styles.py

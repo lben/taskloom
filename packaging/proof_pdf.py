@@ -455,13 +455,19 @@ def kept(text: str, items: list, note: str = "") -> str:
                     f"{section(text, note, 0)}{first}</td></tr></table>", *items[1:]])
 
 
+def lists_leak_check(feature: dict) -> bool:
+    """Whether a leak check is one of the feature's checkers (one for code that runs for weeks; a bug fix has none)."""
+    return any(c["kind"] == "leak" for c in feature["checkers"] or [])
+
+
 def verdict(feature: dict) -> tuple[str, str]:
     """The feature's verdict, one phrase, and its colour."""
     if feature["blocked"] is not None:
         return AMBER, "BLOCKED: needs your decision"
     if feature["ledger"] is None:
         return FAILED, "Not certified: no ledger"
-    missing = [what for name, what in (("mutants", "mutation testing"), ("leak", "leak check")) if feature[name] is None]
+    needed = [("mutants", "mutation testing")] + [("leak", "leak check")] * lists_leak_check(feature)
+    missing = [what for name, what in needed if feature[name] is None]
     if missing:
         return FAILED, f"Not certified: no {' or '.join(missing)} result"
     red = sum(row["status"] == "RED" for row in feature["ledger"]["rows"])
@@ -739,15 +745,29 @@ def terminal(checker: dict, evidence: Path) -> str:
 
 
 def survivors(mutants: dict | None, path: Path) -> str:
-    """The mutation score against its bar, then each mutant the tests did not catch and why it does not matter."""
+    """The mutation score against its bar and, for a feature that mutation-tests only what it changed, what the bugs
+    were planted in; then each mutant the tests did not catch and why it does not matter: one by one, then those
+    explained by kind, each kind's reason once over its mutants."""
     if mutants is None:
         return f"<p>{mark(False, f'Not found: {path.as_posix()}')}</p>"
     score = (f"Mutation score {round(mutants['score'], 1):g}%: the tests caught {mutants['killed']:,} of the "
              f"{mutants['total']:,} small bugs planted in the code on purpose. The bar is {mutants['threshold']}%.")
-    lines = "".join(f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\"><b>{esc(s['where'])}</b>"
-                    f"&nbsp;&nbsp;{esc(s['change'])}. {esc(s['why_equivalent'])}</p>" for s in mutants["survivors"])
+    planted = ", ".join(f"{s['function']} ({s['mutants']:,})" for s in mutants.get("scope") or [])
+    line = "<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\">"
+    kinds = {}
+    for s in mutants["survivors"]:
+        kinds.setdefault(s.get("kind") or "", []).append(s)
+    lines = "".join(f"{line}<b>{esc(s['where'])}</b>&nbsp;&nbsp;{esc(s['change'])}. {esc(s['why_equivalent'])}</p>"
+                    for s in kinds.pop("", []))
+    for kind, group in kinds.items():
+        lines += (f"{line}<b>{esc(kind)}</b>&nbsp;&nbsp;{len(group):,} mutant{'s' * (len(group) != 1)}. "
+                  f"{esc(group[0]['why_equivalent'])}</p>"
+                  + "".join(f"<p style=\"font-size: 10pt; line-height: 130%; margin-left: 18px; margin-bottom: 3px\">"
+                            f"<span style=\"color: {MUTED}\">{esc(s['where'])}</span>&nbsp;&nbsp;{esc(s['change'])}</p>"
+                            for s in group))
     return (f"<p style=\"font-size: 11pt; margin-bottom: 8px\">{mark(mutants['score'] >= mutants['threshold'], score)}"
-            "</p>" + (lines or "<p style=\"font-size: 11pt\">None: the tests caught every one.</p>"))
+            "</p>" + (f"{line}Planted only in what this feature changed: {esc(planted)}.</p>" if planted else "")
+            + (lines or "<p style=\"font-size: 11pt\">None: the tests caught every one.</p>"))
 
 
 def not_mutation_tested(mutants: dict | None) -> list:
@@ -791,7 +811,8 @@ def feature_page(index: int, total: int, feature: dict, changes: list, evidence:
     # A blocked feature opens with its question; any other with its verdict.
     opening = (blocked_banner(feature["blocked"]) if feature["blocked"] is not None else
                f"<p style=\"font-size: 13pt; font-weight: 600; color: {colour}\">{esc(phrase)}</p>")
-    rest = (section("Memory and leaks") + leaks(feature["leak"], folder / "leak.json")
+    rest = ((section("Memory and leaks") + leaks(feature["leak"], folder / "leak.json")
+             if lists_leak_check(feature) or feature["leak"] is not None else "")
             + section("It works on screen") + on_screen(changes))
     left_out = not_mutation_tested(feature["mutants"])
     found = bugs_found(feature)

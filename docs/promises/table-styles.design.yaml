@@ -1,0 +1,6 @@
+# The design decisions of a template's own styles, one line each (read by packaging/proof_pdf.py): what was chosen,
+# and when to look at it again.
+- chosen: The built-in look of a table is a style sheet (TABLE_CSS) applied last, after the body's own rules are in the style attributes, so a rule of the body's own wins property by property.
+  revisit_if: the inliner (css_inline) ever lets a style sheet's rule replace a property a style attribute already has.
+- chosen: The email's own frame is marked for the inliner to skip, so no rule of the body restyles it.
+  revisit_if: a template must be able to style the frame itself.

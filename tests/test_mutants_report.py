@@ -106,3 +106,73 @@ def test_the_parts_verdicts_count_as_one_run_and_a_mutant_no_part_judged_fails_i
     done, result = scored(tmp_path / "one", parts[0])
     assert done.returncode == 1, done.stdout + done.stderr
     assert result["unjudged"] == [f"{claim}{i} (exit None)" for i in (10, 2, 4, 6, 8)]
+
+
+def scoped(tmp_path, records: dict, explained: dict):
+    """Runs the real script for a feature with a scope: its mutmut records are where a scoped run leaves them,
+    PROJECT_DIR/build/mutation/<feature>/mutants (the feature: the --explained file's name up to its first dot)."""
+    for file, codes in records.items():
+        meta = tmp_path / "build" / "mutation" / "styles" / "mutants" / f"{file}.meta"
+        meta.parent.mkdir(parents=True, exist_ok=True)
+        meta.write_text(json.dumps({"exit_code_by_key": codes}), encoding="utf-8")
+    (tmp_path / "styles.mutants.yaml").write_text(yaml.safe_dump(explained, allow_unicode=True), encoding="utf-8")
+    done = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--explained",
+                           str(tmp_path / "styles.mutants.yaml"), "--out", str(tmp_path / "mutants.json")],
+                          capture_output=True, text=True, timeout=300)
+    return done, json.loads((tmp_path / "mutants.json").read_text(encoding="utf-8"))
+
+
+TABLE = "taskloom.report.x_html_table__mutmut_"
+RECORDS = {"taskloom/report.py": {f"{TABLE}{i}": 1 for i in range(1, 10)} | {f"{TABLE}10": 0}
+           | {"taskloom.report.x_plain_text__mutmut_1": None, "taskloom.report.x_plain_text__mutmut_2": None},
+           "taskloom/blocks/reports.py": {"taskloom.blocks.reports.x__placed__mutmut_1": 1,
+                                          "taskloom.blocks.reports.xǁTemplateǁrun__mutmut_1": 1}}
+SAME = {"kind": "The same style, written another way", "why": "An email program reads both the same way.",
+        "mutants": [f"{TABLE}10"]}
+
+
+def test_a_scope_counts_only_the_functions_and_files_it_names(tmp_path):
+    """A small feature mutation-tests only what it changed (scope: mutate, in its mutants.yaml): a function, as
+    where() names it, or a whole file. The file's other functions have mutants too (mutmut plants them in the whole
+    file) that no test ran: they are not the feature's, so they count in nothing. What was planted in is listed."""
+    done, result = scoped(tmp_path, RECORDS, {"kinds": [SAME], "scope": {
+        "mutate": ["taskloom/report.py html_table", "taskloom/blocks/reports.py"], "tests": ["tests/test_styles.py"]}})
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (result["score"], result["killed"], result["total"], result["passed"]) == (91.7, 11, 12, True)
+    assert result["unjudged"] == [] and "plain_text" not in done.stdout
+    assert result["scope"] == [{"function": "taskloom/report.py html_table", "mutants": 10},
+                               {"function": "taskloom/blocks/reports.py", "mutants": 2}]
+    assert "planted in: taskloom/report.py html_table (10), taskloom/blocks/reports.py (2)" in done.stdout
+
+
+def test_a_scope_entry_nothing_is_planted_in_fails_the_run(tmp_path):
+    """A function the scope names in which mutmut planted nothing (misspelt, renamed, or not a function) fails the
+    run and is named: a scope must not get smaller unseen."""
+    done, result = scoped(tmp_path, RECORDS, {"kinds": [SAME], "scope": {
+        "mutate": ["taskloom/report.py html_table", "taskloom/report.py email_documnet"], "tests": []}})
+
+    assert done.returncode == 1
+    assert (result["killed"], result["total"], result["passed"]) == (9, 10, False)
+    assert {"function": "taskloom/report.py email_documnet", "mutants": 0} in result["scope"]
+    assert "nothing planted in taskloom/report.py email_documnet" in done.stdout, done.stdout
+
+
+def test_one_reason_explains_every_missed_mutant_of_its_kind_and_no_other(tmp_path):
+    """Missed mutants of one kind share one reason (kinds: a kind, its why, the mutants it explains by name), in
+    place of the same line written for each. A missed mutant no kind names, and with no line of its own, has no
+    reason and fails the run."""
+    codes = {f"{TABLE}1": 0, f"{TABLE}2": 0, f"{TABLE}3": 0} | {f"{TABLE}{i}": 1 for i in range(4, 40)}
+    kind = {**SAME, "mutants": [f"{TABLE}1", f"{TABLE}2"]}
+    scope = {"mutate": ["taskloom/report.py html_table"], "tests": []}
+    done, result = scoped(tmp_path, {"taskloom/report.py": codes}, {"kinds": [kind], "scope": scope})
+
+    assert done.returncode == 1
+    assert [(s["name"], s["kind"], s["why_equivalent"]) for s in result["survivors"]] == [
+        (f"{TABLE}1", SAME["kind"], SAME["why"]), (f"{TABLE}2", SAME["kind"], SAME["why"]), (f"{TABLE}3", "", "")]
+    assert result["unexplained"] == [f"{TABLE}3"]
+
+    done, result = scoped(tmp_path, {"taskloom/report.py": codes},
+                          {"kinds": [kind], "scope": scope, f"{TABLE}3": "Its own reason."})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (result["score"], result["unexplained"], result["passed"]) == (92.3, [], True)

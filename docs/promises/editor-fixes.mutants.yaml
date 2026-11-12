@@ -1,0 +1,17 @@
+# Mutation testing of Data preview's long error, the current tab's mark and errors in the terminal (read by
+# packaging/mutants.py --explained). scope: what the bugs are planted in, the functions the change touched, and the
+# tests run on each. The change's other lines are not functions of their own, so nothing is planted in them: the
+# FlowTabBar class line and the two setTabBar lines in MainWindow.__init__, which the TAB-1 tests check on the three
+# bars. The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it
+# explains) or one by one (mutant name: why it changes nothing a user could notice). None is explained yet.
+scope:
+  mutate:
+    - taskloom/editor/panels.py PreviewPanel.show_outputs
+    - taskloom/editor/panels.py PreviewPanel._load
+    - taskloom/editor/panels.py PreviewPanel._show_text
+    - taskloom/editor/window.py MarkedTabBar.paintEvent
+    - taskloom/editor/safety.py Safety.log
+  tests:
+    - tests/test_preview_long_error.py
+    - tests/test_current_tab.py
+    - tests/test_errors_in_terminal.py

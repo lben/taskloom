@@ -366,3 +366,63 @@ def test_a_row_tried_over_a_range_is_amber_when_its_evidence_says_what_the_range
     rows = {r["row"]: r for r in json.loads((evidence / "delta" / "ledger.json").read_text(encoding="utf-8"))["rows"]}
     assert (rows["D-1"]["status"], rows["D-2"]["status"]) == ("GREEN", "AMBER"), rows
     assert rows["D-2"]["why"] == partly, rows["D-2"]
+
+
+def small_pdf(root: Path, *stems: str) -> list:
+    """The pages of the PDF of these features alone: no proof on screen and no release-wide numbers."""
+    features = [arg for stem in stems for arg in ("--feature", f"promises/{stem}.yaml")]
+    done = subprocess.run([sys.executable, str(PROOF_PDF), "proofs", "small.pdf", "--repo", str(root), "--evidence",
+                           "evidence", *features], cwd=root, env={**os.environ, "GIT_CEILING_DIRECTORIES": str(root)},
+                          capture_output=True, encoding="utf-8", errors="replace", timeout=300)
+    assert done.returncode == 0, f"proof_pdf.py failed:\n{done.stdout}\n{done.stderr}"
+    return pages(root / "small.pdf")
+
+
+def test_a_leak_check_is_asked_only_of_a_feature_that_lists_one(tmp_path):
+    """A bug fix or small feature has nothing that runs for weeks, so it lists no leak check: with no leak result it
+    is Certified, and its pages have no Memory and leaks section. A feature that lists a leak check which no job ran
+    is not certified, and its pages say the result was not found."""
+    promises, evidence = tmp_path / "promises", tmp_path / "evidence"
+    feature(promises, evidence, "zeta", "Zeta styles", {"Z-1": ("A style of your own is kept.", AMBER)},
+            [result("z1", "Z-1")], [], [checker("mutation", "mutation", 0)])
+    feature(promises, evidence, "eta", "Eta service", {"H-1": ("It runs for weeks.", AMBER)},
+            [result("h1", "H-1")], [], [{**checker("leaks", "leak", 0), "exit": "not run"}])
+    for stem in ("zeta", "eta"):
+        (evidence / stem / "leak.json").unlink()
+
+    pdf = small_pdf(tmp_path, "zeta", "eta")
+
+    cover = flat(pdf[0])
+    assert re.search(r"\b1 Zeta styles 1 0 1 0 Certified\b", cover), cover
+    assert re.search(r"\b2 Eta service 1 0 1 0 Not certified: no leak check result", cover), cover
+    zeta, eta = (" ".join(flat(pdf[i]) for i in feature_pages(pdf, number)) for number in (1, 2))
+    assert "Surviving mutants" in zeta and "Memory and leaks" not in zeta, zeta
+    assert "Memory and leaks" in eta and "Not found: evidence/eta/leak.json" in eta, eta
+
+
+def test_missed_mutants_of_one_kind_are_under_its_one_reason_and_what_was_mutated_is_said(tmp_path):
+    """mutants.json of a feature that mutation-tests only what it changed (scope) and explains its missed mutants by
+    kind: the PDF says what the bugs were planted in, with how many each; each kind's reason is written once, over its
+    mutants' changes; a mutant with a reason of its own is listed as before."""
+    promises, evidence = tmp_path / "promises", tmp_path / "evidence"
+    feature(promises, evidence, "zeta", "Zeta styles", {"Z-1": ("A style of your own is kept.", AMBER)},
+            [result("z1", "Z-1")], [], [checker("mutation", "mutation", 0)])
+    kind, why, own = "The same style, written another way", "An email program reads both the same way.", \
+        "Nothing reads this value."
+    missed = [{"where": "zeta/report.py html_table", "name": f"zeta.report.x_html_table__mutmut_{n}",
+               "change": f"border: {n}px to BORDER: {n}px", "kind": kind if n < 4 else "",
+               "why_equivalent": why if n < 4 else own} for n in (1, 2, 3, 4)]
+    write(evidence / "zeta" / "mutants.json", {
+        "score": 92.0, "killed": 46, "total": 50, "threshold": 90, "survivors": missed,
+        "scope": [{"function": "zeta/report.py html_table", "mutants": 44}, {"function": "zeta/blocks.py", "mutants": 6}]})
+
+    pdf = small_pdf(tmp_path, "zeta")
+
+    text = " ".join(flat(pdf[i]) for i in feature_pages(pdf, 1))
+    listed = text[text.index("Surviving mutants, one line each"):]
+    assert "Planted only in what this feature changed: zeta/report.py html_table (44), zeta/blocks.py (6)" in listed, \
+        listed
+    assert listed.count(why) == 1 and listed.count(own) == 1, listed
+    assert re.search(rf"{re.escape(kind)} 3 mutants\. {re.escape(why)} .*border: 1px to BORDER: 1px.*border: 3px to "
+                     rf"BORDER: 3px", listed), listed
+    assert re.search(rf"zeta/report\.py html_table border: 4px to BORDER: 4px\. {re.escape(own)}", listed), listed
