@@ -236,9 +236,29 @@ def red_pixels(bar: QTabBar, index: int) -> int:
     close = bar.tabButton(index, QTabBar.RightSide)  # the current tab's is red: with a wide font the text reaches it
     if close is not None and close.geometry().intersects(text):
         text.setRight(close.geometry().left() - 1)
-    image = bar.grab(text).toImage()
-    colours = [image.pixelColor(x, y) for y in range(image.height()) for x in range(image.width())]
-    return sum(1 for c in colours if c.red() - max(c.green(), c.blue()) >= 50)
+    return len(_red(bar, text))
+
+
+def _red(bar: QTabBar, rect: QRect) -> list:
+    """The red pixels (x, y in the bar) of a part of a picture of the bar."""
+    image = bar.grab(rect).toImage()
+    return [(rect.x() + x, rect.y() + y) for y in range(image.height()) for x in range(image.width())
+            if (c := image.pixelColor(x, y)).red() - max(c.green(), c.blue()) >= 50]
+
+
+def where_red(bar: QTabBar, index: int) -> str:
+    """For a failure's message: where the tab's red pixels are, beside what could be drawing them."""
+    option = QStyleOptionTab()
+    bar.initStyleOption(option, index)
+    red = _red(bar, bar.tabRect(index))
+    box = (min(x for x, _ in red), min(y for _, y in red), max(x for x, _ in red), max(y for _, y in red)) if red else None
+    sides = {side.name: (b.geometry().getRect() if (b := bar.tabButton(index, side)) else None)
+             for side in (QTabBar.LeftSide, QTabBar.RightSide)}
+    return (f"tab {index} {bar.tabText(index)!r} of {bar.count()} (current {bar.currentIndex()}): tab rect "
+            f"{bar.tabRect(index).getRect()}, text rect "
+            f"{bar.style().subElementRect(QStyle.SE_TabBarTabText, option, bar).getRect()}, icon size "
+            f"{bar.iconSize().width()}, buttons {sides}, text colour {bar.tabTextColor(index).name()}, "
+            f"{len(red)} red pixels in the whole tab within {box}, style {bar.style().objectName()!r}")
 
 
 @pytest.mark.invariant("TAB-3")
@@ -255,4 +275,5 @@ def test_a_failed_flows_tab_stays_red_while_it_is_the_current_tab_and_while_anot
     for current in (failed, clean):
         win.tabs.setCurrentWidget(current)
         assert red_pixels(bar, win.tabs.indexOf(failed)) >= 20, "the failed flow's tab is not red"
-        assert red_pixels(bar, win.tabs.indexOf(clean)) == 0, "the tab of the flow that ran well is red"
+        assert red_pixels(bar, win.tabs.indexOf(clean)) == 0, (
+            "the tab of the flow that ran well is red: " + where_red(bar, win.tabs.indexOf(clean)))
