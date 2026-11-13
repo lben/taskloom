@@ -9,7 +9,10 @@ was set before it), never by the text of its style attribute, so the built-in lo
 combined in any way."""
 
 import re
+import threading
+from html import unescape
 from html.parser import HTMLParser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import yaml
@@ -346,6 +349,15 @@ def test_a_table_connected_straight_to_send_emails_body_looks_as_it_did(env, smt
     assert look(my_table(html_of(sent(result, smtp)))) == look_as_it_was()
 
 
+@pytest.mark.invariant("STY-3")
+def test_a_table_shown_whole_puts_only_its_header_and_cells_between_the_words_around_it(env, smtp):
+    html = table_email(env, smtp, "above{my_table}below")
+
+    around = html[html.index("above"):html.index("below") + len("below")]
+    texts = [unescape(text) for text in re.split(r"<[^>]*>", around) if text]
+    assert texts == ["above", *COLUMNS, *(text for _, row in SHOWN for text, _ in row if text), "below"], around
+
+
 # --- STY-4: {name:html} puts text in as HTML, as it is; {name} shows its tags as text -------------------------------
 
 @pytest.mark.invariant("STY-4")
@@ -506,3 +518,41 @@ def test_a_table_rule_styles_the_generated_table_and_a_table_you_wrote_and_not_t
     for table in (my_table(html), own_table(html)):
         assert (borders(table.style), table.style.get("width")) == ([("2px", "solid", "#ff0000")] * 4, "400px"), (
             table.attrs.get("id"), table.attrs.get("style"))
+
+
+# --- the email as a whole --------------------------------------------------------------------------------------------
+
+def test_a_template_that_is_a_whole_html_document_is_sent_without_the_emails_own_frame_around_it(env, smtp):
+    html = table_email(env, smtp, "<!DOCTYPE html><html><head><title>Report</title></head>"
+                                  "<body><p>Hi team,</p>{my_table}</body></html>")
+
+    assert [[th.text for th in table.all("th")] for table in document(html).all("table")] == [COLUMNS], html
+
+
+def test_a_stylesheet_the_template_links_to_is_never_fetched_and_the_table_keeps_its_look(env, smtp):
+    asked = []
+
+    class Stylesheet(BaseHTTPRequestHandler):
+        def do_GET(self):
+            asked.append(self.path)
+            css = b"td {color: red}"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css")
+            self.send_header("Content-Length", str(len(css)))
+            self.end_headers()
+            self.wfile.write(css)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Stylesheet)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        html = table_email(env, smtp, f'<link rel="stylesheet" href="http://127.0.0.1:{server.server_port}/look.css">'
+                                      "{my_table}")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert asked == []
+    assert look(my_table(html)) == look_as_it_was()

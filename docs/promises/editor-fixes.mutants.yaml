@@ -15,7 +15,8 @@ scope:
       tests:
         - tests/test_preview_long_error.py
         - tests/test_paths_editor_running.py -k data_preview
-        - tests/test_paths_data.py -k cleaned_up
+        - tests/test_paths_data.py -k "cleaned_up or single_output or has_not_run"
+        - tests/test_rerun_old_and_kept.py -k data_previews_label_says_old
     - mutate:
         - taskloom/editor/window.py MarkedTabBar.paintEvent
       tests:
@@ -30,7 +31,13 @@ kinds:
       Filling the list of outputs then shows the first one already, and show_outputs shows it again right after: the
       same output, the same picture.
     mutants:
-      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_18
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_24
+  - kind: A value no caller leaves out
+    why: >-
+      The window says whether the result is old each time it shows a block's outputs (when the block is selected,
+      when its result arrives and when what is old changes), so what `old` would be when left out is never used.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_1
   - kind: The text reaches the terminal at once without it
     why: >-
       Python writes each whole line to the error stream at once (since 3.9 also when it is not a terminal), and print

@@ -1,15 +1,26 @@
 # Mutation testing of a template's own styles (read by packaging/mutants.py --explained). scope: what the bugs are
-# planted in, the functions the change touched (TABLE_CSS is a constant: mutmut plants in functions only), and the
-# tests run on each. The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the
-# mutants it explains) or one by one (mutant name: why it changes nothing a user could notice). Only those no user
-# could notice are explained: the others stay without a reason until a test catches them.
+# planted in, the functions the change touched (TABLE_CSS is a constant: mutmut plants in functions only), in groups:
+# each group's bugs run the tests that can see them (each line of tests: is one pytest run, a file with -k words or
+# without). The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it
+# explains) or one by one (mutant name: why it changes nothing a user could notice). Only those no user could notice
+# are explained: the others stay without a reason until a test catches them.
 scope:
   mutate:
-    - taskloom/report.py html_table
-    - taskloom/report.py email_document
-    - taskloom/blocks/reports.py _placed
-  tests:
-    - tests/test_template_styles.py
+    - mutate:
+        - taskloom/report.py html_table
+      tests:
+        - tests/test_template_styles.py
+        - tests/test_html_template_inputs.py -k tables_are_outlook_tables_cut
+        - tests/test_paths_reports_email.py -k "notify_on_success_emails_every_address or over_500_blocks"
+    - mutate:
+        - taskloom/report.py email_document
+      tests:
+        - tests/test_template_styles.py
+    - mutate:
+        - taskloom/blocks/reports.py _placed
+      tests:
+        - tests/test_template_styles.py
+        - tests/test_html_template_inputs.py -k "a_format_a_value_cannot_take or text_numbers_dates_lists"
 kinds:
   - kind: The same HTML in other letter case
     why: >-
@@ -18,3 +29,10 @@ kinds:
     mutants:
       - taskloom.report.x_email_document__mutmut_10
       - taskloom.report.x_email_document__mutmut_11
+  - kind: The second pass finds no linked stylesheet
+    why: >-
+      The first pass takes every <link> out of the email (after it, a body that held
+      <link rel="stylesheet" href="https://example.com/look.css"> has no <link> left), so the second pass has none to
+      download, whatever it is told about them; left untold, it also takes out <style> elements, as it is told to.
+    mutants:
+      - taskloom.report.x_email_document__mutmut_25

@@ -1499,6 +1499,38 @@ def test_data_preview_shows_values_that_are_not_tables_and_each_output(win, qtbo
     assert not win.preview.text.isHidden() and '"status": "ok"' in win.preview.text.toPlainText()
 
 
+def test_data_preview_of_a_single_output_has_no_chooser_and_a_table_of_200_rows_is_shown_whole(win, qtbot, tmp_path):
+    tab = _run_in_editor(win, qtbot, tmp_path / "single.yaml", """
+        blocks:
+          start: {type: trigger.manual}
+          rows: {type: data.duckdb_sql, config: {inputs: [], sql: "select range as i from range(200)"}}
+          note: {type: logic.python, config: {inputs: [], code: "output = 'a note'"}}
+        edges:
+          - start.start -> rows.after
+          - start.start -> note.after
+    """)
+    assert tab.last["status"] == "success"
+
+    _select(tab, "rows")
+    assert win.preview.label.text() == "rows.result: 200 rows × 1 columns"  # all of them: no "showing first 200"
+    assert len(_grid(win)[1]) == 200 and win.preview.ports.isHidden()
+
+    _select(tab, "note")
+    assert win.preview.label.text() == "note.output:" and "a note" in win.preview.text.toPlainText()
+    assert win.preview.ports.isHidden()
+
+
+def test_data_preview_of_a_block_that_has_not_run_says_to_run_the_flow_first(win, tmp_path):
+    tab = win.open_flow(write_flow(tmp_path / "new.yaml", """
+        blocks:
+          note: {type: logic.python, config: {inputs: [], code: "output = 1"}}
+    """))
+
+    _select(tab, "note")
+
+    assert win.preview.label.text() == "Select a block to see what it produced in the last run (run the flow first)."
+
+
 def test_data_preview_shows_the_table_of_the_run_opened_from_run_history(win, qtbot, tmp_path):
     data = tmp_path / "data.csv"
     flow = write_flow(tmp_path / "history.yaml", """

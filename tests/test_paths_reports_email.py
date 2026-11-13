@@ -1336,6 +1336,17 @@ def test_notify_on_success_emails_every_address_in_the_settings(env, smtp):
     assert "weekly" in html and ">fine<" in html and ">success<" in html
 
 
+def test_the_email_about_a_run_of_over_500_blocks_lists_500_of_them_and_says_so(env, smtp):
+    env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\nnotify_on: [success]\n")
+    blocks = "".join(f"\n      b{n}: {{type: logic.python, config: {{inputs: [], outputs: [], code: pass}}}}"
+                     for n in range(501))
+
+    assert run(env, f"\n    name: many\n    blocks:{blocks}\n", "--notify").returncode == 0
+
+    html = html_of(smtp.messages[0])
+    assert len(re.findall(r">b\d+<", html)) == 500 and "Showing 500 of 501 rows." in html
+
+
 def test_a_flows_notify_section_turns_emails_off_or_sends_them_elsewhere(env, smtp):
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")  # on failure
     off = FAILING_FLOW.replace("name: nightly", "name: quiet\n    notify: {when: []}")
