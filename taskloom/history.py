@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS keeps (
     flow_path TEXT NOT NULL, block TEXT NOT NULL, keep TEXT, keep_failed INTEGER NOT NULL,
     PRIMARY KEY (flow_path, block)
 );
+CREATE TABLE IF NOT EXISTS carried_on (run_id INTEGER PRIMARY KEY, carried_on_from INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS carried_on_later ON carried_on (carried_on_from);
 """
 
 
@@ -66,23 +68,17 @@ class History:
                    for table in ("runs", "logs", "blocks")}
         # A history file from before runs recorded their process, what started them, the start blocks they count
         # for, the version of the flow file they ran, when they began, for which schedule the scheduler service started
-        # them, the run a re-run carried on from, before log lines said how the Log shows them, before blocks kept the
-        # query they sent, or how a block inside a Loop ended over its items: it gets the column (a run from before has
-        # no version: NULL).
+        # them, before log lines said how the Log shows them, before blocks kept the query they sent, or how a block
+        # inside a Loop ended over its items: it gets the column (a run from before has no version: NULL).
         for table, name, kind in (("runs", "pid", "INTEGER"), ("runs", "started_by", "TEXT NOT NULL DEFAULT ''"),
                                   ("runs", "counts_for", "TEXT NOT NULL DEFAULT ''"), ("runs", "version", "TEXT"),
                                   ("runs", "began", "REAL"), ("runs", "schedule", "TEXT"),
-                                  ("runs", "carried_on_from", "INTEGER"),
                                   ("logs", "show", "TEXT"), ("blocks", "query", "TEXT"), ("blocks", "items", "TEXT")):
             if name not in columns[table]:
                 try:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
                 except sqlite3.OperationalError:
                     pass  # another process added it just now
-        # Only re-runs are in it: finding the runs that carried on from a run (carried_on, forget) reads none of the
-        # others, which can be millions.
-        self._db.execute("CREATE INDEX IF NOT EXISTS runs_carried_on ON runs (carried_on_from) "
-                         "WHERE carried_on_from IS NOT NULL")
         self._lock = threading.Lock()
 
     def _exec(self, sql, args=()):
@@ -97,8 +93,8 @@ class History:
         Always keep failed runs ({block: (keep, keep_failed)}); from now on these decide for all their runs.
         `version`: the version of the flow file it runs (the Git blob id of the bytes it read). `schedule`: the
         scheduler service started it, for this schedule (e.g. "cron 0 7 * * *"). `carried_on_from`: the earlier run a
-        re-run of a block took its inputs from (its folder began as a copy of that run's). The run records itself so,
-        from its own process: with that process (pid) and the moment it began (seconds since 1970, which no clock or
+        re-run of a block took its inputs from (its folder began as a copy of that run's); kept apart from the runs,
+        so that it outlives both (see carried_on). The run records itself so, from its own process: with that process (pid) and the moment it began (seconds since 1970, which no clock or
         time zone change alters), by which that process had begun (see launch.run_alive). `claim(db)`, if given, is
         done first, in the same transaction: it may refuse the run by raising, and then nothing is recorded (a run
         the scheduler service started claims its time or its place in the line so: scheduler.claim_time)."""
@@ -112,10 +108,13 @@ class History:
                                  "keep_failed=excluded.keep_failed", (flow_path, block, kept, failed))
             cur = self._db.execute(
                 "INSERT INTO runs (flow, flow_path, params, status, started, pid, started_by, counts_for, version, "
-                "began, schedule, carried_on_from) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "began, schedule) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)",
                 (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by,
-                 ", ".join(counts_for), version, time.time(), schedule, carried_on_from),
+                 ", ".join(counts_for), version, time.time(), schedule),
             )
+            if carried_on_from is not None:
+                self._db.execute("INSERT INTO carried_on (run_id, carried_on_from) VALUES (?, ?)",
+                                 (cur.lastrowid, carried_on_from))
         return cur.lastrowid
 
     def __call__(self, event: dict):
@@ -166,11 +165,7 @@ class History:
             yield run_id, flow_path, status, started, counts_for.split(", ") if counts_for else []
 
     def forget(self, run_id: int):
-        """Forget a run, with its block results, values and logs. The runs that carried on from it then carry on from
-        the run it carried on from (a full run: they keep its number), so carried_on still finds them from the runs
-        before it."""
-        self._exec("UPDATE runs SET carried_on_from = COALESCE((SELECT carried_on_from FROM runs WHERE id=?), "
-                   "carried_on_from) WHERE carried_on_from=?", (run_id, run_id))
+        """Forget a run, with its block results, values and logs; not which run it carried on from (see carried_on)."""
         self._exec("DELETE FROM logs WHERE run_id=?", (run_id,))
         self._exec("DELETE FROM blocks WHERE run_id=?", (run_id,))
         self._exec("DELETE FROM runs WHERE id=?", (run_id,))
@@ -195,10 +190,12 @@ class History:
 
     def carried_on(self, run_id: int) -> list[int]:
         """The runs that carried on from run `run_id` (see start_run), directly or through other re-runs, newest
-        first; not those still going."""
-        rows = self._exec("WITH RECURSIVE later(id, status) AS (SELECT id, status FROM runs WHERE carried_on_from = ? "
-                          "UNION SELECT r.id, r.status FROM runs r JOIN later ON r.carried_on_from = later.id) "
-                          "SELECT id FROM later WHERE status != 'running' ORDER BY id DESC", (run_id,))
+        first; not those forgotten since or still going. Run `run_id` and the re-runs in between may be forgotten:
+        a result still on the canvas from one of them leads to the runs that hold what it held."""
+        rows = self._exec("WITH RECURSIVE later(id) AS (SELECT run_id FROM carried_on WHERE carried_on_from = ? "
+                          "UNION SELECT c.run_id FROM carried_on c JOIN later ON c.carried_on_from = later.id) "
+                          "SELECT r.id FROM later JOIN runs r ON r.id = later.id WHERE r.status != 'running' "
+                          "ORDER BY r.id DESC", (run_id,))
         return [row[0] for row in rows]
 
     def version_runs(self, flow_path: str) -> dict[str, dict]:

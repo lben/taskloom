@@ -403,6 +403,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                     runner.outputs, runner.blocked, runner.before_unhandled, runner.outside = _from_before(
                         flow, registry, home, part, source, start)
             status = runner.run()
+            if only:
+                runner.pass_cookies_on()
         except BaseException:
             # Never leave the run, or a block of it, recorded as "running" (e.g. a forced second Ctrl+C).
             status = "cancelled" if cancel.is_set() else "failed"
@@ -1013,6 +1015,7 @@ class _Runner:
         if failed:
             return (*self._fail(spec, 1, Failed("; ".join(failed)), given or {}), records)
         ran = [k for k in range(n) if records[k] is not None]
+        gave: dict = {b: {} for b in self._at_level(part)}
         for source in leaving:  # what leaves the runs: by line
             missing = [names[k] for k in ran if source not in records[k][2]]
             if missing:
@@ -1020,7 +1023,12 @@ class _Runner:
                     f"nothing left {source[0]}.{source[1]} in the run{'s' if len(missing) > 1 else ''} for "
                     f"{', '.join(missing)}: what comes after the runs gets nothing from it")})
             else:
-                self.outputs[source] = PerLine((names[k], records[k][2][source]) for k in ran)
+                self.outputs[source] = gave.setdefault(source[0], {})[source[1]] = PerLine(
+                    (names[k], records[k][2][source]) for k in ran)
+        # Each run keeps its blocks' results in its own folder; kept here over the lines, they are there for a block
+        # after the runs run on its own from this run (which may not have run it, e.g. a run of only the Merger).
+        for block, by_line in gave.items():
+            self._keep_outputs(block, by_line, status="success")
         produced = {"value": PerLine((names[k], values[k]) for k in sorted(values))}  # (the Merger's output)
         self.emit({"event": "log", "block": merger, "level": "INFO",
                    "message": f"{n} line{'s' if n != 1 else ''} done"})
@@ -1126,8 +1134,6 @@ class _Runner:
                 if merger and first == LINES else f"nothing reached its '{first}' input")
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped", "summary": why})
             return None
-        if by_line:  # what running it again on its own gets (the runs' blocks keep nothing at this level)
-            self._keep_outputs(block_id, inputs, KEPT_INPUTS)
         return inputs
 
     def _failed_lines(self, merger: str, incoming: list) -> list[str]:
@@ -1275,7 +1281,8 @@ class _Runner:
         Session is inside), which the lines running at the same time share (it has a lock of its own). What it holds
         just before the block runs is kept with the block's outputs (KEPT_COOKIES), for running again from it: a run
         that carries on from another starts it with the cookies the Session held just before the first of its blocks
-        to send a request did there, and the Log says so."""
+        to send a request did there (or, that run being of only a block before it, as that run left them: see
+        pass_cookies_on), and the Log says so."""
         level, owner = self.flow.sessions.get(spec.session), self
         while owner.parent is not None and (owner.loop != level or owner.parent.loop == owner.loop):
             owner = owner.parent  # (a line's: the runner's whose line it is)
@@ -1294,10 +1301,22 @@ class _Runner:
                         said = f"session {spec.session} starts with no cookies: {run} kept none for {spec.id}"
                     self.emit({"event": "log", "block": spec.id, "level": "INFO", "message": said})
             held = _held(jar)
-        folder = self.workspace / spec.id
+        self._keep_cookies(spec.id, held)
+        return jar
+
+    def _keep_cookies(self, block: str, held: list):
+        folder = self.workspace / block
         folder.mkdir(parents=True, exist_ok=True)
         (folder / KEPT_COOKIES).write_bytes(pickle.dumps(held))
-        return jar
+
+    def pass_cookies_on(self):
+        """After a run of only one block: the requests after it in a Session it sent requests in, which did not run,
+        keep the Session's cookies as they are now, in place of those from before the block ran again. Run on its own
+        from this run, each sends these (e.g. the new login's, not the one it sent last time)."""
+        for session, jar in self.jars.items():
+            for block in _after(self.flow, self.only) - self.taking_part:
+                if self.flow.blocks[block].session == session and self.flow.blocks[block].type == API_REQUEST:
+                    self._keep_cookies(block, _held(jar))
 
     def _fail(self, spec, attempts, error, inputs) -> tuple[str, dict]:
         block_id = spec.id
@@ -1549,6 +1568,9 @@ def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[d
             edges = [e for e in flow.edges if e.dst == only and e.dst_port == port]
             in_port = input_ports(flow, registry, only).get(port)
             values[port], came[port] = _arriving(in_port, edges, delivered), _came(in_port, edges, delivered)
+    if flow.blocks[only].type == MERGER and any(isinstance(v, PerLine) for v in values.get(LINES, {}).values()):
+        values[LINES] = _by_line(values[LINES])  # (as _gather: it closes the runs of a Merger set to each line)
+        del came[LINES]  # one line per run now: no longer one part per connection
     return values, missing, {}, came
 
 
@@ -1784,7 +1806,8 @@ def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, give
     # give, a block that did not run then may still lack its `after` (it only sets the order).
     unresolved = [why for port, why in missing.items() if port not in given and not (given and port == AFTER)]
     if unresolved:
-        raise ValueError(f"{unresolved[0]}: run the whole flow instead, or choose its inputs")
+        instead = "run the whole flow instead"  # (a block before it that did not run: its reason ends so already)
+        raise ValueError(f"{unresolved[0].removesuffix(': ' + instead)}: {instead}, or choose its inputs")
     values = {k: v for k, v in {**values, **given}.items() if v is not NO_VALUE}
     needed = [name for name, port in in_ports.items() if port.required and name not in values]
     if needed:
@@ -1864,8 +1887,8 @@ def _tables_to_marks(value):
         return {"__table__": str(value.path)}
     if isinstance(value, (list, tuple)):
         return type(value)(_tables_to_marks(v) for v in value)
-    if isinstance(value, dict):
-        return {k: _tables_to_marks(v) for k, v in value.items()}
+    if isinstance(value, dict):  # (what left a Merger's runs is still by line when read again)
+        return (PerLine if isinstance(value, PerLine) else dict)((k, _tables_to_marks(v)) for k, v in value.items())
     return value
 
 
@@ -1876,7 +1899,7 @@ def _map_marks(value, fn):
     if isinstance(value, (list, tuple)):
         return type(value)(_map_marks(v, fn) for v in value)
     if isinstance(value, dict):
-        return {k: _map_marks(v, fn) for k, v in value.items()}
+        return (PerLine if isinstance(value, PerLine) else dict)((k, _map_marks(v, fn)) for k, v in value.items())
     return value
 
 

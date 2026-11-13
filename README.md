@@ -240,12 +240,12 @@ taskloom editor examples/daily-sales-report.yaml
   any font installed on your computer. Text does not run.
 - **Retry after a fix:** right-click the block →
   - **Run only this block, with the same inputs**: only that block runs, with what reached
-    it in the newest run that carries on from the one its result on the canvas comes from
-    (the menu names that run), so it gets what a block before it made when that block was
-    run again on its own. A block showing no result, e.g. one added since: the same, from
-    the latest run among the results of the blocks connected into it. While the canvas shows
-    a run you opened from Run history, that run is used as it is. The other blocks keep
-    their results (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
+    it in the newest run among the results on the canvas of the block and the blocks before
+    it, or in the newest re-run that carries on from that run (the menu names the run). So
+    it gets what a block before it made when that block was run again on its own, and what
+    a run that ended before reaching it (stopped, or its process died) made up to there.
+    While the canvas shows a run you opened from Run history, that run is used as it is.
+    The other blocks keep their results (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
   - **Run from this block on, with the same inputs** (or **with inputs I choose…**): that
     block and every block after it
     (error handlers too) run; the blocks before it are not run again, what they held in
@@ -258,10 +258,10 @@ taskloom editor examples/daily-sales-report.yaml
   on** on the first of them: retrying a block past an old one is refused, and Taskloom says
   which block to retry first.
 - **Test a block with values you choose:** right-click it → **Run only this block, with
-  inputs I choose…**. Each input is filled in with what reached it in the newest run that
-  carries on from the one its result comes from (the window names that run; a block showing
-  no result: from the latest run among the results of the blocks connected into it; empty
-  if it did not run); change any of them and press Run. Write values as Python: `42`, `'text'`,
+  inputs I choose…**. Each input is filled in with what reached it in the same run as
+  above: the newest among the results of the block and the blocks before it, or the newest
+  re-run that carries on from it (the window names that run; empty if none of them shows a
+  result); change any of them and press Run. Write values as Python: `42`, `'text'`,
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
   what you typed and works it out again, so after editing `data.csv` just press Run.

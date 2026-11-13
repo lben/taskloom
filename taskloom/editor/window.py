@@ -1117,15 +1117,21 @@ class MainWindow(QMainWindow):
             history.close()
 
     def inputs_run(self, tab: FlowTab, block_id: str) -> int | None:
-        """The run whose inputs "with the same inputs" gives a block, and "with inputs I choose…" is filled in with:
-        the newest run that carries on from the run of the result it shows, directly or through other re-runs (so
-        what a block before it made when it ran again is seen), whose files still exist; none: that run itself.
-        Showing no result (e.g. a block added since), or with none of those runs' files left, the same from the
-        latest run among the results the blocks connected into it show. While the canvas shows a run you opened from
-        Run history, that run as it is."""
-        into = max(filter(None, (tab.result_run(src) for src, _, dst, _ in tab.doc.edges() if dst == block_id)),
-                   default=None)
-        runs = [run_id for run_id in (tab.result_run(block_id), into) if run_id]
+        """The run whose inputs "with the same inputs" gives a block, and "with inputs I choose…" is filled in with.
+        It starts from the newest run among the results that the block and the blocks before it (at any distance
+        along the connections) show: a full run that ended before reaching the block is seen so, where the block
+        still shows the run before. From there, the newest run that carries on from that run, directly or through
+        other re-runs (so what a block before it made when it ran again is seen), whose files still exist; none:
+        that run itself. With none of those runs' files left, the same from the next newest of the runs shown. Not
+        the flow's newest run: a run none of these blocks took part in holds nothing of theirs. While the canvas
+        shows a run you opened from Run history, that run as it is."""
+        edges, before, todo = tab.doc.edges(), {block_id}, [block_id]
+        while todo:
+            block = todo.pop()
+            for src in {src for src, _, dst, _ in edges if dst == block} - before:
+                before.add(src)
+                todo.append(src)
+        runs = sorted({tab.result_run(block) for block in before} - {None}, reverse=True)
         if runs and tab.following_latest:
             history = self._history()
             try:
@@ -1340,13 +1346,13 @@ class MainWindow(QMainWindow):
             self.show_history_run(dialog.run_id, tab)
 
     def rerun_block(self, tab: FlowTab, block_id: str, on: bool = False):
-        """Run one block again (`on`: and every block after it), with the inputs it got in the newest run that
-        carries on from the one its result comes from (e.g. after fixing it, or a block before it; see inputs_run);
-        the blocks before it do not run."""
+        """Run one block again (`on`: and every block after it), with the inputs it got in the newest run among the
+        results of the block and the blocks before it, or the newest re-run that carries on from that run (e.g. after
+        fixing it, or a block before it; see inputs_run); the blocks before it do not run."""
         run_id = self.inputs_run(tab, block_id)
         if run_id is None:
-            QMessageBox.information(self, "Run the flow first", "Neither this block nor the blocks connected into it "
-                                    "show a result to take the inputs from.")
+            QMessageBox.information(self, "Run the flow first", "Neither this block nor the blocks before it show a "
+                                    "result to take the inputs from.")
             return
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
@@ -1357,8 +1363,9 @@ class MainWindow(QMainWindow):
         self.start_run(tab, {}, ["--from" if on else "--only", block_id, "--inputs-from", str(run_id)], rerun=True)
 
     def run_block_with_inputs(self, tab: FlowTab, block_id: str, on: bool = False):
-        """Run one block (`on`: and the blocks after it) with input values you type for it (filled in with
-        what reached it in the newest run that carries on from the one its result comes from: see inputs_run)."""
+        """Run one block (`on`: and the blocks after it) with input values you type for it (filled in with what
+        reached it in the newest run among the results of the block and the blocks before it, or the newest re-run
+        that carries on from that run: see inputs_run)."""
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
