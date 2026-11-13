@@ -176,3 +176,145 @@ def test_one_reason_explains_every_missed_mutant_of_its_kind_and_no_other(tmp_pa
                           {"kinds": [kind], "scope": scope, f"{TABLE}3": "Its own reason."})
     assert done.returncode == 0, done.stdout + done.stderr
     assert (result["score"], result["unexplained"], result["passed"]) == (92.3, [], True)
+
+
+PYPROJECT = """\
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mutmut]
+source_paths = ["pkg/"]
+timeout_multiplier = 2.0
+timeout_constant = 2.0
+pytest_add_cli_args = ["-p", "no:cacheprovider"]
+"""
+COMMAND = "import sys\n\nfrom pkg import calc\n\nprint(getattr(calc, sys.argv[1])(int(sys.argv[2])))\n"
+SHOWN = '''\
+import subprocess
+import sys
+
+import pytest
+
+
+@pytest.fixture
+def shown(tmp_path):
+    """What `python -m pkg FUNCTION N` prints, run as a child process in another folder."""
+    return lambda function, n: subprocess.run([sys.executable, "-m", "pkg", function, str(n)], cwd=tmp_path,
+                                              capture_output=True, text=True).stdout.strip()
+'''
+DOUBLE = '"""Small sums."""\n\n\ndef double(n):\n    return n * 2\n'
+TRIPLE = "def triple(n):\n    return n * 3\n"
+DOUBLE_TEST = 'def test_double(shown):\n    assert shown("double", 3) == "6"\n'
+
+
+def standin(tmp_path, calc: str, tests: dict, scope: dict):
+    """Runs the real script with --run on a small project of its own: pkg/calc.py, the functions the bugs are
+    planted in; `python -m pkg FUNCTION N`, which prints FUNCTION(N); and tests that never import pkg: they only
+    start that command, as a child process in another folder. So a test passes only if the child process imports
+    the copy of the code that mutmut planted the bugs in, and catches a bug only if the child takes the one under
+    test."""
+    project = tmp_path / "project"
+    for name, text in {"pyproject.toml": PYPROJECT, "pkg/__init__.py": "", "pkg/__main__.py": COMMAND,
+                       "pkg/calc.py": calc, "tests/conftest.py": SHOWN, **tests}.items():
+        (project / name).parent.mkdir(parents=True, exist_ok=True)
+        (project / name).write_text(text, encoding="utf-8")
+    (project / "small.mutants.yaml").write_text(yaml.safe_dump({"scope": scope}), encoding="utf-8")
+    done = subprocess.run([sys.executable, str(SCRIPT), str(project), "--run", "--workers", "3", "--explained",
+                           str(project / "small.mutants.yaml"), "--out", str(tmp_path / "mutants.json")],
+                          capture_output=True, text=True, timeout=600)
+    return done, json.loads((tmp_path / "mutants.json").read_text(encoding="utf-8"))
+
+
+def test_a_bug_is_caught_through_a_child_process_and_one_no_test_notices_is_reported_with_its_change(tmp_path):
+    """The tests reach the code only through a child process, where mutmut links no test to a function and so
+    judges nothing. Each planted bug is run with the scope's tests all the same: those in double, whose result a
+    test checks, are all caught; those in note that only change its words, which no test reads, are missed and
+    reported with their change and no reason, so the run fails."""
+    note = 'def note(n):\n    return "n is " + str(n)\n'
+    done, result = standin(tmp_path, DOUBLE + "\n\n" + note, {
+        "tests/test_calc.py": DOUBLE_TEST + '\n\ndef test_note_says_something(shown):\n    assert shown("note", 3)\n'},
+        {"mutate": ["pkg/calc.py double", "pkg/calc.py note"], "tests": ["tests/test_calc.py"]})
+
+    planted = {n["function"]: n["mutants"] for n in result["scope"]}
+    assert done.returncode == 1 and result["unjudged"] == [], done.stdout + done.stderr
+    assert planted["pkg/calc.py double"] > 0 and result["total"] == sum(planted.values())
+    assert result["survivors"] and {s["where"] for s in result["survivors"]} == {"pkg/calc.py note"}
+    assert result["killed"] == result["total"] - len(result["survivors"]) >= planted["pkg/calc.py double"] + 1
+    assert all("n is" in s["change"] and "→" in s["change"] for s in result["survivors"]), result["survivors"]
+    assert result["unexplained"] == [s["name"] for s in result["survivors"]] and not result["passed"]
+    assert f"missed {result['survivors'][0]['name']}: " in done.stdout and "NO REASON GIVEN" in done.stdout
+
+
+def test_a_group_of_functions_runs_its_own_tests_and_the_others_run_the_scopes(tmp_path):
+    """An entry of mutate: may be a group, mutate: and tests: of its own (each of tests: one pytest run, a file with
+    -k words or without), so that a bug runs only the tests that can see it. triple's bugs run test_more.py -k
+    triple, which catches them: the scope's tests would not (they never call triple), and without -k the other
+    test there fails with no bug planted. double is not in a group: its bugs run the scope's tests."""
+    more = 'def test_triple(shown):\n    assert shown("triple", 3) == "9"\n\n\ndef test_other():\n    assert False\n'
+    done, result = standin(tmp_path, DOUBLE + "\n\n" + TRIPLE, {
+        "tests/test_double.py": DOUBLE_TEST, "tests/test_more.py": more},
+        {"tests": ["tests/test_double.py"], "mutate": [
+            "pkg/calc.py double", {"mutate": ["pkg/calc.py triple"], "tests": ["tests/test_more.py -k triple"]}]})
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert [n["function"] for n in result["scope"]] == ["pkg/calc.py double", "pkg/calc.py triple"]
+    assert all(n["mutants"] > 0 for n in result["scope"])
+    assert result["killed"] == result["total"] == sum(n["mutants"] for n in result["scope"])
+    assert (result["score"], result["survivors"], result["unjudged"], result["passed"]) == (100.0, [], [], True)
+
+
+def test_tests_that_fail_with_no_bug_planted_stop_the_run_before_any_bug_is_judged(tmp_path):
+    """A test that fails on the code as it is would catch every bug: the scope's tests first run with no bug
+    planted, and when they fail the run stops, says so, and no bug gets a verdict."""
+    done, result = standin(tmp_path, DOUBLE, {
+        "tests/test_calc.py": 'def test_double(shown):\n    assert shown("double", 3) == "7"\n'},
+        {"mutate": ["pkg/calc.py double"], "tests": ["tests/test_calc.py"]})
+
+    assert done.returncode == 1
+    assert "tests/test_calc.py: the tests fail with no mutant planted" in done.stdout, done.stdout + done.stderr
+    assert (result["killed"], result["total"], result["survivors"], result["passed"]) == (0, 0, [], False)
+    assert result["unjudged"] and all(name.endswith("(exit None)") for name in result["unjudged"])
+
+
+def test_a_bug_that_makes_the_tests_hang_is_caught_by_the_time_limit(tmp_path):
+    """A planted bug can make the code never end (here: counting down by one becomes counting up, and the child
+    process never reaches 0). Its tests are stopped at a time limit, a multiple of the time they take with no bug
+    planted, and the bug counts as caught; the run goes on to the next bug."""
+    countdown = ("def countdown(n):\n    steps = 0\n    while n != 0:\n        n -= 1\n        steps += 1\n"
+                 "    return steps\n")
+    done, result = standin(tmp_path, countdown, {
+        "tests/test_calc.py": 'def test_countdown(shown):\n    assert shown("countdown", 3) == "3"\n'},
+        {"mutate": ["pkg/calc.py countdown"], "tests": ["tests/test_calc.py"]})
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "caught, at the time limit" in done.stdout, done.stdout
+    assert (result["score"], result["survivors"], result["unjudged"]) == (100.0, [], [])
+
+
+def test_a_function_the_scope_does_not_name_stays_as_it_is_written(tmp_path):
+    """mutmut wraps every function it plants a bug in, and the wrapper takes any arguments. Code that looks at
+    what a function takes then sees something else: Qt gives a slot as many of a signal's values as it takes, so a
+    wrapped slot that takes none gets them all and fails, with no bug on. Bugs are planted only in the functions
+    the scope names, so the file's other functions stay as written: here pair, which arguments() looks at."""
+    calc = (DOUBLE + "\n\ndef pair(a, b):\n    return a + b\n"
+            "\n\ndef arguments(n):\n    return pair.__code__.co_argcount + n\n")
+    takes_two = 'def test_pair_takes_two(shown):\n    assert shown("arguments", 0) == "2"\n'
+    done, result = standin(tmp_path, calc, {"tests/test_calc.py": DOUBLE_TEST + "\n\n" + takes_two},
+                           {"mutate": ["pkg/calc.py double"], "tests": ["tests/test_calc.py"]})
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert result["scope"] == [{"function": "pkg/calc.py double", "mutants": result["killed"]}]
+    assert (result["score"], result["survivors"], result["unjudged"]) == (100.0, [], [])
+
+
+def test_a_bug_that_makes_the_tests_own_process_die_is_caught(tmp_path):
+    """A planted bug can end the process of the tests themselves (in the editor's tests: a grid given no table
+    crashes Qt; here: the signal that only asks whether a process lives becomes one that ends it). The tests passed
+    with no bug planted and did not pass with it, so it counts as caught, not as a run that proves nothing."""
+    alive = "import os\n\n\ndef alive(n):\n    os.kill(os.getpid(), 0)\n    return n\n"
+    done, result = standin(tmp_path, alive, {
+        "tests/test_calc.py": "from pkg.calc import alive\n\n\ndef test_alive():\n    assert alive(3) == 3\n"},
+        {"mutate": ["pkg/calc.py alive"], "tests": ["tests/test_calc.py"]})
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (result["score"], result["survivors"], result["unjudged"]) == (100.0, [], [])
