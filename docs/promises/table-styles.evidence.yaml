@@ -37,6 +37,14 @@ STY-6:
     is not text) and returns HTML from another template as it is.
   not_green: >-
     Tests try a table, a number, a list, a picture and a date; no check tries every kind of value.
+STY-7:
+  enforced: >-
+    email_document marks the email's own layout table, its row and its cell for the inliner to skip, so a rule of the
+    body's own reaches only what the body holds; a table written in the template is part of the body and takes the
+    rule.
+  not_green: >-
+    Tests send emails with a td rule and with a table rule and read the frame's and the cells' styles; no check tries
+    every selector a template could write.
 
 # The checker of this feature: mutation testing of the functions the change touched, which are the scope in
 # table-styles.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
