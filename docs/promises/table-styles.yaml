@@ -5,7 +5,10 @@
 feature: A template's own styles win, and {name:html}
 agreed: 2026-11-11
 # The maintainer's own words that led to these rows, with the date they were said.
-asked: []
+asked:
+  - date: 2026-11-14
+    # Asked whether a td rule may draw a border around the whole email, whose own layout cell is also a td (STY-7).
+    words: "yes, do not draw a border around the whole email"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_table_styles]
 rows:
@@ -27,3 +30,6 @@ rows:
   STY-6: >-
     {name:html} on something that is not text stops the run with "Template: {my_table:html}: html applies only to
     text". That covers a table, a number, a list and a picture. HTML from another template is passed as it is.
+  STY-7: >-
+    Your rules style your content, not the email's own frame. With the td rule of STY-1, the email gets no border
+    around its whole body. A table you write yourself in the Template still takes your rules.

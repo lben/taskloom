@@ -1,0 +1,52 @@
+# What must always be true of long output in the Log, Inspect and Data preview, as agreed with the maintainer in chat
+# on 2026-11-14 (the lighter choice, decided on 2026-11-11). Each row is checked by the tests marked
+# @pytest.mark.invariant("NC-<n>"); the proof's ledger is built from their results. Changing a row's words needs the
+# maintainer's approval first. "Long" means over 200 lines or over 20,000 characters.
+feature: Long output in the Log, Inspect and Data preview
+agreed: 2026-11-14
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    # Chosen between the whole text in the Log itself and this.
+    words: "The lighter choice: the Log shows a long message’s first 200 lines and a “show all” that opens the whole value in Data preview."
+  - date: 2026-11-11
+    # About a table shown in the Log (NC-9).
+    words: "keep the table a small look"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_long_output]
+rows:
+  NC-1: >-
+    A long message in the Log shows its first 200 lines and a "show all". Inspect on an API response of 5 MB (236,765
+    lines): the Log shows its first 200 lines, then "… 236,565 more lines (4,830,112 characters in all) · show all".
+    A message that is not long is whole in the Log: a JSON of 150 lines and 9,000 characters is shown to its closing }.
+  NC-2: >-
+    "show all" opens the whole message in Data preview. Press it: Data preview comes to the front, its label reads
+    "Log message of inspect_orders, 09:02:41: 236,765 lines", and the box holds all of it down to the closing }.
+    Selecting a block brings Data preview back to that block's outputs.
+  NC-3: >-
+    Data preview shows the whole text or JSON of a block's output. Select the block that made the 5 MB response:
+    scroll to the end and the closing } is there.
+  NC-4: >-
+    It stays whole afterwards. Open that run later from Run history: the same 200 lines, and show all still opens all
+    of it. In Data preview, Copy gives all of it and Find finds a word on its last line. Copying from the Log does not
+    hang on a long message.
+  NC-5: >-
+    The editor stays responsive. With that 5 MB JSON the window never fails to answer for more than 1 second: while the
+    flow runs, when you press show all, and when you select the block. All of it is in Data preview within 15 seconds
+    of pressing show all.
+  NC-6: >-
+    A very long line is folded in Data preview. A line over 2,000 characters, such as a JSON printed on one line, is
+    shown as lines of 2,000. Copy gives it back as one line, and Find finds a word across a fold.
+  NC-7: >-
+    Secrets stay hidden in the whole text. A 5 MB response that contains your API token shows *** in its place, in the
+    Log, Data preview and the run history.
+  NC-8: >-
+    One-line labels stay one line, and say when they are shortened. The finished line reads "✓ result: {'orders':
+    [{'id': 1, … (4,830,112 characters)". The same for each input and variable in an error report, and for the hover
+    over a block (its first 4,000 characters, then …).
+  NC-9: >-
+    A table in the Log stays a small look at the table: its count of rows and columns, its first 5 and last 5 rows,
+    cells shortened with … at 60 characters. The whole table with whole cells is in Data preview's grid.
+  NC-10: >-
+    The Log keeps the latest 20,000 messages and at most 50 million characters. Older runs' messages leave first and
+    stay in Run history; the newest message is always kept whole.
