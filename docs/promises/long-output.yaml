@@ -12,6 +12,10 @@ asked:
   - date: 2026-11-11
     # About a table shown in the Log (NC-9).
     words: "keep the table a small look"
+  - date: 2026-11-14
+    # Asked where the count goes when the line under a block has no room for it (NC-8): my recommendation was to keep
+    # the value's start under the block and put the count in the hover.
+    words: "Regarding your NC-8 question go with your recommendation"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_long_output]
 rows:
@@ -42,8 +46,9 @@ rows:
     Log, Data preview and the run history.
   NC-8: >-
     One-line labels stay one line, and say when they are shortened. The finished line reads "✓ result: {'orders':
-    [{'id': 1, … (4,830,112 characters)". The same for each input and variable in an error report, and for the hover
-    over a block (its first 4,000 characters, then …).
+    [{'id': 1, … (4,830,112 characters)". The same for each input and variable in an error report. Under a block the
+    line keeps the value's start and is cut to the block's width with …; the hover over the block shows the value's
+    first 4,000 characters and then "… (4,830,112 characters)".
   NC-9: >-
     A table in the Log stays a small look at the table: its count of rows and columns, its first 5 and last 5 rows,
     cells shortened with … at 60 characters. The whole table with whole cells is in Data preview's grid.
