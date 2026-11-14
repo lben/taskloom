@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 SCRIPT = Path(__file__).resolve().parents[1] / "packaging" / "mutants.py"
@@ -213,6 +214,8 @@ def standin(tmp_path, calc: str, tests: dict, scope: dict):
     start that command, as a child process in another folder. So a test passes only if the child process imports
     the copy of the code that mutmut planted the bugs in, and catches a bug only if the child takes the one under
     test."""
+    if sys.platform == "win32":
+        pytest.skip("bugs are planted by mutmut, which does not run on Windows")
     project = tmp_path / "project"
     for name, text in {"pyproject.toml": PYPROJECT, "pkg/__init__.py": "", "pkg/__main__.py": COMMAND,
                        "pkg/calc.py": calc, "tests/conftest.py": SHOWN, **tests}.items():

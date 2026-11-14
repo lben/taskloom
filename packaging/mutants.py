@@ -227,7 +227,9 @@ def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
             run = subprocess.Popen(
                 [sys.executable, "-m", "pytest", "-x", "-q", "--rootdir=.", *settings.get("pytest_add_cli_args", []),
                  *shlex.split(item)], cwd=copy, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
-                env={**os.environ, "MUTANT_UNDER_TEST": mutant, "PYTHONPATH": path, "TMPDIR": tmp})
+                # (not the options of a pytest run this one is started from, e.g. which tests to run)
+                env={**{k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"},
+                     "MUTANT_UNDER_TEST": mutant, "PYTHONPATH": path, "TMPDIR": tmp})
             try:
                 code = run.wait(limit)
             except subprocess.TimeoutExpired:
