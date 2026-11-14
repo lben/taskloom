@@ -794,6 +794,7 @@ class NoteItem(QGraphicsTextItem):
 class FlowScene(QGraphicsScene):
     # Each with whether it was chosen: False when the canvas is only drawn again after a change to the flow.
     block_selected = Signal(object, bool)  # block id or None
+    block_clicked = Signal(str)  # a left click on the block that alone is selected already (no block_selected then)
     note_selected = Signal(str, bool)  # a text on the canvas, when it alone is selected
     block_menu = Signal(str, object)  # block id, screen position (right-click on a block)
     canvas_menu = Signal(object, object)  # scene position, screen position (right-click on empty canvas)
@@ -1121,7 +1122,12 @@ class FlowScene(QGraphicsScene):
             self.addItem(self._drag_line)
             event.accept()
             return
+        selected = self.selected_block_ids()
         super().mousePressEvent(event)
+        node = self.mouseGrabberItem()  # the item that took the press
+        if (event.button() == Qt.LeftButton and isinstance(node, NodeItem)
+                and selected == [node.block_id] == self.selected_block_ids()):
+            self.block_clicked.emit(node.block_id)
 
     @_mouse
     def mouseMoveEvent(self, event):

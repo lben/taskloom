@@ -57,15 +57,19 @@ CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
 
 
+# The Log's two limits apply at different moments. The count only ever takes earlier runs' messages, when a new run's
+# messages come after them: a run just finished, or opened from Run history, is whole in the Log. The characters are
+# memory (each message is whole in it), so that limit holds over all the messages as soon as the run that passed it
+# has ended.
 MAX_LOG_ENTRIES = 20000  # the Log keeps earlier runs' messages, up to this many
-MAX_LOG_CHARACTERS = 50_000_000  # and up to this many characters of them (each message is whole in memory)
+MAX_LOG_CHARACTERS = 50_000_000  # and, of all its messages, up to this many characters
 
 
 def _latest(entries: list[dict]) -> list[dict]:
-    """The messages the Log keeps: the latest MAX_LOG_ENTRIES, and of those the latest that together have at most
-    MAX_LOG_CHARACTERS characters. The oldest leave first; the newest stays, however long it is."""
+    """The latest messages that together have at most MAX_LOG_CHARACTERS characters. The oldest leave first; the
+    newest stays, however long it is."""
     first, characters = len(entries), 0
-    while first > max(len(entries) - MAX_LOG_ENTRIES, 0):
+    while first > 0:
         characters += len(entries[first - 1].get("message", ""))
         if characters > MAX_LOG_CHARACTERS and first < len(entries):
             break
@@ -632,6 +636,7 @@ class MainWindow(QMainWindow):
     def add_tab(self, doc: FlowDocument) -> FlowTab:
         tab = FlowTab(doc, self.registry)
         tab.scene.block_selected.connect(lambda block_id, chosen, t=tab: self._on_block_selected(t, block_id, chosen))
+        tab.scene.block_clicked.connect(lambda block_id, t=tab: self._on_block_clicked(t, block_id))
         tab.scene.block_menu.connect(lambda block_id, pos, t=tab: self._block_menu(t, block_id, pos))
         tab.scene.note_selected.connect(lambda note_id, chosen, t=tab: self._on_note_selected(t, note_id, chosen))
         tab.scene.canvas_menu.connect(lambda at, pos, t=tab: self._canvas_menu_for(t, at).exec(pos))
@@ -928,9 +933,16 @@ class MainWindow(QMainWindow):
         if block_id is not None:
             self.preview.show_outputs(block_id, tab.block_info.get(block_id), block_id in tab.scene.old)
 
+    def _on_block_clicked(self, tab: FlowTab, block_id: str):
+        """A click on the block that is already the selected one (the selection does not change): its outputs in
+        Data preview again when a Log message is there; nothing else, and nothing when its outputs are there."""
+        if tab is self.current and self.preview.block_id is None:
+            self.preview.show_outputs(block_id, tab.block_info.get(block_id), block_id in tab.scene.old)
+
     def _show_message(self, entry: dict):
         """"show all" under a long message in the Log: the whole message in Data preview, brought to the front."""
         self.preview.show_message(entry)
+        self.preview.block_id = None  # no block's outputs are in it now (see _on_block_clicked)
         self.bottom_tabs.setCurrentWidget(self.preview)
 
     # --- copy and paste -------------------------------------------------------------
@@ -1114,7 +1126,7 @@ class MainWindow(QMainWindow):
         self._end_waits(tab)  # (the run on screen until now, if it is still going)
         tab.shown_run, tab.run_blocks = run, []
         if not rerun:
-            tab.entries = _latest(tab.entries)  # its messages follow the earlier runs'
+            tab.entries = _latest(tab.entries[-MAX_LOG_ENTRIES:])  # its messages follow the earlier runs'
             if tab is self.current:
                 self.log.set_entries(list(tab.entries))
                 self.bottom_tabs.setCurrentWidget(self.log)
@@ -1558,7 +1570,7 @@ class MainWindow(QMainWindow):
                     self._apply_block_result(tab, block, {"status": "failed", "run_id": info["run_id"],
                                                           "error": "the run process stopped unexpectedly"})
             self._mark_old(tab)
-        kept = _latest(tab.entries)  # the Log's limits hold again as soon as the run that passed them has ended
+        kept = _latest(tab.entries)  # the limit of characters holds again as soon as the run that passed it has ended
         if len(kept) < len(tab.entries):
             tab.entries = kept
             if tab is self.current:
@@ -1967,7 +1979,7 @@ class MainWindow(QMainWindow):
         if run:
             logs = [_started_line(run_id, run["started"]),
                     *logs, _finished_line(run_id, run["status"], run["finished"] or run["started"])]
-        tab.entries = _latest((tab.entries if keep_log else []) + logs)
+        tab.entries = _latest((tab.entries[-MAX_LOG_ENTRIES:] if keep_log else []) + logs)
         if tab is self.current:
             self.log.set_entries(list(tab.entries))
             self.bottom_tabs.setCurrentWidget(self.log)
