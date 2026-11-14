@@ -306,26 +306,27 @@ def test_a_block_added_after_a_run_runs_on_that_runs_results(proof, win, qtbot, 
            "is not run a second time.")
     p.why_simplest("Running one block on an earlier run's results was already there, and Taskloom could already work "
                    "out what a block gets from what the blocks before it hold in a run, also for a block that took no "
-                   "part in that run. Only the menu stopped you: it looked at the block's own result alone. Now, "
-                   "when there is none, it looks at the blocks connected into it.")
-    p.why_simplest("“Run only this block, with inputs I choose…” already filled in its values that way, from the "
-                   "latest run among the blocks connected into it. The “with the same inputs” items now use that "
-                   "same rule: one rule for the whole menu.")
+                   "part in that run. Only the menu stopped you: it looked at the block's own result alone. Now it "
+                   "looks at the results of the block and of the blocks before it.")
+    p.why_simplest("“Run only this block, with inputs I choose…” fills in its values from the same run as the “with "
+                   "the same inputs” items: the newest run among those results, or the newest re-run that carries on "
+                   "from it. One rule for the whole menu.")
     p.alternative("Run the whole flow again",
                   "That is what you had to do before: it runs every block again, a slow query too, and anything the "
                   "flow sends is sent again, just to try one new block.")
     p.alternative("Always the flow's very latest run",
-                  "The latest run may be another line's, one that never touched the blocks connected into the new "
-                  "block: they would have nothing to give it. Taking the run from those blocks means the new block "
+                  "The latest run may be another line's, one that never touched the blocks before the new block: "
+                  "they would have nothing to give it. Taking the run from those blocks means the new block "
                   "gets exactly what you see on them.")
     p.alternative("Ask which run to use, each time",
                   "One more question every time, when almost always you want the results you see. To use an older "
                   "run, pick it in Run history: the canvas then shows that run, and the menu takes the inputs from "
                   "it.")
-    p.fits("The run the menu names comes from what the canvas shows: the latest of the runs whose results the blocks "
-           "connected into the new block show. So what you see on them is what it gets.")
-    p.fits("Once it has run, the new block shows its own result, like any block, and from then on its menu uses that "
-           "result, as for every other block. Run history lists the run as “only” that block, as for any block run "
+    p.fits("The run the menu names comes from what the canvas shows: the newest run among the results that the new "
+           "block and the blocks before it show, or the newest re-run that carries on from that run. So what you see "
+           "on them is what it gets.")
+    p.fits("Once it has run, the new block shows its own result, like any block, and its menu goes on following that "
+           "rule, as for every other block. Run history lists the run as “only” that block, as for any block run "
            "on its own.")
     p.fits("“Run from this block on, with the same inputs” follows the same rule: the new block and the blocks after "
            "it run, the blocks before it do not.")
