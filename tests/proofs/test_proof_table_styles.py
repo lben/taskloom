@@ -1,12 +1,12 @@
 """Proof: a template's own <style> rules win over a table's built-in look, and {name:html} puts text in as HTML. See
 README.md here."""
 
-from proofs.test_proof_failure_inputs import finished, open_flow, press_run_now
+from proofs.test_proof_failure_inputs import finished, in_the_log, open_flow, press_run_now, scroll_log_to
 from proofs.test_proof_html_template_formatting import click_block, email_reader
 from tests.test_code_editor import code_box
 from tests.test_paths_reports_email import html_of
-from tests.test_template_styles import (DARK, HEAD_LOOK, STYLED, background_shown, borders, document, effective,
-                                        paddings, styled_table)
+from tests.test_template_styles import (DARK, HEAD_LOOK, STYLED, background_shown, bordered, borders, document,
+                                        effective, frame, paddings, styled_table)
 
 ASKED = ("The HTML Template seems to override styles from df.style.apply / set_table_styles … cell padding 15px, "
          "font 15px, 1px black borders")
@@ -14,6 +14,8 @@ RULE = "<style>td {{padding: 15px; border: 1px solid black; font-size: 15px}}</s
 PRICES = 'table = pl.DataFrame({"item": ["pen", "ink", "paper"], "price": [1.2, 4.5, 3.75], "stock": [1200, 80, 15]})'
 COLUMNS = ["item", "price", "stock"]
 BLACK = [("1px", "solid", "#000000")] * 4
+BY_HAND = "<table><tr><td>a table I wrote by hand</td></tr></table>"  # typed in the Template itself
+ONLY_TEXT = "Template: {my_table:html}: html applies only to text"
 
 
 def python(code: str, x: int, y: int, output: str) -> dict:
@@ -47,6 +49,24 @@ STYLED_FLOW = {
                                   "{styled}", 520, 0),
                "send": send("Scores", 790, 0)},
     "edges": ["start.start -> styled.after", "styled.output -> report.data", "report.html -> send.body"],
+}
+
+
+# The td rule, then a table written by hand in the Template, then the table of prices.
+BY_HAND_FLOW = {
+    "blocks": {"start": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},
+               "prices": python(PRICES, 250, 0, "table"),
+               "report": template(RULE + "\n" + BY_HAND + "\n<br>\n{my_table}", 520, 0, {"prices.table": "my_table"}),
+               "send": send("Prices, and a table of my own", 790, 0)},
+    "edges": ["start.start -> prices.after", "prices.table -> report.data", "report.html -> send.body"],
+}
+# {my_table:html}, where my_table is a table and not text.
+HTML_ON_A_TABLE_FLOW = {
+    "blocks": {"start": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},
+               "prices": python(PRICES, 250, 0, "table"),
+               "report": template("Prices this week:<br>\n{my_table:html}", 520, 0, {"prices.table": "my_table"}),
+               "send": send("Prices", 790, 0)},
+    "edges": ["start.start -> prices.after", "prices.table -> report.data", "report.html -> send.body"],
 }
 
 
@@ -142,9 +162,37 @@ def test_a_td_rule_in_the_templates_style_changes_the_tables_cells(proof, smtp, 
             [background_shown(row.all("td")[0]) for row in table.all("tr")[1:]] == ["#ffffff", "#f3f6f9", "#ffffff"])
     p.check("Numbers are still on the right, text on the left",
             [td.style.get("text-align") for td in cells] == ["left", "right", "right"] * 3)
-    frame = [td for td in document(styled).all("td") if td.all("table")]  # the cell that holds your text
+    around = [td for td in document(styled).all("td") if td.all("table")]  # the cell that holds your text
     p.check("The email's own frame got none of the rule: no black border, no 15px padding",
-            frame and not any(borders(td.style) == BLACK or paddings(td.style) == ["15px"] * 4 for td in frame))
+            around and not any(borders(td.style) == BLACK or paddings(td.style) == ["15px"] * 4 for td in around))
+
+    p.step("Open own_table.yaml and click report. Under the same <style> line its Template has a table written by "
+           "hand, with one cell, then {my_table}. Press ▶ Run now and look at the email.")
+    tab = open_flow(win, monkeypatch, env.root / "own_table.yaml", BY_HAND_FLOW)
+    click_block(tab, "report")
+    box = code_box(win)
+    p.shot(win, "The Template of report: the <style> line with the td rule, the table written by hand, then "
+                "{my_table}.", highlight=[box], zoom=[box])
+    press_run_now(win)
+    finished(qtbot, tab, 1)
+    p.check("The run succeeded and the mail server received a third email",
+            tab.runs[0].status == "success" and len(smtp.messages) == 3)
+    html = html_of(smtp.messages[2])
+    reader, _ = email_reader(qtbot, smtp.messages[2])
+    p.shot(reader, "The cell you wrote by hand, at the top, takes your rule like the cells of the prices under it: "
+                   "a black border, 15px of room, 15px text. There is still no border around the email itself: the "
+                   "only black lines are around the cells.")
+    reader.close()
+    [mine] = [td for td in document(html).all("td") if td.text == "a table I wrote by hand"]
+    p.check("The cell you wrote by hand has 15px of padding, a 1px solid black border and 15px text",
+            (paddings(mine.style), borders(mine.style), mine.style.get("font-size")) == (["15px"] * 4, BLACK, "15px"))
+    p.check("So do the nine cells of the prices",
+            all((paddings(td.style), borders(td.style), td.style.get("font-size")) == (["15px"] * 4, BLACK, "15px")
+                for td in prices_table(html).all("td")) and len(prices_table(html).all("td")) == 9)
+    _, body = frame(html)  # the email's own frame: the one cell that holds the whole body
+    p.check("The email's own frame is as Taskloom draws it: no border around the whole body, its own 16px of "
+            "padding and 14px text",
+            not bordered(body.style) and (paddings(body.style), body.style.get("font-size")) == (["16px"] * 4, "14px"))
     for each in win.tabs_list():  # nothing to save when the window closes
         each.doc.dirty = False
 
@@ -202,5 +250,25 @@ def test_name_html_puts_html_text_in_as_it_is(proof, smtp, env, win, qtbot, monk
             == {"EU": "#008000", "10": "#008000", "US": None, "20": None})
     p.check("No <style> block is left in the email", "<style" not in html.lower())
     p.check("{styled}: the email also shows the tags as text", "&lt;table" in html and "&lt;/table&gt;" in html)
+
+    p.step("Open prices.yaml and click report. Its Template reads {my_table:html}, and my_table is a table, not "
+           "text. Press ▶ Run now.")
+    tab = open_flow(win, monkeypatch, env.root / "prices.yaml", HTML_ON_A_TABLE_FLOW)
+    click_block(tab, "report")
+    box = code_box(win)
+    press_run_now(win)
+    run = finished(qtbot, tab, 1)
+    scroll_log_to(win, run, ONLY_TEXT)
+    said = in_the_log(win, run, [ONLY_TEXT], upto=ONLY_TEXT)  # (its first line: the report under it repeats it)
+    p.shot(win, f"① report failed, in red, and send did not run. ② The Log says why: “{ONLY_TEXT}”.",
+           highlight=["report", said], badges=True, zoom=[said])
+    p.text("That line of the Log, in full",
+           next(text for text in win.log.text.toPlainText().splitlines() if ONLY_TEXT in text))
+    p.check("The Template holds {my_table:html}", box.toPlainText().endswith("{my_table:html}"))
+    p.check("The run stopped: report failed and send did not run",
+            tab.runs[0].status == "failed" and tab.scene.nodes["report"].status == "failed"
+            and tab.scene.nodes["send"].status == "skipped")
+    p.check(f"The Log says “{ONLY_TEXT}”", ONLY_TEXT in win.log.text.toPlainText())
+    p.check("No second email was sent", len(smtp.messages) == 1)
     for each in win.tabs_list():
         each.doc.dirty = False

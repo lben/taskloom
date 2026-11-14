@@ -321,21 +321,23 @@ def test_what_was_made_from_older_data_is_marked_old_and_never_passed_on_silentl
     p.check("Data preview's line reads “clean.result (old): 10 rows × 3 columns”",
             preview.label.text() == "clean.result (old): 10 rows × 3 columns")
 
-    p.step("Click the Log tab, and Show all above it. Then right-click report and choose “Run only this block, with "
-           "the same inputs”, without running clean first. Taskloom refuses.")
+    p.step("Click the Log tab. clean is still selected, so the Log shows clean's lines only. Right-click report and "
+           "choose “Run only this block, with the same inputs”, without running clean first. Taskloom refuses, and "
+           "the Log says so with the block still selected.")
     click_tab(win.bottom_tabs.tabBar(), "Log")
-    QTest.mouseClick(win.log.clear_filter, Qt.LeftButton)
     run_only(p, tab, "report")
     refused = finished(qtbot, tab, 3)  # (what was refused is the third the editor started; it has no number)
     scroll_log_to(win, None, REFUSED)
-    p.shot(win, f"The outlined line of the Log: “{REFUSED}”. report did not run: on the canvas it still reads "
-                "“old · ”.",
-           highlight=[(win.log.text, REFUSED)], zoom=[in_the_log(win, None, [REFUSED], upto=REFUSED)])
+    showing = plain(win.log.showing.text())
+    p.shot(win, f"① The Log still shows one block's lines only: “{showing}”. ② The refusal is there all the same: "
+                f"“{REFUSED}”. report did not run: on the canvas it still reads “old · ”.",
+           highlight=[[win.log.showing, win.log.clear_filter], (win.log.text, REFUSED)], badges=True,
+           zoom=[win.log.showing, in_the_log(win, None, [REFUSED], upto=REFUSED)])
     p.text("That line of the Log, in full",
            next(text for text in win.log.text.toPlainText().splitlines() if REFUSED in text))
-    p.note("The Log shows this line while it shows all blocks. After you click a block, the Log shows that block's "
-           "lines only, and this one is not among them: press Show all.")
-    p.check(f"The Log says “{REFUSED}”", REFUSED in win.log.text.toPlainText())
+    p.check(f"① A block is still selected, and the Log shows that block's lines only (“{showing}”)",
+            win.log.block is not None and bool(tab.scene.selectedItems()) and win.log.clear_filter.isVisible())
+    p.check(f"② The Log says “{REFUSED}”", REFUSED in win.log.text.toPlainText())
     p.check("report did not run: no run was recorded, and report still reads “old · ✓ text: '10 orders'”",
             refused is None and win.history_panel.table.rowCount() == 2
             and under(tab, "report") == "old · " + TEN["report"])
