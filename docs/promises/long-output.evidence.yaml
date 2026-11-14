@@ -79,7 +79,7 @@ NC-8:
     output) and inline for each input and variable of an error report (300); fail in HELPER (taskloom/pyenv.py)
     says the same of the variables of code run in your own Python environment. FlowScene.show_result
     (taskloom/editor/canvas.py) writes the finished line under the block on one line, and value_html ends a hover's
-    value after its first 4,000 characters with ….
+    value after its first 4,000 characters with the same _label: … and how many characters the value has.
   not_green: >-
     Tests read the finished line in the Log, under the block and as taskloom run prints it, the hover, and an error
     report in Taskloom's own Python and in an environment of your own; no check tries every kind of value, and the

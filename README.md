@@ -225,7 +225,8 @@ taskloom editor examples/daily-sales-report.yaml
   block's **Keep runs** says (by default `keep_runs_for`: 5 years). The message under a block
   stays one line, and a result too long for it ends with how many characters it has, e.g.
   `✓ result: {'orders': [{'id': 1, … (4,830,112 characters)`. Hover over it to read it (of a
-  long value its first 4,000 characters, then `…`; all of it is in Data preview);
+  long value its first 4,000 characters, then `… (4,830,112 characters)`; all of it is in
+  Data preview);
   its bottom right says when that result was made, the time the block finished in its run (e.g.
   `results from 2026-10-31 14:03:22`; none while the block runs). The canvas follows the runs of the flow, including scheduled ones: each block
   shows its result from the latest run it took part in, and a run that starts clears only

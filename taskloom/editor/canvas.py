@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPat
 
 from ..block import AFTER, DONE, all_ports
 from ..blocks.logic import written_seconds
+from ..engine import _label
 from ..flow import (API_REQUEST, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, RESULT, RESULTS, SESSION, BlockSpec,
                     block_config)
 from .document import FlowDocument, edge_text
@@ -588,8 +589,9 @@ class EdgeItem(QGraphicsPathItem):
 
 
 def value_html(text: str) -> str:
-    """A value as shown when hovering (cut when long): escaped, to go inside <pre>."""
-    return html.escape(text if len(text) <= 4000 else text[:4000] + "…", quote=False)  # e.g. a wide table's rows
+    """A value as shown when hovering: escaped, to go inside <pre>. A long one (e.g. a wide table's rows): its first
+    4,000 characters, then how many it has."""
+    return html.escape(_label(text, 4000, len(text)), quote=False)
 
 
 def _short(text: str, n: int = 60) -> str:

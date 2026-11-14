@@ -88,7 +88,8 @@ class RunProcess(QObject):
             try:
                 event = json.loads(line)
             except ValueError:  # not JSON, or not UTF-8 (a library's own line, in another encoding)
-                self.output.emit("OUTPUT", line.decode(errors="replace"))
+                # (on Windows a line ends \r\n: the \r is its ending too, not a character of its text)
+                self.output.emit("OUTPUT", line.removesuffix(b"\r").decode(errors="replace"))
                 continue
             if event.get("event") == "run_started":
                 self.run_id = event["run_id"]
