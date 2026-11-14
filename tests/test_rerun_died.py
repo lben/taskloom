@@ -56,6 +56,8 @@ def died_while_load_orders_ran(win, qtbot, folder: Path, words: str):
     def kill_while_load_orders_runs():
         entry(win, tab, "load_orders", words).trigger()
         qtbot.waitUntil(lambda: under(tab, "load_orders").startswith("running"), timeout=60_000)
+        # (its code has begun: on a busy machine "running" shows before its first line has run)
+        qtbot.waitUntil(lambda: lines_of(folder / "ran.txt") == FLOW_RAN + ["load_orders"], timeout=60_000)
         tab.runs[-1].proc.kill()
 
     died = do(win, qtbot, tab, kill_while_load_orders_runs)

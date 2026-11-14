@@ -1493,8 +1493,9 @@ edges:
   they run at the same time.
 - **Running again**: Run only this block and Run from this block on, on an API Request inside
   a Session (`taskloom run flow.yaml --only orders --inputs-from 12`), start with the cookies
-  the session held just before that block in the run they carry on from, kept with that run's
-  results (as its outputs are, in the Taskloom folder's runs, never in a file next to the
+  the session held after the newest run of the blocks before that block (so after the login
+  was run again on its own, the new login's), kept with the results of the run they carry on
+  from (as its outputs are, in the Taskloom folder's runs, never in a file next to the
   flow): a later call runs again without logging in again, and the Log says the cookies come
   from run #12. If the server has ended the session since, that call fails with what the
   server answered (e.g. 401): run the flow again from the login.

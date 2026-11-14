@@ -392,7 +392,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                     # This run holds everything the run it starts from held (so retrying another block
                     # from it works, and its tables survive that run being cleaned up), then takes its
                     # inputs from that.
-                    _carry_over(home.runs_dir / str(inputs_from), runner.workspace, _after(flow, start))
+                    _carry_over(home.runs_dir / str(inputs_from), runner.workspace, start, _after(flow, start))
                 given = {k: Table.from_frame(v, runner.workspace / start / "inputs" / f"{k}.parquet")
                          if Table.is_frame(v) else v for k, v in given.items()}
                 runner.only, runner.run_from = only, run_from
@@ -1295,8 +1295,8 @@ class _Runner:
                     if kept.exists():
                         for cookie in pickle.loads(kept.read_bytes()):
                             jar.set_cookie(cookie)
-                        said = (f"session {spec.session}'s cookies come from {run}, as they were just before {spec.id} "
-                                f"there: {_cookie_names(_held(jar))}")
+                        said = (f"session {spec.session}'s cookies come from {run}, as they were after the newest run "
+                                f"of the blocks before {spec.id}: {_cookie_names(_held(jar))}")
                     else:
                         said = f"session {spec.session} starts with no cookies: {run} kept none for {spec.id}"
                     self.emit({"event": "log", "block": spec.id, "level": "INFO", "message": said})
@@ -1397,13 +1397,14 @@ class _Runner:
 KEPT_OUTPUTS = "outputs.pickle"
 ITEM_RESULTS = "__items__"  # with a Loop's outputs: each item's (item, status, result), None for one not run
 KEPT_INPUTS = "inputs.pickle"  # what a block run on its own got: its inputs then, not what came before it
-KEPT_COOKIES = "cookies.pickle"  # an API Request inside a Session: the Session's cookies just before it ran
+KEPT_COOKIES = "cookies.pickle"  # an API Request inside a Session: the cookies it starts with when run on its own
+# (the Session's just before it ran, or as a request before it left them when that one ran on its own since)
 STATUS = "__status__"  # how the block ended: success | failed | BLOCKED
 BLOCKED = "blocked"  # skipped because something before it failed
 SKIPPED = "skipped"  # skipped for another reason (e.g. a path not taken)
 TYPED = "__typed__"  # inputs you typed, as you typed them
 CAME = "__came__"  # the connections the other inputs came by (see _came)
-STALE = "__stale__"  # made from older data: a block before it ran again on its own since
+STALE = "__stale__"  # not current: a block before it ran again on its own since, or a re-run of it ended before it did
 WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
 
 
@@ -1637,9 +1638,9 @@ def _by_edge(value, came) -> dict:
 class _Now:
     """What a full run would do now, by its rules, from what each block holds in a run's folder.
 
-    A block holds its saved outputs, unless a block before it ran again on its own since (it is
-    stale): then a full run would run it again, so what it gives is not known, unless a full run
-    would skip it now (e.g. an If before it took the other path).
+    A block holds its saved outputs, unless a block before it ran again on its own since, or a re-run
+    of it ended before it did (it is stale): then a full run would run it again, so what it gives is
+    not known, unless a full run would skip it now (e.g. an If before it took the other path).
     """
 
     def __init__(self, flow, registry, run_dir, run_id):
@@ -1903,10 +1904,11 @@ def _map_marks(value, fn):
     return value
 
 
-def _carry_over(old: Path, new: Path, after_only: set[str]):
+def _carry_over(old: Path, new: Path, start: str, after_only: set[str]):
     """Copy the saved outputs (and inputs, and a Session's cookies) of every block of an earlier run into a new run's
     folder. Table files are hard-linked (no extra space; they outlive the old run's folder), or copied.
-    Saved inputs of blocks after the one that runs are left behind: its new outputs replace them."""
+    Saved inputs of blocks after the one that runs (`start`) are left behind: its new outputs replace them. Its saved
+    outputs, and theirs, are marked stale: its own until it ends, when what it saves takes their place."""
     kept_files = [*old.glob(f"*/{KEPT_OUTPUTS}"), *old.glob(f"*/{KEPT_COOKIES}"),
                   *(f for f in old.glob(f"*/{KEPT_INPUTS}") if f.parent.name not in after_only)]
     for kept_file in sorted(kept_files):
@@ -1924,8 +1926,10 @@ def _carry_over(old: Path, new: Path, after_only: set[str]):
             return {"__table__": str(target)}
 
         kept = _map_marks(pickle.loads(kept_file.read_bytes()), relink)
-        if block in after_only and kept_file.name == KEPT_OUTPUTS:
-            kept[STALE] = True  # it made these from what the block that runs now made before
+        if (block == start or block in after_only) and kept_file.name == KEPT_OUTPUTS:
+            # Made before this run by the block that runs now (should the run end before it does, the blocks after it
+            # must not take them), or by a block after it from those.
+            kept[STALE] = True
         (new / block).mkdir(parents=True, exist_ok=True)
         (new / block / kept_file.name).write_bytes(pickle.dumps(kept))
 
