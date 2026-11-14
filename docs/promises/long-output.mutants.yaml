@@ -1,0 +1,210 @@
+# Mutation testing of long output in the Log, Inspect and Data preview (read by packaging/mutants.py --explained).
+# scope: what the bugs are planted in, the functions the change touched, in groups: each group's bugs run the tests
+# that can see them (each line of tests: is one pytest run, a file with -k words or without). The functions that are
+# new or mostly rewritten are tested whole. A function in which the change touched a line or two, among much that was
+# there before, is under not_tested: its bugs are planted and counted, not run, and its reason names the test that
+# fails when the changed line is taken out by hand. Nothing can be planted in two of the change's places, which are
+# under not_tested too, with no bugs to count: FlowScene.mousePressEvent (mutmut leaves a decorated function alone)
+# and fail in pyenv.HELPER (code kept as a text). One bug is under not_tested by its name: only a message of over 50
+# million characters shows it. The mutants the tests let through are explained here by kind (kinds: a kind, its why,
+# the mutants it explains). Only those no user could notice are explained: the others stay without a reason until a
+# test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/panels.py _first_lines
+        - taskloom/editor/panels.py LogPanel._entry
+        - taskloom/editor/panels.py LogPanel._pressed
+      tests:
+        - tests/test_long_output_log.py -k "150_lines or 201_lines or first_200_lines_then_how_many or markdown or two_long_messages"
+        - tests/test_long_output_mutants.py -k "201_lines or cut_inside"
+        - tests/test_inspect_log.py -k "charts_picture_shows_under or markdown_entry_draws or readable_in_the_light"
+        - tests/test_run_output_and_tables.py -k "library_prints or own_errors"
+    - mutate:
+        - taskloom/editor/panels.py _TextBox.__init__
+        - taskloom/editor/panels.py _TextBox.show_text
+        - taskloom/editor/panels.py _TextBox._fill
+        - taskloom/editor/panels.py _TextBox.createMimeDataFromSelection
+      tests:
+        - tests/test_long_output_log.py -k "data_preview_holds or select_all_and_copy_gives or line_of_5000 or inspect_on_a_5_mb"
+        - tests/test_long_output_mutants.py -k "copied_from_data_preview or find_in_data_preview"
+        - tests/test_preview_long_error.py
+    - mutate:
+        - taskloom/editor/panels.py FindBar._find
+      tests:
+        - tests/test_long_output_mutants.py -k find_in_data_preview
+        - tests/test_long_output_log.py -k "select_all_and_copy_gives or line_of_5000"
+        - tests/test_find_bar.py -k "data_preview_finds or users_case or text_selected"
+    - mutate:
+        - taskloom/editor/panels.py PreviewPanel.show_message
+        - taskloom/editor/window.py MainWindow._show_message
+        - taskloom/editor/window.py MainWindow._on_block_clicked
+      tests:
+        - tests/test_long_output_log.py -k show_all_brings
+        - tests/test_long_output_mutants.py -k library_wrote
+        - tests/test_long_output_rest.py -k click_on_the_block
+    - mutate:
+        - taskloom/engine.py _label
+        - taskloom/engine.py inline
+        - taskloom/engine.py _summary
+        - taskloom/engine.py preview
+      tests:
+        - tests/test_long_output_rest.py -k "finished_line or (error_report and own) or table_in_the_log or api_token"
+        - tests/test_run_output_and_tables.py -k "ten_rows_or_fewer or hovering_a_long_tables or full_path_of_each_table"
+        - tests/test_inspect_log.py -k inspected_table
+    - mutate:
+        - taskloom/editor/runs.py RunProcess._read_stdout
+      tests:
+        - tests/test_long_output_log.py -k "150_lines or inspect_on_a_5_mb"
+        - tests/test_long_output_mutants.py -k library_wrote
+        - tests/test_run_output_and_tables.py -k library_prints
+    - mutate:
+        - taskloom/editor/window.py _latest
+      tests:
+        - tests/test_long_output_mutants.py -k 201_lines
+        - tests/test_long_output_rest.py -k 50_million
+    - mutate:
+        - taskloom/editor/panels.py LogPanel.__init__
+        - taskloom/editor/panels.py LogPanel._render
+        - taskloom/editor/panels.py PreviewPanel.__init__
+        - taskloom/editor/window.py MainWindow.__init__
+        - taskloom/editor/window.py MainWindow.add_tab
+        - taskloom/editor/window.py MainWindow.start_run
+        - taskloom/editor/window.py MainWindow._on_finished
+        - taskloom/editor/window.py MainWindow._show_log
+        - taskloom/engine.py _Runner._succeeded
+        - taskloom/engine.py _Runner._run_block
+        - taskloom/editor/canvas.py FlowScene.show_result
+      tests:
+        - tests/test_long_output_mutants.py
+not_tested:
+  taskloom/editor/panels.py LogPanel.__init__: >-
+    The Log panel as it is built, to which this change added two lines (the list of each show all's message, and
+    a press on a link goes to _pressed): without the second,
+    test_show_all_brings_data_preview_to_the_front_with_the_whole_message_and_a_selected_block_gets_it_back fails;
+    without the first, no message can be written to the Log at all.
+  taskloom/editor/panels.py LogPanel._render: >-
+    This change added one line to it (the list of each show all's message starts empty when the Log is drawn again).
+    No test fails without it: every show all still opens its own message; the line only lets go of messages that
+    have left the Log, which is memory.
+  taskloom/editor/panels.py PreviewPanel.__init__: >-
+    Data preview as it is built, in which this change replaced three lines by one (its box is a _TextBox): with the
+    plain box as before, test_data_preview_holds_the_whole_output_of_the_block_that_made_it_to_its_last_character
+    fails.
+  taskloom/editor/window.py MainWindow.__init__: >-
+    The window as it is built, to which this change added one line (the Log's show all goes to _show_message):
+    without it,
+    test_show_all_brings_data_preview_to_the_front_with_the_whole_message_and_a_selected_block_gets_it_back fails.
+  taskloom/editor/window.py MainWindow.add_tab: >-
+    A flow's tab as it is built, to which this change added one line (a click on the block already selected goes
+    to _on_block_clicked): without it,
+    test_a_click_on_the_block_that_is_already_selected_brings_data_preview_back_from_its_log_message_to_its_output
+    fails.
+  taskloom/editor/window.py MainWindow.start_run: >-
+    The start of a run, in which this change touched one line (the earlier runs' latest 20,000 messages go through
+    _latest). With the 20,000 taken out,
+    test_a_run_of_20050_messages_is_whole_in_the_log_when_it_ends_and_from_run_history_its_oldest_leave_when_the_next_run_starts
+    fails. No test fails without _latest there: the 50 million characters already hold when a run starts, from the
+    end of the run before (_on_finished).
+  taskloom/editor/window.py MainWindow._on_finished: >-
+    The end of a run, to which this change added five lines (the 50 million characters hold again, and the Log is
+    drawn again if messages left): without them,
+    test_past_50_million_characters_the_oldest_runs_messages_leave_the_log_the_newest_is_whole_and_run_history_has_them_all
+    fails.
+  taskloom/editor/window.py MainWindow._show_log: >-
+    A past run's messages put in the Log, in which this change touched one line. With the 20,000 counted over the
+    opened run too,
+    test_a_run_of_20050_messages_is_whole_in_the_log_when_it_ends_and_from_run_history_its_oldest_leave_when_the_next_run_starts
+    fails. No test fails without _latest there yet: it needs one run of over 50 million characters opened from
+    Run history, or runs the scheduler made while the flow is open.
+  taskloom/engine.py _Runner._succeeded: >-
+    The end of a Loop or a Merger, in which this change touched three lines (each output's whole text is made once,
+    and its length goes into the finished line). No test fails yet when that length is wrong: no test reads the
+    finished line of a Loop whose results are long.
+  taskloom/engine.py _Runner._run_block: >-
+    A block's run, in which this change touched three lines (each output's whole text is made once, and its length
+    goes into the finished line): with a wrong length there,
+    test_the_finished_line_of_a_long_output_ends_with_how_many_characters_it_has_and_one_that_fits_is_shown_whole
+    fails.
+  taskloom/editor/canvas.py FlowScene.show_result: >-
+    A block's result on the canvas, in which this change touched one line (the finished line under the block is
+    whole, on one line): cut at 48 characters as before,
+    test_the_finished_line_of_a_long_output_ends_with_how_many_characters_it_has_and_one_that_fits_is_shown_whole
+    fails.
+  taskloom/editor/canvas.py FlowScene.mousePressEvent: >-
+    A press on the canvas, to which this change added the lines that tell of a click on the block already selected:
+    without them,
+    test_a_click_on_the_block_that_is_already_selected_brings_data_preview_back_from_its_log_message_to_its_output
+    fails.
+  taskloom/pyenv.py fail: >-
+    The error report of code run in your own Python environment, in which this change touched one line (a variable
+    cut at 300 characters says how many it has): cut without a word as before,
+    test_an_error_report_says_how_many_characters_each_shortened_input_and_variable_has fails.
+  taskloom.editor.window.x__latest__mutmut_9: >-
+    Seen only when the newest message alone has over 50 million characters: such a message takes about 25 seconds
+    to reach the editor, too long for a test (said at the top of tests/test_long_output_rest.py).
+kinds:
+  - kind: A default for what every message of the Log has
+    why: >-
+      Each entry of the Log has its time, its level and its message: the editor's own lines, a run's messages and
+      the history's rows all carry the three, e.g. 09:02:41, INFO, "run #1 started". The value used when one is
+      missing is never used.
+    mutants:
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_6
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_8
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_11
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_13
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_15
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_18
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_19
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_45
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_47
+      - taskloom.editor.panels.xǁLogPanelǁ_entry__mutmut_50
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_message__mutmut_3
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_message__mutmut_5
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_message__mutmut_8
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_message__mutmut_28
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_message__mutmut_30
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_message__mutmut_33
+  - kind: The same first lines, found more slowly
+    why: >-
+      Without its limit the split cuts the whole message into lines, of which the first 200 are taken as before:
+      the Log shows the same, and for 236,765 lines the extra work is a few thousandths of a second.
+    mutants:
+      - taskloom.editor.panels.x__first_lines__mutmut_7
+  - kind: A fold exactly where the box ends so far
+    why: >-
+      While Data preview fills, a fold whose line break is the next character to come has nothing after it yet, so
+      counting it or not puts every match at the same place: e.g. the box holds 2,000 characters of a line of 5,000.
+    mutants:
+      - taskloom.editor.panels.xǁFindBarǁ_find__mutmut_34
+  - kind: A cell with no text
+    why: >-
+      Both tables Find searches give a text for every cell and header (Data preview's grid shows an empty cell as "",
+      Run history fills each cell), so what is searched in place of a cell with no text is never used.
+    mutants:
+      - taskloom.editor.panels.xǁFindBarǁ_find__mutmut_4
+      - taskloom.editor.panels.xǁFindBarǁ_find__mutmut_6
+  - kind: The character U+FFFF counted as two
+    why: >-
+      U+FFFF is not a character any text has (Unicode keeps it unused), so whether it counts as one or two changes
+      no match: an emoji, which does count as two, is above it either way.
+    mutants:
+      - taskloom.editor.panels.xǁFindBarǁ_find__mutmut_72
+  - kind: One character either side of 50 million
+    why: >-
+      The limit is then 49,999,999 characters, or a Log of exactly 50,000,000 lets one more message go: no one can
+      tell which of the two it is.
+    mutants:
+      - taskloom.editor.window.x__latest__mutmut_2
+      - taskloom.editor.window.x__latest__mutmut_8
+  - kind: The timer that fills the box, made another way
+    why: >-
+      The box keeps its timer itself, so it lives as long with no parent; and a slice a thousandth of a second
+      later, 25 slices for 5 MB, is nothing to see. The text kept before any is shown is replaced when one is.
+    mutants:
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_6
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_8
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_10
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_11
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_12

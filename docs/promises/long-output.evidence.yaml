@@ -1,0 +1,114 @@
+# How each agreed row of docs/promises/long-output.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A bug fix or small feature has no model to
+# check: its rows are amber, checked by tests only, and not_green says what the tests leave out.
+NC-1:
+  enforced: >-
+    _first_lines (taskloom/editor/panels.py) gives LogPanel._entry a long message's first 200 lines, or its first
+    20,000 characters if that is less, and the words under them ("… 236,565 more lines (4,830,112 characters in all)
+    · "), after which _entry writes the link "show all". Of a message that is not long, _first_lines gives all and no
+    words, so _entry writes it to its closing }.
+  not_green: >-
+    Tests run Inspect on values of 150, 200, 201 and 250 lines and on a response of 5 MB, on one line of 20,000,
+    20,001 and 25,000 characters and on a long text drawn as Markdown; no check tries every length, and a message
+    drawn as Markdown is cut by lines, which can cut a table or a code block in two.
+NC-2:
+  enforced: >-
+    LogPanel._entry keeps, for each "show all", the entry whose message it stands under; LogPanel._pressed sends that
+    entry to MainWindow._show_message (taskloom/editor/window.py), which has PreviewPanel.show_message put the whole
+    message in the box under the label "Log message of inspect_orders, 09:02:41: 236,765 lines" and brings Data
+    preview to the front. Selecting a block shows its outputs again (MainWindow._on_block_selected), and so does a
+    click on the block already selected (FlowScene.mousePressEvent, taskloom/editor/canvas.py, tells
+    MainWindow._on_block_clicked).
+  not_green: >-
+    Tests press show all under one message, under each of two and in a run opened from Run history, then select a
+    block or click the one already selected; no check tries every order of presses, selections and runs.
+NC-3:
+  enforced: >-
+    preview (taskloom/engine.py) makes the whole text or JSON of an output, with no cut (it was cut at 4,000
+    characters); _Runner._run_block sends it with the block's result, and RunProcess._read_stdout
+    (taskloom/editor/runs.py) reads the long line it comes in to its end. PreviewPanel._load hands it to
+    _TextBox.show_text, which keeps all of it and, with _TextBox._fill, fills the box down to the closing }.
+  not_green: >-
+    Tests select the block after a dict and a text of 250 lines and after a JSON of 5 MB, and read the box to its
+    last character; no check tries every kind or size of value.
+NC-4:
+  enforced: >-
+    The history keeps each message and each output whole, so MainWindow._show_log gives the Log the same entries,
+    LogPanel._entry writes the same 200 lines, and show all hands over an entry that holds the whole message.
+    _TextBox.createMimeDataFromSelection gives Copy the text as it was, and FindBar._find searches all the box holds.
+    The Log itself holds only a long message's first 200 lines (_first_lines), so copying from it has little to
+    take.
+  not_green: >-
+    Tests open one run with a message of 250 lines from Run history, copy and find in a text of 250 lines, and time
+    Select all and Copy in the Log with one long message (under 2 seconds); no check tries a run whose files Keep
+    runs let go, or every size.
+NC-5:
+  enforced: >-
+    The Log writes only a long message's first 200 lines (_first_lines). _TextBox.show_text puts a text's first
+    200,000 characters in the box at once, and _TextBox._fill adds the rest a slice at a time from a timer, the
+    window answering in between. RunProcess._read_stdout joins the pieces of a long line once, when its end is
+    there, and _summary (taskloom/engine.py) takes each output's text as already made for the result, so a 5 MB
+    value is made into text once.
+  not_green: >-
+    Tests measure, for one JSON of 5 MB on the machine they run on, the longest time the window does not answer
+    (under 1 second) and the time until all of it is in Data preview (under 15 seconds); the times are those of the
+    CI machines of one run, not proven for every machine or size.
+NC-6:
+  enforced: >-
+    _TextBox.show_text shows each line over 2,000 characters as lines of 2,000 and notes where the line breaks it
+    added are. _TextBox.createMimeDataFromSelection takes the selection from the text as it was, so Copy gives the
+    line back as one; FindBar._find searches the box's text without those line breaks and puts each match where the
+    box shows it.
+  not_green: >-
+    Tests fold one line of 5,000 characters, copy it and find a word across a fold, and leave lines of up to 2,000
+    as they are; no check tries every length, or a selection that starts or ends at each place around a fold.
+NC-7:
+  enforced: >-
+    preview (taskloom/engine.py) puts *** in place of every secret over the whole text (redact, and _masked for
+    secret values inside a list or dict) and nothing shortens it afterwards: that text is the Inspect message in the
+    Log, the output in Data preview and what the history keeps. _summary hides secrets in a value's one-line text
+    before _label shortens it.
+  not_green: >-
+    Tests put one API token in a response of about 600,000 characters (on its second line and on its last but one)
+    and look for it in the Log, Data preview, the hover and the run history's file; no check tries 5 MB with a
+    token, or every place in a value a secret can be.
+NC-8:
+  enforced: >-
+    _label (taskloom/engine.py) gives a value's one-line text whole when it fits, else its start, then … and how
+    many characters the value's whole text has. _summary uses it for the finished line (200 characters of each
+    output) and inline for each input and variable of an error report (300); fail in HELPER (taskloom/pyenv.py)
+    says the same of the variables of code run in your own Python environment. FlowScene.show_result
+    (taskloom/editor/canvas.py) writes the finished line under the block on one line, and value_html ends a hover's
+    value after its first 4,000 characters with ….
+  not_green: >-
+    Tests read the finished line in the Log, under the block and as taskloom run prints it, the hover, and an error
+    report in Taskloom's own Python and in an environment of your own; no check tries every kind of value, and the
+    hover over a long value can be taller than the window.
+NC-9:
+  enforced: >-
+    Of a table, preview (taskloom/engine.py) writes its count of rows and columns, then its rows as Polars prints
+    them: all up to 10, else the first 5, a row of … and the last 5, each cell shortened with … at 60 characters.
+    That text is the table's message in the Log. Data preview reads the table's file itself (PreviewPanel._load)
+    and shows each cell whole in its grid (FrameModel.data).
+  not_green: >-
+    Tests log one table of 12 rows and 3 columns with a cell of 100 characters and read the Log and the grid; no
+    check tries every shape of table, and the grid shows a table's first 200 rows.
+NC-10:
+  enforced: >-
+    MainWindow.start_run (taskloom/editor/window.py) keeps the latest 20,000 of the earlier runs' messages when a
+    new run starts, and MainWindow._show_log does so when a run opened from Run history is put after them. _latest
+    lets the oldest messages go until at most 50 million characters are left, never the newest one: in start_run,
+    in _show_log and, as a run ends, in MainWindow._on_finished. What leaves the Log is still in the history, which
+    _show_log reads.
+  not_green: >-
+    Tests pass 50 million characters with three runs of about 20 million each, and run 20,050 messages in one run
+    and then another run, opening them from Run history; no check tries every mix of counts and lengths, e.g. both
+    limits passed in the same run.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# long-output.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/long-output.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

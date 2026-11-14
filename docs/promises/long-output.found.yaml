@@ -1,0 +1,17 @@
+# The bugs proving long output in the Log, Inspect and Data preview found, each fixed and guarded by a test since (the
+# proof PDF counts and lists them before the details; tests/test_promises_found.py checks each test exists), and where
+# it is checked more lightly.
+found:
+  - what: The limit of 20,000 messages had started to cut a single run of more than 20,000 messages, when it ended and when it was opened from Run history, e.g. a run of 20,050 messages lost its first 50 in the Log.
+    found_by: the implementer's own report
+    fixed_in: f59b51c
+    guarded_by: tests/test_long_output_rest.py::test_a_run_of_20050_messages_is_whole_in_the_log_when_it_ends_and_from_run_history_its_oldest_leave_when_the_next_run_starts
+  - what: After show all, a click on the block already selected left Data preview on the Log message, because the selection had not changed.
+    found_by: the implementer's own report
+    fixed_in: f59b51c
+    guarded_by: tests/test_long_output_rest.py::test_a_click_on_the_block_that_is_already_selected_brings_data_preview_back_from_its_log_message_to_its_output
+lighter:
+  - "The times of NC-5 (the window answers within 1 second, all of a 5 MB JSON is in Data preview within 15 seconds) are measured on the CI machines of one run, not proven for every machine."
+  - "The hover over a block with a long value shows the value's first 4,000 characters, which can be taller than the window."
+  - "Outlook and real screens were not looked at: the pictures are of the editor drawn off screen."
+  - "A long message drawn as Markdown is cut by lines, after its first 200, which can cut a table or a code block in two."
