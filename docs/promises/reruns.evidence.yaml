@@ -1,0 +1,98 @@
+# How each agreed row of docs/promises/reruns.yaml is kept, and why a row is not green (read by packaging/ledger.py;
+# the reviewer checks these words against the code). A bug fix or small feature has no model to check: its rows are
+# amber, checked by tests only, and not_green says what the tests leave out.
+RR-1:
+  enforced: >-
+    MainWindow.inputs_run (taskloom/editor/window.py) gives the block the newest run among the results that it and
+    the blocks before it show, then the newest re-run that carries on from that run (History.carried_on), so clean
+    takes run #6. In that run's folder load_orders succeeded, so _Now.inputs (taskloom/engine.py) finds clean ready
+    and _block_inputs hands it the 12 rows.
+  not_green: >-
+    Tests fail a block, fix it and re-run the block after it in a few flows (a chain, two branches, a block added
+    since the run); no check tries every flow or every order of re-runs.
+RR-2:
+  enforced: >-
+    run_flow (taskloom/engine.py) starts the folder of run #6 as a copy of run #5's (_carry_over), and load_orders
+    keeps its 12 rows there in place of the 10. MainWindow.inputs_run names run #6 for clean, so _block_inputs reads
+    the 12 rows; a run that ended before reaching clean is seen too, because the runs that the blocks before clean
+    show are looked at, not only clean's own.
+  not_green: >-
+    Tests change a table outside the flow, edit a query, end a full run before the block (Stop, its process dying)
+    and try 15 generated orders of changes and re-runs in a chain of four blocks; no check tries every way a run can
+    end or every flow.
+RR-3:
+  enforced: >-
+    History.start_run (taskloom/history.py) records, for each re-run, the run it carried on from, and
+    History.carried_on follows those links from run to run, newest first. MainWindow.inputs_run takes the first of
+    them whose folder exists, so prices re-run alone (#7) carries on from #6, and report takes #7, which holds both
+    new results.
+  not_green: >-
+    Tests re-run two branches, a chain of three, a block added since, and blocks whose runs Keep runs let go; no
+    check tries every shape of flow or every order of re-runs.
+RR-4:
+  enforced: >-
+    MainWindow._block_menu_for writes the run that inputs_run gives into both "with the same inputs" entries
+    (_run_label: its number, date and time); rerun_block starts the run with that same run, and
+    run_block_with_inputs fills the window in with what reached the block in it (block_inputs, taskloom/engine.py).
+  not_green: >-
+    Tests read the two entries' words and what the window opens with for a table of 12 rows; no check tries every
+    kind of block or of input.
+RR-5:
+  enforced: >-
+    The new run's folder begins as a copy of the newest run's (_carry_over), and from it _Runner._earlier_items
+    takes a Loop's items and a Merger's lines that succeeded, and _Runner._session_cookies the Session's cookies.
+    After a request run alone, _Runner.pass_cookies_on keeps the Session's cookies as they are now for the requests
+    after it; after a Merger set to each line, _Runner._run_per_line keeps each block's results over the lines.
+  not_green: >-
+    Tests re-run a Loop over 5 items, a Merger of 3 lines and a login request in a Session; no check tries a Loop
+    inside a Loop, or a Session inside a Loop, run again.
+RR-6:
+  enforced: >-
+    MainWindow.inputs_run names run #6 also when load_orders failed in it; in its folder load_orders is kept as
+    failed, and _Now.inputs (taskloom/engine.py) answers "clean would not run: load_orders, before it, failed",
+    with which _only_inputs refuses the run before anything runs.
+  not_green: >-
+    Tests fail load_orders again, and fail it after it had succeeded; no check tries every way a block can fail.
+RR-7:
+  enforced: >-
+    MainWindow._mark_old finds each block that shows a result of an older run than a block before it does, from
+    the runs of the results on the canvas and the connections; FlowScene.set_old and FlowScene._shown_status
+    (taskloom/editor/canvas.py) put "old · " before its result and the reason in its hover, NodeItem.paint and
+    LoopItem.paint draw it grey, and PreviewPanel.show_outputs writes "(old)" in Data preview's label.
+  not_green: >-
+    Tests read the words under each block, the hover and the label, and the strongest colours of a block's picture
+    in the Fusion style; no check looks at Windows' own style, and the marks are not worked out again when a
+    connection is edited.
+RR-8:
+  enforced: >-
+    _carry_over (taskloom/engine.py) marks as not current what the blocks after the one that runs held before, and
+    what that block held itself until it ends; for such a block _Now.state answers "clean still holds what it made
+    from older data: retry clean first", and _only_inputs refuses the run with it. Run from this block on runs clean
+    and every block after it (blocks_from) in the flow's order.
+  not_green: >-
+    Tests re-run report and send past clean, after a full run that ended before clean, and after a re-run of clean
+    that died or was stopped; no check tries every flow, e.g. an If between the blocks.
+RR-9:
+  enforced: >-
+    MainWindow._show_results, given the run opened from Run history, shows only that run's results and notes that
+    the canvas no longer follows the latest run; MainWindow.inputs_run then returns that run itself, without looking
+    for a re-run that carries on from it.
+  not_green: >-
+    Tests open run #5 after a re-run #6 and read the canvas, the menu and what the block received; a re-run made
+    from an opened run starts a chain of its own, and a later result made that way is not marked old.
+RR-10:
+  enforced: >-
+    Each block's result on the canvas comes from the full run as it finishes (MainWindow._apply_block_result), so
+    MainWindow._mark_old finds no block showing an older run than a block before it, and MainWindow.inputs_run
+    finds run #8 the newest shown, with no re-run carrying on from it yet.
+  not_green: >-
+    Tests press Run now after re-runs and read every block, the menu and what a re-run received; no check tries a
+    flow with several start blocks, where a full run of one line leaves the other line's results as they were.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# reruns.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/reruns.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

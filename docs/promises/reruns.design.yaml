@@ -1,0 +1,14 @@
+# The design decisions of a re-run seen by the blocks after it, one line each (read by packaging/proof_pdf.py): what
+# was chosen, and when to look at it again.
+- chosen: Each run's link to the run it carried on from is kept in a table of its own (carried_on), which cleaning up runs leaves alone, so a result still on the canvas from a run that Keep runs let go leads to the re-runs made from it.
+  revisit_if: a run must be forgotten for good, with every trace of it, e.g. a way to delete a run from the history.
+- chosen: A block run again takes the newest run among those the block and the blocks before it show, then the newest re-run that carries on from it whose files exist; not the newest run of the flow, which may be of another line and hold nothing of these blocks.
+  revisit_if: each run records which blocks' results it holds, so the newest run that holds them can be asked for directly.
+- chosen: A run opened from Run history is used as it is, e.g. run #5 itself although run #6 carried on from it; no later re-run is looked for.
+  revisit_if: a re-run made from an opened run must be seen by the blocks after it too (today it starts a chain of its own, and a later result made that way is not marked old).
+- chosen: A result is old when a block before it shows a result of a newer run; this is worked out in the editor from the results the canvas shows, not read from the run folders.
+  revisit_if: the old marks must also be right after connections are edited, or be shown outside the editor (e.g. in an email of the run).
+- chosen: After a request in a Session is run alone, the requests after it keep the Session's cookies as that run left them, so each of them, run alone, sends the new login's cookie and not the one it sent last time.
+  revisit_if: a request must be able to run again with exactly the cookies it sent before, e.g. to reproduce a failure.
+- chosen: After a Merger set to each line succeeds, each block it runs once per line keeps one result over the lines (costs, sales, stock) at the Merger's level, so a block after those runs can run alone from a run of only the Merger.
+  revisit_if: a block that runs once per line is offered to run on its own (today it is refused, and told to run from the Merger instead).

@@ -1,0 +1,180 @@
+# Mutation testing of a re-run seen by the blocks after it (read by packaging/mutants.py --explained). scope: what the
+# bugs are planted in, the functions the change touched, in groups: each group's bugs run the tests that can see them
+# (each line of tests: is one pytest run, a file with -k words or without). The functions that are new or mostly
+# rewritten are tested whole. A function in which the change touched a line or two, among much that was there before,
+# is under not_tested: its bugs are planted and counted, not run, and its reason names the tests that fail when the
+# changed lines are taken out by hand. The change's other lines are not functions of their own, so nothing is planted
+# in them: the carried_on table in history.py's SCHEMA, which the tests of runs that Keep runs let go check. The
+# mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it explains) or one
+# by one (mutant name: why it changes nothing a user could notice). Only those no user could notice are explained:
+# the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/history.py History.carried_on
+      tests:
+        - tests/test_rerun_stopped_and_cleaned.py -k blocks_own_result_let_go
+        - tests/test_rerun_carries_on.py -k two_branches
+        - tests/test_rerun_mutants.py -k still_going_is_not
+    - mutate:
+        - taskloom/engine.py _Runner.pass_cookies_on
+        - taskloom/engine.py _Runner._keep_cookies
+      tests:
+        - tests/test_rerun_old_and_kept.py -k a_request_in_a_session
+        - tests/test_rerun_mutants.py -k own_session_only
+        - tests/test_api_session.py -k "run_only_or_from_a_call_inside or each_run_starts or session_inside_a_loop"
+    - mutate:
+        - taskloom/editor/window.py MainWindow.inputs_run
+      tests:
+        - tests/test_rerun_carries_on.py -k "two_branches or cleaned_up or opened_from_run_history"
+        - tests/test_rerun_stopped_and_cleaned.py -k "blocks_own_result_let_go or (that_block_rerun_alone_gets and died and not terminal) or (the_block_after_it_is_refused and Stop)"
+        - tests/test_rerun_mutants.py -k "another_line or before_a_flow_has_run"
+    - mutate:
+        - taskloom/editor/window.py MainWindow._mark_old
+        - taskloom/editor/canvas.py FlowScene.set_old
+        - taskloom/editor/canvas.py FlowScene._shown_status
+      tests:
+        - tests/test_rerun_old_and_kept.py -k "shows_old_before or hovering or drawn_in_grey or next_block_is_rerun or after_a_full_run"
+        - tests/test_rerun_mutants.py -k "loop_rerun_alone_is_still_going or data_previews_label or deleted or before_a_flow_has_run"
+        - tests/test_run_scope.py -k disconnecting_a_block
+    - mutate:
+        - taskloom/history.py History.start_run
+        - taskloom/history.py History.forget
+        - taskloom/engine.py run_flow
+        - taskloom/engine.py _Runner._run_per_line
+        - taskloom/engine.py _Runner._gather
+        - taskloom/engine.py _Runner._session_cookies
+        - taskloom/engine.py _block_inputs
+        - taskloom/engine.py _only_inputs
+        - taskloom/engine.py _tables_to_marks
+        - taskloom/engine.py _map_marks
+        - taskloom/engine.py _carry_over
+        - taskloom/editor/window.py MainWindow.rerun_block
+        - taskloom/editor/window.py MainWindow.run_block_with_inputs
+        - taskloom/editor/window.py MainWindow._block_menu_for
+        - taskloom/editor/window.py MainWindow._on_event
+        - taskloom/editor/window.py MainWindow._on_finished
+        - taskloom/editor/window.py MainWindow._apply_block_result
+        - taskloom/editor/window.py MainWindow._on_block_selected
+        - taskloom/editor/window.py MainWindow._show_results
+        - taskloom/editor/canvas.py FlowScene.set_status
+        - taskloom/editor/canvas.py NodeItem.set_status
+        - taskloom/editor/canvas.py NodeItem.paint
+        - taskloom/editor/canvas.py LoopItem.paint
+      tests:
+        - tests/test_rerun_mutants.py
+not_tested:
+  taskloom/history.py History.start_run: >-
+    The record of a run's start, to which this change added one value and three lines (the run it carries on from is
+    written to the carried_on table): without them,
+    test_with_the_run_of_a_blocks_own_result_let_go_by_keep_runs_the_rerun_that_carried_on_from_it_is_named_and_used
+    fails.
+  taskloom/history.py History.forget: >-
+    This change touched only its description: it leaves the carried_on table alone, as before. That a run's link
+    outlives a run Keep runs let go is checked by
+    test_with_the_rerun_in_between_let_go_by_keep_runs_the_newest_rerun_is_named_and_used.
+  taskloom/engine.py run_flow: >-
+    The whole of a run, in which this change touched three places. It hands the run it carries on from to start_run:
+    without that, test_with_the_run_of_a_blocks_own_result_let_go_by_keep_runs_the_rerun_that_carried_on_from_it_is_named_and_used
+    fails. After a run of only one block it calls pass_cookies_on: without that,
+    test_a_request_in_a_session_rerun_alone_sends_the_cookie_the_request_before_it_got_when_it_was_rerun_alone fails.
+    It tells _carry_over which block runs: see _carry_over.
+  taskloom/engine.py _Runner._run_per_line: >-
+    The runs of a Merger's lines, to which this change added the lines that keep each block's results over the lines:
+    without them, test_a_closing_merger_rerun_alone_after_a_full_run_in_which_it_ran_gets_every_lines_result fails.
+  taskloom/engine.py _Runner._gather: >-
+    This change only took two lines out of it (a closing Merger no longer keeps its inputs by line itself); what they
+    did is checked by test_a_closing_merger_rerun_alone_after_a_full_run_in_which_it_ran_gets_every_lines_result.
+  taskloom/engine.py _Runner._session_cookies: >-
+    This change moved its last lines into _keep_cookies, which is tested whole, and reworded one Log sentence: without
+    the call, test_run_only_or_from_a_call_inside_starts_with_the_cookies_held_just_before_it_in_the_run_it_carries_on_from
+    fails; the sentence is read by test_a_login_rerun_alone_passes_its_cookie_on_to_the_requests_of_its_own_session_only.
+  taskloom/engine.py _block_inputs: >-
+    This change added three lines at its end (a closing Merger run alone gets its lines by line): without them,
+    test_a_closing_merger_rerun_alone_after_a_full_run_in_which_it_ran_gets_every_lines_result and
+    test_after_a_merger_of_each_line_is_rerun_alone_the_blocks_after_its_runs_rerun_alone_get_every_lines_result fail.
+  taskloom/engine.py _only_inputs: >-
+    The inputs of a block run alone, in which this change touched two lines (a refusal says "run the whole flow
+    instead" once): with them as before,
+    test_a_block_refused_because_the_block_before_it_did_not_run_is_told_to_run_the_whole_flow_instead_once fails.
+  taskloom/engine.py _tables_to_marks: >-
+    Saves every block's results; this change touched one line (what left a Merger's runs is saved by line): with it as
+    before, test_a_closing_merger_rerun_alone_after_a_full_run_in_which_it_ran_gets_every_lines_result fails.
+  taskloom/engine.py _map_marks: >-
+    Reads every block's saved results; this change touched one line (what was saved by line is read by line): with it
+    as before, test_a_closing_merger_rerun_alone_after_a_full_run_in_which_it_ran_gets_every_lines_result fails.
+  taskloom/engine.py _carry_over: >-
+    The copy of an earlier run's results into a new run's folder, in which this change touched one condition (what the
+    block that runs held before is not current until it ends): with it as before,
+    test_after_a_rerun_of_a_block_alone_died_while_the_block_ran_the_block_after_it_is_refused_naming_that_block fails.
+  taskloom/editor/window.py MainWindow.rerun_block: >-
+    This change replaced one call in it (the run comes from inputs_run): with the run of the block's own result
+    there, test_two_branches_rerun_one_after_the_other_then_the_block_both_feed_gets_both_new_results fails. Its
+    reworded message cannot be reached from the menu, whose entry is greyed while there is no run to take.
+  taskloom/editor/window.py MainWindow.run_block_with_inputs: >-
+    This change replaced one call in it (the run comes from inputs_run): with the run of the block's own result
+    there, both cases of test_inputs_i_choose_opens_filled_in_from_the_newest_run_and_runs_with_it fail.
+  taskloom/editor/window.py MainWindow._block_menu_for: >-
+    The whole right-click menu, in which this change replaced one call (the run named comes from inputs_run): with the
+    run of the block's own result there, test_the_same_inputs_entries_name_the_newest_run_with_its_date_and_time fails.
+  taskloom/editor/window.py MainWindow._on_event: >-
+    Every event of a run, to which this change added one line (what is old is worked out as each result arrives):
+    without it, test_while_a_loop_rerun_alone_is_still_going_the_block_after_it_is_old_once_an_item_is_done fails.
+  taskloom/editor/window.py MainWindow._on_finished: >-
+    The end of a run, to which this change added one line (what is old is worked out once more, after the blocks that
+    were still running are shown as failed): without it,
+    test_after_a_rerun_of_a_block_alone_died_while_the_block_ran_the_block_after_it_is_refused_naming_that_block fails.
+  taskloom/editor/window.py MainWindow._apply_block_result: >-
+    This change added one word to it (Data preview is told whether the result is old). No test fails without it: a
+    block whose result arrives was cleared when its run began, so it is never old then; _mark_old, tested whole, tells
+    Data preview when that changes.
+  taskloom/editor/window.py MainWindow._on_block_selected: >-
+    This change added one word to it (Data preview is told whether the block selected is old): without it,
+    test_data_previews_label_says_old_for_a_table_a_text_and_a_failed_result fails.
+  taskloom/editor/window.py MainWindow._show_results: >-
+    This change added one line at its end (what is old is worked out after the canvas is filled from the history):
+    without it, test_back_on_the_newest_run_from_run_history_what_was_old_is_marked_old_again fails.
+  taskloom/editor/canvas.py FlowScene.set_status: >-
+    This change added one line to it (a block whose result is cleared is no longer old). No test fails without it:
+    _mark_old, which follows every change of the results, takes it off the old ones too.
+  taskloom/editor/canvas.py NodeItem.set_status: >-
+    This change added one value to it (whether the result is old, for the drawing): without it,
+    test_an_old_result_is_drawn_in_grey_with_a_grey_border_also_a_failed_one fails.
+  taskloom/editor/canvas.py NodeItem.paint: >-
+    The drawing of a block, in which this change touched two lines (an old result's border and text are grey): with
+    either as before, test_an_old_result_is_drawn_in_grey_with_a_grey_border_also_a_failed_one fails.
+  taskloom/editor/canvas.py LoopItem.paint: >-
+    The drawing of a Loop, in which this change touched two lines (an old result's border and text are grey): with
+    either as before, test_an_old_loop_is_drawn_in_grey_with_a_grey_border fails.
+kinds:
+  - kind: The same SQL in other letter case
+    why: >-
+      SQLite reads its keywords and the names of tables and columns the same in capital and in small letters:
+      "order by r.id desc" does what "ORDER BY r.id DESC" does.
+    mutants:
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_7
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_8
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_10
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_11
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_13
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_16
+      - taskloom.history.xǁHistoryǁcarried_on__mutmut_17
+  - kind: Nothing left to draw again
+    why: >-
+      A result stops being old only when its block runs again or another run is opened from Run history. Both clear
+      the block's result first, which takes it off the old ones (FlowScene.set_status), so set_old finds none that
+      stopped being old: e.g. clean, old after load_orders ran again, is cleared when its own re-run begins.
+    mutants:
+      - taskloom.editor.canvas.xǁFlowSceneǁset_old__mutmut_5
+  - kind: A hover text kept, not shown, while a block has no result
+    why: >-
+      Hovering a block with no result says nothing: NodeItem.set_status gives the text under a block a hover text
+      only when the block has a result, whatever hover text is kept for it meanwhile.
+    mutants:
+      - taskloom.editor.canvas.xǁFlowSceneǁ_shown_status__mutmut_6
+  - kind: Another grey for the border of a block with no result
+    why: >-
+      A block with no result has a grey border and its type under it in grey; told that it is old, only the grey of
+      the border changes to that of old results, and nothing says old.
+    mutants:
+      - taskloom.editor.canvas.xǁFlowSceneǁ_shown_status__mutmut_7
