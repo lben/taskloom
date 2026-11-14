@@ -299,8 +299,9 @@ def test_a_block_added_after_a_run_runs_on_that_runs_results(proof, win, qtbot, 
     p.idea("A block you add after a run can now run on that run's results, without running the flow again.")
     p.idea("Each block shows the result of the last run it took part in, and its menu's “Run only this block, with "
            "the same inputs” runs it again on what reached it in that run. A block added since has no result of its "
-           "own, so that item used to be greyed out. Now, when a block shows no result, the item uses the latest run "
-           "among the results that the blocks connected into it show, and says which run that is.")
+           "own, so that item used to be greyed out. Now, when a block shows no result, the item uses the newest run "
+           "among the results that the blocks before it show, or the newest re-run that carries on from that run, "
+           "and says which run that is.")
     p.idea("The new block runs on what those blocks hold in that run. They are not run again: a slow query before it "
            "is not run a second time.")
     p.why_simplest("Running one block on an earlier run's results was already there, and Taskloom could already work "
