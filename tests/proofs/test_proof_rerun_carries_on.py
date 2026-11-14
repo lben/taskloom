@@ -390,16 +390,13 @@ def test_inputs_i_choose_opens_filled_in_from_the_newest_run(proof, win, qtbot, 
     p.check(f"load_orders shows the 12 rows of run #{alone}, clean the 10 rows of run #{full}, marked old",
             alone == full + 1 and under(tab, "load_orders") == TWELVE and under(tab, "clean") == "old · " + TEN["clean"])
 
-    p.step("Right-click clean and choose “Run only this block, with inputs I choose…”. Drag the lower edge of the "
-           "window that opens down, until its first lines show whole. Click in orders and press End, to see the end "
-           "of the file's name. Then press Run.")
+    p.step("Right-click clean and choose “Run only this block, with inputs I choose…”. In the window that opens, "
+           "click in orders and press End, to see the end of the file's name. Then press Run.")
     seen = {}
 
     def look(dialog):
         intro, field = dialog.findChild(QLabel), dialog.fields["orders"]
         seen["says"], seen["orders"] = plain(intro.text()), field.text()
-        seen["cut"] = intro.height() < intro.heightForWidth(intro.width())
-        dialog.resize(dialog.width(), dialog.layout().totalHeightForWidth(dialog.width()))
         QTest.mouseClick(field, Qt.LeftButton)
         QTest.keyClick(field, Qt.Key_End)
         p.shot(dialog, f"① The window says “Filled in: what reached the block in run #{alone}”. ② orders is filled in "
@@ -410,10 +407,6 @@ def test_inputs_i_choose_opens_filled_in_from_the_newest_run(proof, win, qtbot, 
     p.while_open(lambda: right_click(tab, "clean"),
                  lambda menu: p.while_open(lambda: choose(menu, CHOOSE), look))
     chosen = finished(qtbot, tab, 3)
-    # Once the window opens tall enough for its introduction, take the dragging out of the step and the note below.
-    assert seen["cut"], "the window now shows its introduction whole as it opens: this proof still drags it taller"
-    p.note("As it opens, the window is too short for its first lines: “Filled in: what reached the block in run …” "
-           "is cut off until you make the window taller. The picture is taken after that.")
     p.text("What orders was filled in with", seen["orders"])
     file = Path(ast.literal_eval(re.fullmatch(r"table\((.+)\)", seen["orders"])[1])).resolve()
     p.check(f"The window says “Filled in: what reached the block in run #{alone} · {started(win, alone)}.”",

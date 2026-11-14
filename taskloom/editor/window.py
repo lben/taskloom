@@ -1410,7 +1410,10 @@ class MainWindow(QMainWindow):
 
     def _on_output(self, tab, run, level, line):
         if run is tab.shown_run and line.strip():
-            self._log(tab, {"ts": dt.datetime.now().isoformat(), "level": level, "message": line})
+            # Refused before a run was recorded: why is the answer to what you just did, so it is shown whichever
+            # block the Log shows, like a run's first and last lines.
+            self._log(tab, {"ts": dt.datetime.now().isoformat(), "level": level, "message": line,
+                            "header": level == "ERROR" and run.run_id is None})
 
     def _on_event(self, tab: FlowTab, run: RunProcess, e: dict):
         kind = e.get("event")

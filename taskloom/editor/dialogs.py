@@ -948,7 +948,6 @@ class ChooseInputsDialog(QDialog):
                  typed: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"Run {block_id} with inputs you choose")
-        self.resize(560, 0)
         self.values, self.typed = values, typed or {}
         layout = QVBoxLayout(self)
         intro = QLabel("Write each value as Python: <code>42</code>, <code>'text'</code>, <code>[1, 2]</code>, "
@@ -984,6 +983,8 @@ class ChooseInputsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        # As tall as its contents need at this width: the least height Qt gives it is for its introduction on one line.
+        self.resize(560, self.heightForWidth(560))
 
     def given(self) -> dict:
         """{input: Python text} for each input you set, or typed last time (worked out again); the other
