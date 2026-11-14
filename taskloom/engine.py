@@ -239,9 +239,9 @@ def _now() -> str:
     return dt.datetime.now().isoformat(timespec="milliseconds")
 
 
-def preview(value, limit: int = 4000) -> str:
-    """A readable look at any value: a table's rows (over 10: its first 5, a row of …, its last 5), text, or a
-    list/dict as JSON."""
+def preview(value) -> str:
+    """A readable look at any value: a table's rows (over 10: its first 5, a row of …, its last 5), a text whole, or
+    a list/dict as JSON, whole."""
     import json
 
     import polars as pl
@@ -259,8 +259,8 @@ def preview(value, limit: int = 4000) -> str:
     if isinstance(value, SecretStr):
         return "***"
     if isinstance(value, (dict, list, tuple)):
-        return redact(json.dumps(_masked(value), indent=2, default=str, ensure_ascii=False))[:limit]  # scrub, then cut
-    return redact(str(value))[:limit]
+        return redact(json.dumps(_masked(value), indent=2, default=str, ensure_ascii=False))
+    return redact(str(value))
 
 
 def _masked(value):
@@ -274,9 +274,16 @@ def _masked(value):
     return value
 
 
+def _label(text: str, limit: int, whole: int) -> str:
+    """A one-line label of a value: `text` when it fits in `limit` characters; else its start, then how many
+    characters the value's whole text (`whole`) has: {'orders': [{'id': 1, … (4,830,112 characters)."""
+    return text if len(text) <= limit else f"{text[:limit]}… ({whole:,} characters)"
+
+
 def inline(value, limit: int = 300) -> str:
-    """A value on one line, for error reports."""
-    return " ".join(preview(value).split())[:limit]
+    """A value on one line, for error reports; shortened, it says how many characters its whole text has."""
+    text = preview(value)
+    return _label(" ".join(text.split()), limit, len(text))
 
 
 def finished_text(event: dict) -> str:
@@ -289,11 +296,13 @@ def finished_text(event: dict) -> str:
     return " · ".join([status, *([detail] if detail else []), *(event.get("tables") or {}).values()])
 
 
-def _summary(produced: dict) -> str:
+def _summary(produced: dict, previews: dict) -> str:
+    """A finished block's outputs on one line. `previews`: each output's whole text, already made for the event (a
+    shortened value says how many characters that has)."""
     parts = []
     for port, value in produced.items():
         text = value.summary() if isinstance(value, Table) else redact(repr(value))  # scrub, then cut
-        parts.append(f"{port}: {text[:200]}")
+        parts.append(f"{port}: {_label(text, 200, len(previews[port]))}")
     return "; ".join(parts)
 
 
@@ -815,10 +824,11 @@ class _Runner:
 
     def _succeeded(self, block_id: str, produced: dict, started: float):
         """A Loop's or a Merger's end, over its runs: success, with what it passes on."""
+        previews = {p: preview(v) for p, v in produced.items()}
         self.emit({"event": "block_finished", "block": block_id, "status": "success", "attempts": 1,
-                   "duration": round(time.monotonic() - started, 3), "summary": _summary(produced),
+                   "duration": round(time.monotonic() - started, 3), "summary": _summary(produced, previews),
                    "tables": {where: path for p, v in produced.items() for where, path in _table_files(v, p).items()},
-                   "previews": {p: preview(v) for p, v in produced.items()}})
+                   "previews": previews})
 
     def _item_runner(self, block: str, tag: str, number: int, given: dict, part: set, tally: dict, changed,
                      failing: set | None = None) -> "_Runner":
@@ -1247,9 +1257,10 @@ class _Runner:
                         self.emit({"event": "log", "block": spec.id, "level": "INFO",
                                    "message": f"session {spec.session}'s cookies: {_cookie_names(_held(jar))}"})
                 produced = self._check_outputs(result, out_ports, ctx)
+                previews = {p: preview(v) for p, v in produced.items()}
                 # A Splitter given no value passes None on to its lines: not a value to show as if it were one.
                 summary = ("its lines start with nothing: no value arrived" if spec.type == SPLITTER
-                           and "value" not in own else _summary(produced))
+                           and "value" not in own else _summary(produced, previews))
             except Exception as e:
                 # Stopped: whatever the block raised as it stopped (e.g. a closed query or connection) is not a failure.
                 if isinstance(e, Cancelled) or self.cancel.is_set():
@@ -1270,7 +1281,7 @@ class _Runner:
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
                        "tables": {where: path for p, v in produced.items()
                                   for where, path in _table_files(v, p).items()},
-                       "previews": {p: preview(v) for p, v in produced.items()}})
+                       "previews": previews})
             if has_done_output(cls, out_ports):
                 produced[DONE] = True  # for blocks connected done -> after
             return "success", produced

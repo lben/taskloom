@@ -998,7 +998,8 @@ class FlowScene(QGraphicsScene):
         attempts = info.get("attempts") or 0
         retried = f" · retried {attempts - 1}×" if attempts > 1 else ""
         if status == "success":
-            text = "✓ " + _short(info.get("summary") or "done", 48) + retried
+            # (the summary whole, on one line: where it shortens a value it says so, with its count of characters)
+            text = "✓ " + " ".join((info.get("summary") or "done").split()) + retried
             # Hovering it shows each output as the connections do (e.g. JSON laid out).
             tip = "".join(f"<b>{html.escape(port)}</b><pre>{value_html(value)}</pre>"
                           for port, value in (info.get("previews") or {}).items())

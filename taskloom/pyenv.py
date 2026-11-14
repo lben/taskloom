@@ -64,7 +64,10 @@ def fail(error):
             text = repr(value)
             for secret in job["secrets"]:  # scrub, then cut: a cut must not leave part of a password
                 text = text.replace(secret, "***")
-            print(f"  {name} = {' '.join(text.split())[:300]}")
+            line = ' '.join(text.split())
+            if len(line) > 300:  # cut, it says how many characters the whole has: never silently
+                line = f"{line[:300]}… ({len(text):,} characters)"
+            print(f"  {name} = {line}")
     tb = error.__traceback__.tb_next  # from your code on, not this file's
     try:
         from rich.console import Console
