@@ -17,6 +17,7 @@ scope:
         - tests/test_paths_editor_running.py -k data_preview
         - tests/test_paths_data.py -k "cleaned_up or single_output or has_not_run"
         - tests/test_rerun_old_and_kept.py -k data_previews_label_says_old
+        - tests/test_long_output_log.py -k a_line_of_5000_characters
     - mutate:
         - taskloom/editor/window.py MarkedTabBar.paintEvent
       tests:
@@ -38,6 +39,20 @@ kinds:
       when its result arrives and when what is old changes), so what `old` would be when left out is never used.
     mutants:
       - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_1
+  - kind: No value for fold is the same as not folding
+    why: >-
+      The box folds a text's long lines only when it is told to, and no value counts as not told: an error and the
+      reason a table cannot be shown stay as written.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_46
+      - taskloom.editor.panels.xǁPreviewPanelǁ_load__mutmut_20
+  - kind: A reason with no line long enough to fold
+    why: >-
+      Only a line of over 2,000 characters is folded. Why a table cannot be shown is a line or two of polars, which
+      names the file by the last part of its path (it shortens a long path), and one line of ours, each far shorter:
+      told to fold them, the box shows the same.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁ_load__mutmut_23
   - kind: The text reaches the terminal at once without it
     why: >-
       Python writes each whole line to the error stream at once (since 3.9 also when it is not a terminal), and print

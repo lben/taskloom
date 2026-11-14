@@ -29,6 +29,7 @@ scope:
         - tests/test_rerun_carries_on.py -k "two_branches or cleaned_up or opened_from_run_history"
         - tests/test_rerun_stopped_and_cleaned.py -k "blocks_own_result_let_go or (that_block_rerun_alone_gets and died and not terminal) or (the_block_after_it_is_refused and Stop)"
         - tests/test_rerun_mutants.py -k "another_line or before_a_flow_has_run"
+        - tests/test_canvas_paste_and_reuse.py -k blocks_added_after_a_run
     - mutate:
         - taskloom/editor/window.py MainWindow._mark_old
         - taskloom/editor/canvas.py FlowScene.set_old
@@ -159,6 +160,13 @@ kinds:
       - taskloom.history.xǁHistoryǁcarried_on__mutmut_13
       - taskloom.history.xǁHistoryǁcarried_on__mutmut_16
       - taskloom.history.xǁHistoryǁcarried_on__mutmut_17
+  - kind: A list of runs that is never empty there
+    why: >-
+      inputs_run gives no run at its start when neither the block nor a block connected directly into it shows a
+      result. Past that, one of them shows a run, so the list of runs it ends with always holds one: what it would
+      give for an empty list is never asked.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁinputs_run__mutmut_25
   - kind: Nothing left to draw again
     why: >-
       A result stops being old only when its block runs again or another run is opened from Run history. Both clear
