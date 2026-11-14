@@ -87,7 +87,7 @@ class RunProcess(QObject):
         for line in lines:
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except ValueError:  # not JSON, or not UTF-8 (a library's own line, in another encoding)
                 self.output.emit("OUTPUT", line.decode(errors="replace"))
                 continue
             if event.get("event") == "run_started":

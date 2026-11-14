@@ -17,7 +17,7 @@ scope:
         - taskloom/editor/panels.py LogPanel._pressed
       tests:
         - tests/test_long_output_log.py -k "150_lines or 201_lines or first_200_lines_then_how_many or markdown or two_long_messages"
-        - tests/test_long_output_mutants.py -k "201_lines or cut_inside"
+        - tests/test_long_output_mutants.py -k "201_lines or cut_inside or start_and_end_a_run or tab_key"
         - tests/test_inspect_log.py -k "charts_picture_shows_under or markdown_entry_draws or readable_in_the_light"
         - tests/test_run_output_and_tables.py -k "library_prints or own_errors"
     - mutate:
@@ -32,7 +32,7 @@ scope:
     - mutate:
         - taskloom/editor/panels.py FindBar._find
       tests:
-        - tests/test_long_output_mutants.py -k find_in_data_preview
+        - tests/test_long_output_mutants.py -k "find_in_data_preview or find_in_a_table"
         - tests/test_long_output_log.py -k "select_all_and_copy_gives or line_of_5000"
         - tests/test_find_bar.py -k "data_preview_finds or users_case or text_selected"
     - mutate:
@@ -41,7 +41,7 @@ scope:
         - taskloom/editor/window.py MainWindow._on_block_clicked
       tests:
         - tests/test_long_output_log.py -k show_all_brings
-        - tests/test_long_output_mutants.py -k library_wrote
+        - tests/test_long_output_mutants.py -k "library_wrote or second_output or result_is_old"
         - tests/test_long_output_rest.py -k click_on_the_block
     - mutate:
         - taskloom/engine.py _label
@@ -50,14 +50,16 @@ scope:
         - taskloom/engine.py preview
       tests:
         - tests/test_long_output_rest.py -k "finished_line or (error_report and own) or table_in_the_log or api_token"
+        - tests/test_long_output_mutants.py -k "password_with_punctuation or polars_is_set or 21_columns or accented_word or exactly_200 or exactly_300"
         - tests/test_run_output_and_tables.py -k "ten_rows_or_fewer or hovering_a_long_tables or full_path_of_each_table"
-        - tests/test_inspect_log.py -k inspected_table
+        - tests/test_inspect_log.py -k "inspected_table or values_that_are_not_pictures"
     - mutate:
         - taskloom/editor/runs.py RunProcess._read_stdout
       tests:
         - tests/test_long_output_log.py -k "150_lines or inspect_on_a_5_mb"
-        - tests/test_long_output_mutants.py -k library_wrote
-        - tests/test_run_output_and_tables.py -k library_prints
+        - tests/test_long_output_mutants.py -k "library_wrote or not_utf_8"
+        - tests/test_run_output_and_tables.py -k "library_prints or own_errors"
+        - tests/test_editor.py -k ask_user_block_asks_during
     - mutate:
         - taskloom/editor/window.py _latest
       tests:
@@ -208,3 +210,34 @@ kinds:
       - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_10
       - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_11
       - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_12
+  - kind: More of a table's rows fetched than are drawn
+    why: >-
+      Polars draws at most 10 rows: of more it draws the first 5, a row of …, and the last 5. So a 7th row fetched
+      from the start, or a 6th from the end, is never drawn (a table of 12 rows shows rows 1 to 5 and 8 to 12 either
+      way), and a table of 10 rows or fewer asked for 11 rows, or for all of them, gives the same rows.
+    mutants:
+      - taskloom.engine.x_preview__mutmut_5
+      - taskloom.engine.x_preview__mutmut_6
+      - taskloom.engine.x_preview__mutmut_11
+      - taskloom.engine.x_preview__mutmut_14
+  - kind: The same rows drawn, the whole table read for them
+    why: >-
+      With every row fetched for the start, the table drawn is still its first 5 rows, a row of … and its last 5;
+      only the time differs: a table of 10 million rows of three columns takes 25 thousandths of a second in place
+      of 2.
+    mutants:
+      - taskloom.engine.x_preview__mutmut_10
+  - kind: None, which means the same there
+    why: >-
+      Polars takes tbl_rows=None as its own number of rows, which is 10 (also where POLARS_FMT_MAX_ROWS says 20: a
+      table of 12 rows is still its first 5 and last 5), and Python's json takes ensure_ascii=None as False (Zürich
+      is written Zürich either way).
+    mutants:
+      - taskloom.engine.x_preview__mutmut_26
+      - taskloom.engine.x_preview__mutmut_46
+  - kind: A wide table fitted into 201 characters
+    why: >-
+      A table too wide for the Log's 200 characters is then fitted into 201: four columns of 55-character texts get
+      one character more before a cell's …. No one can tell which of the two it is.
+    mutants:
+      - taskloom.engine.x_preview__mutmut_39
