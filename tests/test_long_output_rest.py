@@ -1,5 +1,6 @@
 """Long output in the Log, Inspect and Data preview: the rows NC-5, NC-7, NC-8, NC-9 and NC-10 of
-docs/promises/long-output.yaml (agreed 2026-11-14). NC-1, 2, 3, 4 and 6 are in tests/test_long_output_log.py.
+docs/promises/long-output.yaml (agreed 2026-11-14). NC-1, 2, 3, 4 and 6 are in tests/test_long_output_log.py; of
+NC-2 the last test here adds the click on the block that is already the selected one.
 
 "Long" means over 200 lines or over 20,000 characters. A long message in the Log shows its first 200 lines and a
 "show all" that opens the whole of it in Data preview.
@@ -13,6 +14,7 @@ the run history's file.
 Not here: one message of over 50 million characters kept whole while it is the newest (NC-10): measured on
 2026-11-13, such a message takes about 25 seconds to reach the editor, too long for a test.
 """
+import html
 import json
 import os
 import re
@@ -120,6 +122,11 @@ def box(win) -> str:
     return win.preview.text.toPlainText()
 
 
+def label(win) -> str:
+    """Data preview's label as it reads."""
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", "", win.preview.label.text()))).strip()
+
+
 def run(win, qtbot, tab, ends="success") -> int:
     """Run now, and wait for the run to end and for the editor to have shown it. Gives the run's number."""
     count = len(tab.runs)
@@ -134,6 +141,14 @@ def run(win, qtbot, tab, ends="success") -> int:
 def select(tab, block: str):
     tab.scene.clearSelection()
     tab.scene.nodes[block].setSelected(True)
+
+
+def click_on_canvas(tab, block: str):
+    """Left-click the middle of `block` on the canvas itself, with the mouse."""
+    tab.view.ensureVisible(tab.scene.nodes[block])
+    at = tab.view.mapFromScene(tab.scene.nodes[block].sceneBoundingRect().center())
+    QTest.mouseClick(tab.view.viewport(), Qt.LeftButton, Qt.NoModifier, at)
+    QApplication.processEvents()
 
 
 def under(tab, block: str) -> str:
@@ -512,3 +527,94 @@ def test_past_50_million_characters_the_oldest_runs_messages_leave_the_log_the_n
     assert arrives(qtbot, win, page(1, 4), 60), f"run #{runs[0]}'s last page, after its show all: " \
                                                 f"{missing(box(win), page(1, 4))}"
     print(f"NC-10 measured: the whole test took {time.perf_counter() - started:.1f} s")
+
+
+MESSAGES = 20_050  # one run's messages: 50 more than the 20,000 the Log keeps
+# load_orders' code: it prints one short line for each order of the batch that batch.txt names ("<batch> <orders>").
+PACK_ORDERS = '''
+batch, count = open("batch.txt").read().split()
+for i in range(1, int(count) + 1):
+    print(f"batch {batch} order {i:05d} packed")
+result = int(count)
+'''
+
+
+def packed(win, batch: int) -> list[int]:
+    """The orders of `batch` that the Log says were packed: their numbers, in the Log's order."""
+    return [int(line[1]) for line in re.finditer(rf"batch {batch} order (\d{{5}}) packed$", log_text(win), re.M)]
+
+
+def in_words(orders: list[int]) -> str:
+    return f"{len(orders):,} of its messages, order {orders[0]} to order {orders[-1]}" if orders else "none of them"
+
+
+@pytest.mark.invariant("NC-10")
+def test_a_run_of_20050_messages_is_whole_in_the_log_when_it_ends_and_from_run_history_its_oldest_leave_when_the_next_run_starts(
+        win, qtbot, tmp_path):
+    """The 20,000 messages are a limit on earlier runs' messages, applied when a new run starts: the run that has
+    just ended is whole in the Log, and so is a run opened from Run history. No block is selected: the Log shows
+    every block's messages."""
+    every = list(range(1, MESSAGES + 1))
+    started = time.perf_counter()
+    tab = win.open_flow(orders_flow(tmp_path, PACK_ORDERS))
+    qtbot.waitExposed(win)
+
+    (tmp_path / "batch.txt").write_text(f"1 {MESSAGES}")
+    long_run = run(win, qtbot, tab)
+    when_it_ended = packed(win, 1)
+    print(f"NC-10 measured: a run of {MESSAGES:,} messages had run after {time.perf_counter() - started:.1f} s")
+
+    (tmp_path / "batch.txt").write_text("2 3")  # the next run: 3 messages
+    run(win, qtbot, tab)
+    earlier, newest = packed(win, 1), packed(win, 2)
+
+    open_from_history(win, qtbot, long_run)
+    last = f"batch 1 order {MESSAGES:05d} packed"
+    qtbot.waitUntil(lambda: "batch 2 order" not in log_text(win) and last in log_text(win), timeout=60_000)
+    from_history = packed(win, 1)
+    print(f"NC-10 measured: the whole test took {time.perf_counter() - started:.1f} s")
+
+    # As before: once the next run has started, the earlier run's oldest messages have left and its latest are there
+    # (20,000 with the few other lines of the two runs: started, finished, inspect_orders' own).
+    assert newest == [1, 2, 3], f"the next run's messages in the Log: {newest}"
+    assert earlier == every[-len(earlier):] and 19_990 <= len(earlier) <= 20_000, \
+        f"after the next run the Log has, of run #{long_run}: {in_words(earlier)}"
+    assert when_it_ended == every and from_history == every, (
+        f"run #{long_run} logged {MESSAGES:,} messages, order 1 to order {MESSAGES}. When it ended the Log had "
+        f"{in_words(when_it_ended)}; opened from Run history the Log had {in_words(from_history)}")
+
+
+# --- NC-2: a click on the block that is already selected brings Data preview back to its outputs ---------------------
+
+# load_orders also logs a long message of its own: 300 lines that are not its output.
+LONG_AND_CHECKED = LONG + '''
+log("\\n".join(f"order {i:04d} checked" for i in range(1, 301)))
+'''
+
+
+@pytest.mark.invariant("NC-2")
+@pytest.mark.parametrize("block", ["inspect_orders", "load_orders"])
+def test_a_click_on_the_block_that_is_already_selected_brings_data_preview_back_from_its_log_message_to_its_output(
+        win, qtbot, tmp_path, block):
+    """inspect_orders' long message is the text of its output (the label says which of the two the box holds);
+    load_orders' long message is another text (the box changes too)."""
+    output = whole_text(made_by(LONG))
+    tab = win.open_flow(orders_flow(tmp_path, LONG_AND_CHECKED))
+    qtbot.waitExposed(win)
+    run(win, qtbot, tab)
+    click_on_canvas(tab, block)  # selected: the Log shows its messages, Data preview its output
+    assert label(win).startswith(f"{block}."), label(win)
+    press_show_all(win)  # its long message
+    qtbot.waitUntil(lambda: label(win).startswith(f"Log message of {block}, "), timeout=10_000)
+    if block == "load_orders":
+        assert box(win).endswith("order 0300 checked") and box(win) != output
+
+    click_on_canvas(tab, block)  # the block that is selected already
+
+    try:
+        qtbot.waitUntil(lambda: label(win).startswith(f"{block}."), timeout=3_000)
+    except qtbot.TimeoutError:
+        pass
+    assert label(win).startswith(f"{block}."), \
+        f"after a click on {block}, already the selected block, Data preview's label reads {label(win)!r}"
+    assert arrives(qtbot, win, output, 10), f"Data preview's box after that click: {missing(box(win), output)}"
