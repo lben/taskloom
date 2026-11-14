@@ -14,6 +14,10 @@ found:
     found_by: mutation testing
     fixed_in: 0b67fba
     guarded_by: tests/test_long_output_mutants.py::test_a_line_that_is_not_utf_8_from_a_library_is_in_the_log_with_a_mark_where_it_cannot_be_read
+  - what: "A line a library wrote to a run's output kept its carriage return on Windows, where a line ends with one before the new line: the Log counted it (25,001 characters for a line of 25,000) and show all showed an empty line after it. It was already kept before this change; show all made it visible."
+    found_by: CI on Windows
+    fixed_in: e8b3239
+    guarded_by: tests/test_long_output_mutants.py::test_a_line_a_library_wrote_shows_in_the_log_and_after_show_all_in_data_preview_with_nothing_after_its_last_character
 lighter:
   - "The times of NC-5 (the window answers within 1 second, all of a 5 MB JSON is in Data preview within 15 seconds) are measured on the CI machines of one run, not proven for every machine."
   - "The hover over a block with a long value shows the value's first 4,000 characters, which can be taller than the window."
