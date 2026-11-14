@@ -2708,6 +2708,7 @@ class PreviewPanel(QWidget):
         are shown."""
         message, block = entry.get("message", ""), entry.get("block")
         lines = message.count("\n") + 1
+        self.block_id = None  # no block's outputs are in it now (MainWindow._on_block_clicked brings them back)
         self.ports.hide()
         self._show_text(message, fold=True)
         self.label.setText(f"Log message{f' of {block}' if block else ''}, {entry.get('ts', '')[11:19]}: "

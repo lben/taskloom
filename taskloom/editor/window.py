@@ -942,7 +942,6 @@ class MainWindow(QMainWindow):
     def _show_message(self, entry: dict):
         """"show all" under a long message in the Log: the whole message in Data preview, brought to the front."""
         self.preview.show_message(entry)
-        self.preview.block_id = None  # no block's outputs are in it now (see _on_block_clicked)
         self.bottom_tabs.setCurrentWidget(self.preview)
 
     # --- copy and paste -------------------------------------------------------------
@@ -1149,14 +1148,18 @@ class MainWindow(QMainWindow):
 
     def inputs_run(self, tab: FlowTab, block_id: str) -> int | None:
         """The run whose inputs "with the same inputs" gives a block, and "with inputs I choose…" is filled in with.
-        It starts from the newest run among the results that the block and the blocks before it (at any distance
-        along the connections) show: a full run that ended before reaching the block is seen so, where the block
-        still shows the run before. From there, the newest run that carries on from that run, directly or through
-        other re-runs (so what a block before it made when it ran again is seen), whose files still exist; none:
-        that run itself. With none of those runs' files left, the same from the next newest of the runs shown. Not
-        the flow's newest run: a run none of these blocks took part in holds nothing of theirs. While the canvas
-        shows a run you opened from Run history, that run as it is."""
+        None when neither the block nor a block connected directly into it shows a result: there is nothing to take
+        its inputs from (a result further back does not change that). Otherwise it starts from the newest run among
+        the results that the block and the blocks before it (at any distance along the connections) show: a full
+        run that ended before reaching the block is seen so, where the block still shows the run before. From
+        there, the newest run that carries on from that run, directly or through other re-runs (so what a block
+        before it made when it ran again is seen), whose files still exist; none: that run itself. With none of
+        those runs' files left, the same from the next newest of the runs shown. Not the flow's newest run: a run
+        none of these blocks took part in holds nothing of theirs. While the canvas shows a run you opened from
+        Run history, that run as it is."""
         edges, before, todo = tab.doc.edges(), {block_id}, [block_id]
+        if all(tab.result_run(b) is None for b in (block_id, *(src for src, _, dst, _ in edges if dst == block_id))):
+            return None
         while todo:
             block = todo.pop()
             for src in {src for src, _, dst, _ in edges if dst == block} - before:
@@ -1382,8 +1385,8 @@ class MainWindow(QMainWindow):
         fixing it, or a block before it; see inputs_run); the blocks before it do not run."""
         run_id = self.inputs_run(tab, block_id)
         if run_id is None:
-            QMessageBox.information(self, "Run the flow first", "Neither this block nor the blocks before it show a "
-                                    "result to take the inputs from.")
+            QMessageBox.information(self, "Run the flow first", "Neither this block nor the blocks connected into it "
+                                    "show a result to take the inputs from.")
             return
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")

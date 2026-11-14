@@ -268,8 +268,9 @@ taskloom editor examples/daily-sales-report.yaml
 - **Test a block with values you choose:** right-click it → **Run only this block, with
   inputs I choose…**. Each input is filled in with what reached it in the same run as
   above: the newest among the results of the block and the blocks before it, or the newest
-  re-run that carries on from it (the window names that run; empty if none of them shows a
-  result); change any of them and press Run. Write values as Python: `42`, `'text'`,
+  re-run that carries on from it (the window names that run; empty if neither the block nor
+  a block connected into it shows a result, and then "with the same inputs" is greyed out);
+  change any of them and press Run. Write values as Python: `42`, `'text'`,
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
   what you typed and works it out again, so after editing `data.csv` just press Run.

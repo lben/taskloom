@@ -84,17 +84,18 @@ def test_after_a_rerun_of_a_block_alone_died_while_the_block_ran_the_block_after
 
 @pytest.mark.invariant("RR-2")
 @pytest.mark.invariant("RR-6")
-def test_after_a_rerun_from_a_block_on_died_while_that_block_ran_the_blocks_after_it_are_each_refused_when_rerun_alone(
+def test_after_a_rerun_from_a_block_on_died_while_that_block_ran_the_block_after_it_is_refused_and_the_next_cannot_be_chosen(
         win, qtbot, tmp_path):
     tab, _ = died_while_load_orders_ran(win, qtbot, tmp_path, RUN_ON)
 
     clean = choose(win, qtbot, tab, "clean", RUN_ONLY)
-    report = choose(win, qtbot, tab, "report", RUN_ONLY)
+    # report shows nothing, and neither does clean, the block connected into it (the dead run cleared them): there is
+    # nothing to take its inputs from, so its entry cannot be chosen, as for a block that has never run.
+    assert not entry(win, tab, "report", RUN_ONLY).isEnabled()
 
     # Neither ran: not with the 10 rows of run #1 again, nor with what clean made of them.
-    assert (received(tmp_path, "clean"), received(tmp_path, "report")) == (["10"], ["10"]), (clean.log, report.log)
+    assert (received(tmp_path, "clean"), received(tmp_path, "report")) == (["10"], ["10"]), clean.log
     assert clean.status != "success" and "load_orders" in clean.said, clean.log  # the Log names the block to run first
-    assert report.status != "success", report.log
 
 
 @pytest.mark.invariant("RR-2")
