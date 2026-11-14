@@ -57,7 +57,20 @@ CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
 
 
-MAX_LOG_ENTRIES = 20000  # the Log keeps earlier runs' messages, up to this many lines
+MAX_LOG_ENTRIES = 20000  # the Log keeps earlier runs' messages, up to this many
+MAX_LOG_CHARACTERS = 50_000_000  # and up to this many characters of them (each message is whole in memory)
+
+
+def _latest(entries: list[dict]) -> list[dict]:
+    """The messages the Log keeps: the latest MAX_LOG_ENTRIES, and of those the latest that together have at most
+    MAX_LOG_CHARACTERS characters. The oldest leave first; the newest stays, however long it is."""
+    first, characters = len(entries), 0
+    while first > max(len(entries) - MAX_LOG_ENTRIES, 0):
+        characters += len(entries[first - 1].get("message", ""))
+        if characters > MAX_LOG_CHARACTERS and first < len(entries):
+            break
+        first -= 1
+    return entries[first:]
 
 
 def _finished_line(run_id: int, status: str, ts: str) -> dict:
@@ -462,6 +475,7 @@ class MainWindow(QMainWindow):
         self.history_panel.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.history_panel.table.customContextMenuRequested.connect(self._run_menu)
         self.log.filter_cleared.connect(lambda: self.current and self.current.scene.clearSelection())
+        self.log.show_all.connect(self._show_message)
         # Each just after a second of the clock (see _show_countdowns), so they move on as the clock does.
         self._countdown = QTimer(self, singleShot=True, timerType=Qt.PreciseTimer)
         self._countdown.timeout.connect(self._show_countdowns)
@@ -914,6 +928,11 @@ class MainWindow(QMainWindow):
         if block_id is not None:
             self.preview.show_outputs(block_id, tab.block_info.get(block_id), block_id in tab.scene.old)
 
+    def _show_message(self, entry: dict):
+        """"show all" under a long message in the Log: the whole message in Data preview, brought to the front."""
+        self.preview.show_message(entry)
+        self.bottom_tabs.setCurrentWidget(self.preview)
+
     # --- copy and paste -------------------------------------------------------------
 
     def copy_blocks(self):
@@ -1095,7 +1114,7 @@ class MainWindow(QMainWindow):
         self._end_waits(tab)  # (the run on screen until now, if it is still going)
         tab.shown_run, tab.run_blocks = run, []
         if not rerun:
-            tab.entries = tab.entries[-MAX_LOG_ENTRIES:]  # its messages follow the earlier runs'
+            tab.entries = _latest(tab.entries)  # its messages follow the earlier runs'
             if tab is self.current:
                 self.log.set_entries(list(tab.entries))
                 self.bottom_tabs.setCurrentWidget(self.log)
@@ -1539,6 +1558,11 @@ class MainWindow(QMainWindow):
                     self._apply_block_result(tab, block, {"status": "failed", "run_id": info["run_id"],
                                                           "error": "the run process stopped unexpectedly"})
             self._mark_old(tab)
+        kept = _latest(tab.entries)  # the Log's limits hold again as soon as the run that passed them has ended
+        if len(kept) < len(tab.entries):
+            tab.entries = kept
+            if tab is self.current:
+                self.log.set_entries(list(kept))
         self._load_last_run(tab)
         if tab is self.current:
             self._refresh_history(tab)
@@ -1943,7 +1967,7 @@ class MainWindow(QMainWindow):
         if run:
             logs = [_started_line(run_id, run["started"]),
                     *logs, _finished_line(run_id, run["status"], run["finished"] or run["started"])]
-        tab.entries = (tab.entries[-MAX_LOG_ENTRIES:] if keep_log else []) + logs
+        tab.entries = _latest((tab.entries if keep_log else []) + logs)
         if tab is self.current:
             self.log.set_entries(list(tab.entries))
             self.bottom_tabs.setCurrentWidget(self.log)

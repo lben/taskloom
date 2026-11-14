@@ -8,7 +8,7 @@ import keyword
 import math
 import os
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 from functools import partial
 from itertools import accumulate
@@ -2083,7 +2083,13 @@ class FindBar(QWidget):
             heads = [(-1, c) for c in columns if self.headers and found(model.headerData(c, Qt.Horizontal))]
             return heads + [(r, c) for r in range(model.rowCount()) for c in columns if found(model.index(r, c).data())]
         text = self.view.document().toPlainText()
-        matches = [(m.start(), m.end()) for m in pattern.finditer(text) if m.end() > m.start()]
+        # A long line that Data preview shows folded is searched as the one line it is: without the line breaks shown
+        # in it, each match then put where the box shows it (some folds may still be to come: it fills in slices).
+        folds = [fold for fold in self.view.folds if fold < len(text)] if isinstance(self.view, _TextBox) else []
+        lines = "".join(text[a:b] for a, b in zip([0, *(fold + 1 for fold in folds)], [*folds, len(text)]))
+        starts = [fold - i for i, fold in enumerate(folds)]  # where the folds are in `lines`
+        matches = [(m.start() + bisect_right(starts, m.start()), m.end() + bisect_left(starts, m.end()))
+                   for m in pattern.finditer(lines) if m.end() > m.start()]
         if re.search("[\U00010000-\U0010ffff]", text):  # Qt counts such a character (e.g. an emoji) as two
             wide = list(accumulate((c > "\uffff" for c in text), initial=0))
             matches = [(start + wide[start], end + wide[end]) for start, end in matches]
@@ -2184,6 +2190,8 @@ MARKDOWN = QTextDocument.MarkdownFeature.MarkdownDialectGitHub | QTextDocument.M
 FENCES = MarkdownIt("commonmark", {"html": False})  # finds the ```mermaid code blocks Qt's Markdown would show
 DARK_DIAGRAM = '\n%%{init: {"theme": "dark"}}%%\n'  # at the end: Mermaid's front matter (---) must come first
 PICTURE = "taskloom-picture:"  # the Log's names for its pictures: never a file's or a web address
+MESSAGE = "taskloom-message:"  # the Log's names for its long messages: where each "show all" leads
+LOG_LINES, LOG_CHARACTERS = 200, 20_000  # a message over either is long: the Log shows its start, Data preview all
 _DIAGRAMS = OrderedDict()  # (source, background, pixel ratio) -> its picture, or why it could not be drawn
 
 
@@ -2318,8 +2326,21 @@ class _LogView(QTextBrowser):
         return mime
 
 
+def _first_lines(message: str) -> tuple[str, str]:
+    """What the Log shows of a message, and what it says under that: the whole message and "" unless it is long (over
+    LOG_LINES lines or over LOG_CHARACTERS characters); of a long one its first LOG_LINES lines, or its first
+    LOG_CHARACTERS characters if that is less, and how much more there is (the words "show all" follow it)."""
+    first = "\n".join(message.split("\n", LOG_LINES)[:LOG_LINES])[:LOG_CHARACTERS]
+    if len(first) == len(message):
+        return message, ""
+    more = message.count("\n", len(first)) if message[len(first)] == "\n" else 0  # (cut inside a line: not counted)
+    lines = f"{more:,} more line{'' if more == 1 else 's'} " if more else ""
+    return first, f"… {lines}({len(message):,} characters in all) · "
+
+
 class LogPanel(QWidget):
     filter_cleared = Signal()
+    show_all = Signal(object)  # "show all" was pressed under a long message's first lines: its entry
 
     def __init__(self, toggles: FindToggles | None = None):
         super().__init__()
@@ -2338,6 +2359,8 @@ class LogPanel(QWidget):
         self.find_bar = FindBar(self.text, toggles or FindToggles(self))  # (on its own, as in a proof: its own toggles)
         layout.addWidget(self.find_bar)
         self.entries, self.block = [], None
+        self._long = {}  # a "show all" in the Log (its link's name) -> the entry whose message it shows whole
+        self.text.anchorClicked.connect(self._pressed)
         # New lines keep the view at the bottom when it is there, and leave it where you scrolled up to.
         self._follow = True
         scroll = self.text.verticalScrollBar()
@@ -2361,6 +2384,11 @@ class LogPanel(QWidget):
                 scroll.setValue(value)
         return False
 
+    def _pressed(self, link):
+        entry = self._long.get(link.toString())
+        if entry is not None:  # (any other link is a message's own: shown, never opened)
+            self.show_all.emit(entry)
+
     def set_entries(self, entries: list[dict]):
         self.entries = entries
         self._render()
@@ -2383,6 +2411,7 @@ class LogPanel(QWidget):
     def _render(self):
         self.text.clear()
         self.text.document().pictures.clear()
+        self._long.clear()
         self._follow = True  # drawn again: it shows the last lines
         self._write([e for e in self.entries if self._shown(e)])
 
@@ -2395,11 +2424,14 @@ class LogPanel(QWidget):
 
     def _entry(self, cursor: QTextCursor, e: dict):
         """An entry's line, HH:MM:SS [block] LEVEL message, at the end of the Log; for a picture (show "image") the
-        picture under it, for Markdown (show "markdown") the message drawn under it instead."""
+        picture under it, for Markdown (show "markdown") the message drawn under it instead. Of a long message its
+        first lines, then a line that says how much more there is and "show all" (a link: all of it in Data preview);
+        Qt lays a message out whole each time a line follows it, and copying takes the square of its lines."""
         show, message, level = e.get("show"), e.get("message", ""), e.get("level", "INFO")
+        first, more = _first_lines(message)
         # One paragraph (its lines split by line separators), its spaces kept: reports such as Python tracebacks are
         # laid out in columns.
-        said = "" if show == "markdown" or not message else " " + "\u2028".join(message.splitlines())
+        said = "" if show == "markdown" or not first else " " + "\u2028".join(first.splitlines())
         self._paragraph(cursor, QTextBlockFormat())
         plain = QTextCharFormat()
         if e.get("header"):
@@ -2413,7 +2445,16 @@ class LogPanel(QWidget):
         if show == "image":
             self._picture(cursor, message)
         elif show == "markdown":
-            self._markdown(cursor, message)
+            self._markdown(cursor, first)
+        if more:
+            self._note(cursor, more)
+            link = QTextCharFormat()
+            link.setAnchor(True)
+            link.setAnchorHref(f"{MESSAGE}{len(self._long)}")
+            link.setForeground(self.text.palette().link())
+            link.setFontUnderline(True)
+            self._long[link.anchorHref()] = e
+            cursor.insertText("show all", link)
 
     def _paragraph(self, cursor: QTextCursor, fmt: QTextBlockFormat):
         """Start a paragraph at the end of the Log: in the empty one there (the first, or the one after Markdown)."""
@@ -2540,10 +2581,71 @@ class FrameModel(QAbstractTableModel):
         return None
 
 
+FOLD = 2000  # Data preview shows a longer line as lines of this many characters
+SLICE = 200_000  # Data preview's box is filled this many characters at a time, the window answering in between
+LONG_LINE = re.compile(f"^.{{{FOLD + 1},}}", re.MULTILINE)
+
+
+class _TextBox(QPlainTextEdit):
+    """Data preview's text box: a text whole, read only, in the fixed-width font, its lines never wrapped, to scroll,
+    select, find in and copy. A line over FOLD characters of an output or a Log message is shown as lines of FOLD (Qt
+    draws a line whole each time it paints, and cannot scroll to the end of a very long one); `folds` says where in
+    the box the line breaks added for that are, so that Find searches such a line as one and Copy gives it back as
+    one. A long text is filled in a slice at a time (all at once, 5 MB hold the window for most of a second)."""
+
+    def __init__(self):
+        super().__init__(readOnly=True)
+        self.setFont(MONO)
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.whole, self.folds, self._rest = "", [], []
+        self._more = QTimer(self, interval=0)
+        self._more.timeout.connect(self._fill)
+        self._blank = QPlainTextEdit()  # never shown: what createMimeDataFromSelection asks Qt's object of
+
+    def show_text(self, text: str, fold: bool):
+        """`text` in the box, in place of what it holds or was still being filled with; `fold`: its long lines
+        folded."""
+        # Qt shows \r\n as one line break: as \n here, so that a place in the box is a place in the text.
+        self.whole = text.replace("\r\n", "\n")
+        pieces, self.folds, at = [], [], 0
+        for line in LONG_LINE.finditer(self.whole) if fold else ():
+            for cut in range(line.start() + FOLD, line.end(), FOLD):
+                pieces.append(self.whole[at:cut])
+                self.folds.append(cut + len(self.folds))
+                at = cut
+        shown = "\n".join([*pieces, self.whole[at:]])
+        self._rest = [shown[i:i + SLICE] for i in range(SLICE, len(shown), SLICE)][::-1]
+        self.setPlainText(shown[:SLICE])  # at once: a short text is there as soon as it is asked for
+        self._more.start()
+
+    def _fill(self):
+        if not self._rest:
+            self._more.stop()
+            return
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(self._rest.pop())
+
+    def createMimeDataFromSelection(self):
+        # The text as it was, not the box's as Qt writes it: that has a line break at each fold, and for a long text
+        # Qt first builds its HTML, Markdown and ODF (seconds for 5 MB). Each end of the selection is so many
+        # characters into the box (measured as text: Qt's positions count some characters, e.g. an emoji, as two),
+        # less the folds before it. The object must come from Qt (the clipboard keeps it, and one made in Python is
+        # freed twice when the program quits): an empty box's, which Qt has nothing to fill with.
+        cursor = self.textCursor()
+        before = QTextCursor(self.document())
+        before.setPosition(cursor.selectionStart(), QTextCursor.KeepAnchor)
+        start = len(before.selectedText())
+        end = start + len(cursor.selectedText())
+        mime = QPlainTextEdit.createMimeDataFromSelection(self._blank)
+        mime.setText(self.whole[start - bisect_left(self.folds, start):end - bisect_left(self.folds, end)])
+        return mime
+
+
 class PreviewPanel(QWidget):
-    """What the selected block produced in the run on screen: tables as a grid, anything else as text. A failed block's
-    error, and why a table cannot be shown, are text in the box too, never in the label: the window cannot be narrower
-    than a label's text, so a long error there made it wider than the screen."""
+    """What the selected block produced in the run on screen: tables as a grid, anything else as text; or a message
+    of the Log, whole. A failed block's error, and why a table cannot be shown, are text in the box too, never in the
+    label: the window cannot be narrower than a label's text, so a long error there made it wider than the screen."""
 
     PREVIEW_ROWS = 200
     HINT = "Select a block to see what it produced in the last run (run the flow first)."
@@ -2563,9 +2665,7 @@ class PreviewPanel(QWidget):
         layout.addLayout(bar)
         self.view = QTableView()
         self.view.setFont(MONO)
-        self.text = QPlainTextEdit(readOnly=True)
-        self.text.setFont(MONO)
-        self.text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.text = _TextBox()
         layout.addWidget(self.view)
         layout.addWidget(self.text)
         self.text.hide()
@@ -2596,18 +2696,28 @@ class PreviewPanel(QWidget):
             self.label.setText(self.HINT if not block_id or not status
                                else f"{block_id}: {status}, no output{self.old_note}")
             if info.get("error"):
-                self._show_text(info["error"])
+                self._show_text(info["error"], fold=False)
             else:
                 self.text.hide()
                 self.view.show()
             return
         self._load(names[0])
 
+    def show_message(self, entry: dict):
+        """A message of the Log whole in the box ("show all" under its first lines there), until a block's outputs
+        are shown."""
+        message, block = entry.get("message", ""), entry.get("block")
+        lines = message.count("\n") + 1
+        self.ports.hide()
+        self._show_text(message, fold=True)
+        self.label.setText(f"Log message{f' of {block}' if block else ''}, {entry.get('ts', '')[11:19]}: "
+                           f"{lines:,} line{'' if lines == 1 else 's'}")
+
     def _load(self, port):
         if not port:
             return
         if port not in self.tables:
-            self._show_text(self.previews[port])
+            self._show_text(self.previews[port], fold=True)
             self.label.setText(f"{self.block_id}.{port}{self.old_note}:")
             return
         try:
@@ -2616,7 +2726,7 @@ class PreviewPanel(QWidget):
             df = lazy.head(self.PREVIEW_ROWS).collect()
         except Exception as e:
             self.label.setText("Cannot preview")
-            self._show_text(f"{e}\n(runs are cleaned up as Keep runs or keep_runs_for says)")
+            self._show_text(f"{e}\n(runs are cleaned up as Keep runs or keep_runs_for says)", fold=False)
             return
         self.text.hide()
         self.view.show()
@@ -2625,11 +2735,12 @@ class PreviewPanel(QWidget):
         self.label.setText(f"{self.block_id}.{port}{self.old_note}: {total:,} rows × {df.width} columns"
                            + (f" (showing first {self.PREVIEW_ROWS})" if total > self.PREVIEW_ROWS else ""))
 
-    def _show_text(self, text: str):
-        """`text` in the box under the label, in place of the grid: whole and as written, to scroll, select and copy."""
+    def _show_text(self, text: str, fold: bool):
+        """`text` in the box under the label, in place of the grid: whole, to scroll, select and copy. `fold`: a line
+        over FOLD characters as lines of FOLD (an output, a Log message); else as written (an error, a reason)."""
         self.view.hide()
         self.text.show()
-        self.text.setPlainText(text)
+        self.text.show_text(text, fold)
 
 
 # --- Run history --------------------------------------------------------------------

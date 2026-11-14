@@ -189,8 +189,12 @@ taskloom editor examples/daily-sales-report.yaml
   runs the flow in a separate process: blocks show their
   status live, the **Log** shows the selected block's messages (when a block finishes, its line
   gives the full path of each table it produced, to copy; what a database driver or library
-  prints shows as plain `OUTPUT`), **Data preview** shows
-  everything the selected block produced (tables as a grid, other values as text; a table
+  prints shows as plain `OUTPUT`; a long message, over 200 lines or over 20,000 characters,
+  shows its first 200 lines and a **show all**, see Inspect below), **Data preview** shows
+  everything the selected block produced (tables as a grid, other values as text, whole: a
+  5 MB API response down to its closing `}`, to scroll, find in and copy; a line over 2,000
+  characters is shown as lines of 2,000, Find still finds a word across such a break and
+  Copy gives the line back as one; a table
   inside a dict or list also on its own, by where it is, e.g. `output.combined`; for a block
   that failed, its whole error, in a box that scrolls, to select and copy), and
   **Run history** lists every run of the flow as its own row, newest first, whoever started
@@ -218,7 +222,10 @@ taskloom editor examples/daily-sales-report.yaml
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it (a table over 10 rows: its first 5 rows, `…`, its last 5). Every run's
   values are kept in **Run history** (double-click a run, then hover) for as long as its start
-  block's **Keep runs** says (by default `keep_runs_for`: 5 years). Hover over the message under a block to read all of it;
+  block's **Keep runs** says (by default `keep_runs_for`: 5 years). The message under a block
+  stays one line, and a result too long for it ends with how many characters it has, e.g.
+  `✓ result: {'orders': [{'id': 1, … (4,830,112 characters)`. Hover over it to read it (of a
+  long value its first 4,000 characters, then `…`; all of it is in Data preview);
   its bottom right says when that result was made, the time the block finished in its run (e.g.
   `results from 2026-10-31 14:03:22`; none while the block runs). The canvas follows the runs of the flow, including scheduled ones: each block
   shows its result from the latest run it took part in, and a run that starts clears only
@@ -226,7 +233,8 @@ taskloom editor examples/daily-sales-report.yaml
   in it show nothing) until you start a run or open the newest one. A flow you open starts
   clean, unless it ran since you last saw it (e.g. on schedule). The Log keeps the messages
   of the earlier runs above it, each run starting with a bold line with its number, date
-  and time.
+  and time: the latest 20,000 messages and at most 50 million characters. Older runs'
+  messages leave first (they stay in Run history); the newest message is always kept whole.
 - **A block's earlier results:** right-click it → **Results of this block…**: one row per
   run it took part in, newest first, with the run, when it started, what started it, how
   the block ended and its result or error. Select a row to see the values the block's
@@ -268,7 +276,8 @@ taskloom editor examples/daily-sales-report.yaml
   (`--input NAME=VALUE` with `--only` from a terminal.)
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
-  the values of your variables. A failure Ask User expects (you chose **Don't answer**;
+  the values of your variables (each input and variable on one line; one too long for it
+  ends with how many characters it has, e.g. `… (33,412 characters)`). A failure Ask User expects (you chose **Don't answer**;
   nobody can be asked, e.g. in a scheduled run, and it has no Default, or for a password no
   stored secret or one never saved; an answer that is not one of its Options; kind choice
   without Options) says so in a short message,
@@ -279,7 +288,15 @@ taskloom editor examples/daily-sales-report.yaml
   when nothing came by it, e.g. the path an If did not take or an input you left empty.
 - To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
   the data on and shows it in the Log and Data preview. A table's columns line up as in
-  its hover tooltip. Its **message** is written like a Python f-string, e.g.
+  its hover tooltip: in the Log it is a small look at the table (its count of rows and
+  columns, its first 5 and last 5 rows, cells shortened with `…` at 60 characters); the table
+  with its cells whole is in Data preview's grid. A long message (over 200 lines or over
+  20,000 characters) shows its first 200 lines in the Log, then how much more there is and
+  a **show all**, e.g. for a 5 MB API response
+  `… 236,565 more lines (4,830,112 characters in all) · show all`. Press **show all** and
+  Data preview comes to the front with the whole of it, under
+  `Log message of inspect_orders, 09:02:41: 236,765 lines`, until you select a block. In a
+  terminal the message is printed whole. Its **message** is written like a Python f-string, e.g.
   `Healthy: {value['healthy']}`. Example: `examples/check-app-health.yaml` (Health Check's
   `result` output says healthy or not).
   - A value that is a picture's path (.png, .jpg, .jpeg, .gif, .bmp, .svg or .webp, e.g. a
@@ -294,7 +311,8 @@ taskloom editor examples/daily-sales-report.yaml
     light or dark) and scaled down to fit 640 × 640 (in a terminal, the Markdown as
     written); one that cannot be drawn shows as written, with a note saying why. Links are
     shown but open nothing.
-  - Past and scheduled runs reopened from Run history show the same pictures and Markdown.
+  - Past and scheduled runs reopened from Run history show the same pictures and Markdown,
+    and the same first 200 lines of a long message, whose **show all** still opens all of it.
 - **Several blocks connected into one input of a Python Code block:** that input is a dict
   keyed by each block's name (as on the canvas), with its output as the value, in the order
   of the connections, e.g. `input["load"]`; with one block connected it is that block's
