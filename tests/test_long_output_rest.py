@@ -369,20 +369,58 @@ def test_the_finished_line_taskloom_run_prints_for_a_long_output_ends_with_how_m
     assert not wrong, wrong
 
 
+# load_orders' code: a text of COUNT characters, an order a line (30 characters with its line break).
+ORDER_TEXT = 'result = "\\n".join(f"order {i:06d}: pen, ink, paper" for i in range(1, 1001))[:COUNT]'
+CARRIED = "load_orders.result -> inspect_orders.value"  # the connection that carries load_orders' result
+
+
+def hovered_result(tab) -> dict[str, str]:
+    """load_orders' result as hovering shows it, by where the mouse rests: on the line under the block, on the block's
+    output (the dot on its right) and on the connection that carries the value to inspect_orders. Each hover names
+    what it shows on its first line; the value is what follows it (under the block, up to the hover's last line, which
+    says when the result was made)."""
+    lines = [as_seen(edge.toolTip()) for edge in tab.scene.edge_items]
+    shown = {"the block": ("result", re.sub(r"\nresults from [-\d]+ [:\d]+$", "", hover(tab, "load_orders"))),
+             "the block's output": ("load_orders.result",
+                                    as_seen(tab.scene.nodes["load_orders"].ports["result", True].toolTip())),
+             "the connection": (CARRIED, next((text for text in lines if text.startswith(CARRIED)), ""))}
+    for where, (name, text) in shown.items():
+        assert text.startswith(name + "\n"), f"the hover over {where} does not start with {name!r}: {text[:80]!r}"
+    return {where: text[len(name) + 1:] for where, (name, text) in shown.items()}
+
+
 @pytest.mark.invariant("NC-8")
-def test_the_hover_over_a_block_with_a_long_output_shows_its_first_4000_characters_then_an_ellipsis(win, qtbot,
-                                                                                                    tmp_path):
-    whole = whole_text(made_by(LONG))
-    tab = win.open_flow(orders_flow(tmp_path, LONG))
+@pytest.mark.parametrize("code", [LONG, orders_code(4001, ORDER_TEXT)],
+                         ids=["a JSON of 33,000 characters", "a text of 4,001 characters"])
+def test_hovering_an_output_of_over_4000_characters_shows_its_first_4000_then_how_many_characters_it_has(
+        win, qtbot, tmp_path, code):
+    value = made_by(code)
+    whole = value if isinstance(value, str) else whole_text(value)  # (a text is its own whole text)
+    assert len(whole) > 4000, len(whole)
+    ending = f"… ({len(whole):,} characters)"
+    tab = win.open_flow(orders_flow(tmp_path, code))
 
     run(win, qtbot, tab)
 
-    shown = hover(tab, "load_orders")
-    start = "result\n" + whole[:4000]  # the output's name, then its value
-    assert shown.startswith(start), f"the hover is not the value's first 4,000 characters: {missing(shown, start)}"
-    after = shown[len(start):]
-    assert after.startswith("…") and whole[4000:4020] not in after, \
-        f"after the first 4,000 of the value's {len(whole):,} characters the hover shows {after[:60]!r}, not …"
+    wrong = {where: f"{missing(shown[:4000], whole[:4000]) or 'the first 4,000'}, then {shown[4000:4060]!r}"
+             for where, shown in hovered_result(tab).items() if shown != whole[:4000] + ending}
+    assert not wrong, (f"hovering does not show the first 4,000 of the value's {len(whole):,} characters and then "
+                       f"{ending!r}; it shows: {wrong}")
+
+
+@pytest.mark.invariant("NC-8")
+@pytest.mark.parametrize("characters", [4000, 1000], ids=["exactly 4,000 characters", "1,000 characters"])
+def test_hovering_an_output_of_4000_characters_or_fewer_shows_it_whole_with_no_ending(win, qtbot, tmp_path,
+                                                                                      characters):
+    code = orders_code(characters, ORDER_TEXT)
+    whole = made_by(code)
+    assert len(whole) == characters, len(whole)
+    tab = win.open_flow(orders_flow(tmp_path, code))
+
+    run(win, qtbot, tab)
+
+    wrong = {where: missing(shown, whole) for where, shown in hovered_result(tab).items() if shown != whole}
+    assert not wrong, f"hovering does not show the value of {characters:,} characters whole, and nothing after: {wrong}"
 
 
 @pytest.mark.invariant("NC-8")

@@ -310,8 +310,8 @@ def test_a_one_line_label_says_when_it_is_shortened_and_a_table_in_the_log_stays
     p.idea("Some places show a value on one line: the line a block writes in the Log when it finishes, and the line "
            f"under it on the canvas. A long value is shortened there, and now says so: the line ends with “{ending}”, "
            "the size of the whole value.")
-    p.idea("Rest the mouse on the line under the block: the hover shows the value's first 4,000 characters, then “…”. "
-           "All of it is in Data preview.")
+    p.idea("Rest the mouse on the line under the block: the hover shows the value's first 4,000 characters, then "
+           f"“{ending}”. All of it is in Data preview.")
     p.idea("A table that Inspect writes in the Log stays a small look at the table, as you asked: its count of rows "
            "and columns, its first 5 and last 5 rows, and cells shortened with … at 60 characters. The whole table, "
            "with whole cells, is in Data preview's grid.")
@@ -339,8 +339,8 @@ def test_a_one_line_label_says_when_it_is_shortened_and_a_table_in_the_log_stays
     says = as_seen(tip.text())
     place = QRect(tip.mapToGlobal(QPoint(0, 0)) - win.mapToGlobal(QPoint(0, 0)), tip.size())
     p.shot(tip, "The hover: the output's name, result, then the value from its first character. It stops after "
-                "4,000 characters, in the middle of order 00032, with “…”. Its last line, in small letters, says when "
-                "the result was made.",
+                f"4,000 characters, in the middle of order 00032, with “{ending}”. Its last line, in small letters, "
+                "says when the result was made.",
            over=win, highlight=[tip], zoom=[QRect(place.left(), place.bottom() - 110, min(700, place.width()), 110)])
     tip.hide()
     after = says[len("result\n") + 4000:]  # what the hover shows after the value's first 4,000 characters
@@ -348,7 +348,8 @@ def test_a_one_line_label_says_when_it_is_shortened_and_a_table_in_the_log_stays
     p.check("The whole hover is on screen, inside the window", win.rect().contains(place))
     p.check("The hover shows the name result, then the value's first 4,000 characters",
             says.startswith("result\n" + whole[:4000]))
-    p.check("Then “…”, and nothing more of the value", after.startswith("…") and whole[4000:4020] not in after)
+    p.check(f"Then “{ending}”, and nothing more of the value",
+            after.split("\n")[0] == ending and whole[4000:4020] not in after)
 
     p.step("In a terminal, run the same flow: taskloom run orders.yaml. Look at the line it prints when load_orders "
            "finishes.")
@@ -362,7 +363,7 @@ def test_a_one_line_label_says_when_it_is_shortened_and_a_table_in_the_log_stays
     p.check("The line under load_orders on the canvas is the same, after its ✓",
             under == "✓ " + printed["load_orders"].removeprefix("success · "))
     p.note("On the canvas a block is too narrow for that line: it shows its start. The ending with the count is in "
-           "what the terminal prints, and in an error report's inputs and variables.")
+           "the hover, in what the terminal prints, and in an error report's inputs and variables.")
 
     p.step("Open orders_table.yaml and press ▶ Run now. Here load_orders gives a table of 12 orders; the note of the "
            "second one is 100 characters long. inspect_orders writes the table in the Log. Drag the edge between the "
