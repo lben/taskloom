@@ -38,6 +38,14 @@ LIBRARY_LINE = ('import sys\n'
                 'sys.stdout.write("".join(f"row {i:05d} " for i in range(1, 5000))[:25000] + "\\n")\n'
                 'sys.stdout.flush()\n'
                 'orders = "done"')
+# load_orders' code: it makes a small value, and a library it uses writes two lines straight to the run's output, a
+# short one and one of 25,000 characters, each with the line end put in for %r: b"\r\n" or b"\n".
+LIBRARY_LINES = ('import sys\n'
+                 'rows = "".join(f"row {i:05d} " for i in range(1, 5000))[:25000]\n'
+                 'for line in ("stock list read: 4,999 rows", rows):\n'
+                 '    sys.stdout.buffer.write(line.encode() + %r)\n'
+                 '    sys.stdout.flush()\n'
+                 'orders = "done"')
 
 
 def under_the_message(win, qtbot) -> str:
@@ -168,6 +176,37 @@ def test_show_all_under_a_line_a_library_wrote_names_no_block_says_1_line_and_sh
     assert L.label(win) == f"Log message, {shown[:8]}: 1 line"
     qtbot.waitUntil(lambda: L.box(win).replace("\n", "") == line, timeout=10_000)
     assert [len(part) for part in L.box(win).split("\n")] == [2000] * 12 + [1000]
+
+
+@pytest.mark.invariant("NC-2")
+@pytest.mark.parametrize("end", [b"\r\n", b"\n"], ids=["ended as Windows ends a line", "ended with a new line alone"])
+def test_a_line_a_library_wrote_shows_in_the_log_and_after_show_all_in_data_preview_with_nothing_after_its_last_character(
+        win, qtbot, tmp_path, end):
+    """A library ends its lines as the computer it runs on does: on Windows with a carriage return before the new
+    line. Neither is a character of the line, in the Log or in Data preview."""
+    short, line = "stock list read: 4,999 rows", "".join(f"row {i:05d} " for i in range(1, 5000))[:25_000]
+
+    L.run_in_editor(win, qtbot, L.orders_flow(tmp_path, LIBRARY_LINES % end))
+    L.the_message(win, qtbot)  # the run's last line is in the Log
+    log = L.log_text(win).split("\n")
+    at = next(i for i, text in enumerate(log) if " OUTPUT " in text)
+    under = next(i for i, text in enumerate(log) if text.rstrip().endswith(L.SHOW_ALL))
+
+    # The short line is whole in the Log, and the Log's next line is the next thing the run wrote.
+    assert re.fullmatch(r"\d\d:\d\d:\d\d OUTPUT " + re.escape(short), log[at]), f"the Log shows {log[at]!r}"
+    assert re.match(r"\d\d:\d\d:\d\d OUTPUT row 00001 ", log[at + 1]), f"after it the Log shows {log[at + 1][:60]!r}"
+    # Under the long line's start the Log counts the line's own characters, and the run's next line follows.
+    assert log[under].strip() == "… (25,000 characters in all) · show all"
+    assert L.ENTRY.match(log[under + 1]), f"after it the Log shows {log[under + 1][:60]!r}"
+
+    press_the_only_show_all(win)
+
+    qtbot.waitUntil(lambda: win.bottom_tabs.currentWidget() is win.preview, timeout=5_000)
+    L.wait(qtbot, lambda: len(L.box(win)) >= len(line),
+           lambda: f"Data preview's box holds {len(L.box(win)):,} characters")
+    box = L.box(win)
+    assert [len(part) for part in box.split("\n")] == [2000] * 12 + [1000]
+    assert box.replace("\n", "") == line, f"Data preview's box ends {box[-12:]!r}"
 
 
 # --- how the Log draws a run's lines and show all ---------------------------------------------------------------------
