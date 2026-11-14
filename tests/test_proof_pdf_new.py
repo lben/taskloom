@@ -400,20 +400,59 @@ def test_ci_takes_for_features_only_their_agreed_lists_not_their_other_files():
 
 def test_ci_runs_every_features_checkers_and_puts_their_results_where_the_proof_reads_them():
     """A feature is certified on its own evidence: for each agreed list in docs/promises, some CI step runs its
-    checkers (packaging/checkers.py, by its name or in a loop over the agreed lists that does not skip it), and the
-    evidence job puts every feature's results together (--merge), so none is left without its checkers.json."""
+    checkers (packaging/checkers.py, by its name, in a loop over the agreed lists that does not skip it, or in a job
+    for each feature that the features job's loop lists), and the evidence job puts every feature's results together
+    (--merge), so none is left without its checkers.json."""
     jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
     runs = [step["run"] for job in jobs.values() for step in job["steps"] if "packaging/checkers.py" in step.get("run", "")]
+
+    def taken(run: str, name: str) -> bool:
+        """Whether the step's loop over the agreed lists takes this one."""
+        skipped = re.search(r'case "\$promises" in (\S+)\) continue;; esac', run)
+        return "for promises in docs/promises/*.yaml" in run and not any(
+            fnmatch.fnmatchcase(f"docs/promises/{name}", glob) for glob in skipped[1].split("|"))
 
     def reaches(run: str, name: str) -> bool:
         if f"docs/promises/{name}" in run:
             return True
-        skipped = re.search(r'case "\$promises" in (\S+)\) continue;; esac', run)
-        return ("for promises in docs/promises/*.yaml" in run and 'checkers.py "$promises"' in run and not any(
-            fnmatch.fnmatchcase(f"docs/promises/{name}", glob) for glob in skipped[1].split("|")))
+        if 'checkers.py "docs/promises/${{ matrix.feature }}.yaml"' in run:
+            return any(taken(step.get("run", ""), name) for step in jobs["features"]["steps"])
+        return 'checkers.py "$promises"' in run and taken(run, name)
 
     features = [p.name for p in sorted((REPO / "docs" / "promises").glob("*.yaml")) if p.name.count(".") == 1]
     assert len(features) >= 4, features
     for name in features:
         assert any(reaches(run, name) for run in runs if "--merge" not in run), f"no CI step runs the checkers of {name}"
         assert any(reaches(run, name) for run in runs if "--merge" in run), f"no CI step merges the results of {name}"
+
+
+def test_ci_runs_each_features_checkers_in_a_job_of_its_own_that_keeps_its_results_when_it_fails(tmp_path):
+    """One feature's mutation testing took all the memory of the machine that ran the features' checkers one after
+    the other (CI run 43594508147), and the results of the feature before it and of the two after it went with it.
+    Each feature's checkers run in a job of their own: one for each name the features job lists (every agreed list
+    but the scheduler's, whose checkers have their own jobs; its step is run here as GitHub runs it), none stopped
+    when another fails. Each uploads what it has under its feature's name, also when it failed or was stopped, and
+    the evidence job, which waits for them and runs whatever happened to them, downloads every one."""
+    if sys.platform == "win32":
+        pytest.skip("the features job's step is run here by bash, as on GitHub")
+    jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
+    job = jobs["checkers-features"]
+    assert job.get("strategy", {}).get("fail-fast") is False, "one job runs them all, or one's failure stops the others"
+
+    lists = next(step for step in jobs["features"]["steps"] if "docs/promises/*.yaml" in step.get("run", ""))
+    output = tmp_path / "output"
+    subprocess.run(["bash", "-e", "-c", lists["run"]], cwd=REPO, env={**os.environ, "GITHUB_OUTPUT": str(output)},
+                   check=True)
+    key, _, names = output.read_text(encoding="utf-8").strip().partition("=")
+    features = {p.stem for p in (REPO / "docs" / "promises").glob("*.yaml") if p.name.count(".") == 1}
+    assert sorted(json.loads(names)) == sorted(features - {"scheduler"})
+    assert jobs["features"]["outputs"] == {key: f"${{{{ steps.{lists['id']}.outputs.{key} }}}}"}
+    assert job["needs"] == "features"
+    assert job["strategy"]["matrix"] == {"feature": f"${{{{ fromJSON(needs.features.outputs.{key}) }}}}"}
+
+    upload = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
+    assert "always()" in upload["if"] and "${{ matrix.feature }}" in upload["with"]["name"], upload
+    evidence = jobs["evidence"]
+    assert "checkers-features" in evidence["needs"] and "!cancelled()" in evidence["if"]
+    assert any(fnmatch.fnmatchcase(upload["with"]["name"], step["with"]["pattern"]) for step in evidence["steps"]
+               if step.get("uses", "").startswith("actions/download-artifact")), "the evidence job does not take them"

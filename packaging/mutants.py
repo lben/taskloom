@@ -1,11 +1,12 @@
 """The mutation testing result of a feature, from mutmut's own records: its score and each mutant the tests missed.
 
     python packaging/mutants.py PROJECT_DIR --explained docs/promises/scheduler.mutants.yaml [--out mutants.json]
-    python packaging/mutants.py . --run [--part K/N] [--workers W] --explained ...scheduler.mutants.yaml [--out ...]
+    python packaging/mutants.py . --run [--part K/N] [--workers W] [--memory-limit MB] --explained ... [--out ...]
     python packaging/mutants.py PROJECT_DIR --parts PART_DIR [PART_DIR ...] --explained ... [--out mutants.json]
 
 PROJECT_DIR is where `mutmut run` ran (it holds mutants/). A mutant is a small bug planted in the code on purpose:
-- caught: a test failed, or the tests did not finish in time (the bug made them hang);
+- caught: a test failed, or the tests did not finish in time (the bug made them hang) or, in a scope's run, took
+  more memory than a run may;
 - missed: every test passed, or no test ran that code.
 The score is the share caught. It passes at 90% or more when every missed mutant has a one-line reason in the
 --explained file (mutant name: why it changes nothing a user could notice). It fails, too, when mutmut could not
@@ -41,10 +42,13 @@ first on PYTHONPATH and the mutant's name in MUTANT_UNDER_TEST, so the tests and
 --workers of these runs go at a time (default: this machine's cores), each with a temporary folder of its own. A run
 that fails (or whose process dies) catches the mutant and one that passes misses it; one still going at the time
 limit (mutmut's: the tests' time with no mutant plus timeout_constant, times timeout_multiplier) is ended with every
-process it started, and catches it. Before any mutant, every worker runs the tests at once with no mutant on: if one
-of these runs fails, no mutant is judged (such tests would catch every mutant), and the slowest is the tests' time.
-The verdicts go into mutmut's records, which the score is read from as after `mutmut run`; the output of each
-mutant's tests is in logs/ next to mutants/.
+process it started, and catches it. So does one whose processes together (pytest and all it started: its process
+group, each one's memory read from `ps` every second) hold more than the memory limit: --memory-limit MB, else the
+scope's memory_limit:, else 3,000. A mutant can make the tests take memory without end, and a few such runs at once
+take the machine down with every result so far. Before any mutant, every worker runs the tests at once with no mutant
+on: if one of these runs fails or passes the memory limit, no mutant is judged (such tests would catch every mutant),
+and the slowest is the tests' time. The verdicts go into mutmut's records, which the score is read from as after
+`mutmut run`; the output of each mutant's tests is in logs/ next to mutants/.
 
 Without a scope, --run first runs `mutmut run` (configured in pyproject.toml) here. Either way it is on every mutant
 that counts: all mutmut plants in the files it mutates (listed by mutmut's own code, so none is missed) but the
@@ -78,9 +82,11 @@ from pathlib import Path
 import yaml
 
 THRESHOLD = 90
-CAUGHT = {1, 3, 36, 24, -24, 152, 255}  # a test failed (3: pytest's own error), or the time limit ended it
+CAUGHT = {1, 3, 36, 24, -24, 152, 255, 137}  # a test failed (3: pytest's own error), or a limit ended it
 MISSED = {0, 5, 33}  # the tests passed, or none ran that code
 TIME_LIMIT, NO_TESTS = 36, 33  # mutmut's codes for these two
+MEMORY_LIMIT = 137  # ours, for a scope's run ended at its memory limit: mutmut has none
+MEMORY = 3000  # that limit in MB, unless given: 4 runs at a time then stay under the 16 GB of a CI machine
 # What `mutmut run` does before it runs anything: its copy of the code in mutants/, with the mutants of the files it
 # mutates, here only those on the lines given (file -> lines; mutmut's own way to leave lines out, which it uses for
 # lines no test runs). In a process of its own, started in the project: mutmut reads its settings from where it is
@@ -205,12 +211,21 @@ def counted(project: Path, explained: dict) -> list[str]:
             and where(name) not in not_tested]
 
 
+def megabytes(group: int) -> float:
+    """The memory the processes of a group hold, in MB: the resident size of each as `ps` lists it, added up (what
+    two of them share counts for both, so never too little)."""
+    listed = subprocess.run(["ps", "-A", "-o", "pgid=", "-o", "rss="], capture_output=True, text=True, check=True)
+    return sum(int(rss) for pgid, rss in map(str.split, listed.stdout.splitlines()) if pgid == str(group)) / 1024
+
+
 def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
     """A scope's own run of these mutants, `workers` at a time: mutmut plants them, then each one's tests run with
     it on, in the pytest process and in every process that starts; the verdicts go into mutmut's records. 1, and
-    no verdict, if the tests fail with no mutant on. mutmut plants only in the functions the scope names: it wraps
-    each function it plants in, and the wrapper takes any arguments, so code that looks at what a function takes
-    would see something else in all of the file (Qt gives a slot as many of a signal's values as it takes)."""
+    no verdict, if the tests fail or pass the memory limit with no mutant on. mutmut plants only in the functions
+    the scope names: it wraps each function it plants in, and the wrapper takes any arguments, so code that looks
+    at what a function takes would see something else in all of the file (Qt gives a slot as many of a signal's
+    values as it takes)."""
+    memory = scope["memory_limit"]
     settings = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["mutmut"]
     lines = {file: lines_of(project, file, scope) for file in settings["only_mutate"]}
     subprocess.run([sys.executable, "-c", PLANT, json.dumps(lines)], cwd=project, check=True,
@@ -220,7 +235,8 @@ def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
     (project / "logs").mkdir()
 
     def tests(item: str, mutant: str, log: str, limit: float | None) -> tuple[int, float]:
-        """One pytest run with the mutant on ("": none) -> its exit code (TIME_LIMIT: ended there), its seconds."""
+        """One pytest run with the mutant on ("": none) -> its exit code (TIME_LIMIT, MEMORY_LIMIT: ended there,
+        looked at each second), its seconds."""
         started = time.monotonic()
         with (tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,
               (project / "logs" / f"{log}.txt").open("ab") as out):
@@ -230,12 +246,18 @@ def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
                 # (not the options of a pytest run this one is started from, e.g. which tests to run)
                 env={**{k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"},
                      "MUTANT_UNDER_TEST": mutant, "PYTHONPATH": path, "TMPDIR": tmp})
-            try:
-                code = run.wait(limit)
-            except subprocess.TimeoutExpired:
-                os.killpg(run.pid, signal.SIGKILL)  # (pytest and all it started: a mutant may hang any of them)
-                run.wait()
-                code = TIME_LIMIT
+            code = None
+            while code is None:
+                try:
+                    code = run.wait(1)
+                except subprocess.TimeoutExpired:
+                    if limit is not None and time.monotonic() - started > limit:
+                        code = TIME_LIMIT
+                    elif megabytes(run.pid) > memory:  # (of its group, which pytest leads)
+                        code = MEMORY_LIMIT
+                    if code:
+                        os.killpg(run.pid, signal.SIGKILL)  # (pytest and all it started: a mutant may hang any of them)
+                        run.wait()
         return (1 if code < 0 else code), time.monotonic() - started  # (below 0: the tests' own process died)
 
     def own(name: str) -> list[str]:
@@ -260,8 +282,10 @@ def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
             if code:
                 failed.setdefault(item, (code, log))
         for item, (code, log) in failed.items():
-            print(f"{item}: the tests fail with no mutant planted (exit {code}), so no mutant is judged. The end of "
-                  f"their output:\n" + "\n".join((project / "logs" / f"{log}.txt").read_text(
+            how = (f"passed {memory:,} MB of memory with no mutant planted (the limit of one run)"
+                   if code == MEMORY_LIMIT else f"fail with no mutant planted (exit {code})")
+            print(f"{item}: the tests {how}, so no mutant is judged. The end of their output:\n"
+                  + "\n".join((project / "logs" / f"{log}.txt").read_text(
                       encoding="utf-8", errors="replace").splitlines()[-15:]), flush=True)
         if failed:
             return 1
@@ -271,6 +295,7 @@ def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
         for name, code in zip(names, pool.map(verdict, names)):
             codes[name] = code
             print(f"{name}: " + ("missed" if code in MISSED else "caught, at the time limit" if code == TIME_LIMIT
+                                 else f"caught: its tests passed {memory:,} MB of memory" if code == MEMORY_LIMIT
                                  else "caught" if code in CAUGHT else f"exit {code}"), flush=True)
     for meta in sorted(copy.rglob("*.meta")):
         data = json.loads(meta.read_text(encoding="utf-8"))
@@ -365,6 +390,7 @@ def main(argv=None) -> int:
     p.add_argument("--part", metavar="K/N")
     p.add_argument("--parts", nargs="+", type=Path, metavar="PART_DIR")
     p.add_argument("--workers", type=int, default=os.cpu_count())
+    p.add_argument("--memory-limit", type=int, metavar="MB")
     a = p.parse_args(argv)
     part = re.fullmatch(r"(\d+)/(\d+)", a.part or "1/1")
     if not part or not 1 <= int(part[1]) <= int(part[2]) or (a.part and not a.run) or (a.run and a.parts):
@@ -372,6 +398,7 @@ def main(argv=None) -> int:
     explained = (yaml.safe_load(a.explained.read_text(encoding="utf-8")) or {}) if a.explained.exists() else {}
     if explained.get("scope"):
         explained["scope"]["mutate"] = tests_of(explained["scope"])
+        explained["scope"]["memory_limit"] = a.memory_limit or explained["scope"].get("memory_limit") or MEMORY
         a.project = scoped(a.project, a.explained.name.split(".")[0], explained["scope"], anew=a.run)
     ran = 0
     if a.run:

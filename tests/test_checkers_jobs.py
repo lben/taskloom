@@ -1,7 +1,7 @@
 """The checkers (packaging/checkers.py) run on CI in parallel jobs, each within GitHub's 6 hours: --only runs those
 named, and --merge puts the jobs' results together in one checkers.json, every listed checker in its listed order, as
-if one job had run them all; a checker no job ran is recorded as not run, and fails. The real script runs here on a
-feature whose checkers are small shell commands."""
+if one job had run them all; a checker no job ran is recorded as not run, and fails. What a checker prints is kept
+as it comes, for a job that dies. The real script runs here on a feature whose checkers are small shell commands."""
 
 import json
 import subprocess
@@ -21,11 +21,11 @@ CHECKERS = [
 ]
 
 
-def promises(tmp_path) -> Path:
+def promises(tmp_path, listed=CHECKERS) -> Path:
     path = tmp_path / "promises" / "alpha.yaml"
     path.parent.mkdir()
     path.write_text("feature: Alpha\n", encoding="utf-8")
-    (path.parent / "alpha.evidence.yaml").write_text(yaml.safe_dump({"checkers": CHECKERS}), encoding="utf-8")
+    (path.parent / "alpha.evidence.yaml").write_text(yaml.safe_dump({"checkers": listed}), encoding="utf-8")
     return path
 
 
@@ -54,6 +54,25 @@ def test_only_runs_the_checkers_named_and_command_runs_another_command_for_the_o
     assert [(e["name"], e["kind"], e["command"], e["summary"]) for e in entries] == [
         ("Model", "model", command.replace("{out}", (other / "alpha").resolve().as_posix()), "scored the parts")]
     assert (other / "alpha" / "parts.txt").is_file() and not (other / "alpha" / "model.txt").exists()
+
+
+def test_a_checkers_output_is_in_its_log_and_in_the_jobs_output_as_it_comes(tmp_path):
+    """A job that dies while a checker runs (CI run 43594508147: a feature's mutation testing took all the memory
+    of its machine) left nothing of what the checker had printed, as it was kept until the checker ended. Each line
+    goes to the checker's log and to the job's own output when it is printed: here the job is ended while its
+    checker waits, after its first line, and both have that line."""
+    waits = f'echo judged one && "{sys.executable}" -c "import time; time.sleep(3)" && echo judged two'
+    listed = promises(tmp_path, [{"name": "Slow", "kind": "mutation", "command": waits}])
+    job = subprocess.Popen([sys.executable, str(SCRIPT), str(listed), str(tmp_path / "job")],
+                           stdout=subprocess.PIPE, text=True)
+    try:
+        first = job.stdout.readline()
+    finally:
+        job.kill()
+        job.communicate()
+
+    assert first.strip() == "judged one"
+    assert (tmp_path / "job" / "alpha" / "logs" / "slow.log").read_text(encoding="utf-8").strip() == "judged one"
 
 
 def test_merge_puts_the_jobs_results_together_in_listed_order_and_a_checker_no_job_ran_fails(tmp_path):

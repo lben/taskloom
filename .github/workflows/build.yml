@@ -120,11 +120,34 @@ jobs:
             proof
             !mutants/**/__pycache__
 
-  # The checkers of every other feature (docs/promises/<feature>.evidence.yaml), one after the other in one job: a bug
-  # fix or small feature lists only mutation testing of the functions it changed (the scope in its
-  # <feature>.mutants.yaml), a few minutes each. Their output and results go to proof/<feature>/, as the scheduler's.
-  checkers-features:
+  # The checkers of every other feature (docs/promises/<feature>.evidence.yaml), each feature's in a job of its own
+  # (checkers-features, one for each name the features job lists), so that a job that dies (a feature's mutation
+  # testing once took all its machine's memory) takes no other feature's results with it: a bug fix or small feature
+  # lists only mutation testing of the functions it changed (the scope in its <feature>.mutants.yaml), a few minutes
+  # each. Their output and results go to proof/<feature>/, as the scheduler's.
+  features:
     if: ${{ !inputs.tests }}
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.list.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          # A feature is its agreed list, <feature>.yaml; the scheduler's checkers run in the jobs above.
+          for promises in docs/promises/*.yaml; do
+            case "$promises" in *.*.yaml|*/scheduler.yaml) continue;; esac
+            names="$names${names:+, }\"$(basename "$promises" .yaml)\""
+          done
+          echo "names=[$names]" >> "$GITHUB_OUTPUT"
+
+  checkers-features:
+    needs: features
+    if: ${{ !inputs.tests }}
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: ${{ fromJSON(needs.features.outputs.names) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -135,17 +158,10 @@ jobs:
       - name: Qt libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - run: uv sync --python 3.12
-      - name: Each feature's checkers
-        run: |
-          # A feature is its agreed list, <feature>.yaml; the scheduler's checkers run in the jobs above.
-          for promises in docs/promises/*.yaml; do
-            case "$promises" in *.*.yaml|*/scheduler.yaml) continue;; esac
-            uv run python packaging/checkers.py "$promises" proof || status=1
-          done
-          exit ${status:-0}
+      - run: uv run python packaging/checkers.py "docs/promises/${{ matrix.feature }}.yaml" proof
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}  # also when a checker failed: the proof shows its output
-        with: {name: checkers-features, path: proof}
+        if: always()  # also when a checker failed or the job ran out of time: the proof shows its output so far
+        with: {name: "checkers-feature-${{ matrix.feature }}", path: proof}
 
   # The checkers' results together, where the proof job reads them (proof-evidence: proof/<feature>/ with
   # checkers.json, every checker in its listed order, their logs, mutants.json and, for the scheduler, leak.json): the

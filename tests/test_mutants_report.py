@@ -208,7 +208,7 @@ TRIPLE = "def triple(n):\n    return n * 3\n"
 DOUBLE_TEST = 'def test_double(shown):\n    assert shown("double", 3) == "6"\n'
 
 
-def standin(tmp_path, calc: str, tests: dict, scope: dict):
+def standin(tmp_path, calc: str, tests: dict, scope: dict, *options: str, workers: int = 3):
     """Runs the real script with --run on a small project of its own: pkg/calc.py, the functions the bugs are
     planted in; `python -m pkg FUNCTION N`, which prints FUNCTION(N); and tests that never import pkg: they only
     start that command, as a child process in another folder. So a test passes only if the child process imports
@@ -222,8 +222,8 @@ def standin(tmp_path, calc: str, tests: dict, scope: dict):
         (project / name).parent.mkdir(parents=True, exist_ok=True)
         (project / name).write_text(text, encoding="utf-8")
     (project / "small.mutants.yaml").write_text(yaml.safe_dump({"scope": scope}), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(SCRIPT), str(project), "--run", "--workers", "3", "--explained",
-                           str(project / "small.mutants.yaml"), "--out", str(tmp_path / "mutants.json")],
+    done = subprocess.run([sys.executable, str(SCRIPT), str(project), "--run", "--workers", str(workers), "--explained",
+                           str(project / "small.mutants.yaml"), "--out", str(tmp_path / "mutants.json"), *options],
                           capture_output=True, text=True, timeout=600)
     return done, json.loads((tmp_path / "mutants.json").read_text(encoding="utf-8"))
 
@@ -292,6 +292,57 @@ def test_a_bug_that_makes_the_tests_hang_is_caught_by_the_time_limit(tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
     assert "caught, at the time limit" in done.stdout, done.stdout
     assert (result["score"], result["survivors"], result["unjudged"]) == (100.0, [], [])
+
+
+# hold(n) keeps n lists of 10 MB, one more each tenth of a second. room() is not in the scope, so no bug is planted
+# in it: whatever the limit under test does, the process ends by itself before it holds 31 of them (about 350 MB
+# with the tests' own process), and these tests run one at a time (workers=1), so this machine cannot run out.
+HOLD = '''\
+import time
+
+
+def room(held):
+    if len(held) > 30:
+        raise SystemExit("no memory limit stopped it")
+    time.sleep(0.1)
+
+
+def hold(n):
+    held = []
+    while n != 0:
+        room(held)
+        held.append([None] * 1_250_000)
+        n -= 1
+    return sum(map(len, held))
+'''
+
+
+def test_a_bug_that_makes_the_tests_take_more_and_more_memory_is_caught_by_the_memory_limit(tmp_path):
+    """A planted bug can make the code take memory without end (here: counting down becomes counting up, and each
+    step keeps 10 MB more), which took a CI machine down with every result of its job (run 43594508147). The memory
+    of each run's processes together, the tests' and the child they start, is watched: past the limit (the scope's
+    memory_limit, in MB) they are all ended, the bug counts as caught, its line says why, and the run goes on."""
+    done, result = standin(tmp_path, HOLD, {
+        "tests/test_calc.py": 'def test_hold(shown):\n    assert shown("hold", 3) == "3750000"\n'},
+        {"mutate": ["pkg/calc.py hold"], "tests": ["tests/test_calc.py"], "memory_limit": 150}, workers=1)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "caught: its tests passed 150 MB of memory" in done.stdout, done.stdout
+    assert (result["score"], result["survivors"], result["unjudged"]) == (100.0, [], [])
+
+
+def test_tests_that_pass_the_memory_limit_with_no_bug_planted_stop_the_run_before_any_bug_is_judged(tmp_path):
+    """Tests that take more memory than a run may on the code as it is (here 280 MB, with --memory-limit 150)
+    would catch every bug at the limit: the run stops, says so, and no bug gets a verdict."""
+    done, result = standin(tmp_path, HOLD, {
+        "tests/test_calc.py": 'def test_hold(shown):\n    assert shown("hold", 28) == "35000000"\n'},
+        {"mutate": ["pkg/calc.py hold"], "tests": ["tests/test_calc.py"]}, "--memory-limit", "150", workers=1)
+
+    assert done.returncode == 1
+    assert "tests/test_calc.py: the tests passed 150 MB of memory with no mutant planted" in done.stdout, (
+        done.stdout + done.stderr)
+    assert (result["killed"], result["total"], result["survivors"], result["passed"]) == (0, 0, [], False)
+    assert result["unjudged"] and all(name.endswith("(exit None)") for name in result["unjudged"])
 
 
 def test_a_function_the_scope_does_not_name_stays_as_it_is_written(tmp_path):

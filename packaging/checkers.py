@@ -6,9 +6,10 @@
 The checkers are listed in the feature's <name>.evidence.yaml under `checkers:`, each with a name (rows name it in
 green_by), a kind (trace, model, mutation, leak, charter, tests) and a command, run by the shell from the repository
 with {out} replaced by proof/<release>/<name> (where a checker writes its own result, e.g. leak.json). Each one's
-whole output goes to proof/<release>/<name>/logs/; checkers.json there says, for each, its command, exit code,
-commit, log, final lines, last line (its summary) and key (the pattern of the lines that show its verdict, which
-the proof PDF boxes in orange). Exit 1 when any checker failed.
+whole output goes to proof/<release>/<name>/logs/ and to this script's own output, line by line as it comes (what it
+writes as errors too, in the order printed), so a job that dies still shows how far its checker got; checkers.json
+there says, for each, its command, exit code, commit, log, final lines, last line (its summary) and key (the pattern
+of the lines that show its verdict, which the proof PDF boxes in orange). Exit 1 when any checker failed.
 
 CI runs them in parallel jobs, as a GitHub job runs at most 6 hours. --only runs the checkers named (checkers.json
 lists those); with one, --command runs CMD in place of its listed command and records CMD (CI scores the mutation
@@ -25,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import yaml
@@ -42,14 +44,31 @@ def run(checker: dict, out: Path, evidence: Path) -> dict:
     command = checker["command"].replace("{out}", out.as_posix())
     log = out / "logs" / (re.sub(r"[^a-z0-9]+", "-", checker["name"].lower()).strip("-") + ".log")
     log.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        done = subprocess.run(command, shell=True, cwd=ROOT, capture_output=True, text=True, errors="replace",
-                              timeout=HOURS * 3600)
-        output, code = done.stdout + done.stderr, done.returncode
-    except subprocess.TimeoutExpired as e:
-        output, code = f"{e.stdout or ''}{e.stderr or ''}\nstopped: it had not finished after {HOURS} hours", 124
-    log.write_text(output, encoding="utf-8")
-    lines = [line for line in output.splitlines() if line.strip()]
+    with log.open("w", encoding="utf-8") as kept:
+        going = subprocess.Popen(command, shell=True, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, errors="replace")
+
+        def copy():
+            """Each line to the log and to this job's output as it comes: a job that dies leaves what it had."""
+            for line in going.stdout:
+                if kept.closed:  # (stopped below, and a process the checker started still prints)
+                    break
+                for to in (kept, sys.stdout):
+                    to.write(line)
+                    to.flush()
+
+        copying = threading.Thread(target=copy, daemon=True)
+        copying.start()
+        copying.join(HOURS * 3600)  # (to the end of its output: the checker's and that of all it started)
+        if copying.is_alive():
+            going.kill()
+            going.wait()
+            copying.join(10)  # (its last lines; not for ever: a process it started may hold its output open)
+            kept.write(f"\nstopped: it had not finished after {HOURS} hours")
+            code = 124
+        else:
+            code = going.wait()
+    lines = [line for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     return {"name": checker["name"], "kind": checker["kind"], "command": command, "exit": code, "commit": commit(),
             "log": log.relative_to(evidence).as_posix(), "summary": lines[-1] if lines else "(it printed nothing)",
             "tail": lines[-12:], "key": checker.get("key")}
@@ -93,6 +112,7 @@ def main(argv=None) -> int:
         p.error("--merge runs no checker")
     out = (a.evidence / a.promises.stem).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    sys.stdout.reconfigure(errors="replace")  # (a checker's lines are shown here, whatever this output can show)
     if a.merge:
         results = merge(listed, out, a.merge)
         for r in results:
