@@ -137,8 +137,10 @@ def test_the_proof_pdf_links_each_change_and_back(proof, qtbot, tmp_path):
                f"make the proof PDF of it with {COUNT} more changes recorded for this proof, {len(NEW)} of them new "
                "since the last release.")
         records = tmp_path / "records"
+        # Not a by-hand CI run's list of tests (PYTEST_ADDOPTS): it holds this proof, which would start itself again.
+        inner = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
         ran = subprocess.run([sys.executable, "-m", "pytest", REAL, "-q", "-p", "no:cacheprovider"], cwd=REPO,
-                             env={**os.environ, "PROOF_DIR": str(records)}, capture_output=True, encoding="utf-8",
+                             env={**inner, "PROOF_DIR": str(records)}, capture_output=True, encoding="utf-8",
                              errors="replace", timeout=600)
         output = ran.stdout.strip().splitlines()
         p.text("What the run of the real proof printed, at its end", output[-1] if output else ran.stderr[-2000:])

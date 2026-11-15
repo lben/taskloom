@@ -983,9 +983,11 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
     font.setPointSize(10)
     resources = {f"badge{n}": badge(n) for n in range(1, 21)}
 
-    def document(text: str, paged: bool = True, scale: float = 1.0, rows: bool = False) -> QTextDocument:
+    def document(text: str, paged: bool = True, scale: float = 1.0, rows: bool = False,
+                 split: bool = True) -> QTextDocument:
         """`scale`: how much its pages are shrunk on paper (they are laid out that much bigger); `rows`: its tables
-        are rows, each kept whole on one page (the cover's)."""
+        are rows, each kept whole on one page (the cover's); `split`: its paragraphs split where a page ends (see
+        split_at_page_ends)."""
         doc = QTextDocument()
         doc.setDefaultFont(font)
         doc.setDocumentMargin(8)
@@ -1003,7 +1005,7 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
             doc.rootFrame().setFrameFormat(frame)
         if rows:
             whole(doc)
-        if paged:
+        if paged and split:
             split_at_page_ends(doc)
         return doc
 
@@ -1016,15 +1018,18 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
         would leave a few lines alone there, and a cut box is drawn with stray bits of its tint. (Its content is
         measured unpaged: where a page's end cuts a box, Qt adds space, so it can take a page more.) `rows`: as
         document()'s."""
-        doc = document(text, rows=rows)
+        # Chosen on unsplit pages, then split: a box split where a page ends no longer looks cut to cuts_a_box().
+        doc = document(text, rows=rows, split=False)
         fills = math.ceil(measure(text) / body.height())
         for pages in range(max(1, fills - 1), doc.pageCount() + 1):
             scale, smaller = 1.0, doc
             while scale >= MIN_SCALE:
                 if smaller.pageCount() <= pages and not cuts_a_box(smaller):
+                    split_at_page_ends(smaller)
                     return smaller
                 scale *= 0.98
-                smaller = document(text, scale=scale, rows=rows)
+                smaller = document(text, scale=scale, rows=rows, split=False)
+        split_at_page_ends(doc)
         return doc
 
     # The features' diagrams, drawn once.
