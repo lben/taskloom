@@ -258,8 +258,10 @@ def test_the_proof_pdf_opens_with_what_is_new(proof, qtbot, tmp_path, monkeypatc
     try:
         p.step("Run the proofs of two changes, as CI does, and make the proof PDF of what they recorded, from a "
                "folder with no Git history. Open it.")
+        # Not a by-hand CI run's list of tests (PYTEST_ADDOPTS): it holds this proof, which would start itself again.
+        inner = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
         ran = subprocess.run([sys.executable, "-m", "pytest", OLD, NEW, "-q", "-p", "no:cacheprovider"], cwd=REPO,
-                             env={**os.environ, "PROOF_DIR": str(records)}, capture_output=True, encoding="utf-8",
+                             env={**inner, "PROOF_DIR": str(records)}, capture_output=True, encoding="utf-8",
                              errors="replace", timeout=600)
         output = ran.stdout.strip().splitlines()
         p.text("What the run of the two proofs printed, at its end", output[-1] if output else ran.stderr[-2000:])
