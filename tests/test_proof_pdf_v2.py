@@ -426,3 +426,54 @@ def test_missed_mutants_of_one_kind_are_under_its_one_reason_and_what_was_mutate
     assert re.search(rf"{re.escape(kind)} 3 mutants\. {re.escape(why)} .*border: 1px to BORDER: 1px.*border: 3px to "
                      rf"BORDER: 3px", listed), listed
     assert re.search(rf"zeta/report\.py html_table border: 4px to BORDER: 4px\. {re.escape(own)}", listed), listed
+
+
+def fonts_with(path: Path, char: str) -> set:
+    """The PDF's fonts (their names) that have a glyph of `char`, as each font's map of its glyphs to the text (its
+    ToUnicode stream) says. A glyph Qt draws as a shape, from a font it cannot put in a PDF, is in none."""
+    data = path.read_bytes()
+    maps = dict(re.findall(rb"(\d+) 0 obj\s*<<\s*/Length \d+\s*>>\s*stream\s(.*?)endstream", data, re.S))
+    code = f"<{ord(char):04X}>".encode()
+    return {name.decode() for name, to in re.findall(rb"/BaseFont /(\S+)[^>]*?/ToUnicode (\d+) 0 R", data)
+            if code in maps.get(to, b"")}
+
+
+def test_a_cross_in_a_promises_words_is_in_the_pdfs_text_as_itself(tmp_path):
+    """A promise can name a mark the app shows ("a failed result ... keeps its ✕"): the PDF's text has the mark
+    itself, where the promise is listed and in its row of the ledger, drawn in the font of the PDF's own symbols (the
+    ↑ of each page's go-back link), one that goes in a PDF on CI's Windows and Linux and on a Mac. (CI's PDF, made on
+    Windows, drew the ✕ from the font Qt fell back to, one it cannot put in a PDF, as a shape: its text read "keeps
+    its ." On a Mac the font Qt falls back to goes in a PDF, so there the text alone does not show it.)"""
+    promises, evidence = tmp_path / "promises", tmp_path / "evidence"
+    feature(promises, evidence, "theta", "Theta marks", {"T-1": ("A failed result that is old keeps its ✕.", AMBER)},
+            [result("t1", "T-1")], [])
+
+    pdf = small_pdf(tmp_path, "theta")
+
+    text = " ".join(flat(pdf[i]) for i in feature_pages(pdf, 1))
+    assert text.count("keeps its ✕.") == 2, text
+    crosses, arrows = fonts_with(tmp_path / "small.pdf", "✕"), fonts_with(tmp_path / "small.pdf", "↑")
+    assert arrows and crosses == arrows, f"the ✕ is in the font(s) {crosses}, the ↑ in {arrows}"
+
+
+def test_no_line_is_in_the_pdfs_text_twice_where_a_page_ends(tmp_path):
+    """A promise longer than a page, and a checker's output longer than a page (its box is cut line by line): each
+    of their words is in the PDF's text once, none lost. (Of a paragraph that a page starts in the middle of, Qt
+    also writes the line before, out of sight above the page: the text of CI's PDF had the last line of a page
+    again as the first of the next, at 8 places.)"""
+    promises, evidence = tmp_path / "promises", tmp_path / "evidence"
+    promised, printed = [f"rw{k}" for k in range(1500)], [f"cw{k}" for k in range(2000)]
+    feature(promises, evidence, "iota", "Iota lists", {"I-1": (f"A long promise holds. {' '.join(promised)}.", AMBER)},
+            [result("i1", "I-1")], [], [{**checker("pytest", "tests", 0), "tail": [" ".join(printed)]}])
+
+    pdf = small_pdf(tmp_path, "iota")
+
+    at = {}  # each word: the page it is on, once for each time it is in the text
+    for i in feature_pages(pdf, 1):
+        for word in re.findall(r"\b[rc]w\d+\b", flat(pdf[i])):
+            at.setdefault(word, []).append(i)
+    assert set(at) == {*promised, *printed}, "words lost, or not as written"
+    for words in (promised, printed):  # the case meant: a page's end cuts each of the two
+        assert len({at[word][0] for word in words}) > 1, "on one page"
+    twice = {word: pages for word, pages in at.items() if len(pages) > 1}
+    assert not twice, f"in the text more than once (word: its pages): {twice}"

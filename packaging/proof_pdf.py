@@ -42,7 +42,7 @@ if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unle
 
 from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QImage, QPageLayout, QPageSize, QPainter,  # noqa: E402
-                           QPdfWriter, QPen, QTextDocument, QTextFormat, QTextTable)
+                           QPdfWriter, QPen, QTextCursor, QTextDocument, QTextFormat, QTextTable)
 
 TITLE = "Proof that it works"
 DPI = 96  # pages are laid out in screen pixels, what the screenshots are in
@@ -51,7 +51,9 @@ ACCENT = "#e8590c"  # as the highlights on the screenshots (tests/proofs/conftes
 OK, FAILED = "#1a7f37", "#c62828"
 ASKED_TINT, IDEA_TINT, IDEA_BAR, CARD_TINT = "#fff4e6", "#edf3fc", "#3b6fb6", "#f6f8fa"
 FONTS = ["Segoe UI", "Helvetica Neue", "Arial", "DejaVu Sans"]
-SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Apple Symbols'"
+# The font for symbols, with ✓ ✗ ✕ ↑, that goes in a PDF: on Windows, on Linux, on a Mac (Apple Symbols, the Mac's
+# before, has only ↑ of them).
+SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Arial Unicode MS'"
 MONO_FONT = "font-family: Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New'"
 MONO = f"{MONO_FONT}; font-size: 8pt; white-space: pre-wrap"
 FOOTER = 28  # under each page's text: the footer line
@@ -62,9 +64,12 @@ BLANK = 1000  # pixels left blank under each page as it is laid out (see build()
 
 
 def esc(text: str) -> str:
-    """Text as HTML, with ①, ②… drawn as the badges on the screenshots."""
+    """Text as HTML, with ①, ②… drawn as the badges on the screenshots, and a mark such as ✓ or ✕ (the Dingbats) in
+    the font for symbols: the text's fonts lack them, and the font Qt falls back to may be one it cannot put in a PDF
+    (Windows': it draws the mark as a shape, so the PDF's text lacks it)."""
+    text = re.sub("[\u2700-\u27bf]", lambda m: f"<span style=\"{SYMBOLS}\">{m.group()}</span>", html.escape(text))
     return re.sub("[①-⑳]", lambda m: f"<img src=\"badge{ord(m.group()) - 0x245F}\" width=\"17\" height=\"17\" "
-                                      "style=\"vertical-align: middle\">", html.escape(text))
+                                      "style=\"vertical-align: middle\">", text)
 
 
 def mark(ok: bool, text: str, size: str = "") -> str:
@@ -857,6 +862,30 @@ def whole(doc: QTextDocument):
             frame.setFrameFormat(fmt)
 
 
+def split_at_page_ends(doc: QTextDocument):
+    """No paragraph runs on from one page to the next: one that would is made two where the page ends (in place of
+    the <br> that ends the line there, if one does), the second out of its list, if in one, so as not to be numbered.
+    (Of a paragraph that a page starts in the middle of, Qt also draws the line before, out of sight above the page,
+    and the PDF's text had that line twice.)"""
+    layout, pitch = doc.documentLayout(), doc.pageSize().height()
+    block = doc.begin()
+    while block.isValid():
+        top, lines = layout.blockBoundingRect(block).top(), block.layout()
+        page = [(top + lines.lineAt(n).y()) // pitch for n in range(lines.lineCount())]
+        cut = next((n for n in range(1, len(page)) if page[n] != page[0]), None)
+        if cut is not None:
+            start = block.position()
+            cursor = QTextCursor(doc)
+            cursor.setPosition(start + lines.lineAt(cut).textStart())
+            if doc.characterAt(cursor.position() - 1) == "\u2028":  # a <br>
+                cursor.setPosition(cursor.position() - 1, QTextCursor.KeepAnchor)
+            cursor.insertBlock()
+            block = doc.findBlock(start)
+            if block.next().textList():
+                block.next().textList().remove(block.next())
+        block = block.next()
+
+
 def framed(image: QImage) -> QImage:
     """The screenshot with a thin grey frame, so it stands out from the white paper."""
     image = image.convertToFormat(QImage.Format_RGB32)
@@ -974,6 +1003,8 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
             doc.rootFrame().setFrameFormat(frame)
         if rows:
             whole(doc)
+        if paged:
+            split_at_page_ends(doc)
         return doc
 
     def measure(text: str) -> float:
@@ -1064,8 +1095,9 @@ def paint(writer: QPdfWriter, docs: list, body: QSizeF, font: QFont, left: str):
             if number:
                 writer.newPage()
             number += 1
-            # Of a paragraph that a page starts in the middle of, Qt also draws the line before, clipped out of
-            # sight: with the blank under each page, above the paper, not in its top margin under the go-back link.
+            # Of a paragraph that a page starts in the middle of, Qt also draws the line before (split_at_page_ends()
+            # leaves none: the PDF's text had it twice), clipped out of sight: with the blank under each page, above
+            # the paper, not in its top margin under the go-back link.
             pitch = doc.pageSize().height()  # a page and the blank under it
             page = QSizeF(doc.pageSize().width(), pitch - BLANK)
             painter.save()

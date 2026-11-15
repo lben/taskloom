@@ -4,7 +4,7 @@
   revisit_if: a run must be forgotten for good, with every trace of it, e.g. a way to delete a run from the history.
 - chosen: A block run again takes the newest run among those the block and the blocks before it show, then the newest re-run that carries on from it whose files exist; not the newest run of the flow, which may be of another line and hold nothing of these blocks.
   revisit_if: each run records which blocks' results it holds, so the newest run that holds them can be asked for directly.
-- chosen: A run opened from Run history is used as it is, e.g. run #5 itself although run #6 carried on from it; no later re-run is looked for.
+- chosen: "A run opened from Run history is used as it is, e.g. run #5 itself although run #6 carried on from it; no later re-run is looked for."
   revisit_if: a re-run made from an opened run must be seen by the blocks after it too (today it starts a chain of its own, and a later result made that way is not marked old).
 - chosen: A result is old when a block before it shows a result of a newer run; this is worked out in the editor from the results the canvas shows, not read from the run folders.
   revisit_if: the old marks must also be right after connections are edited, or be shown outside the editor (e.g. in an email of the run).
