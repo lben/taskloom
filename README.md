@@ -189,9 +189,14 @@ taskloom editor examples/daily-sales-report.yaml
   runs the flow in a separate process: blocks show their
   status live, the **Log** shows the selected block's messages (when a block finishes, its line
   gives the full path of each table it produced, to copy; what a database driver or library
-  prints shows as plain `OUTPUT`), **Data preview** shows
-  everything the selected block produced (tables as a grid, other values as text; a table
-  inside a dict or list also on its own, by where it is, e.g. `output.combined`), and
+  prints shows as plain `OUTPUT`; a long message, over 200 lines or over 20,000 characters,
+  shows its first 200 lines and a **show all**, see Inspect below), **Data preview** shows
+  everything the selected block produced (tables as a grid, other values as text, whole: a
+  5 MB API response down to its closing `}`, to scroll, find in and copy; a line over 2,000
+  characters is shown as lines of 2,000, Find still finds a word across such a break and
+  Copy gives the line back as one; a table
+  inside a dict or list also on its own, by where it is, e.g. `output.combined`; for a block
+  that failed, its whole error, in a box that scrolls, to select and copy), and
   **Run history** lists every run of the flow as its own row, newest first, whoever started
   it (Run now, the scheduler service, a terminal): a run started while the flow is open
   comes in as it goes, also while an older run is shown or one of yours is going. The run you
@@ -217,7 +222,11 @@ taskloom editor examples/daily-sales-report.yaml
 - **After a run, hover** over any input, output or connection line to see the value that
   went through it (a table over 10 rows: its first 5 rows, `…`, its last 5). Every run's
   values are kept in **Run history** (double-click a run, then hover) for as long as its start
-  block's **Keep runs** says (by default `keep_runs_for`: 5 years). Hover over the message under a block to read all of it;
+  block's **Keep runs** says (by default `keep_runs_for`: 5 years). The message under a block
+  stays one line, and a result too long for it ends with how many characters it has, e.g.
+  `✓ result: {'orders': [{'id': 1, … (4,830,112 characters)`. Hover over it to read it (of a
+  long value its first 4,000 characters, then `… (4,830,112 characters)`; all of it is in
+  Data preview);
   its bottom right says when that result was made, the time the block finished in its run (e.g.
   `results from 2026-10-31 14:03:22`; none while the block runs). The canvas follows the runs of the flow, including scheduled ones: each block
   shows its result from the latest run it took part in, and a run that starts clears only
@@ -225,7 +234,8 @@ taskloom editor examples/daily-sales-report.yaml
   in it show nothing) until you start a run or open the newest one. A flow you open starts
   clean, unless it ran since you last saw it (e.g. on schedule). The Log keeps the messages
   of the earlier runs above it, each run starting with a bold line with its number, date
-  and time.
+  and time: the latest 20,000 messages and at most 50 million characters. Older runs'
+  messages leave first (they stay in Run history); the newest message is always kept whole.
 - **A block's earlier results:** right-click it → **Results of this block…**: one row per
   run it took part in, newest first, with the run, when it started, what started it, how
   the block ended and its result or error. Select a row to see the values the block's
@@ -239,27 +249,37 @@ taskloom editor examples/daily-sales-report.yaml
   any font installed on your computer. Text does not run.
 - **Retry after a fix:** right-click the block →
   - **Run only this block, with the same inputs**: only that block runs, with what reached
-    it in the run its result on the canvas comes from (the menu names that run; a block
-    showing no result, e.g. one added since: the latest run among the results of the blocks
-    connected into it); the other blocks keep their results
-    (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
+    it in the newest run among the results on the canvas of the block and the blocks before
+    it, or in the newest re-run that carries on from that run (the menu names the run). So
+    it gets what a block before it made when that block was run again on its own, and what
+    a run that ended before reaching it (stopped, or its process died) made up to there.
+    While the canvas shows a run you opened from Run history, that run is used as it is.
+    The other blocks keep their results (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
   - **Run from this block on, with the same inputs** (or **with inputs I choose…**): that
     block and every block after it
     (error handlers too) run; the blocks before it are not run again, what they held in
     that run is used (`--from BLOCK --inputs-from RUN`).
   Inputs that held a password are never saved, so such a block needs a full run. Blocks get
-  what a full run would give them now (Taskloom says which block to retry first if needed).
+  what a full run would give them now. A result made before an earlier block ran again is
+  marked old: **old ·** before it under its block, in grey with a grey border (a failed
+  one keeps its ✕), and **(old)** in Data preview; hovering it says which block ran again,
+  in which run. Retry the old blocks in the flow's order, or choose **Run from this block
+  on** on the first of them: retrying a block past an old one is refused, and Taskloom says
+  which block to retry first.
 - **Test a block with values you choose:** right-click it → **Run only this block, with
-  inputs I choose…**. Each input is filled in with what reached it in the run its result comes
-  from (a block showing no result: the latest run among the results of the blocks connected
-  into it; empty if it did not run); change any of them and press Run. Write values as Python: `42`, `'text'`,
+  inputs I choose…**. Each input is filled in with what reached it in the same run as
+  above: the newest among the results of the block and the blocks before it, or the newest
+  re-run that carries on from it (the window names that run; empty if neither the block nor
+  a block connected into it shows a result, and then "with the same inputs" is greyed out);
+  change any of them and press Run. Write values as Python: `42`, `'text'`,
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
   what you typed and works it out again, so after editing `data.csv` just press Run.
   (`--input NAME=VALUE` with `--only` from a terminal.)
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
-  the values of your variables. A failure Ask User expects (you chose **Don't answer**;
+  the values of your variables (each input and variable on one line; one too long for it
+  ends with how many characters it has, e.g. `… (33,412 characters)`). A failure Ask User expects (you chose **Don't answer**;
   nobody can be asked, e.g. in a scheduled run, and it has no Default, or for a password no
   stored secret or one never saved; an answer that is not one of its Options; kind choice
   without Options) says so in a short message,
@@ -270,7 +290,15 @@ taskloom editor examples/daily-sales-report.yaml
   when nothing came by it, e.g. the path an If did not take or an input you left empty.
 - To check data mid-flow, put an **Inspect** block (Debug) between two blocks: it passes
   the data on and shows it in the Log and Data preview. A table's columns line up as in
-  its hover tooltip. Its **message** is written like a Python f-string, e.g.
+  its hover tooltip: in the Log it is a small look at the table (its count of rows and
+  columns, its first 5 and last 5 rows, cells shortened with `…` at 60 characters); the table
+  with its cells whole is in Data preview's grid. A long message (over 200 lines or over
+  20,000 characters) shows its first 200 lines in the Log, then how much more there is and
+  a **show all**, e.g. for a 5 MB API response
+  `… 236,565 more lines (4,830,112 characters in all) · show all`. Press **show all** and
+  Data preview comes to the front with the whole of it, under
+  `Log message of inspect_orders, 09:02:41: 236,765 lines`, until you select a block. In a
+  terminal the message is printed whole. Its **message** is written like a Python f-string, e.g.
   `Healthy: {value['healthy']}`. Example: `examples/check-app-health.yaml` (Health Check's
   `result` output says healthy or not).
   - A value that is a picture's path (.png, .jpg, .jpeg, .gif, .bmp, .svg or .webp, e.g. a
@@ -285,7 +313,8 @@ taskloom editor examples/daily-sales-report.yaml
     light or dark) and scaled down to fit 640 × 640 (in a terminal, the Markdown as
     written); one that cannot be drawn shows as written, with a note saying why. Links are
     shown but open nothing.
-  - Past and scheduled runs reopened from Run history show the same pictures and Markdown.
+  - Past and scheduled runs reopened from Run history show the same pictures and Markdown,
+    and the same first 200 lines of a long message, whose **show all** still opens all of it.
 - **Several blocks connected into one input of a Python Code block:** that input is a dict
   keyed by each block's name (as on the canvas), with its output as the value, in the order
   of the connections, e.g. `input["load"]`; with one block connected it is that block's
@@ -354,7 +383,9 @@ taskloom editor examples/daily-sales-report.yaml
   none is left); built-in blocks cannot be deleted.
 - **Your work is safe:** unsaved changes are copied to a recovery folder as you work, and
   the flows you had open come back with them after a crash or a restart. If the editor
-  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. The
+  ever closes unexpectedly, the details are in `crash.log` in your Taskloom folder. An
+  error the editor does not catch is shown in a box, written to `crash.log` and, when you
+  started the editor from a terminal, printed in that terminal too. The
   list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
@@ -990,7 +1021,11 @@ chart and an email body with the chart and the table, and emails them. Emails ar
 for desktop Outlook: table layout, CSS moved into `style=""` attributes, charts as inline images with
 explicit sizes (never `data:` URIs or SVG), plus a plain-text version (one line per
 list item). Headings, paragraphs, lists and table cells get their font and spacing inline;
-a style you write yourself wins.
+a style you write yourself wins, over a table's built-in look too, property by property and
+without `!important`: with `<style>td {{padding: 15px; border: 1px solid black}}</style>` in
+the Template, every cell of `{my_table}` gets that padding and border and keeps the rest (the
+dark header, the striped rows, numbers to the right). Your rules style what you show, not the
+email's own frame: that `td` rule puts no border around the whole body.
 
 - **Chart**: `x_label` and `y_label` name its axes, e.g. column `store_id` shown as `Store ID`
   (empty: the column names; a pie chart has no axes).
@@ -1004,8 +1039,12 @@ a style you write yourself wins.
   Each value is shown by its type: a table as an Outlook-safe table (at most **Max table
   rows**, 500 by default), a chart's picture inline, HTML from another template as it is, a
   list item by item, nothing for an empty value, and anything else as its text, escaped,
-  where you put it. Enter makes no new line in the email: write `<br>`, and put a table or
-  a chart between `<br>`s rather than inside a `<p>`. An empty Template shows every input in
+  where you put it. `{name:html}` puts text in as HTML instead, as it is, with the `<style>`
+  block inside it applied, e.g. what `df.style.apply(colour, axis=1).to_html()` gives in
+  Python Code; html applies only to text (and passes HTML from another template as it is):
+  on a table, a number, a date, a list or a picture it stops the run. Enter makes no new line
+  in the email: write `<br>`, and put a table or a chart between `<br>`s rather than inside
+  a `<p>`. An empty Template shows every input in
   turn. A comment, `<!-- ... -->`, is a note for you: it is left out of the email, and a
   `{name}` in it shows nothing; Outlook's conditional comments (`<!--[if mso]> ...
   <![endif]-->`) and `<style>` elements are kept as written. A name the Template does not
@@ -1474,8 +1513,9 @@ edges:
   they run at the same time.
 - **Running again**: Run only this block and Run from this block on, on an API Request inside
   a Session (`taskloom run flow.yaml --only orders --inputs-from 12`), start with the cookies
-  the session held just before that block in the run they carry on from, kept with that run's
-  results (as its outputs are, in the Taskloom folder's runs, never in a file next to the
+  the session held after the newest run of the blocks before that block (so after the login
+  was run again on its own, the new login's), kept with the results of the run they carry on
+  from (as its outputs are, in the Taskloom folder's runs, never in a file next to the
   flow): a later call runs again without logging in again, and the Log says the cookies come
   from run #12. If the server has ended the session since, that call fails with what the
   server answered (e.g. 401): run the flow again from the login.

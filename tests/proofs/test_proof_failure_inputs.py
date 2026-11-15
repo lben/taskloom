@@ -354,14 +354,16 @@ def test_a_block_run_again_reports_the_inputs_it_received(proof, win, qtbot, tmp
             [in_typed[n] for n in (0, 2, 3)] == [in_full[n] for n in (0, 2, 3)])
 
     p.step(f"Right-click returns, an earlier block, and choose “{SAME}”. returns runs again, then compare_targets; "
-           f"load_sales, load_targets and late_orders do not run again: what they held in run #{full} is used.")
+           f"load_sales, load_targets and late_orders do not run again: what they hold in run #{typed}, the newest run "
+           f"that carries on from run #{full}, is used (for them, their results of run #{full}).")
     p.while_open(lambda: right_click(tab, "returns"), lambda menu: choose(menu, SAME))
     later = finished(qtbot, tab, 4)
     _, in_later = report(win, later, "compare_targets")
     scroll_log_to(win, later, "compare_targets (Python Code) failed")
-    said = f"with the inputs it got in run #{full}"
+    said = f"with the inputs it got in run #{typed}"
     lines = the_report(win, later, said, in_later, said)
-    p.shot(win, f"The outlined lines: run #{later} ran from returns on, with what the blocks held in run #{full}. "
+    p.shot(win, f"The outlined lines: run #{later} ran from returns on, with what the blocks hold in run #{typed}, the newest "
+                f"that carries on from run #{full}. "
                 "compare_targets failed again, and its report shows each value it received, as in the full run: also "
                 "those from load_sales, load_targets and late_orders, which did not run again.",
            highlight=[lines], zoom=[lines])

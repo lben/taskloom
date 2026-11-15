@@ -239,9 +239,9 @@ def _now() -> str:
     return dt.datetime.now().isoformat(timespec="milliseconds")
 
 
-def preview(value, limit: int = 4000) -> str:
-    """A readable look at any value: a table's rows (over 10: its first 5, a row of …, its last 5), text, or a
-    list/dict as JSON."""
+def preview(value) -> str:
+    """A readable look at any value: a table's rows (over 10: its first 5, a row of …, its last 5), a text whole, or
+    a list/dict as JSON, whole."""
     import json
 
     import polars as pl
@@ -259,8 +259,8 @@ def preview(value, limit: int = 4000) -> str:
     if isinstance(value, SecretStr):
         return "***"
     if isinstance(value, (dict, list, tuple)):
-        return redact(json.dumps(_masked(value), indent=2, default=str, ensure_ascii=False))[:limit]  # scrub, then cut
-    return redact(str(value))[:limit]
+        return redact(json.dumps(_masked(value), indent=2, default=str, ensure_ascii=False))
+    return redact(str(value))
 
 
 def _masked(value):
@@ -274,9 +274,16 @@ def _masked(value):
     return value
 
 
+def _label(text: str, limit: int, whole: int) -> str:
+    """A one-line label of a value: `text` when it fits in `limit` characters; else its start, then how many
+    characters the value's whole text (`whole`) has: {'orders': [{'id': 1, … (4,830,112 characters)."""
+    return text if len(text) <= limit else f"{text[:limit]}… ({whole:,} characters)"
+
+
 def inline(value, limit: int = 300) -> str:
-    """A value on one line, for error reports."""
-    return " ".join(preview(value).split())[:limit]
+    """A value on one line, for error reports; shortened, it says how many characters its whole text has."""
+    text = preview(value)
+    return _label(" ".join(text.split()), limit, len(text))
 
 
 def finished_text(event: dict) -> str:
@@ -289,11 +296,13 @@ def finished_text(event: dict) -> str:
     return " · ".join([status, *([detail] if detail else []), *(event.get("tables") or {}).values()])
 
 
-def _summary(produced: dict) -> str:
+def _summary(produced: dict, previews: dict) -> str:
+    """A finished block's outputs on one line. `previews`: each output's whole text, already made for the event (a
+    shortened value says how many characters that has)."""
     parts = []
     for port, value in produced.items():
         text = value.summary() if isinstance(value, Table) else redact(repr(value))  # scrub, then cut
-        parts.append(f"{port}: {text[:200]}")
+        parts.append(f"{port}: {_label(text, 200, len(previews[port]))}")
     return "; ".join(parts)
 
 
@@ -352,7 +361,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
 
     history = History(home.history_db)
     run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps, flow.version,
-                               scheduled, claim)
+                               scheduled, claim, inputs_from)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
     # Lines run at the same time tell their events one at a time, each whole and in the order they happen.
@@ -392,7 +401,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                     # This run holds everything the run it starts from held (so retrying another block
                     # from it works, and its tables survive that run being cleaned up), then takes its
                     # inputs from that.
-                    _carry_over(home.runs_dir / str(inputs_from), runner.workspace, _after(flow, start))
+                    _carry_over(home.runs_dir / str(inputs_from), runner.workspace, start, _after(flow, start))
                 given = {k: Table.from_frame(v, runner.workspace / start / "inputs" / f"{k}.parquet")
                          if Table.is_frame(v) else v for k, v in given.items()}
                 runner.only, runner.run_from = only, run_from
@@ -403,6 +412,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                     runner.outputs, runner.blocked, runner.before_unhandled, runner.outside = _from_before(
                         flow, registry, home, part, source, start)
             status = runner.run()
+            if only:
+                runner.pass_cookies_on()
         except BaseException:
             # Never leave the run, or a block of it, recorded as "running" (e.g. a forced second Ctrl+C).
             status = "cancelled" if cancel.is_set() else "failed"
@@ -813,10 +824,11 @@ class _Runner:
 
     def _succeeded(self, block_id: str, produced: dict, started: float):
         """A Loop's or a Merger's end, over its runs: success, with what it passes on."""
+        previews = {p: preview(v) for p, v in produced.items()}
         self.emit({"event": "block_finished", "block": block_id, "status": "success", "attempts": 1,
-                   "duration": round(time.monotonic() - started, 3), "summary": _summary(produced),
+                   "duration": round(time.monotonic() - started, 3), "summary": _summary(produced, previews),
                    "tables": {where: path for p, v in produced.items() for where, path in _table_files(v, p).items()},
-                   "previews": {p: preview(v) for p, v in produced.items()}})
+                   "previews": previews})
 
     def _item_runner(self, block: str, tag: str, number: int, given: dict, part: set, tally: dict, changed,
                      failing: set | None = None) -> "_Runner":
@@ -1013,6 +1025,7 @@ class _Runner:
         if failed:
             return (*self._fail(spec, 1, Failed("; ".join(failed)), given or {}), records)
         ran = [k for k in range(n) if records[k] is not None]
+        gave: dict = {b: {} for b in self._at_level(part)}
         for source in leaving:  # what leaves the runs: by line
             missing = [names[k] for k in ran if source not in records[k][2]]
             if missing:
@@ -1020,7 +1033,12 @@ class _Runner:
                     f"nothing left {source[0]}.{source[1]} in the run{'s' if len(missing) > 1 else ''} for "
                     f"{', '.join(missing)}: what comes after the runs gets nothing from it")})
             else:
-                self.outputs[source] = PerLine((names[k], records[k][2][source]) for k in ran)
+                self.outputs[source] = gave.setdefault(source[0], {})[source[1]] = PerLine(
+                    (names[k], records[k][2][source]) for k in ran)
+        # Each run keeps its blocks' results in its own folder; kept here over the lines, they are there for a block
+        # after the runs run on its own from this run (which may not have run it, e.g. a run of only the Merger).
+        for block, by_line in gave.items():
+            self._keep_outputs(block, by_line, status="success")
         produced = {"value": PerLine((names[k], values[k]) for k in sorted(values))}  # (the Merger's output)
         self.emit({"event": "log", "block": merger, "level": "INFO",
                    "message": f"{n} line{'s' if n != 1 else ''} done"})
@@ -1126,8 +1144,6 @@ class _Runner:
                 if merger and first == LINES else f"nothing reached its '{first}' input")
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped", "summary": why})
             return None
-        if by_line:  # what running it again on its own gets (the runs' blocks keep nothing at this level)
-            self._keep_outputs(block_id, inputs, KEPT_INPUTS)
         return inputs
 
     def _failed_lines(self, merger: str, incoming: list) -> list[str]:
@@ -1241,9 +1257,10 @@ class _Runner:
                         self.emit({"event": "log", "block": spec.id, "level": "INFO",
                                    "message": f"session {spec.session}'s cookies: {_cookie_names(_held(jar))}"})
                 produced = self._check_outputs(result, out_ports, ctx)
+                previews = {p: preview(v) for p, v in produced.items()}
                 # A Splitter given no value passes None on to its lines: not a value to show as if it were one.
                 summary = ("its lines start with nothing: no value arrived" if spec.type == SPLITTER
-                           and "value" not in own else _summary(produced))
+                           and "value" not in own else _summary(produced, previews))
             except Exception as e:
                 # Stopped: whatever the block raised as it stopped (e.g. a closed query or connection) is not a failure.
                 if isinstance(e, Cancelled) or self.cancel.is_set():
@@ -1264,7 +1281,7 @@ class _Runner:
                        "duration": round(time.monotonic() - started, 3), "summary": summary,
                        "tables": {where: path for p, v in produced.items()
                                   for where, path in _table_files(v, p).items()},
-                       "previews": {p: preview(v) for p, v in produced.items()}})
+                       "previews": previews})
             if has_done_output(cls, out_ports):
                 produced[DONE] = True  # for blocks connected done -> after
             return "success", produced
@@ -1275,7 +1292,8 @@ class _Runner:
         Session is inside), which the lines running at the same time share (it has a lock of its own). What it holds
         just before the block runs is kept with the block's outputs (KEPT_COOKIES), for running again from it: a run
         that carries on from another starts it with the cookies the Session held just before the first of its blocks
-        to send a request did there, and the Log says so."""
+        to send a request did there (or, that run being of only a block before it, as that run left them: see
+        pass_cookies_on), and the Log says so."""
         level, owner = self.flow.sessions.get(spec.session), self
         while owner.parent is not None and (owner.loop != level or owner.parent.loop == owner.loop):
             owner = owner.parent  # (a line's: the runner's whose line it is)
@@ -1288,16 +1306,28 @@ class _Runner:
                     if kept.exists():
                         for cookie in pickle.loads(kept.read_bytes()):
                             jar.set_cookie(cookie)
-                        said = (f"session {spec.session}'s cookies come from {run}, as they were just before {spec.id} "
-                                f"there: {_cookie_names(_held(jar))}")
+                        said = (f"session {spec.session}'s cookies come from {run}, as they were after the newest run "
+                                f"of the blocks before {spec.id}: {_cookie_names(_held(jar))}")
                     else:
                         said = f"session {spec.session} starts with no cookies: {run} kept none for {spec.id}"
                     self.emit({"event": "log", "block": spec.id, "level": "INFO", "message": said})
             held = _held(jar)
-        folder = self.workspace / spec.id
+        self._keep_cookies(spec.id, held)
+        return jar
+
+    def _keep_cookies(self, block: str, held: list):
+        folder = self.workspace / block
         folder.mkdir(parents=True, exist_ok=True)
         (folder / KEPT_COOKIES).write_bytes(pickle.dumps(held))
-        return jar
+
+    def pass_cookies_on(self):
+        """After a run of only one block: the requests after it in a Session it sent requests in, which did not run,
+        keep the Session's cookies as they are now, in place of those from before the block ran again. Run on its own
+        from this run, each sends these (e.g. the new login's, not the one it sent last time)."""
+        for session, jar in self.jars.items():
+            for block in _after(self.flow, self.only) - self.taking_part:
+                if self.flow.blocks[block].session == session and self.flow.blocks[block].type == API_REQUEST:
+                    self._keep_cookies(block, _held(jar))
 
     def _fail(self, spec, attempts, error, inputs) -> tuple[str, dict]:
         block_id = spec.id
@@ -1378,13 +1408,14 @@ class _Runner:
 KEPT_OUTPUTS = "outputs.pickle"
 ITEM_RESULTS = "__items__"  # with a Loop's outputs: each item's (item, status, result), None for one not run
 KEPT_INPUTS = "inputs.pickle"  # what a block run on its own got: its inputs then, not what came before it
-KEPT_COOKIES = "cookies.pickle"  # an API Request inside a Session: the Session's cookies just before it ran
+KEPT_COOKIES = "cookies.pickle"  # an API Request inside a Session: the cookies it starts with when run on its own
+# (the Session's just before it ran, or as a request before it left them when that one ran on its own since)
 STATUS = "__status__"  # how the block ended: success | failed | BLOCKED
 BLOCKED = "blocked"  # skipped because something before it failed
 SKIPPED = "skipped"  # skipped for another reason (e.g. a path not taken)
 TYPED = "__typed__"  # inputs you typed, as you typed them
 CAME = "__came__"  # the connections the other inputs came by (see _came)
-STALE = "__stale__"  # made from older data: a block before it ran again on its own since
+STALE = "__stale__"  # not current: a block before it ran again on its own since, or a re-run of it ended before it did
 WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
 
 
@@ -1549,6 +1580,9 @@ def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[d
             edges = [e for e in flow.edges if e.dst == only and e.dst_port == port]
             in_port = input_ports(flow, registry, only).get(port)
             values[port], came[port] = _arriving(in_port, edges, delivered), _came(in_port, edges, delivered)
+    if flow.blocks[only].type == MERGER and any(isinstance(v, PerLine) for v in values.get(LINES, {}).values()):
+        values[LINES] = _by_line(values[LINES])  # (as _gather: it closes the runs of a Merger set to each line)
+        del came[LINES]  # one line per run now: no longer one part per connection
     return values, missing, {}, came
 
 
@@ -1615,9 +1649,9 @@ def _by_edge(value, came) -> dict:
 class _Now:
     """What a full run would do now, by its rules, from what each block holds in a run's folder.
 
-    A block holds its saved outputs, unless a block before it ran again on its own since (it is
-    stale): then a full run would run it again, so what it gives is not known, unless a full run
-    would skip it now (e.g. an If before it took the other path).
+    A block holds its saved outputs, unless a block before it ran again on its own since, or a re-run
+    of it ended before it did (it is stale): then a full run would run it again, so what it gives is
+    not known, unless a full run would skip it now (e.g. an If before it took the other path).
     """
 
     def __init__(self, flow, registry, run_dir, run_id):
@@ -1784,7 +1818,8 @@ def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, give
     # give, a block that did not run then may still lack its `after` (it only sets the order).
     unresolved = [why for port, why in missing.items() if port not in given and not (given and port == AFTER)]
     if unresolved:
-        raise ValueError(f"{unresolved[0]}: run the whole flow instead, or choose its inputs")
+        instead = "run the whole flow instead"  # (a block before it that did not run: its reason ends so already)
+        raise ValueError(f"{unresolved[0].removesuffix(': ' + instead)}: {instead}, or choose its inputs")
     values = {k: v for k, v in {**values, **given}.items() if v is not NO_VALUE}
     needed = [name for name, port in in_ports.items() if port.required and name not in values]
     if needed:
@@ -1864,8 +1899,8 @@ def _tables_to_marks(value):
         return {"__table__": str(value.path)}
     if isinstance(value, (list, tuple)):
         return type(value)(_tables_to_marks(v) for v in value)
-    if isinstance(value, dict):
-        return {k: _tables_to_marks(v) for k, v in value.items()}
+    if isinstance(value, dict):  # (what left a Merger's runs is still by line when read again)
+        return (PerLine if isinstance(value, PerLine) else dict)((k, _tables_to_marks(v)) for k, v in value.items())
     return value
 
 
@@ -1876,14 +1911,15 @@ def _map_marks(value, fn):
     if isinstance(value, (list, tuple)):
         return type(value)(_map_marks(v, fn) for v in value)
     if isinstance(value, dict):
-        return {k: _map_marks(v, fn) for k, v in value.items()}
+        return (PerLine if isinstance(value, PerLine) else dict)((k, _map_marks(v, fn)) for k, v in value.items())
     return value
 
 
-def _carry_over(old: Path, new: Path, after_only: set[str]):
+def _carry_over(old: Path, new: Path, start: str, after_only: set[str]):
     """Copy the saved outputs (and inputs, and a Session's cookies) of every block of an earlier run into a new run's
     folder. Table files are hard-linked (no extra space; they outlive the old run's folder), or copied.
-    Saved inputs of blocks after the one that runs are left behind: its new outputs replace them."""
+    Saved inputs of blocks after the one that runs (`start`) are left behind: its new outputs replace them. Its saved
+    outputs, and theirs, are marked stale: its own until it ends, when what it saves takes their place."""
     kept_files = [*old.glob(f"*/{KEPT_OUTPUTS}"), *old.glob(f"*/{KEPT_COOKIES}"),
                   *(f for f in old.glob(f"*/{KEPT_INPUTS}") if f.parent.name not in after_only)]
     for kept_file in sorted(kept_files):
@@ -1901,8 +1937,10 @@ def _carry_over(old: Path, new: Path, after_only: set[str]):
             return {"__table__": str(target)}
 
         kept = _map_marks(pickle.loads(kept_file.read_bytes()), relink)
-        if block in after_only and kept_file.name == KEPT_OUTPUTS:
-            kept[STALE] = True  # it made these from what the block that runs now made before
+        if (block == start or block in after_only) and kept_file.name == KEPT_OUTPUTS:
+            # Made before this run by the block that runs now (should the run end before it does, the blocks after it
+            # must not take them), or by a block after it from those.
+            kept[STALE] = True
         (new / block).mkdir(parents=True, exist_ok=True)
         (new / block / kept_file.name).write_bytes(pickle.dumps(kept))
 

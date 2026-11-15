@@ -42,7 +42,7 @@ if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unle
 
 from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QImage, QPageLayout, QPageSize, QPainter,  # noqa: E402
-                           QPdfWriter, QPen, QTextDocument, QTextFormat, QTextTable)
+                           QPdfWriter, QPen, QTextCursor, QTextDocument, QTextFormat, QTextTable)
 
 TITLE = "Proof that it works"
 DPI = 96  # pages are laid out in screen pixels, what the screenshots are in
@@ -51,7 +51,9 @@ ACCENT = "#e8590c"  # as the highlights on the screenshots (tests/proofs/conftes
 OK, FAILED = "#1a7f37", "#c62828"
 ASKED_TINT, IDEA_TINT, IDEA_BAR, CARD_TINT = "#fff4e6", "#edf3fc", "#3b6fb6", "#f6f8fa"
 FONTS = ["Segoe UI", "Helvetica Neue", "Arial", "DejaVu Sans"]
-SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Apple Symbols'"
+# The font for symbols, with ✓ ✗ ✕ ↑, that goes in a PDF: on Windows, on Linux, on a Mac (Apple Symbols, the Mac's
+# before, has only ↑ of them).
+SYMBOLS = "font-family: 'Segoe UI Symbol', 'DejaVu Sans', 'Arial Unicode MS'"
 MONO_FONT = "font-family: Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New'"
 MONO = f"{MONO_FONT}; font-size: 8pt; white-space: pre-wrap"
 FOOTER = 28  # under each page's text: the footer line
@@ -62,9 +64,12 @@ BLANK = 1000  # pixels left blank under each page as it is laid out (see build()
 
 
 def esc(text: str) -> str:
-    """Text as HTML, with ①, ②… drawn as the badges on the screenshots."""
+    """Text as HTML, with ①, ②… drawn as the badges on the screenshots, and a mark such as ✓ or ✕ (the Dingbats) in
+    the font for symbols: the text's fonts lack them, and the font Qt falls back to may be one it cannot put in a PDF
+    (Windows': it draws the mark as a shape, so the PDF's text lacks it)."""
+    text = re.sub("[\u2700-\u27bf]", lambda m: f"<span style=\"{SYMBOLS}\">{m.group()}</span>", html.escape(text))
     return re.sub("[①-⑳]", lambda m: f"<img src=\"badge{ord(m.group()) - 0x245F}\" width=\"17\" height=\"17\" "
-                                      "style=\"vertical-align: middle\">", html.escape(text))
+                                      "style=\"vertical-align: middle\">", text)
 
 
 def mark(ok: bool, text: str, size: str = "") -> str:
@@ -455,13 +460,19 @@ def kept(text: str, items: list, note: str = "") -> str:
                     f"{section(text, note, 0)}{first}</td></tr></table>", *items[1:]])
 
 
+def lists_leak_check(feature: dict) -> bool:
+    """Whether a leak check is one of the feature's checkers (one for code that runs for weeks; a bug fix has none)."""
+    return any(c["kind"] == "leak" for c in feature["checkers"] or [])
+
+
 def verdict(feature: dict) -> tuple[str, str]:
     """The feature's verdict, one phrase, and its colour."""
     if feature["blocked"] is not None:
         return AMBER, "BLOCKED: needs your decision"
     if feature["ledger"] is None:
         return FAILED, "Not certified: no ledger"
-    missing = [what for name, what in (("mutants", "mutation testing"), ("leak", "leak check")) if feature[name] is None]
+    needed = [("mutants", "mutation testing")] + [("leak", "leak check")] * lists_leak_check(feature)
+    missing = [what for name, what in needed if feature[name] is None]
     if missing:
         return FAILED, f"Not certified: no {' or '.join(missing)} result"
     red = sum(row["status"] == "RED" for row in feature["ledger"]["rows"])
@@ -739,15 +750,29 @@ def terminal(checker: dict, evidence: Path) -> str:
 
 
 def survivors(mutants: dict | None, path: Path) -> str:
-    """The mutation score against its bar, then each mutant the tests did not catch and why it does not matter."""
+    """The mutation score against its bar and, for a feature that mutation-tests only what it changed, what the bugs
+    were planted in; then each mutant the tests did not catch and why it does not matter: one by one, then those
+    explained by kind, each kind's reason once over its mutants."""
     if mutants is None:
         return f"<p>{mark(False, f'Not found: {path.as_posix()}')}</p>"
     score = (f"Mutation score {round(mutants['score'], 1):g}%: the tests caught {mutants['killed']:,} of the "
              f"{mutants['total']:,} small bugs planted in the code on purpose. The bar is {mutants['threshold']}%.")
-    lines = "".join(f"<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\"><b>{esc(s['where'])}</b>"
-                    f"&nbsp;&nbsp;{esc(s['change'])}. {esc(s['why_equivalent'])}</p>" for s in mutants["survivors"])
+    planted = ", ".join(f"{s['function']} ({s['mutants']:,})" for s in mutants.get("scope") or [])
+    line = "<p style=\"font-size: 11pt; line-height: 135%; margin-bottom: 6px\">"
+    kinds = {}
+    for s in mutants["survivors"]:
+        kinds.setdefault(s.get("kind") or "", []).append(s)
+    lines = "".join(f"{line}<b>{esc(s['where'])}</b>&nbsp;&nbsp;{esc(s['change'])}. {esc(s['why_equivalent'])}</p>"
+                    for s in kinds.pop("", []))
+    for kind, group in kinds.items():
+        lines += (f"{line}<b>{esc(kind)}</b>&nbsp;&nbsp;{len(group):,} mutant{'s' * (len(group) != 1)}. "
+                  f"{esc(group[0]['why_equivalent'])}</p>"
+                  + "".join(f"<p style=\"font-size: 10pt; line-height: 130%; margin-left: 18px; margin-bottom: 3px\">"
+                            f"<span style=\"color: {MUTED}\">{esc(s['where'])}</span>&nbsp;&nbsp;{esc(s['change'])}</p>"
+                            for s in group))
     return (f"<p style=\"font-size: 11pt; margin-bottom: 8px\">{mark(mutants['score'] >= mutants['threshold'], score)}"
-            "</p>" + (lines or "<p style=\"font-size: 11pt\">None: the tests caught every one.</p>"))
+            "</p>" + (f"{line}Planted only in what this feature changed: {esc(planted)}.</p>" if planted else "")
+            + (lines or "<p style=\"font-size: 11pt\">None: the tests caught every one.</p>"))
 
 
 def not_mutation_tested(mutants: dict | None) -> list:
@@ -791,7 +816,8 @@ def feature_page(index: int, total: int, feature: dict, changes: list, evidence:
     # A blocked feature opens with its question; any other with its verdict.
     opening = (blocked_banner(feature["blocked"]) if feature["blocked"] is not None else
                f"<p style=\"font-size: 13pt; font-weight: 600; color: {colour}\">{esc(phrase)}</p>")
-    rest = (section("Memory and leaks") + leaks(feature["leak"], folder / "leak.json")
+    rest = ((section("Memory and leaks") + leaks(feature["leak"], folder / "leak.json")
+             if lists_leak_check(feature) or feature["leak"] is not None else "")
             + section("It works on screen") + on_screen(changes))
     left_out = not_mutation_tested(feature["mutants"])
     found = bugs_found(feature)
@@ -834,6 +860,30 @@ def whole(doc: QTextDocument):
             fmt = frame.frameFormat()
             fmt.setPageBreakPolicy(QTextFormat.PageBreak_AlwaysBefore)
             frame.setFrameFormat(fmt)
+
+
+def split_at_page_ends(doc: QTextDocument):
+    """No paragraph runs on from one page to the next: one that would is made two where the page ends (in place of
+    the <br> that ends the line there, if one does), the second out of its list, if in one, so as not to be numbered.
+    (Of a paragraph that a page starts in the middle of, Qt also draws the line before, out of sight above the page,
+    and the PDF's text had that line twice.)"""
+    layout, pitch = doc.documentLayout(), doc.pageSize().height()
+    block = doc.begin()
+    while block.isValid():
+        top, lines = layout.blockBoundingRect(block).top(), block.layout()
+        page = [(top + lines.lineAt(n).y()) // pitch for n in range(lines.lineCount())]
+        cut = next((n for n in range(1, len(page)) if page[n] != page[0]), None)
+        if cut is not None:
+            start = block.position()
+            cursor = QTextCursor(doc)
+            cursor.setPosition(start + lines.lineAt(cut).textStart())
+            if doc.characterAt(cursor.position() - 1) == "\u2028":  # a <br>
+                cursor.setPosition(cursor.position() - 1, QTextCursor.KeepAnchor)
+            cursor.insertBlock()
+            block = doc.findBlock(start)
+            if block.next().textList():
+                block.next().textList().remove(block.next())
+        block = block.next()
 
 
 def framed(image: QImage) -> QImage:
@@ -953,6 +1003,8 @@ def build(proof_dirs: list, out: Path, ci_url: str = "", title: str = TITLE, rep
             doc.rootFrame().setFrameFormat(frame)
         if rows:
             whole(doc)
+        if paged:
+            split_at_page_ends(doc)
         return doc
 
     def measure(text: str) -> float:
@@ -1043,8 +1095,9 @@ def paint(writer: QPdfWriter, docs: list, body: QSizeF, font: QFont, left: str):
             if number:
                 writer.newPage()
             number += 1
-            # Of a paragraph that a page starts in the middle of, Qt also draws the line before, clipped out of
-            # sight: with the blank under each page, above the paper, not in its top margin under the go-back link.
+            # Of a paragraph that a page starts in the middle of, Qt also draws the line before (split_at_page_ends()
+            # leaves none: the PDF's text had it twice), clipped out of sight: with the blank under each page, above
+            # the paper, not in its top margin under the go-back link.
             pitch = doc.pageSize().height()  # a page and the blank under it
             page = QSizeF(doc.pageSize().width(), pitch - BLANK)
             painter.save()

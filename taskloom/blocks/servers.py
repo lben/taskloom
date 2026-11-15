@@ -1128,7 +1128,7 @@ class Session(Block):
                    "lists the cookies the session holds, by name and domain, never their values. Every run starts it "
                    "with no cookies (inside a Loop, every item); lines running at the same time inside it share them. "
                    "Run only this block and Run from this block on, on a block inside it, start with the cookies it "
-                   "held just before that block in the run they carry on from (kept with that run's results), so a "
+                   "held after the newest run of the blocks before that block (kept with the runs' results), so a "
                    "later call runs again without logging in again; if the server has ended the session since, that "
                    "call fails, saying what the server answered.")
     category = "Servers"

@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS keeps (
     flow_path TEXT NOT NULL, block TEXT NOT NULL, keep TEXT, keep_failed INTEGER NOT NULL,
     PRIMARY KEY (flow_path, block)
 );
+CREATE TABLE IF NOT EXISTS carried_on (run_id INTEGER PRIMARY KEY, carried_on_from INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS carried_on_later ON carried_on (carried_on_from);
 """
 
 
@@ -85,16 +87,17 @@ class History:
 
     def start_run(self, flow: str, flow_path: str, params: dict, ts: str, started_by: str = "",
                   counts_for=(), keeps: dict | None = None, version: str | None = None, schedule: str | None = None,
-                  claim=None) -> int:
+                  claim=None, carried_on_from: int | None = None) -> int:
         """`started_by`: the start blocks that started it ("manual, manual_2"), or "only load" / "from load".
         `counts_for`: the start blocks it counts for. `keeps`: the flow's start blocks, with their Keep runs and
         Always keep failed runs ({block: (keep, keep_failed)}); from now on these decide for all their runs.
         `version`: the version of the flow file it runs (the Git blob id of the bytes it read). `schedule`: the
-        scheduler service started it, for this schedule (e.g. "cron 0 7 * * *"). The run records itself so, from
-        its own process: with that process (pid) and the moment it began (seconds since 1970, which no clock or time
-        zone change alters), by which that process had begun (see launch.run_alive). `claim(db)`, if given, is done
-        first, in the same transaction: it may refuse the run by raising, and then nothing is recorded (a run the
-        scheduler service started claims its time or its place in the line so: scheduler.claim_time)."""
+        scheduler service started it, for this schedule (e.g. "cron 0 7 * * *"). `carried_on_from`: the earlier run a
+        re-run of a block took its inputs from (its folder began as a copy of that run's); kept apart from the runs,
+        so that it outlives both (see carried_on). The run records itself so, from its own process: with that process (pid) and the moment it began (seconds since 1970, which no clock or
+        time zone change alters), by which that process had begun (see launch.run_alive). `claim(db)`, if given, is
+        done first, in the same transaction: it may refuse the run by raising, and then nothing is recorded (a run
+        the scheduler service started claims its time or its place in the line so: scheduler.claim_time)."""
         with self._lock, self._db:  # (one transaction: all recorded, or nothing)
             self._db.execute("BEGIN IMMEDIATE")
             if claim is not None:
@@ -109,6 +112,9 @@ class History:
                 (flow, flow_path, json.dumps(params, default=str, ensure_ascii=False), ts, os.getpid(), started_by,
                  ", ".join(counts_for), version, time.time(), schedule),
             )
+            if carried_on_from is not None:
+                self._db.execute("INSERT INTO carried_on (run_id, carried_on_from) VALUES (?, ?)",
+                                 (cur.lastrowid, carried_on_from))
         return cur.lastrowid
 
     def __call__(self, event: dict):
@@ -159,7 +165,7 @@ class History:
             yield run_id, flow_path, status, started, counts_for.split(", ") if counts_for else []
 
     def forget(self, run_id: int):
-        """Forget a run, with its block results, values and logs."""
+        """Forget a run, with its block results, values and logs; not which run it carried on from (see carried_on)."""
         self._exec("DELETE FROM logs WHERE run_id=?", (run_id,))
         self._exec("DELETE FROM blocks WHERE run_id=?", (run_id,))
         self._exec("DELETE FROM runs WHERE id=?", (run_id,))
@@ -181,6 +187,16 @@ class History:
                          f"AND ({match}) ORDER BY id DESC LIMIT 1",
                          [flow_path, *(f", {name}, " for name in started_by)]).fetchone()
         return dict(zip(RUN_COLUMNS, row)) if row else None
+
+    def carried_on(self, run_id: int) -> list[int]:
+        """The runs that carried on from run `run_id` (see start_run), directly or through other re-runs, newest
+        first; not those forgotten since or still going. Run `run_id` and the re-runs in between may be forgotten:
+        a result still on the canvas from one of them leads to the runs that hold what it held."""
+        rows = self._exec("WITH RECURSIVE later(id) AS (SELECT run_id FROM carried_on WHERE carried_on_from = ? "
+                          "UNION SELECT c.run_id FROM carried_on c JOIN later ON c.carried_on_from = later.id) "
+                          "SELECT r.id FROM later JOIN runs r ON r.id = later.id WHERE r.status != 'running' "
+                          "ORDER BY r.id DESC", (run_id,))
+        return [row[0] for row in rows]
 
     def version_runs(self, flow_path: str) -> dict[str, dict]:
         """The latest finished run of each version of a flow file (see start_run) it was run with:

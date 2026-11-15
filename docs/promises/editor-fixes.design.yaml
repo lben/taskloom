@@ -1,0 +1,6 @@
+# The design decisions of Data preview's long error and the current tab's mark, one line each (read by
+# packaging/proof_pdf.py): what was chosen, and when to look at it again.
+- chosen: The current tab's strip is painted over Qt's own tabs, not set by a style sheet, so their sizes and the failed tab's red stay Qt's.
+  revisit_if: the tabs get a style sheet of their own for another reason.
+- chosen: A failed block's error is in the scrolling box and the label stays short, because a window cannot be narrower than a label's text.
+  revisit_if: the label must show the error itself.

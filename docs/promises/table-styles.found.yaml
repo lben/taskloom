@@ -1,0 +1,14 @@
+# The bugs proving a template's own styles found, each fixed and guarded by a test since (the proof PDF counts and
+# lists them before the details; tests/test_promises_found.py checks each test exists), and where it is checked more
+# lightly.
+found:
+  - what: A td rule in a template's own style drew a border around the whole email, because the email's own layout cell is a td too.
+    found_by: writing the tests
+    fixed_in: 10ee015
+    guarded_by: tests/test_template_styles.py::test_a_td_rule_leaves_the_emails_own_frame_as_it_is_and_styles_the_tables_cells_and_a_cell_you_wrote
+  - what: "{day:html} on a date printed the word html in place of stopping the run."
+    found_by: writing the tests
+    fixed_in: 10ee015
+    guarded_by: tests/test_template_styles.py::test_html_on_a_date_stops_the_run_too_and_does_not_show_the_word_html
+lighter:
+  - "Checked in the email's HTML (the style on each cell), not in Outlook itself."

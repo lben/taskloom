@@ -34,7 +34,7 @@ class RunProcess(QObject):
         self.run_id: int | None = None
         self.status: str | None = None
         self.asking: dict = {}  # ask_id -> the box of its question, while it waits for your answer
-        self._buffer = b""
+        self._pieces = []  # of the line being read: what came of it so far
         self.proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert("TASKLOOM_HOME", str(home.root))
@@ -78,13 +78,18 @@ class RunProcess(QObject):
         self._send({"ask_id": ask_id, "value": value})
 
     def _read_stdout(self):
-        self._buffer += bytes(self.proc.readAllStandardOutput())
-        *lines, self._buffer = self._buffer.split(b"\n")
+        data = bytes(self.proc.readAllStandardOutput())
+        self._pieces.append(data)
+        if b"\n" not in data:  # a long line comes in many reads: joined once, when its end is here
+            return
+        *lines, rest = b"".join(self._pieces).split(b"\n")
+        self._pieces = [rest]
         for line in lines:
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
-                self.output.emit("OUTPUT", line.decode(errors="replace"))
+            except ValueError:  # not JSON, or not UTF-8 (a library's own line, in another encoding)
+                # (on Windows a line ends \r\n: the \r is its ending too, not a character of its text)
+                self.output.emit("OUTPUT", line.removesuffix(b"\r").decode(errors="replace"))
                 continue
             if event.get("event") == "run_started":
                 self.run_id = event["run_id"]

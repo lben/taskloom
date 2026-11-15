@@ -803,7 +803,8 @@ def test_data_preview_shows_a_table_as_a_grid_and_each_output_and_why_a_failed_b
 
     tab.scene.clearSelection()
     tab.scene.nodes["broken"].setSelected(True)
-    assert "failed" in preview.label.text() and "it broke" in preview.label.text(), preview.label.text()
+    assert preview.label.text() == "broken: failed, no output"  # the error is in the box below, never in the label
+    assert not preview.text.isHidden() and "it broke" in preview.text.toPlainText(), preview.text.toPlainText()
 
 
 # --- Run history -------------------------------------------------------------------------

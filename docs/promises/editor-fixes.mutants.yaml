@@ -1,0 +1,67 @@
+# Mutation testing of Data preview's long error, the current tab's mark and errors in the terminal (read by
+# packaging/mutants.py --explained). scope: what the bugs are planted in, the functions the change touched, in
+# groups: each group's bugs run the tests that can see them (each line of tests: is one pytest run, a file with -k
+# words or without). The change's other lines are not functions of their own, so nothing is planted in them: the
+# FlowTabBar class line and the two setTabBar lines in MainWindow.__init__, which the TAB-1 tests check on the three
+# bars. The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it
+# explains) or one by one (mutant name: why it changes nothing a user could notice). Only those no user could
+# notice are explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/panels.py PreviewPanel.show_outputs
+        - taskloom/editor/panels.py PreviewPanel._load
+        - taskloom/editor/panels.py PreviewPanel._show_text
+      tests:
+        - tests/test_preview_long_error.py
+        - tests/test_paths_editor_running.py -k data_preview
+        - tests/test_paths_data.py -k "cleaned_up or single_output or has_not_run"
+        - tests/test_rerun_old_and_kept.py -k data_previews_label_says_old
+        - tests/test_long_output_log.py -k a_line_of_5000_characters
+    - mutate:
+        - taskloom/editor/window.py MarkedTabBar.paintEvent
+      tests:
+        - tests/test_current_tab.py
+    - mutate:
+        - taskloom/editor/safety.py Safety.log
+      tests:
+        - tests/test_errors_in_terminal.py
+kinds:
+  - kind: The first output is shown twice
+    why: >-
+      Filling the list of outputs then shows the first one already, and show_outputs shows it again right after: the
+      same output, the same picture.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_24
+  - kind: A value no caller leaves out
+    why: >-
+      The window says whether the result is old each time it shows a block's outputs (when the block is selected,
+      when its result arrives and when what is old changes), so what `old` would be when left out is never used.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_1
+  - kind: No value for fold is the same as not folding
+    why: >-
+      The box folds a text's long lines only when it is told to, and no value counts as not told: an error and the
+      reason a table cannot be shown stay as written.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁshow_outputs__mutmut_46
+      - taskloom.editor.panels.xǁPreviewPanelǁ_load__mutmut_20
+  - kind: A reason with no line long enough to fold
+    why: >-
+      Only a line of over 2,000 characters is folded. Why a table cannot be shown is a line or two of polars, which
+      names the file by the last part of its path (it shortens a long path), and one line of ours, each far shorter:
+      told to fold them, the box shows the same.
+    mutants:
+      - taskloom.editor.panels.xǁPreviewPanelǁ_load__mutmut_23
+  - kind: The text reaches the terminal at once without it
+    why: >-
+      Python writes each whole line to the error stream at once (since 3.9 also when it is not a terminal), and print
+      ends the text with a line end, so asking for that again changes nothing.
+    mutants:
+      - taskloom.editor.safety.xǁSafetyǁlog__mutmut_6
+      - taskloom.editor.safety.xǁSafetyǁlog__mutmut_9
+      - taskloom.editor.safety.xǁSafetyǁlog__mutmut_10
+  - kind: Qt's tab bar does not read the event
+    why: Qt's own drawing of the tabs ignores the event it is given, so they are drawn the same without it.
+    mutants:
+      - taskloom.editor.window.xǁMarkedTabBarǁpaintEvent__mutmut_1

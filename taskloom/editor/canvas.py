@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPat
 
 from ..block import AFTER, DONE, all_ports
 from ..blocks.logic import written_seconds
+from ..engine import _label
 from ..flow import (API_REQUEST, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, RESULT, RESULTS, SESSION, BlockSpec,
                     block_config)
 from .document import FlowDocument, edge_text
@@ -177,7 +178,7 @@ class NodeItem(QGraphicsItem):
         # (while it waits: the time left), above its result.
         self.counts_down = spec.get("type") in ("trigger.schedule", "logic.wait")
         self.height = HEADER_H + 6 + rows * ROW_H + (COUNTDOWN_H if self.counts_down else 0) + FOOTER_H
-        self.status, self.status_text = None, ""
+        self.status, self.status_text, self.old = None, "", False  # (see set_status)
         # (done, of, running) in the run on screen: a Loop's items, a Merger's lines (set to each line as it finishes)
         self.progress: tuple[int, int, int] | None = None
         self.countdown = ""
@@ -209,9 +210,10 @@ class NodeItem(QGraphicsItem):
         """Where it is drawn on the canvas (without the room for its selection's outline)."""
         return QRectF(self.pos(), QSizeF(NODE_W, self.height))
 
-    def set_status(self, status: str | None, text: str = "", tip: str = ""):
-        """The run's result under the block: `text` (short), and `tip` (HTML) when hovering it."""
-        self.status, self.status_text = status, text
+    def set_status(self, status: str | None, text: str = "", tip: str = "", old: bool = False):
+        """The run's result under the block: `text` (short), and `tip` (HTML) when hovering it. `old`: it was made
+        before a block before it ran again, so it is drawn in grey, its border too."""
+        self.status, self.status_text, self.old = status, text, old
         self.footer.setToolTip(tip if status else "")
         self.update()
 
@@ -227,7 +229,8 @@ class NodeItem(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget=None):
         pal = QApplication.palette()
         rect = QRectF(0, 0, NODE_W, self.height)
-        border = QColor(STATUS_COLORS.get(self.status, pal.mid().color().name()))
+        muted = pal.placeholderText().color()
+        border = muted if self.old else QColor(STATUS_COLORS.get(self.status, pal.mid().color().name()))
         pen = QPen(border, 2 if self.status in ("running", "success", "failed") else 1.2)
         if self.status in ("skipped", "cancelled"):
             pen.setStyle(Qt.DashLine)
@@ -254,7 +257,6 @@ class NodeItem(QGraphicsItem):
         font.setBold(False)
         font.setPointSizeF(font.pointSizeF() * 0.92)
         painter.setFont(font)
-        muted = pal.placeholderText().color()
         for (name, is_output), port in self.ports.items():
             y = port.pos().y()
             painter.setPen(QColor("#c0392b") if name == ERROR_PORT else muted)
@@ -278,7 +280,7 @@ class NodeItem(QGraphicsItem):
         if self.status == "running" and self.progress is not None:
             text = counter_text(self.progress)
         painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS and self.status != "skipped"
-                       else muted)
+                       and not self.old else muted)
         footer = QRectF(10, self.height - FOOTER_H, NODE_W - 20, FOOTER_H - 4)
         painter.drawText(footer, Qt.AlignVCenter, painter.fontMetrics().elidedText(text, Qt.ElideRight, int(footer.width())))
         painter.setOpacity(1.0)
@@ -385,7 +387,8 @@ class LoopItem(NodeItem):
         painter.setPen(Qt.NoPen)
         painter.setBrush(shade)
         painter.drawRoundedRect(r.translated(SHADOW, SHADOW), 9, 9)
-        pen = QPen(QColor(STATUS_COLORS.get(self.status, pal.mid().color().name())),
+        muted = pal.placeholderText().color()
+        pen = QPen(muted if self.old else QColor(STATUS_COLORS.get(self.status, pal.mid().color().name())),
                    2 if self.status in ("running", "success", "failed") else 1.2)
         if self.status in ("skipped", "cancelled"):
             pen.setStyle(Qt.DashLine)
@@ -421,7 +424,6 @@ class LoopItem(NodeItem):
                 painter.drawRoundedRect(QRectF(bar.topLeft(), QSizeF(bar.width() * done / of, bar.height())), 2, 2)
         font.setBold(False)
         font.setPointSizeF(font.pointSizeF() * 0.92)
-        muted = pal.placeholderText().color()
         for (port_name, is_output), port in self.ports.items():
             inner = port_name in (ITEM, INDEX, RESULT)
             painter.setPen(QColor("#c0392b") if port_name == ERROR_PORT else muted)
@@ -442,7 +444,7 @@ class LoopItem(NodeItem):
         painter.setFont(font)
         if self.status not in (None, "running"):  # (while it runs, the counter says it)
             painter.setPen(QColor(STATUS_COLORS[self.status]) if self.status in STATUS_COLORS
-                           and self.status != "skipped" else muted)
+                           and self.status != "skipped" and not self.old else muted)
             footer = QRectF(r.left() + 10, r.bottom() - FOOTER_H, r.width() - 20 - GRIP, FOOTER_H - 4)
             painter.drawText(footer, Qt.AlignVCenter, painter.fontMetrics().elidedText(
                 self.status_text, Qt.ElideRight, int(footer.width())))
@@ -587,8 +589,9 @@ class EdgeItem(QGraphicsPathItem):
 
 
 def value_html(text: str) -> str:
-    """A value as shown when hovering (cut when long): escaped, to go inside <pre>."""
-    return html.escape(text if len(text) <= 4000 else text[:4000] + "…", quote=False)  # e.g. a wide table's rows
+    """A value as shown when hovering: escaped, to go inside <pre>. A long one (e.g. a wide table's rows): its first
+    4,000 characters, then how many it has."""
+    return html.escape(_label(text, 4000, len(text)), quote=False)
 
 
 def _short(text: str, n: int = 60) -> str:
@@ -793,6 +796,7 @@ class NoteItem(QGraphicsTextItem):
 class FlowScene(QGraphicsScene):
     # Each with whether it was chosen: False when the canvas is only drawn again after a change to the flow.
     block_selected = Signal(object, bool)  # block id or None
+    block_clicked = Signal(str)  # a left click on the block that alone is selected already (no block_selected then)
     note_selected = Signal(str, bool)  # a text on the canvas, when it alone is selected
     block_menu = Signal(str, object)  # block id, screen position (right-click on a block)
     canvas_menu = Signal(object, object)  # scene position, screen position (right-click on empty canvas)
@@ -805,6 +809,8 @@ class FlowScene(QGraphicsScene):
         self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule or Wait block -> (text, tip)
         self.edge_items: list[EdgeItem] = []
         self.statuses: dict[str, tuple[str, str, str]] = {}  # block -> (status, text, tip)
+        # block -> (the block before it that ran again, in which run): its result on the canvas was made before that
+        self.old: dict[str, tuple[str, int]] = {}
         # A Loop's items, a Merger's lines (set to each line as it finishes): (done, of, running), in the run on screen
         self.progress: dict[str, tuple[int, int, int]] = {}
         self.off: set[str] = set()  # blocks connected to no start block (in a flow with start blocks)
@@ -950,6 +956,7 @@ class FlowScene(QGraphicsScene):
         """A block's result on the canvas: `text` under it (short), `tip` (HTML) when hovering that."""
         if status is None:
             self.statuses.pop(block_id, None)
+            self.old.pop(block_id, None)
             if self.progress.pop(block_id, None) is not None and block_id in self.nodes:
                 self.nodes[block_id].set_progress(None)
         else:
@@ -957,10 +964,26 @@ class FlowScene(QGraphicsScene):
         if block_id in self.nodes:
             self.nodes[block_id].set_status(*self._shown_status(block_id))
 
-    def _shown_status(self, block_id: str) -> tuple[str | None, str, str]:
-        """Under a block: its result on the canvas; without one, that it is off if no start block leads to it
-        (not a result: it goes away once the block is connected to a line)."""
-        return self.statuses.get(block_id) or (OFF if block_id in self.off else (None, "", ""))
+    def set_old(self, old: dict[str, tuple[str, int]]):
+        """The results on the canvas made before a block before them ran again: {block: (that block, its run)}.
+        Each is marked old; the others no longer are."""
+        changed = {b for b in old.keys() | self.old.keys() if old.get(b) != self.old.get(b)}
+        self.old = dict(old)
+        for block_id in changed & self.nodes.keys():
+            self.nodes[block_id].set_status(*self._shown_status(block_id))
+
+    def _shown_status(self, block_id: str) -> tuple[str | None, str, str, bool]:
+        """Under a block: its result on the canvas, and whether it is old (then it says so, and hovering it why);
+        without one, that it is off if no start block leads to it (not a result: it goes away once the block is
+        connected to a line)."""
+        if block_id not in self.statuses:
+            return (*(OFF if block_id in self.off else (None, "", "")), False)
+        status, text, tip = self.statuses[block_id]
+        if block_id not in self.old:
+            return status, text, tip, False
+        by, run_id = self.old[block_id]
+        return status, "old · " + text, (f"<p><b>Old:</b> made before {html.escape(by)} ran again (run #{run_id}). "
+                                         "Right-click → Run only this block to bring it up to date.</p>" + tip), True
 
     def show_result(self, block_id: str, info: dict):
         """A block's result in a run (an event of the run, or its row in the history), made at info["finished"]: under
@@ -978,7 +1001,8 @@ class FlowScene(QGraphicsScene):
         attempts = info.get("attempts") or 0
         retried = f" · retried {attempts - 1}×" if attempts > 1 else ""
         if status == "success":
-            text = "✓ " + _short(info.get("summary") or "done", 48) + retried
+            # (the summary whole, on one line: where it shortens a value it says so, with its count of characters)
+            text = "✓ " + " ".join((info.get("summary") or "done").split()) + retried
             # Hovering it shows each output as the connections do (e.g. JSON laid out).
             tip = "".join(f"<b>{html.escape(port)}</b><pre>{value_html(value)}</pre>"
                           for port, value in (info.get("previews") or {}).items())
@@ -1100,7 +1124,12 @@ class FlowScene(QGraphicsScene):
             self.addItem(self._drag_line)
             event.accept()
             return
+        selected = self.selected_block_ids()
         super().mousePressEvent(event)
+        node = self.mouseGrabberItem()  # the item that took the press
+        if (event.button() == Qt.LeftButton and isinstance(node, NodeItem)
+                and selected == [node.block_id] == self.selected_block_ids()):
+            self.block_clicked.emit(node.block_id)
 
     @_mouse
     def mouseMoveEvent(self, event):

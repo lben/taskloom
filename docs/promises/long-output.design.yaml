@@ -1,0 +1,18 @@
+# The design decisions of long output in the Log, Inspect and Data preview, one line each (read by
+# packaging/proof_pdf.py): what was chosen, and when to look at it again.
+- chosen: The Log shows a long message's first 200 lines, or its first 20,000 characters if that is less, and a show all; the whole message stays with its entry, so show all and a run opened from Run history have all of it (Qt lays a message out whole each time a line follows it, so 236,765 lines in the Log itself would hold the window).
+  revisit_if: the whole of a long message must be read in the Log itself, e.g. with the lines of the blocks before and after it around it.
+- chosen: Show all opens the message in Data preview, in the box that shows a block's text output, not in a window of its own; selecting a block, or a click on the block already selected, brings that block's outputs back.
+  revisit_if: a message must stay open while blocks are selected, e.g. to read an API response next to the table made from it.
+- chosen: Data preview fills a long text in slices of 200,000 characters from a timer, the first slice at once, so the window keeps answering while 5 MB arrive.
+  revisit_if: values far larger than 5 MB are usual, e.g. 500 MB, where only the part on screen should be loaded.
+- chosen: A line over 2,000 characters is shown as lines of 2,000 in Data preview (Qt draws a line whole each time it paints), and the box keeps the text as it was, so Copy gives the line back as one and Find finds a word across a fold.
+  revisit_if: a long line must be read unfolded, e.g. a wide report whose columns must line up.
+- chosen: An error, and the reason a table cannot be shown, are in the box as written, not folded.
+  revisit_if: an error with a line long enough to slow the window is seen, e.g. a database error that quotes a JSON of 1 MB on one line.
+- chosen: The limit of 20,000 messages takes only earlier runs' messages, when a new run starts, so a run of 20,050 messages is whole when it ends and from Run history; the limit of 50 million characters holds over all the messages as a run ends, the newest message always whole.
+  revisit_if: one run of far more than 20,000 messages makes the Log slow, e.g. a Loop over 500,000 items that writes a line for each.
+- chosen: 'A one-line label that is shortened ends with … and how many characters the value''s whole text has, e.g. "{''orders'': [{''id'': 1, … (4,830,112 characters)", so no value is cut without a word.'
+  revisit_if: the count is wanted another way, e.g. in lines or in MB.
+- chosen: A run's output is read without joining it again on every read; the pieces of a long line are kept as they come and joined once, when the line's end arrives (a 5 MB line comes in many reads).
+  revisit_if: a run's output reaches the editor another way, e.g. from a file in place of the runner's standard output.
