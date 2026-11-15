@@ -37,7 +37,7 @@ def write(path: Path, data):
     path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
 
 
-def record(proof_dir: Path, scenario: str, title: str, minute: int):
+def record(proof_dir: Path, scenario: str, title: str, minute: int, entries: list | None = None):
     """A proof record as tests/proofs/conftest.py writes it (no screenshot)."""
     write(proof_dir / scenario / "proof.json", {
         "title": title, "asked": "Can it do this?", "status": "passed", "error": "", "system": "Windows",
@@ -45,7 +45,8 @@ def record(proof_dir: Path, scenario: str, title: str, minute: int):
         "idea": ["It is shown in the editor."], "why_simplest": ["It reuses what is there."],
         "alternatives": [{"option": "A separate window", "why_not": "One more thing to learn."}],
         "fits": ["As the rest of the editor does."], "platform": "Windows-11 · Python 3.12 · PySide6 6.9",
-        "entries": [{"kind": "step", "text": "Open the flow."}, {"kind": "check", "text": "It opened", "ok": True}]})
+        "entries": entries or [{"kind": "step", "text": "Open the flow."},
+                               {"kind": "check", "text": "It opened", "ok": True}]})
 
 
 def feature(promises: Path, evidence: Path, stem: str, name: str, rows: dict, results: list, proofs: list,
@@ -477,3 +478,25 @@ def test_no_line_is_in_the_pdfs_text_twice_where_a_page_ends(tmp_path):
         assert len({at[word][0] for word in words}) > 1, "on one page"
     twice = {word: pages for word, pages in at.items() if len(pages) > 1}
     assert not twice, f"in the text more than once (word: its pages): {twice}"
+
+
+def test_a_printed_text_that_fits_on_one_page_shrunk_is_not_cut_by_a_page_end(tmp_path):
+    """A step's printed text (a tinted box) that runs on from part-way down its page over two pages at full size, and
+    fits on one page shrunk: the page is shrunk until the box is whole, all of its words on one page of the PDF, as
+    before a paragraph was split where a page ends. (The split, made before the page was fitted, made the cut box two
+    paragraphs, each on a page, so no box was taken as cut: CI's PDF came out a page shorter, a box cut across a
+    page's end.)"""
+    printed = [f"pw{k}" for k in range(3000)]
+    record(tmp_path / "proofs", "test_proof_print.test_long_output", "A long output is printed whole", 1,
+           [{"kind": "step", "text": "Run the flow."},
+            {"kind": "text", "caption": "What it printed", "text": " ".join(printed)}])
+
+    pdf = small_pdf(tmp_path)  # no feature: the PDF of the proofs on screen
+
+    at = {}  # each word: the pages it is on
+    for i, page in enumerate(pdf):
+        for word in re.findall(r"\bpw\d+\b", flat(page)):
+            at.setdefault(word, set()).add(i)
+    assert set(at) == set(printed), "words lost, or not as written"
+    on = sorted({i for pages in at.values() for i in pages})
+    assert len(on) == 1, f"the printed text is cut across a page's end: on pages {[i + 1 for i in on]} of {len(pdf)}"
