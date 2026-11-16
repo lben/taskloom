@@ -35,7 +35,7 @@ dependencies = [
 path = "taskloom/__init__.py"
 
 [tool.hatch.build.targets.wheel.force-include]
-"README.md" = "taskloom/README.md"  # the guide of Help > Documentation
+"docs/guide.md" = "taskloom/guide.md"  # the guide of Help > Documentation
 
 [project.scripts]
 taskloom = "taskloom.cli:run_cli"
@@ -70,7 +70,7 @@ markers = [
 [tool.mutmut]
 source_paths = ["taskloom/"]
 only_mutate = ["taskloom/schedule.py", "taskloom/scheduler.py"]
-also_copy = ["README.md"]  # (tests check the README's words)
+also_copy = ["docs/guide.md"]  # (tests check the guide's words)
 process_isolation = "forkserver"  # (fork reaps any child process, also one a test left: a random KeyError)
 timeout_multiplier = 2.0
 timeout_constant = 10.0

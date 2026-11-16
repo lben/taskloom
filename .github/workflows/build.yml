@@ -334,7 +334,7 @@ jobs:
         with: {files: "artifacts/*"}
 
   # The documentation website on GitHub Pages, from each release tag. No job needs it, so it never holds up or fails
-  # a release (it fails on its own until Settings > Pages > Source is GitHub Actions; see README, Development).
+  # a release (it fails on its own until Settings > Pages > Source is GitHub Actions; see docs/guide.md, Development).
   pages:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release

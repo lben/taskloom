@@ -132,8 +132,8 @@ SCH-16:
     each one then starts is checked by tests.
 SCH-17:
   enforced: >-
-    README.md explains each case: missed times and the 100 limit (also on servers), overlaps, turning the service off,
-    saved runs and clock changes.
+    docs/guide.md explains each case: missed times and the 100 limit (also on servers), overlaps, turning the service
+    off, saved runs and clock changes.
   not_green: >-
     Docs are words: the test checks each case has its explanation, and a reviewer reads them.
 # The checkers (run by packaging/checkers.py, each command by the shell from the repository, {out} its folder under

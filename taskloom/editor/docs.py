@@ -1,5 +1,5 @@
 """The documentation: the pages of Help > Documentation and what the cards of the Properties tab say, from one
-source. The guide is README.md, one page per "## " section; the reference is made from the block registry it is
+source. The guide is docs/guide.md, one page per "## " section; the reference is made from the block registry it is
 given, so it lists plugin blocks and your own blocks too. Pages are HTML, with names and anchors that stay put:
 index.html (Contents), <slug of the heading>.html, properties.html#properties.<row> and
 blocks-<category>.html#<type_id> (a block) or #<type_id>.<key> (its setting). No Qt here."""
@@ -178,17 +178,18 @@ def row_card(row: str) -> tuple[str, str, str]:
 
 # --- the pages ---------------------------------------------------------------------------------------------
 
-def _readme() -> str | None:
-    """README.md: next to this package's modules (as installed), or above them (a source checkout)."""
+def _guide_text() -> str | None:
+    """docs/guide.md: as guide.md next to this package's modules (as installed), or in docs/ above them (a source
+    checkout)."""
     package = Path(__file__).resolve().parents[1]
-    for path in (package / "README.md", package.parent / "README.md"):
+    for path in (package / "guide.md", package.parent / "docs" / "guide.md"):
         if path.is_file():
             return path.read_text(encoding="utf-8")
     return None
 
 
 def _guide(text: str) -> tuple[str, list[tuple[str, str]]]:
-    """README as HTML: its introduction (before its first "## "), and each "## " section's heading and HTML.
+    """The guide as HTML: its introduction (before its first "## "), and each "## " section's heading and HTML.
     Headings get their slug as id."""
     parts = [("", [])]
     tokens = _MARKDOWN.parse(text)
@@ -206,9 +207,9 @@ def _guide(text: str) -> tuple[str, list[tuple[str, str]]]:
 
 def pages(registry) -> dict[str, str]:
     """Every page of the documentation: file name -> HTML."""
-    readme = _readme()
-    intro, sections = _guide(readme) if readme is not None else (
-        "<h1>Taskloom</h1><p>The guide is not included in this installation (its README.md is missing); the "
+    guide = _guide_text()
+    intro, sections = _guide(guide) if guide is not None else (
+        "<h1>Taskloom</h1><p>The guide is not included in this installation (its guide.md is missing); the "
         "reference below is.</p>", [])
     categories: dict[str, list] = {}
     for cls in registry.blocks.values():

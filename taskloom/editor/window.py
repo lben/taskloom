@@ -2085,7 +2085,7 @@ def _smoke_test(app, window: MainWindow, tab: FlowTab, folder: Path):
 
 def _documentation_shown(window: MainWindow) -> bool:
     """Whether Help > Documentation works in this build: a setting's Learn more shows its entry (its heading, then what
-    it is for), and the guide, from the README.md the build carries, its Schedules page."""
+    it is for), and the guide, from the guide.md the build carries, its Schedules page."""
     from ..blocks.files import CopyFiles
 
     window.docs.open_at(docs.field_href(CopyFiles, "source"))
