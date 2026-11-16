@@ -830,6 +830,9 @@ def feature_page(index: int, total: int, feature: dict, changes: list, evidence:
     checkers = sorted(feature["checkers"] or [], key=lambda c: order.index(c["kind"]) if c["kind"] in order else
                       len(order))
     boxes = [terminal(c, evidence) for c in checkers] or [f"<p>{mark(False, 'No checker ran for this feature.')}</p>"]
+    # Their final lines are of this commit, but those of a check taken from an earlier CI run (its box says which).
+    of = "this commit unless reused from an earlier CI run" if any(c.get("reused_from") for c in checkers) else \
+        "this commit"
     colour, phrase = verdict(feature)
     # A blocked feature opens with its question; any other with its verdict.
     opening = (blocked_banner(feature["blocked"]) if feature["blocked"] is not None else
@@ -843,7 +846,7 @@ def feature_page(index: int, total: int, feature: dict, changes: list, evidence:
                     shows(feature), asked_and_agreed(feature),
                     kept("Evidence ledger", ledger_rows((feature["ledger"] or {}).get("rows", []))),
                     kept("Bugs found while proving it", found, "(and fixed)") if found else "",
-                    kept("Checker output", boxes, "(final lines, this commit)"),
+                    kept("Checker output", boxes, f"(final lines, {of})"),
                     kept("Surviving mutants, one line each", [survivors(feature["mutants"], folder / "mutants.json")]),
                     kept("Not mutation-tested, and what checks it instead", left_out, "(not in the score)")
                     if left_out else "",

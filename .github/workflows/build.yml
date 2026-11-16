@@ -71,17 +71,16 @@ jobs:
   decide:
     if: ${{ !inputs.tests }}
     runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read}  # (the default token cannot list artifacts or read runs)
     outputs:
       model_key: ${{ steps.find.outputs.model_key }}
       model_run: ${{ steps.find.outputs.model_run }}
       model_url: ${{ steps.find.outputs.model_url }}
       model_date: ${{ steps.find.outputs.model_date }}
-      model_commit: ${{ steps.find.outputs.model_commit }}
       mutation_key: ${{ steps.find.outputs.mutation_key }}
       mutation_run: ${{ steps.find.outputs.mutation_run }}
       mutation_url: ${{ steps.find.outputs.mutation_url }}
       mutation_date: ${{ steps.find.outputs.mutation_date }}
-      mutation_commit: ${{ steps.find.outputs.mutation_commit }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -108,7 +107,7 @@ jobs:
             [ $check = model ] || names=$(echo reuse-mutation-$key-part-{1,2,3})  # (all 3 parts from one run)
             run=$(newest $names)
             if [ -n "$run" ] && about=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" \
-                --jq '"run=\(.id)\nurl=\(.html_url)\ncommit=\(.head_sha)\ndate=\(.created_at[:10])"'); then
+                --jq '"run=\(.id)\nurl=\(.html_url)\ndate=\(.created_at[:10])"'); then
               echo "$about" | sed "s/^/${check}_/" >> "$GITHUB_OUTPUT"
               echo "$check: reused from run $run, its files unchanged (key $key)"
             else
@@ -219,6 +218,7 @@ jobs:
           uv run python packaging/mutants.py . --run --part ${{ matrix.part }}/3 \
             --explained docs/promises/scheduler.mutants.yaml 2>&1 \
             | tee proof/scheduler/logs/mutation-part-${{ matrix.part }}.log
+          git rev-parse HEAD > tested-commit  # the commit tested (on a pull request, its merge commit), for a reuse
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}  # also when it failed: the evidence job says which mutants have no verdict
         with:
@@ -234,6 +234,7 @@ jobs:
           path: |
             mutants
             proof
+            tested-commit
             !mutants/**/__pycache__
 
   # The checkers of every other feature (docs/promises/<feature>.evidence.yaml), each feature's in a job of its own
@@ -288,6 +289,7 @@ jobs:
     needs: [decide, checkers, model-check, mutation, checkers-features]
     if: ${{ !cancelled() && !inputs.tests }}  # also when a checker failed or ran out of time: the proof shows which
     runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read}  # (the default token cannot download another run's artifacts)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -319,17 +321,26 @@ jobs:
           path: mutation-parts
           run-id: ${{ needs.decide.outputs.mutation_run }}
           github-token: ${{ github.token }}  # (without it, run-id is not used)
+      - name: All 3 parts came, each with the commit it tested (a pattern that finds nothing does not fail)
+        id: reused-mutation
+        if: ${{ !cancelled() && needs.decide.outputs.mutation_run }}
+        run: |
+          for part in 1 2 3; do
+            file="mutation-parts/reuse-mutation-${{ needs.decide.outputs.mutation_key }}-part-$part/tested-commit"
+            commit=$(cat "$file") && [ -n "$commit" ] || { echo "::error::Not downloaded: $file"; exit 1; }
+          done
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - name: Mutation testing, its parts scored as one run
         if: ${{ !cancelled() }}
         run: |
           uv run python packaging/checkers.py docs/promises/scheduler.yaml jobs/mutation --only "Mutation testing" \
             --command "python packaging/mutants.py . --parts mutation-parts/* --explained docs/promises/scheduler.mutants.yaml --out {out}/mutants.json"
       - name: Mutation testing's record says its verdicts are the earlier run's, of that run's commit (scored here)
-        if: ${{ !cancelled() && needs.decide.outputs.mutation_run }}
+        if: ${{ !cancelled() && steps.reused-mutation.outcome == 'success' }}  # (a failed reuse shows as failed)
         run: >-
           uv run python packaging/ci_reuse.py mark jobs/mutation --run "${{ needs.decide.outputs.mutation_run }}"
           --url "${{ needs.decide.outputs.mutation_url }}" --date "${{ needs.decide.outputs.mutation_date }}"
-          --commit "${{ needs.decide.outputs.mutation_commit }}"
+          --commit "${{ steps.reused-mutation.outputs.commit }}"
       - name: Every checker's result, in proof/
         if: ${{ !cancelled() }}
         run: |

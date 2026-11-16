@@ -102,3 +102,11 @@ def test_a_record_of_another_commit_not_marked_as_reused_still_fails_the_commit_
     mark, words = commit_line(built["not-reused"])
     assert mark == "✗" and f"Not all of this commit ({SHA[:7]})" in words, words
     assert f"{MODEL} ran on {OLD_SHA[:7]}" in words, words
+
+
+def test_the_heading_over_the_checker_boxes_does_not_say_a_reused_one_is_of_this_commit(built):
+    """The heading over the boxes said their final lines were all of this commit, also those of a reused check."""
+    text = " ".join(flat(built["reused"][i]) for i in feature_pages(built["reused"], 1))
+    start = text.index("Checker output")
+    heading = text[start:text.index("summary line.", start)]  # up to the first box's summary
+    assert "this commit" not in heading or "reused" in heading.lower(), heading
