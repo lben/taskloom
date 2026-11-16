@@ -70,7 +70,7 @@ markers = [
 [tool.mutmut]
 source_paths = ["taskloom/"]
 only_mutate = ["taskloom/schedule.py", "taskloom/scheduler.py"]
-also_copy = ["docs/guide.md"]  # (tests check the guide's words)
+also_copy = ["docs"]  # (tests check the guide's words, docs/guide.md; mutmut copies a file into an existing folder only)
 process_isolation = "forkserver"  # (fork reaps any child process, also one a test left: a random KeyError)
 timeout_multiplier = 2.0
 timeout_constant = 10.0
