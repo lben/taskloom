@@ -24,20 +24,20 @@ blocks:
     config: {kind: bar, x: region, y: [total], title: "Sales by region"}
   excel:
     type: reports.excel
-    config: {path: "out/sales_{day:%Y-%m-%d}.xlsx", sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
+    config: {path: "out/sales_{{day:%Y-%m-%d}}.xlsx", sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
   body:
     type: reports.html_template
     config:
       template: |
-        <h2 style="font-size:18px;color:#2c5d8f;">Sales for {day:%A %d %B %Y}</h2>
-        {chart}<br>
-        {totals}
+        <h2 style="font-size:18px;color:#2c5d8f;">Sales for {{day:%A %d %B %Y}}</h2>
+        {{chart}}<br>
+        {{totals}}
   mail:
     type: email.send
     config:
       connection: mailer
       to: [you@example.com]
-      subject: "Daily sales {day:%Y-%m-%d}"
+      subject: "Daily sales {{day:%Y-%m-%d}}"
 
 edges:
   - manual.start -> sales.after

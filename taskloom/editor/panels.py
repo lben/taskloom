@@ -1195,7 +1195,7 @@ class PropertiesPanel(QScrollArea):
             label = QLabel(f"from {source}")
             form.addRow(label, edit)
             self._field_help(cls, key, label, edit)
-        note = QLabel("Write {name} in the Template where an input should go; flow parameters work the same way. An "
+        note = QLabel("Write {{name}} in the Template where an input should go; flow parameters work the same way. An "
                       "empty Template shows every input in turn." if sources else
                       "Nothing is connected yet. Connect blocks (tables, charts, text…) to this block's data input; "
                       "each one is listed here with a name, at first its block's name.", wordWrap=True,
@@ -1386,7 +1386,7 @@ class PropertiesPanel(QScrollArea):
         """An API Request's URL with its ticked Params as its query, kept in step: a query typed in it becomes its
         Params (each ticked; those not ticked stay), the URL being what is before its ?."""
         shown = shown_url(config.get("url"), config.get("params"))
-        edit = QLineEdit(shown, placeholderText="relative to the connection's base URL, e.g. /orders/{id}, or whole"
+        edit = QLineEdit(shown, placeholderText="relative to the connection's base URL, e.g. /orders/{{id}}, or whole"
                          if config.get("connection") else "e.g. https://api.example.com/v1/orders")
 
         def commit():

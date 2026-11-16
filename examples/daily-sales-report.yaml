@@ -24,7 +24,7 @@ blocks:
         group by region
   save:
     type: data.write_file
-    config: {path: "out/sales_{day:%Y-%m-%d}.csv"}
+    config: {path: "out/sales_{{day:%Y-%m-%d}}.csv"}
   no_data:
     type: logic.python
     config:

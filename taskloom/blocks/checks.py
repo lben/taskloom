@@ -38,7 +38,7 @@ def _bytes(text: str) -> float:
 
 
 class _Size(fields.Text):
-    """A size with its unit (1 KB, 200 MB): one that is not is refused before the run (with {placeholders}: once
+    """A size with its unit (1 KB, 200 MB): one that is not is refused before the run (with {{placeholders}}: once
     they are filled in, as the block runs)."""
 
     def coerce(self, value):
@@ -189,5 +189,5 @@ class CheckFile(Block):
     def _limit(label: str, text: str) -> float:
         try:
             return _bytes(text)
-        except ValueError as e:  # (written with {placeholders}, filled in as the block runs)
+        except ValueError as e:  # (written with {{placeholders}}, filled in as the block runs)
             raise Failed(f"{label}: {e}") from None

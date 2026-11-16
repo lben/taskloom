@@ -778,8 +778,9 @@ def _curl_options(words):
 
 def from_curl(text: str) -> CurlImport:
     """The API Request's settings for the request a curl command sends, the command written as bash or Windows' cmd
-    reads it (as an API's documentation or a browser's Copy as cURL writes it), with every brace written {{ }} so that
-    it is sent as it is. ValueError, saying why, for text that is not a curl command with a URL."""
+    reads it (as an API's documentation or a browser's Copy as cURL writes it), its body as the command has it, with
+    each {{ written {{{{ so that it is sent as it is. ValueError, saying why, for text that is not a curl command with a
+    URL."""
     text = re.sub(r"[ \t]+\n", "\n", text.replace("\r\n", "\n")).strip()  # (a \ or ^ before spaces copied with it)
     start = re.match(r"(?:\$\s+)?curl(?:\.exe)?(?:\s|$)", text, re.IGNORECASE)  # (a $ prompt, as documentation shows)
     if start is None:
@@ -880,8 +881,7 @@ def from_curl(text: str) -> CurlImport:
                 parsed = json.loads(sent) if sent.lstrip().startswith(("{", "[")) else None
             except ValueError:
                 parsed = None
-            body, config["content"] = ((JSON_BODY, json.dumps(parsed, indent=2, ensure_ascii=False))
-                                       if parsed is not None else (TEXT_BODY, sent))
+            body, config["content"] = JSON_BODY if parsed is not None else TEXT_BODY, sent  # (as the command has it)
         if body != JSON_BODY and "content-type" not in {key.lower() for key, _ in headers}:
             headers.append(("Content-Type", "application/x-www-form-urlencoded"))  # (what curl sends with -d)
     if method is not None and method not in METHODS:
@@ -940,8 +940,8 @@ def from_curl(text: str) -> CurlImport:
 
 
 def _literal(text: str) -> str:
-    """Text as a setting that takes placeholders sends it as it is: its braces written {{ and }}."""
-    return text.replace("{", "{{").replace("}", "}}")
+    """Text as a setting that takes placeholders sends it as it is: each {{ in it written {{{{."""
+    return text.replace("{{", "{{{{")
 
 
 def connection_note(home, name: str, headers) -> str:
@@ -995,20 +995,20 @@ class ApiRequest(Block):
         "connection": fields.Connection(
             kind="api", required=False,
             help="none (empty): everything is set in this block. Or an API connection (Tools > Connections): its base "
-                 "URL (the URL here may then be relative to it, e.g. /orders/{id}), its auth with its stored secret, "
+                 "URL (the URL here may then be relative to it, e.g. /orders/{{id}}), its auth with its stored secret, "
                  "its headers (this block's own Headers are added, this block's winning on the same name) and its "
                  "certificate settings."),
         "method": fields.Choice(METHODS, default="GET", help="The HTTP method of the request"),
         "url": fields.Text(help="The web address to call, with its ?query if it has one (kept in step with Params). "
                                 "With a Connection: whole, or relative to its base URL.",
-                           examples=["https://api.example.com/v1/orders", "/orders/{id}",
+                           examples=["https://api.example.com/v1/orders", "/orders/{{id}}",
                                      "https://api.example.com/v1/orders?status=open"]),
         "params": fields.KeyValues(
             required=False,
             help="Query parameters, added to the URL's query in their order (encoded as a URL needs): only the ticked "
                  "rows are sent. Type name=value in the line under the table to add one; empty a name to remove its "
                  "row. Kept in step with the URL's ?query.",
-            examples=["page=2", "region={region}", "limit=100"]),
+            examples=["page=2", "region={{region}}", "limit=100"]),
         "auth": fields.Choice(
             AUTHS, default=NO_AUTH, only_if=_NO_CONNECTION,
             help="How the request proves who sends it: Basic (a user name and password, sent with the request), a "
@@ -1030,7 +1030,7 @@ class ApiRequest(Block):
                  "one; empty a name to remove its row. A value secret:NAME sends the stored secret NAME (taskloom "
                  "secret set NAME), never written in the flow. A Content-Type here replaces the one Body sets; Auth's "
                  "header replaces one of the same name here.",
-            examples=["Accept: application/json", "X-Region: {region}", "X-Api-Key: secret:orders_key"]),
+            examples=["Accept: application/json", "X-Region: {{region}}", "X-Api-Key: secret:orders_key"]),
         "body": fields.Choice(
             BODIES, default=NO_BODY,
             help="What the request sends: nothing, JSON, text or XML (written in Content), a form url-encoded or "
@@ -1038,13 +1038,13 @@ class ApiRequest(Block):
                  "input connected, the body comes from it instead (set none here)."),
         "content": fields.Code(
             "text", only_if={"body": [JSON_BODY, TEXT_BODY, XML_BODY]},
-            help="The body to send, as it is (JSON is checked before it is sent). {name} fills in a placeholder: "
-                 "write {{ and }} for the braces of JSON.",
-            examples=['{{"region": "{region}", "top": 5}}', '["north", "south"]', '<order id="{id}"/>']),
+            help="The body to send, as it is (JSON is checked before it is sent). {{name}} fills in a placeholder; "
+                 "single braces, as in JSON, are sent as typed; write {{{{ for a literal {{.",
+            examples=['{"region": "{{region}}", "top": 5}', '["north", "south"]', '<order id="{{id}}"/>']),
         "form": fields.KeyValues(required=False, label="Form", only_if={"body": [FORM_BODY]},
                                  help="The form's fields, url-encoded: only the ticked rows are sent. Type name=value "
                                       "in the line under the table to add one.",
-                                 examples=["region=north", "day={day:%Y-%m-%d}"]),
+                                 examples=["region=north", "day={{day:%Y-%m-%d}}"]),
         "parts": fields.KeyValues(required=False, files=True, label="Parts", only_if={"body": [MULTIPART]},
                                   help="The multipart form's fields: only the ticked rows are sent; a row ticked File "
                                        "sends the file at the path its value gives. Type name=value in the line under "
@@ -1060,7 +1060,7 @@ class ApiRequest(Block):
                  "or a file (saved to Save to; the output is its path)."),
         "save_to": fields.Path(label="Save to", only_if={"response_as": [AS_FILE]}, writes=True,
                                help="The file the answer is saved to, as it came (its folder is made if missing)",
-                               examples=["downloads/orders.json", "out/report_{day:%Y-%m-%d}.pdf"]),
+                               examples=["downloads/orders.json", "out/report_{{day:%Y-%m-%d}}.pdf"]),
         "success": _Statuses(default="200-299", label="Statuses that count as success",
                              help="The answer's statuses that count as success, separated by commas: any other fails "
                                   "the block, its error output carrying the status, headers and body.",

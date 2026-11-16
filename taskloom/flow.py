@@ -393,18 +393,18 @@ def block_config(cls, spec: BlockSpec) -> dict:
 
 
 def placeholder_problems(f: fields.Field, text: str, params, inputs) -> list[str]:
-    """What is wrong with the {name} placeholders in `text`, the value (or an item) of the templated setting `f` of a
+    """What is wrong with the {{name}} placeholders in `text`, the value (or an item) of the templated setting `f` of a
     block with the input ports `inputs`: each must name a flow parameter (`params`: their names) or, but in SQL code,
     one of the block's data inputs (not its run after), and not both."""
     try:
         names = P.template_names(text)
     except ValueError as e:
-        return [f"{e} (write {{{{ and }}}} for literal braces)"]
+        return [str(e)]
     if isinstance(f, fields.Code) and f.language == "sql":  # flow parameters only
-        return [f"unknown parameter {{{n}}}" for n in sorted(names - set(params))]
+        return [f"unknown parameter {{{{{n}}}}}" for n in sorted(names - set(params))]
     data = set(inputs) - {AFTER}
-    return [f"{{{n}}} could be the parameter {n} or the input {n}: rename one" if n in params
-            else f"{{{n}}} is neither a flow parameter nor an input of this block"
+    return [f"{{{{{n}}}}} could be the parameter {n} or the input {n}: rename one" if n in params
+            else f"{{{{{n}}}}} is neither a flow parameter nor an input of this block"
             for n in sorted(names) if (n in params) == (n in data)]
 
 
@@ -506,14 +506,25 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         if loops:
             found += [f"{block_id}: {problem}" for problem in cls.loop_problems(config, loops[0])]
         has_params_input = any(e.dst == block_id and e.dst_port == "params" for e in flow.edges)
+        # What a {{name}} in its settings can name: a single-brace {name} of these is plain text, but likely a slip.
+        named = set(flow.params) | set(inputs) - {AFTER}
+        for key, f in cls.config.items():
+            if isinstance(f, fields.SourceNames):  # (e.g. an HTML Template's inputs go by these names, not the port's)
+                named = named - {f.port} | set(f.in_effect(config[key], sources.get(f.port, []), flow.params).values())
         for name, f in cls.config.items():
             value = config.get(name)
             setting = f"{block_id}: {setting_label(name, f)}"
-            if f.template:  # (in each item of a list; a table's rows, fields.KeyValues: in each key and value)
-                texts = [text for item in (value if isinstance(value, list) else [value])
-                         for text in ((item.get("key"), item.get("value")) if isinstance(item, dict) else (item,))]
+            # (in each item of a list; a table's rows, fields.KeyValues: in each key and value)
+            texts = [text for item in (value if isinstance(value, list) else [value])
+                     for text in ((item.get("key"), item.get("value")) if isinstance(item, dict) else (item,))
+                     if isinstance(text, str)]
+            if f.template:
                 found += [f"{setting}: {problem}" for text in texts
-                          if isinstance(text, str) for problem in placeholder_problems(f, text, flow.params, inputs)]
+                          for problem in placeholder_problems(f, text, flow.params, inputs)]
+            if f.template or isinstance(f, fields.Code) and f.language in ("html", "f-string"):  # (filled by its block)
+                sql = isinstance(f, fields.Code) and f.language == "sql"  # (flow parameters only)
+                warnings += [f"{setting}: {{{n}}} is plain text: did you mean {{{{{n}}}}}?" for text in texts
+                             for n in P.single_braced(text) if n in (set(flow.params) if sql else named)]
             if not isinstance(value, str):
                 continue
             if isinstance(f, fields.Code) and f.language == "sql" and not has_params_input:
@@ -614,7 +625,7 @@ def _loop_problems(flow: Flow, registry) -> tuple[list[str], list[str]]:
     flow, a connection out of a Loop but through its result, a Loop's item, index or result used outside it or its
     results inside it, a start block inside one, a Loop's retry or timeout; what to look at: a Loop inside another
     (its blocks run items × items times), a Loop's results connected but its result not, a file path a block inside a
-    Loop writes to without a {placeholder}, as every item writes to it)."""
+    Loop writes to without a {{placeholder}}, as every item writes to it)."""
     errors, warnings = [], []
     loops = {b for b, spec in flow.blocks.items() if spec.type == LOOP}
     for block_id, spec in flow.blocks.items():
@@ -670,7 +681,7 @@ def _loop_problems(flow: Flow, registry) -> tuple[list[str], list[str]]:
             if (f.writes and isinstance(value, str) and value and not has_placeholders(value)
                     and applies(cls, key, spec.config)):
                 warnings.append(f"{block_id}: {setting_label(key, f)}: every item of the loop {around[0]} writes to "
-                                f"{value} (it has no {{placeholder}}, so each item writes over what the one before "
+                                f"{value} (it has no {{{{placeholder}}}}, so each item writes over what the one before "
                                 "wrote)")
     return errors, warnings
 
@@ -891,7 +902,7 @@ def per_line_of(sections: dict[str, set[str]], block: str) -> str | None:
 
 def _per_line_problems(flow: Flow, registry, part: set[str]) -> tuple[list[str], list[str]]:
     """(a block run once per line by a Merger set to each line as it finishes that takes from one of its lines' last
-    blocks, which may not have ended as it runs; a file path such a block writes to without a {placeholder}, as each
+    blocks, which may not have ended as it runs; a file path such a block writes to without a {{placeholder}}, as each
     line's run writes to it)."""
     errors, warnings = [], []
     sections = per_line(flow, registry)
@@ -940,7 +951,7 @@ def _per_line_problems(flow: Flow, registry, part: set[str]) -> tuple[list[str],
                 if (f.writes and isinstance(value, str) and value and not has_placeholders(value)
                         and applies(cls, key, spec.config)):
                     warnings.append(f"{block}: {setting_label(key, f)}: every line of {merger} writes to {value} (it "
-                                    "has no {placeholder}, so each line's run writes over what the one before wrote)")
+                                    "has no {{placeholder}}, so each line's run writes over what the one before wrote)")
     return errors, warnings
 
 

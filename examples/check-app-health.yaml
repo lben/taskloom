@@ -18,7 +18,7 @@ blocks:
   show:
     type: logic.inspect
     config:
-      message: "Healthy: {value['healthy']}. Checked: {', '.join(value['checks'])}. Problems: {value['problems'] or 'none'}"
+      message: "Healthy: {{value['healthy']}}. Checked: {{', '.join(value['checks'])}}. Problems: {{value['problems'] or 'none'}}"
     ui: {x: 520, y: 40}
 
 edges:

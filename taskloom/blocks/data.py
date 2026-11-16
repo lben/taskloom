@@ -142,8 +142,8 @@ class ReadFile(Block):
     outputs = {"table": ports.Table()}
     config = {
         "path": fields.Path(help="The file to read: CSV, Excel or Parquet. A relative path is in the flow's "
-                                 "folder; {name} or {name:format} fills in a parameter",
-                            examples=["data/sales.csv", "C:/exports/sales_{day:%Y-%m-%d}.xlsx",
+                                 "folder; {{name}} or {{name:format}} fills in a parameter",
+                            examples=["data/sales.csv", "C:/exports/sales_{{day:%Y-%m-%d}}.xlsx",
                                       "data/orders.parquet"]),
         "format": fields.Choice(_FORMATS, default="auto", help=f"{_FORMAT_HELP}; or the format it is in"),
         "separator": fields.Text(default=",", help="CSV only", examples=[",", ";", "|"]),
@@ -181,9 +181,9 @@ class WriteFile(Block):
     inputs = {"table": ports.Table()}
     outputs = {"file": ports.Any()}
     config = {
-        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.csv", writes=True,
+        "path": fields.Path(help="e.g. reports/sales_{{day:%Y-%m-%d}}.csv", writes=True,
                             files=["CSV file (*.csv)", "Excel workbook (*.xlsx)", "Parquet file (*.parquet)"],
-                            examples=["reports/sales_{day:%Y-%m-%d}.csv", "out/sales.xlsx",
+                            examples=["reports/sales_{{day:%Y-%m-%d}}.csv", "out/sales.xlsx",
                                       "C:/exports/sales.parquet"]),
         "format": fields.Choice(_FORMATS, default="auto", help=f"{_FORMAT_HELP}; or the format to write. A "
                                                                    "macro-enabled workbook (.xlsm) cannot be written"),

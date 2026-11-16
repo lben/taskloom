@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import re
-import string
 
 from .expr import evaluate
 
@@ -76,30 +75,65 @@ def resolve(specs: dict, overrides: dict, funcs: dict) -> dict:
     return values
 
 
-class _Formatter(string.Formatter):
-    def get_field(self, field_name, args, kwargs):
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field_name):
-            raise ValueError(f"'{{{field_name}}}' is not a parameter name")
-        if field_name not in kwargs:
-            raise KeyError(field_name)
-        return kwargs[field_name], field_name
+# The one brace rule of every text that is filled: {{name}} or {{name:format}} (spaces inside do not matter) is a
+# placeholder, {{{{ a literal {{; a single brace, a lone }} and a backslash are plain text. A placeholder is on one
+# line.
+_BRACES = re.compile(r"\{\{\{\{|\{\{(?!\{)(?:(.*?)\}\})?")
+LITERAL_BRACES = "write {{{{ for a literal {{"
+
+
+def split(text: str) -> list[tuple[str, str | None]]:
+    """`text` cut at its placeholders: [(plain text, what is inside the next {{ }}, stripped), ..., (plain text, None)].
+    Raises ValueError for a {{ with no }} after it on its line, or an empty {{}}."""
+    parts, plain, start = [], "", 0
+    for m in _BRACES.finditer(text):
+        plain += text[start:m.start()]
+        start = m.end()
+        if m.group() == "{{{{":
+            plain += "{{"
+        elif m.group(1) is None:
+            raise ValueError(f"{{{{ with no }}}} after it ({LITERAL_BRACES})")
+        elif not m.group(1).strip():
+            raise ValueError(f"{m.group()} names nothing ({LITERAL_BRACES})")
+        else:
+            parts.append((plain, m.group(1).strip()))
+            plain = ""
+    return parts + [(plain + text[start:], None)]
+
+
+def parse(text: str) -> list[tuple[str, str | None, str]]:
+    """`text` cut at its placeholders {{name}} / {{name:format}}: [(plain text, name, format), ..., (plain text, None,
+    "")]. Raises ValueError as split does, or for a placeholder that is not a name."""
+    parts = []
+    for plain, inside in split(text):
+        name, _, spec = (inside or "").partition(":")
+        if inside is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name.strip()):
+            raise ValueError(f"{{{{{inside}}}}} is not a name ({LITERAL_BRACES})")
+        parts.append((plain, name.strip() if inside is not None else None, spec))
+    return parts
 
 
 def render(template: str, values: dict) -> str:
-    """Fill `{name}` / `{name:format}`. Write `{{` and `}}` for literal braces."""
-    try:
-        return _Formatter().vformat(template, (), values)
-    except KeyError as e:
-        raise ValueError(f"unknown parameter {{{e.args[0]}}} (write {{{{ and }}}} for literal braces)") from None
-    except (ValueError, IndexError) as e:
-        raise ValueError(f"invalid template {template!r}: {e}") from None
+    """`template` with each {{name}} / {{name:format}} filled in once from `values`."""
+    filled = []
+    for plain, name, spec in parse(template):
+        filled.append(plain)
+        if name is not None:
+            if name not in values:
+                raise ValueError(f"unknown parameter {{{{{name}}}}}")
+            filled.append(format(values[name], spec))
+    return "".join(filled)
 
 
 def template_names(template: str) -> set[str]:
-    names = {name for _, name, _, _ in string.Formatter().parse(template) if name is not None}
-    if "" in names:  # e.g. {} or {:>5}: render would refuse it
-        raise ValueError("'{}' names no parameter")
-    return names
+    return {name for _, name, _ in parse(template) if name is not None}
+
+
+def single_braced(text: str) -> list[str]:
+    """The names of the single-brace {name} and {name:format} of `text` outside its placeholders, each once: plain text,
+    though probably meant as {{name}}."""
+    found = re.findall(r"(?<!\$)\{([A-Za-z_]\w*)(?::[^{}\n]*)?\}", _BRACES.sub("\0", text))
+    return list(dict.fromkeys(found))
 
 
 _SQL_TOKENS = re.compile(

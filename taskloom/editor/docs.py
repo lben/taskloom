@@ -18,8 +18,8 @@ from ..blocks.triggers import KeptRuns
 NO_HELP = 'No help yet: add help="..." and examples=[...] to this setting in its block file.'
 NO_EXAMPLES = "No examples yet"
 # On the card of a setting that takes placeholders (fields.Field.template, but code), under its examples.
-PLACEHOLDERS = ("Placeholders: {name} fills in a flow parameter, or the value arriving at the block's input of that "
-                "name; {name:format} formats it; write {{ and }} for braces")
+PLACEHOLDERS = ("Placeholders: {{name}} fills in a flow parameter, or the value arriving at the block's input of "
+                "that name; {{name:format}} formats it; single braces are plain text; write {{{{ for a literal {{")
 
 
 class OneOf(tuple):
