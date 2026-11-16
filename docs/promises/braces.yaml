@@ -9,9 +9,12 @@ asked:
     # The plan's one brace rule for the whole app, Inspect's message too.
     words: "approve as listed (after you clarify me the points above, I am ok with the rest)"
   - date: 2026-11-16
-    # The rows below and the recommended answers: \{{ gives {{ (BR-9), spaces inside (BR-1), Inspect takes an
-    # expression inside {{ }} (BR-10).
+    # The rows below and the recommended answers: spaces inside (BR-1), Inspect takes an expression inside {{ }}
+    # (BR-10).
     words: "Approve all"
+  - date: 2026-11-16
+    # Asked again: \{{ for a literal {{ would turn C:\data\{{day}}.csv into plain text (BR-9).
+    words: "{{{{ gives {{"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_braces]
 rows:
@@ -38,8 +41,8 @@ rows:
     Every shipped example, starter text, help text and docs page uses {{name}} and passes Validate with no BR-4
     warning.
   BR-9: >-
-    \{{ gives a literal {{, so text such as a Mermaid hexagon A{{text}} can be written as A\{{text}}. Without the
-    backslash, {{ always starts a placeholder.
+    {{{{ gives a literal {{, so a Mermaid hexagon A{{text}} is written A{{{{text}}. A backslash is plain text, so a
+    Windows path C:\data\{{day}}.csv works. Otherwise {{ always starts a placeholder.
   BR-10: >-
     Inspect's message is the one place where {{ }} holds a Python expression: {{value}}, {{len(value)}} and
     {{value["id"]}} all work. Single braces in it are plain text, and the block's help says so.
