@@ -1349,10 +1349,11 @@ def test_the_window_shows_the_theme_chosen_dark_and_then_light(look_kept, win, q
 
 # --- 10: README --------------------------------------------------------------------------------------------------
 
-def test_the_readme_tells_of_commit_history_where_it_tells_of_save_and_commit():
-    """Spec 10: in the README's section on Save & Commit, a paragraph on Commit History: the search (message, then
+@pytest.mark.invariant("RD-2")
+def test_the_guide_tells_of_commit_history_where_it_tells_of_save_and_commit():
+    """Spec 10: in the guide's section on Save & Commit, a paragraph on Commit History: the search (message, then
     outputs, then code, then the flow file), the preview with the outputs, and Restore."""
-    text = (REPO / "README.md").read_text(encoding="utf-8")
+    text = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
     sections = re.split(r"\n(?=## )", text)
     (section,) = [s for s in sections if s.startswith("## ") and "Save & Commit" in s.splitlines()[0]]
     paragraphs = [p[p.index("Commit History"):] for p in re.split(r"\n\s*\n", section) if "Commit History" in p]

@@ -443,9 +443,10 @@ def test_every_duration_the_error_message_suggests_works_as_a_timeout_and_a_retr
 
 # --- what users read: the README's flow snippets and the examples folder ------------------------------------------
 
-def test_the_flow_schedule_notify_and_connection_snippets_of_the_readme_are_a_valid_flow(env):
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    snippets = re.findall(r"```yaml\n(.*?)```", readme, re.S)
+@pytest.mark.invariant("RD-2")
+def test_the_flow_schedule_notify_and_connection_snippets_of_the_guide_are_a_valid_flow(env):
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    snippets = re.findall(r"```yaml\n(.*?)```", guide, re.S)
     [flow_text] = [s for s in snippets if s.startswith("params:")]
     [notify] = [s for s in snippets if s.startswith("notify:")]
     [schedules] = [s for s in snippets if s.startswith("triggers:")]

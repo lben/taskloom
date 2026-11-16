@@ -636,26 +636,27 @@ def test_for_each_is_gone_and_a_flow_still_using_it_fails_to_load_as_any_unknown
     assert refused.returncode == 2 and "unknown block type 'logic.for_each'" in refused.stderr, refused.stderr
 
 
-def test_readme_has_a_section_on_the_loop_container_with_an_example_and_the_docs_no_longer_tell_of_for_each():
-    """Spec 10 and 11: README has a section on the Loop container (replacing For Each's), with an example, telling what
-    is inside, the items, item / index / result, At the same time, the results' order, failures and running again;
-    neither README nor the docs folder tell of For Each any more."""
+@pytest.mark.invariant("RD-2")
+def test_the_guide_has_a_section_on_the_loop_container_with_an_example_and_the_docs_no_longer_tell_of_for_each():
+    """Spec 10 and 11: the guide (docs/guide.md) has a section on the Loop container (replacing For Each's), with an
+    example, telling what is inside, the items, item / index / result, At the same time, the results' order, failures
+    and running again; neither README nor the docs folder tell of For Each any more."""
     for path in [REPO / "README.md", *sorted((REPO / "docs").glob("*.md"))]:
         text = path.read_text(encoding="utf-8")
         assert "For Each" not in text and "for_each" not in text, f"{path.name} still tells of For Each"
-    lines = (REPO / "README.md").read_text(encoding="utf-8").splitlines()
+    lines = (REPO / "docs" / "guide.md").read_text(encoding="utf-8").splitlines()
     fenced = [line.startswith("```") for line in lines]
     in_code = [sum(fenced[:i]) % 2 == 1 for i in range(len(lines))]  # (a # line in an example is no heading)
     heads = [(i, len(m.group(1))) for i, line in enumerate(lines) if not in_code[i] and (m := re.match(r"(#+) ", line))]
     found = [(i, level) for i, level in heads if "Loop" in lines[i]]
-    assert found, "README has no section whose heading names the Loop"
+    assert found, "the guide has no section whose heading names the Loop"
     start, level = found[0]
     end = next((i for i, lv in heads if i > start and lv <= level), len(lines))
     section = "\n".join(lines[start:end])
-    assert "```" in section or "example" in section.lower(), "README's Loop section has no example"
+    assert "```" in section or "example" in section.lower(), "the guide's Loop section has no example"
     said = plain(section)
     for words in ("inside", "items", "item", "index", "result", "at the same time", "order", "fail", "run from"):
-        assert words in said, f"README's Loop section does not tell about {words!r}"
+        assert words in said, f"the guide's Loop section does not tell about {words!r}"
 
 
 # --- the editor: what the canvas paints -------------------------------------------------------------------------------

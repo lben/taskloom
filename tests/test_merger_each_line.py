@@ -580,17 +580,18 @@ def test_the_mergers_at_the_same_time_takes_a_whole_number_of_one_or_more(env, s
 
 # --- 1: the documentation ---------------------------------------------------------------------------------------------
 
-def test_the_documentation_and_readme_say_what_each_mode_of_the_merger_does():
+@pytest.mark.invariant("RD-2")
+def test_the_documentation_and_the_guide_say_what_each_mode_of_the_merger_does():
     """Spec 1 (its help and the documentation say what each mode does): the Merger's entry in Help > Documentation
     (its description and settings' help) tells of all lines together (it waits) and each line as it finishes (the
-    blocks after it run once per line) and At the same time; README's part on the Merger tells of both modes and At
+    blocks after it run once per line) and At the same time; the guide's part on the Merger tells of both modes and At
     the same time."""
     from taskloom.editor import docs
 
     said = entry(docs.pages(discover(None))[docs.category_page("Logic")], MERGER)
     for words in (ALL, EACH, "at the same time", "wait", "once"):
         assert words in said, f"the Merger's entry does not tell about {words!r}: {said}"
-    lines = (REPO / "README.md").read_text(encoding="utf-8").splitlines()
+    lines = (REPO / "docs" / "guide.md").read_text(encoding="utf-8").splitlines()
     fenced = [text.startswith("```") for text in lines]
     in_code = [sum(fenced[:i]) % 2 == 1 for i in range(len(lines))]  # (a # line in an example is no heading)
     heads = [(i, len(m.group(1))) for i, text in enumerate(lines) if not in_code[i] and (m := re.match(r"(#+) ", text))]
@@ -598,10 +599,10 @@ def test_the_documentation_and_readme_say_what_each_mode_of_the_merger_does():
     for start, level in [(i, lv) for i, lv in heads if "Merger" in lines[i]]:
         end = next((i for i, lv in heads if i > start and lv <= level), len(lines))
         parts.append("\n".join(lines[start:end]))
-    assert parts, "README has no section whose heading names the Merger"
+    assert parts, "the guide has no section whose heading names the Merger"
     section = plain("\n".join(parts))
     for words in (ALL, EACH, "at the same time"):
-        assert words in section, f"README's part on the Merger does not tell about {words!r}"
+        assert words in section, f"the guide's part on the Merger does not tell about {words!r}"
 
 
 # --- the editor -------------------------------------------------------------------------------------------------------

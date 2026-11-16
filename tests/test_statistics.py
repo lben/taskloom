@@ -903,20 +903,21 @@ def test_run_only_this_block_shows_stats_in_data_preview_and_its_charts_stay_lig
 
 # --- 7: README and Help > Documentation -------------------------------------------------------------------------------------------
 
-def test_the_readme_and_the_documentation_describe_the_block_with_an_example():
-    """Spec 7 (Help > Documentation, the hover help and the README describe the block, with an example: Read File,
-    then Statistics, its charts and stats into an HTML Template for an email): README lists data.statistics with the
+@pytest.mark.invariant("RD-2")
+def test_the_guide_and_the_documentation_describe_the_block_with_an_example():
+    """Spec 7 (Help > Documentation, the hover help and the guide describe the block, with an example: Read File,
+    then Statistics, its charts and stats into an HTML Template for an email): the guide lists data.statistics with the
     built-in blocks and has a YAML example with Read File, Statistics (settings the block accepts) and an HTML Template
     its stats and charts go into; Help > Documentation has the block's entry on the Data page, and its guide (made
-    from README) shows the example."""
+    from docs/guide.md) shows the example."""
     from taskloom.editor import docs
 
     cls = stats_class()
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    listed = readme.split("Built-in blocks:", 1)[1].split("\n\n", 1)[0]
+    guide_md = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    listed = guide_md.split("Built-in blocks:", 1)[1].split("\n\n", 1)[0]
     assert f"`{STATS}`" in listed, listed
-    examples = [yaml.safe_load(t) for t in re.findall(r"```ya?ml\n(.*?)```", readme, re.S) if STATS in t]
-    assert examples, "README has no YAML example with a Statistics block (data.statistics)"
+    examples = [yaml.safe_load(t) for t in re.findall(r"```ya?ml\n(.*?)```", guide_md, re.S) if STATS in t]
+    assert examples, "the guide has no YAML example with a Statistics block (data.statistics)"
     found = False
     for flow in examples:
         flow = flow or {}
@@ -929,7 +930,7 @@ def test_the_readme_and_the_documentation_describe_the_block_with_an_example():
         into = {(src[0], src[1]) for src, dst in edges if dst[0] in templates}
         found |= any(spec.get("type") == "data.read_file" for spec in blocks.values()) and any(
             (b, "stats") in into and (b, "charts") in into for b in stats_blocks)
-    assert found, "no README example has Read File, then Statistics, its stats and charts into an HTML Template"
+    assert found, "no example in the guide has Read File, then Statistics, its stats and charts into an HTML Template"
     pages = docs.pages(discover(None))
     data = pages["blocks-data.html"]
     assert f'id="{STATS}"' in data and html.escape(cls.description) in data

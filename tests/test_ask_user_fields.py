@@ -42,7 +42,7 @@ from tests.test_docs_help import card_lines, dismiss, hover, property_rows, row_
 from tests.test_paths_editor_editing import clean, select_only, settle  # noqa: E402
 from tests.test_paths_editor_running import click, log_text  # noqa: E402
 
-README = Path(__file__).resolve().parents[1] / "README.md"
+GUIDE = Path(__file__).resolve().parents[1] / "docs" / "guide.md"
 ASK_USER = "logic.ask_user"
 KINDS = ("text", "password", "yes_no", "choice", "number")
 # The settings Properties shows for each kind (spec 2).
@@ -172,10 +172,11 @@ def test_the_documentation_says_which_kinds_each_ask_user_setting_is_for():
     assert any(w in text.lower() for w in UNATTENDED) and "fail" in text.lower(), text
 
 
-def test_readme_tells_about_ask_users_kinds_and_settings():
-    """Spec 6: what README says of Ask User (its paragraphs and list items naming it) names every kind, number
+@pytest.mark.invariant("RD-2")
+def test_the_guide_tells_about_ask_users_kinds_and_settings():
+    """Spec 6: what the guide says of Ask User (its paragraphs and list items naming it) names every kind, number
     among them, and its settings Options, Default and the stored secret, as Properties labels it."""
-    text = README.read_text(encoding="utf-8")
+    text = GUIDE.read_text(encoding="utf-8")
     passages = [p for p in re.split(r"\n\s*\n|\n(?=\s*[-*|] )", text) if "Ask User" in p]
     said = " ".join(" ".join(passages).split()).lower()
     cls = discover(None).get(ASK_USER)

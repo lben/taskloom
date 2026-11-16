@@ -705,15 +705,17 @@ def help_texts() -> dict[str, str]:
 
 
 @pytest.mark.invariant("BR-8")
+@pytest.mark.invariant("RD-2")
 def test_every_help_text_starter_text_and_documentation_page_writes_placeholders_with_double_braces():
     """BR-8: no single-brace {name} or {name:format} in the blocks' help, examples and starter texts, in the pages of
-    Help > Documentation (the guide and the reference, as the website shows them too) or in README.md; Python code
-    in them aside."""
+    Help > Documentation (the guide and the reference, as the website shows them too) or in README.md and
+    docs/guide.md; Python code in them aside."""
     texts = help_texts()
     for name, page in docs.pages(discover(None)).items():
         page = re.sub(r'(?s)<code class="language-python">.*?</code>', " ", page)
         texts[f"Help > Documentation, {name}"] = html.unescape(re.sub(r"<[^>]+>", " ", page))
-    texts["README.md"] = re.sub(r"(?s)```python.*?```", " ", (REPO / "README.md").read_text(encoding="utf-8"))
+    for name in ("README.md", "docs/guide.md"):
+        texts[name] = re.sub(r"(?s)```python.*?```", " ", (REPO / name).read_text(encoding="utf-8"))
 
     found = {where: single for where, text in texts.items() if (single := single_brace_placeholders(text or ""))}
 

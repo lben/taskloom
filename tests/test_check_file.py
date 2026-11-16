@@ -697,17 +697,18 @@ def test_its_help_says_retry_waits_for_a_late_file_and_a_warning_never_retries()
     assert any("warn" in s and "retr" in s for s in sentences), f"its help does not say a warning never retries: {text}"
 
 
-def test_the_readme_and_the_documentation_describe_the_block_with_an_example():
-    """Spec 7 (Help > Documentation and the README describe the block, with an example: Check File, with Retry, before
-    a Read File): the README has a YAML example with a Check File that has a retry and an output connected to a Read
-    File, whose settings the block accepts; Help > Documentation's guide (made from README) shows the example."""
+@pytest.mark.invariant("RD-2")
+def test_the_guide_and_the_documentation_describe_the_block_with_an_example():
+    """Spec 7 (Help > Documentation and the guide describe the block, with an example: Check File, with Retry, before
+    a Read File): the guide has a YAML example with a Check File that has a retry and an output connected to a Read
+    File, whose settings the block accepts; Help > Documentation's guide (made from docs/guide.md) shows the example."""
     from taskloom.editor import docs
 
     cls = check_class()
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    assert "Check File" in readme
-    examples = [text for text in re.findall(r"```ya?ml\n(.*?)```", readme, re.S) if TYPE in text]
-    assert examples, f"README has no YAML example with a Check File ({TYPE})"
+    guide_md = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    assert "Check File" in guide_md
+    examples = [text for text in re.findall(r"```ya?ml\n(.*?)```", guide_md, re.S) if TYPE in text]
+    assert examples, f"the guide has no YAML example with a Check File ({TYPE})"
     shown = False
     for text in examples:
         flow = yaml.safe_load(text)
@@ -721,7 +722,7 @@ def test_the_readme_and_the_documentation_describe_the_block_with_an_example():
             if spec.get("retry") and any(m and m[1] == block and m[3] in reads for m in lines):
                 assert Retry.parse(spec["retry"]).max_attempts > 1, spec["retry"]
                 shown = True
-    assert shown, f"no README example has a Check File with a retry connected to a Read File: {examples}"
+    assert shown, f"no example in the guide has a Check File with a retry connected to a Read File: {examples}"
     assert " ".join(cls.description.split()) in checks_page_section()
     pages = docs.pages(discover(None))
     guide = [name for name, page in pages.items()

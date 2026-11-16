@@ -776,9 +776,10 @@ def test_dark_is_dark_whatever_style_the_application_starts_with(win, style):
 
 # --- 5: README -----------------------------------------------------------------------------------------------------
 
-def test_readme_tells_about_the_theme_setting():
-    """Spec 5: README, where it describes Settings, tells about the Theme setting and its System, Light and Dark."""
-    paragraphs = (REPO / "README.md").read_text(encoding="utf-8").split("\n\n")
+@pytest.mark.invariant("RD-2")
+def test_the_guide_tells_about_the_theme_setting():
+    """Spec 5: the guide, where it describes Settings, tells about the Theme setting and its System, Light and Dark."""
+    paragraphs = (REPO / "docs" / "guide.md").read_text(encoding="utf-8").split("\n\n")
     words = ("settings", "theme", "system", "light", "dark")
     told = [p for p in paragraphs if all(word in p.lower() for word in words)]
-    assert told, "README does not tell about Settings' Theme (System, Light, Dark)"
+    assert told, "the guide does not tell about Settings' Theme (System, Light, Dark)"

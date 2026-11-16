@@ -1014,16 +1014,17 @@ def test_the_documentation_and_the_hover_help_say_what_a_line_is_and_how_each_mo
         assert "line" in plain(items[0].toolTip(0)), items[0].toolTip(0)
 
 
-def test_readme_has_a_section_on_splitter_and_merger():
-    """Spec 10: README has a short section on Splitter and Merger: the two modes, the limit, lines connecting across,
+@pytest.mark.invariant("RD-2")
+def test_the_guide_has_a_section_on_splitter_and_merger():
+    """Spec 10: the guide has a short section on Splitter and Merger: the two modes, the limit, lines connecting across,
     what a failed line does, Run from here after one, the Validate check, and that "as each finishes" comes next."""
-    lines = (REPO / "README.md").read_text(encoding="utf-8").splitlines()
+    lines = (REPO / "docs" / "guide.md").read_text(encoding="utf-8").splitlines()
     heads = [(i, len(m.group(1))) for i, line in enumerate(lines) if (m := re.match(r"(#+) ", line))]
     found = [(i, level) for i, level in heads if "Splitter" in lines[i]]
-    assert found, "README has no section whose heading names the Splitter"
+    assert found, "the guide has no section whose heading names the Splitter"
     start, level = found[0]
     end = next((i for i, lv in heads if i > start and lv <= level), len(lines))
     section = plain("\n".join(lines[start:end]))
     for words in ("merger", SAME_TIME, ONE_AFTER_ANOTHER, "at most at once", "across", "fail", "run from",
                   "validate", "as each finishes", "next"):
-        assert words in section, f"README's Splitter and Merger section does not tell about {words!r}"
+        assert words in section, f"the guide's Splitter and Merger section does not tell about {words!r}"

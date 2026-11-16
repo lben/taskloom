@@ -38,6 +38,7 @@ SLOW = """
       - yearly.start -> work.after
 """
 README = Path(__file__).resolve().parents[1] / "README.md"
+GUIDE = Path(__file__).resolve().parents[1] / "docs" / "guide.md"
 
 
 def _env(root) -> dict:
@@ -238,8 +239,9 @@ def test_the_scheduler_command_help_says_off_not_paused(env):
     assert "paus" not in result.stdout.replace("--unless-paused", "").lower(), result.stdout
 
 
-def test_the_readme_says_the_service_is_turned_on_or_off():
-    text = README.read_text(encoding="utf-8").replace("--unless-paused", "")
+@pytest.mark.invariant("RD-2")
+def test_the_readme_and_the_guide_say_the_service_is_turned_on_or_off():
+    text = "\n\n".join(path.read_text(encoding="utf-8") for path in (README, GUIDE)).replace("--unless-paused", "")
     about_it = [p for p in text.split("\n\n") if "scheduler" in p.lower()]
 
     assert about_it and [p for p in about_it if "paus" in p.lower()] == []

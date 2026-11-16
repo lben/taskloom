@@ -34,7 +34,7 @@ from tests.test_scheduler_start_at import write
 from tests.test_service_off import plain
 
 DAY = dt.date(2026, 1, 5)
-README = Path(__file__).resolve().parents[1] / "README.md"
+GUIDE = Path(__file__).resolve().parents[1] / "docs" / "guide.md"
 
 
 # --- helpers ---------------------------------------------------------------------------------------------------
@@ -398,8 +398,9 @@ def test_the_countdown_moves_on_with_the_clock(win, qtbot, tmp_path):
 
 # --- 6: README ----------------------------------------------------------------------------------------------------
 
-def test_the_readme_schedules_section_explains_every_n_and_on_the_clock():
-    text = README.read_text(encoding="utf-8")
+@pytest.mark.invariant("RD-2")
+def test_the_guide_schedules_section_explains_every_n_and_on_the_clock():
+    text = GUIDE.read_text(encoding="utf-8")
     section = text[text.index("## Schedules"):]
     section = section[:section.index("\n## ", 1)]
 

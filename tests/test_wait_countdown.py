@@ -634,12 +634,13 @@ def test_a_past_run_shows_no_countdown_even_when_its_wait_had_time_left(win, qtb
 
 # --- spec 6: README -------------------------------------------------------------------------------------------------
 
-def test_readme_says_the_editor_shows_the_time_left_on_a_wait_block_while_it_waits():
-    """Spec 6: README's line about the Wait block says the editor shows the time left on the block while it waits, as
+@pytest.mark.invariant("RD-2")
+def test_the_guide_says_the_editor_shows_the_time_left_on_a_wait_block_while_it_waits():
+    """Spec 6: the guide's line about the Wait block says the editor shows the time left on the block while it waits, as
     a Schedule block shows its next run."""
-    text = (REPO / "README.md").read_text(encoding="utf-8")
+    text = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
     found = re.search(r"^- \*\*Wait\*\*.*?(?=^- |^\s*$)", text, re.MULTILINE | re.DOTALL)
-    assert found, "README has no line about the Wait block (- **Wait** …)"
+    assert found, "the guide has no line about the Wait block (- **Wait** …)"
     said = " ".join(found.group().split()).lower()
     assert "editor" in said and "time left" in said and "schedule" in said, \
-        f"README's Wait line does not say the editor shows the time left while it waits: {found.group()}"
+        f"the guide's Wait line does not say the editor shows the time left while it waits: {found.group()}"

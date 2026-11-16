@@ -1124,16 +1124,17 @@ def test_the_log_says_what_was_sent_and_what_came_back_and_never_a_secret(env):
 
 # --- 9: README and Help > Documentation -------------------------------------------------------------------------------------
 
-def test_the_readme_and_the_documentation_describe_the_block_with_an_example():
-    """Spec 9 (Help > Documentation and the README describe the block, with an example): README has a YAML example
+@pytest.mark.invariant("RD-2")
+def test_the_guide_and_the_documentation_describe_the_block_with_an_example():
+    """Spec 9 (Help > Documentation and the guide describe the block, with an example): the guide has a YAML example
     with an API Request whose settings the block accepts; Help > Documentation has the block's entry on the Servers
-    page, and its guide (made from README) shows the example."""
+    page, and its guide (made from docs/guide.md) shows the example."""
     from taskloom.editor import docs
 
     cls = api_class()
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    examples = [text for text in re.findall(r"```ya?ml\n(.*?)```", readme, re.S) if API in text]
-    assert examples, "README has no YAML example with an API Request (servers.api_request)"
+    guide_md = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    examples = [text for text in re.findall(r"```ya?ml\n(.*?)```", guide_md, re.S) if API in text]
+    assert examples, "the guide has no YAML example with an API Request (servers.api_request)"
 
     def api_specs(node):
         if isinstance(node, dict):

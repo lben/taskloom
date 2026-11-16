@@ -1171,14 +1171,15 @@ def readme_about(readme: str, title: str) -> str:
     return "\n".join(found)
 
 
-def test_the_readme_and_the_documentation_describe_the_block_the_method_and_the_example_flow():
-    """Spec 11 (Help > Documentation, the hover help and the README describe the block, the method in plain words (the
+@pytest.mark.invariant("RD-2")
+def test_the_guide_and_the_documentation_describe_the_block_the_method_and_the_example_flow():
+    """Spec 11 (Help > Documentation, the hover help and the guide describe the block, the method in plain words (the
     median and typical spread of the same weekday over the last few weeks, Sensitivity as spreads), and an example
     flow: a Run Query of daily row counts per server, then Detect Anomalies by weekday per server, then an If on
     count > 0, then an HTML Template email with the anomalies and the charts) and 3 (Sensitivity's help says plainly
-    4, 3 or 2 spreads): README lists data.detect_anomalies with the built-in blocks, speaks of the median, the spread,
-    the weekday and Sensitivity where it names the block, and has a YAML example of that flow the block accepts; Help
-    > Documentation has the block's entry on the Data page, and a guide page shows the example."""
+    4, 3 or 2 spreads): the guide lists data.detect_anomalies with the built-in blocks, speaks of the median, the
+    spread, the weekday and Sensitivity where it names the block, and has a YAML example of that flow the block
+    accepts; Help > Documentation has the block's entry on the Data page, and a guide page shows the example."""
     from taskloom.editor import docs
 
     cls = detect_class()
@@ -1187,12 +1188,12 @@ def test_the_readme_and_the_documentation_describe_the_block_the_method_and_the_
     sensitivity = " ".join(cls.config[key("Sensitivity")].help.split()).lower()
     assert all(re.search(rf"\b{k}\b", sensitivity) for k in ("4", "3", "2")) and "spread" in sensitivity, sensitivity
 
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    listed = readme.split("Built-in blocks:", 1)[1].split("\n\n", 1)[0]
+    guide_md = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    listed = guide_md.split("Built-in blocks:", 1)[1].split("\n\n", 1)[0]
     assert f"`{DETECT}`" in listed, listed
-    about = " ".join(readme_about(readme, "Detect Anomalies").lower().split())
+    about = " ".join(readme_about(guide_md, "Detect Anomalies").lower().split())
     for word in ("median", "spread", "weekday", "sensitivity"):
-        assert word in about, f"README says nothing of the {word} where it names Detect Anomalies:\n{about[:3000]}"
+        assert word in about, f"the guide says nothing of the {word} where it names Detect Anomalies:\n{about[:3000]}"
 
     def the_example(flow) -> bool:
         if not isinstance(flow, dict) or not isinstance(flow.get("blocks"), dict):
@@ -1215,10 +1216,10 @@ def test_the_readme_and_the_documentation_describe_the_block_the_method_and_the_
                 return True
         return False
 
-    examples = [yaml.safe_load(code) for code in re.findall(r"```ya?ml\n(.*?)```", readme, re.S) if DETECT in code]
+    examples = [yaml.safe_load(code) for code in re.findall(r"```ya?ml\n(.*?)```", guide_md, re.S) if DETECT in code]
     assert any(the_example(flow) for flow in examples), (
-        "README has no YAML example of Run Query, then Detect Anomalies by weekday per server, then an If on count > 0, "
-        "then an HTML Template with the anomalies and the charts into Send Email")
+        "the guide has no YAML example of Run Query, then Detect Anomalies by weekday per server, then an If on "
+        "count > 0, then an HTML Template with the anomalies and the charts into Send Email")
 
     pages = docs.pages(discover(None))
     data = pages["blocks-data.html"]

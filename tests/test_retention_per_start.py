@@ -477,10 +477,11 @@ def test_a_keep_runs_that_cannot_be_read_is_refused_by_validate_and_run_naming_t
 
 # --- 6. README ------------------------------------------------------------------------------------------------------
 
-def test_the_readme_describes_keep_runs_of_a_start_block_and_how_it_goes_with_settings():
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    about = " ".join(" ".join(p.split()) for p in re.split(r"\n\s*\n", readme) if re.search(r"Keep runs\b(?! for)", p))
+@pytest.mark.invariant("RD-2")
+def test_the_guide_describes_keep_runs_of_a_start_block_and_how_it_goes_with_settings():
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    about = " ".join(" ".join(p.split()) for p in re.split(r"\n\s*\n", guide) if re.search(r"Keep runs\b(?! for)", p))
 
-    assert about, "the README does not mention Keep runs"
+    assert about, "the guide does not mention Keep runs"
     for text in [*OPTIONS, FAILED, "keep_runs_for"]:
         assert text in about, text

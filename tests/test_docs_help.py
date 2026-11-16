@@ -2,7 +2,7 @@
 row's label, what it is for, examples of valid values (or the choices it offers, or the connection line), and
 "Learn more ›".
 Learn more, Help > Documentation and F1 open a Documentation column at the far right of the window, next to the canvas
-and Properties, with Back, Forward and Contents. Its guide pages come from README.md and its reference pages are
+and Properties, with Back, Forward and Contents. Its guide pages come from docs/guide.md and its reference pages are
 generated from the live block registry (so they list the user's own blocks), by taskloom.editor.docs.pages(registry).
 Every built-in setting has help, and 1 to 3 examples= that its Properties input and validate accept.
 
@@ -47,10 +47,10 @@ from taskloom.registry import discover  # noqa: E402
 from tests.test_editor import add_from_palette  # noqa: E402
 from tests.test_paths_editor_editing import clean, error_shown, flow_file, press, select_only, settle  # noqa: E402
 from tests.test_paths_editor_running import right_click  # noqa: E402
+from tests.test_readme_guide import guide_parts, plain_line  # noqa: E402
 from tests.test_reusable_block import CREATE, fill_all, in_the_window, names_flow  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-README = REPO / "README.md"
 LEARN_MORE = "Learn more ›"
 NO_HELP = 'No help yet: add help="..." and examples=[...] to this setting in its block file.'
 NO_EXAMPLES = "No examples yet"
@@ -208,32 +208,11 @@ def page_and_anchor(href: str) -> tuple[str, str]:
     return url.fileName() or urldefrag(href)[0], url.fragment()
 
 
-# --- README ----------------------------------------------------------------------------------------------------
+# --- the guide (docs/guide.md: guide_parts, plain_line) --------------------------------------------------------
 
 def slug(heading: str) -> str:
     """A GitHub-style heading id: lower case, punctuation dropped, each space a hyphen."""
     return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
-
-
-def readme_parts() -> tuple[list[str], list[tuple[str, list[str]]]]:
-    """README's introduction (the lines before its first '## ') and its '## ' sections, in order (lines inside code
-    blocks are not headings)."""
-    intro, sections, fence = [], [], False
-    for line in README.read_text(encoding="utf-8").splitlines():
-        if line.startswith("```"):
-            fence = not fence
-        elif not fence and line.startswith("## "):
-            sections.append((line[3:].strip(), []))
-            continue
-        (sections[-1][1] if sections else intro).append("" if fence or line.startswith("```") else line)
-    return intro, sections
-
-
-def plain_line(lines: list[str]) -> str | None:
-    """A line of README prose with no Markdown in it, as it reads on a page."""
-    return next((line.strip() for line in lines
-                 if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ,.;:()'/\-]{29,}", line.strip())
-                 and not re.match(r"\d+[.)] ", line.strip())), None)  # (a numbered item loses its number)
 
 
 # --- the card --------------------------------------------------------------------------------------------------
@@ -1781,7 +1760,7 @@ def test_every_field_type_takes_examples_and_built_in_settings_have_help_and_one
 def test_every_link_and_anchor_in_the_pages_resolves_and_every_built_in_anchor_exists():
     """Spec T7 and rule 5: every internal href resolves to a page and an anchor there; anchors are unique per page;
     every built-in <type_id> and <type_id>.<key> is on a blocks-<category>.html page, and every properties.<ROWS id>
-    on properties.html; links that leave the docs (README's too) are absolute http(s)."""
+    on properties.html; links that leave the docs (the guide's too) are absolute http(s)."""
     pages = Pages(discover(None))
     assert "index.html" in pages.get() and "properties.html" in pages.get(), sorted(pages.get())
     problems = []
@@ -1881,13 +1860,15 @@ def test_the_pages_set_no_text_or_background_colour_of_their_own():
     assert {name: pages.page(name).colours for name in pages.get() if pages.page(name).colours} == {}
 
 
-# === T8: README is the source of the guide =========================================================================
+# === T8: docs/guide.md is the source of the guide ==================================================================
 
-def test_the_guide_is_readme_section_by_section_in_readme_order():
-    """Spec T8, rules 5 and 16: every README "## " section is a guide page <GitHub slug>.html, linked from Contents in
-    README order; its heading has the slug as its id; its text is README's (a sentence of each section, among them the
-    Schedules section, is on its page)."""
-    _, sections = readme_parts()
+@pytest.mark.invariant("RD-2")
+def test_the_guide_is_docs_guide_md_section_by_section_in_its_order():
+    """Spec T8, rules 5 and 16 (RD-2: docs/guide.md, where the README's detailed text moved): every docs/guide.md
+    "## " section is a guide page <GitHub slug>.html, linked from Contents in the file's order; its heading has the
+    slug as its id; its text is the file's (a sentence of each section, among them the Schedules section, is on its
+    page)."""
+    _, sections = guide_parts()
     expected = [slug(heading) + ".html" for heading, _ in sections]
     assert "schedules.html" in expected
     pages = Pages(discover(None))
@@ -1907,23 +1888,24 @@ def test_the_guide_is_readme_section_by_section_in_readme_order():
             problems.append(f"{name}: no heading {heading!r}")
         sentence = plain_line(lines)
         if sentence and norm(sentence) not in norm(page.text):
-            problems.append(f"{name}: README's {sentence!r} is not on it")
-    assert plain_line(dict(sections)["Schedules"]), "no plain sentence in README's Schedules section"
+            problems.append(f"{name}: the guide's {sentence!r} is not on it")
+    assert plain_line(dict(sections)["Schedules"]), "no plain sentence in the guide's Schedules section"
     assert problems == [], "\n".join(problems)
 
 
-def test_contents_begins_with_readmes_introduction_then_the_guide_and_the_reference():
-    """Spec T8 and rule 16: Contents begins with README's introduction (the text before its first "## "), then the
-    guide pages, then the reference: the Properties panel page (grouped as Every block, Schedule: When, Keep runs, Code
-    boxes and Text on the canvas) and one page per block category."""
-    intro, sections = readme_parts()
+@pytest.mark.invariant("RD-2")
+def test_contents_begins_with_the_guides_introduction_then_the_guide_and_the_reference():
+    """Spec T8 and rule 16: Contents begins with docs/guide.md's introduction (the text before its first "## "),
+    then the guide pages, then the reference: the Properties panel page (grouped as Every block, Schedule: When, Keep
+    runs, Code boxes and Text on the canvas) and one page per block category."""
+    intro, sections = guide_parts()
     pages = Pages(discover(None))
     index = pages.page("index.html")
     guide = {slug(heading) + ".html" for heading, _ in sections}
     first_guide_link = min(at for href, at, _ in index.links if page_and_anchor(href)[0] in guide)
     before = norm(index.text[:first_guide_link])
     for line in (line for line in intro if plain_line([line])):
-        assert norm(line) in before, f"README's introduction {line!r} is not at the start of Contents: {before!r}"
+        assert norm(line) in before, f"the guide's introduction {line!r} is not at the start of Contents: {before!r}"
     linked = {page_and_anchor(href)[0] for href, _, _ in index.links}
     categories = {name for name in pages.get() if name.startswith("blocks-")}
     assert categories and "properties.html" in linked and categories <= linked, (sorted(categories), sorted(linked))
@@ -1932,16 +1914,55 @@ def test_contents_begins_with_readmes_introduction_then_the_guide_and_the_refere
         assert group in panel, f"the Properties panel page has no {group!r} group"
 
 
-def test_readme_tells_about_the_card_the_column_and_examples():
-    """Spec rule 20 (and 1): "The editor" describes the hover card and Help > Documentation (F1); "Writing a block"
-    shows help= and examples=."""
-    _, sections = readme_parts()
+@pytest.mark.invariant("RD-2")
+def test_the_guide_tells_about_the_card_the_column_and_examples():
+    """Spec rule 20 (and 1): the guide's "The editor" describes the hover card and Help > Documentation (F1); its
+    "Writing a block" shows help= and examples=."""
+    _, sections = guide_parts()
     text = {heading: "\n".join(lines) for heading, lines in sections}
     assert "F1" in text["The editor"] and "Documentation" in text["The editor"]
     assert "help=" in text["Writing a block"] and "examples=" in text["Writing a block"]
 
 
-NO_README = r'''
+def shown_links(browser) -> list[str]:
+    """The hrefs of the links of the page the column shows, in order."""
+    found, block = [], browser.document().begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            if it.fragment().charFormat().isAnchor() and it.fragment().charFormat().anchorHref():
+                found.append(it.fragment().charFormat().anchorHref())
+            it += 1
+        block = block.next()
+    return found
+
+
+@pytest.mark.invariant("RD-2")
+def test_help_documentation_shows_the_guide_of_docs_guide_md_and_its_pages(win):
+    """RD-2 in the editor: Help > Documentation, then Contents: its guide links are docs/guide.md's "## " sections, in
+    the file's order (none of the README's own sections); clicking Schedules shows that section's page, with a
+    sentence of it."""
+    _, sections = guide_parts()
+    expected = [slug(heading) + ".html" for heading, _ in sections]
+    sentence = plain_line(dict(sections).get("Schedules", []))
+    try:
+        browser = open_column(win)
+        QTest.mouseClick(nav_button(win, "Contents"), Qt.LeftButton)
+        settle()
+        assert page_shown(browser) == "index.html"
+        names = [page_and_anchor(href)[0] for href in shown_links(browser)]
+        guide = list(dict.fromkeys(name for name in names if name.endswith(".html") and not name.startswith("blocks-")
+                                   and name not in ("index.html", "properties.html")))
+        assert guide == expected, f"Contents' guide is {guide}, not docs/guide.md's sections {expected}"
+
+        click_link(browser, lambda href, text: page_and_anchor(href)[0] == "schedules.html")
+        assert page_shown(browser) == "schedules.html"
+        assert sentence and norm(sentence) in norm(browser.toPlainText()), (sentence, browser.toPlainText()[:500])
+    finally:
+        clean_all()
+
+
+NO_GUIDE = r'''
 import json, sys
 from taskloom.editor import docs
 from taskloom.registry import discover
@@ -1951,15 +1972,15 @@ print(json.dumps({"module": docs.__file__, "qt": sorted(m for m in sys.modules i
 '''
 
 
-def test_without_readme_contents_says_the_guide_is_not_included_and_the_reference_still_works(tmp_path):
-    """Spec rules 4 and 22, edge path: an installation without README.md (a broken install): Contents says the guide
-    is not included, the reference pages are there with their anchors, nothing crashes; and building the pages
-    needs no Qt."""
+def test_without_the_guide_contents_says_the_guide_is_not_included_and_the_reference_still_works(tmp_path):
+    """Spec rules 4 and 22, edge path: an installation without its guide (docs/guide.md, wherever the installed
+    package keeps it: a broken install): Contents says the guide is not included, the reference pages are there with
+    their anchors, nothing crashes; and building the pages needs no Qt."""
     shutil.copytree(REPO / "taskloom", tmp_path / "taskloom",
-                    ignore=shutil.ignore_patterns("README.md", "__pycache__"))
+                    ignore=shutil.ignore_patterns("*.md", "__pycache__"))
     env = {**os.environ, "TASKLOOM_HOME": str(tmp_path / "home"),
            "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
-    done = subprocess.run([sys.executable, "-c", NO_README], cwd=tmp_path, env=env, capture_output=True, text=True,
+    done = subprocess.run([sys.executable, "-c", NO_GUIDE], cwd=tmp_path, env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=120)
     assert done.returncode == 0, done.stderr
     result = json.loads(done.stdout.splitlines()[-1])
