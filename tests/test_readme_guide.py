@@ -4,7 +4,7 @@ detailed text is in docs/guide.md, which Help > Documentation and the website ar
 apps show it (the editor's column and the website are checked against that file in tests/test_docs_help.py and
 tests/test_docs_site.py, and every test that checked the README's words now reads the guide). Every link in the README
 works: checked without the internet, so a web address may only be the project's own (its GitHub repository and
-releases, or its documentation website)."""
+releases, or its documentation website). The README's example flow passes Validate (docs/promises/braces.yaml, BR-8)."""
 
 import html
 import json
@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
+import yaml
 from markdown_it import MarkdownIt
 
 REPO = Path(__file__).resolve().parents[1]
@@ -326,3 +327,47 @@ def test_every_link_in_the_readme_leads_to_a_file_a_heading_or_the_projects_own_
 
     assert links(text), "the README links nothing (not even its docs)"
     assert problems == [], "\n".join(problems)
+
+
+# --- BR-8: the README's example flow passes Validate ---------------------------------------------------------------
+
+def readme_flows() -> list[str]:
+    """Each ```yaml block of README.md, as written there."""
+    return [token.content for token in MARKDOWN.parse(README.read_text(encoding="utf-8"))
+            if token.type == "fence" and token.info.strip() == "yaml"]
+
+
+def connections_named(flow: dict) -> dict:
+    """A connection of the kind each Connection setting asks for, under each name the flow gives one (Validate only
+    looks the name up: nothing connects)."""
+    from taskloom.block import fields
+    from taskloom.registry import discover
+    registry, found = discover(None), {}
+    for spec in flow["blocks"].values():
+        cls = registry.get(spec["type"])
+        for key, value in (spec.get("config") or {}).items():
+            setting = cls.config.get(key) if cls else None
+            if isinstance(setting, fields.Connection) and value:
+                found[value] = {"kind": setting.kind}
+    return found
+
+
+@pytest.mark.invariant("BR-8")
+def test_the_readme_example_flow_passes_validate_with_no_error_and_no_did_you_mean_warning(env):
+    """BR-8 for the README: each YAML flow it shows, taken from README.md as written, passes the real `taskloom
+    validate`, run in a temporary Taskloom home (never ~/.taskloom or the system's credential store) that holds a
+    connection of the right kind under each name the flow uses: it exits 0 with no error and no BR-4 warning (a
+    single-brace {name} that is plain text: did you mean {{name}}?)."""
+    flows = readme_flows()
+
+    assert flows, "README.md shows no ```yaml flow"
+    for n, text in enumerate(flows, 1):
+        env.write("home/connections.yaml", yaml.safe_dump(connections_named(yaml.safe_load(text))))
+        path = env.root / f"readme-flow-{n}.yaml"
+        path.write_text(text, encoding="utf-8")
+
+        validated = env.taskloom("validate", path)
+
+        said = validated.stdout + validated.stderr
+        wrong = [line for line in said.splitlines() if line.startswith("error:") or "did you mean" in line.lower()]
+        assert validated.returncode == 0 and wrong == [], f"README.md's flow {n}:\n{said}"
