@@ -555,13 +555,26 @@ def _picture(value) -> Path | None:
 def _message_source(message: str) -> str:
     """Inspect's message as the Python f-string that fills it in: its plain text as typed, each {{expression}} (or
     {{expression:format}}) as an f-string's {expression}. Raises ValueError as params.split does."""
-    text = "".join(plain.replace("{", "{{").replace("}", "}}") + ("" if inside is None else "{" + inside + "}")
+    text = "".join(plain.replace("{", "{{").replace("}", "}}")
+                   + ("" if inside is None else "{" + " " * inside.startswith("{") + inside + "}")  # ({ { is no {{)
                    for plain, inside in P.split(message))
     # As written between the quotes of rf"""...""" (rf'''...''' if the text has """ in it): both kinds of quote can
     # be in the text and in the {...} parts, backslashes stay as typed. {''} keeps a quote at the end from closing it
     # early.
     quotes = "'''" if '"""' in text else '"""'
     return "rf" + quotes + text + "{''}" + quotes
+
+
+def _message_tree(message: str) -> ast.Expression:
+    """_message_source parsed, with the spaces after the colon of each {{expression:format}} left out (the f-string's
+    own colon, as Python finds it: not one in brackets, a slice or a dict), as in every other text that is filled.
+    Raises ValueError as params.split does, SyntaxError for an expression that is not Python."""
+    tree = ast.parse(_message_source(message), mode="eval")
+    for part in tree.body.values:
+        spec = getattr(part, "format_spec", None)
+        if spec is not None and spec.values and isinstance(spec.values[0], ast.Constant):
+            spec.values[0].value = spec.values[0].value.lstrip()
+    return tree
 
 
 class Inspect(Block):
@@ -597,7 +610,7 @@ class Inspect(Block):
         if not config["message"]:
             return []
         try:
-            tree = ast.parse(_message_source(config["message"]), mode="eval")
+            tree = _message_tree(config["message"])
         except ValueError as e:  # e.g. a {{ with no }}
             return [f"Message: {e}"]
         except SyntaxError as e:
@@ -616,7 +629,7 @@ class Inspect(Block):
             params = _masked(ctx.params)
             namespace = {**ctx.functions, **params, "value": _masked(value), "params": params}
             try:
-                text = eval(compile(_message_source(self.config.message), f"<block {ctx.block_id}>", "eval"),
+                text = eval(compile(_message_tree(self.config.message), f"<block {ctx.block_id}>", "eval"),
                             namespace)
             except Exception as e:
                 raise ValueError(f"the message could not be filled in: {type(e).__name__}: {e}") from None

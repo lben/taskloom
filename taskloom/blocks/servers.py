@@ -696,7 +696,7 @@ _CURL_SKIPPED = {"-o", "--output", "-w", "--write-out", "-x", "--proxy", "-U", "
                  "--retry", "--retry-delay", "--retry-max-time", "--max-redirs", "--resolve", "--interface",
                  "--limit-rate", "--oauth2-bearer", "--form-string", "--noproxy"}
 _SECRET_HEADER = re.compile(r"token|key|secret|password|^(proxy-)?authorization$", re.IGNORECASE)
-_BASH = re.compile(r"""(?P<space>\s+)|(?P<joined>\\(?:\n|$))|\\(?P<escaped>.)|'(?P<single>[^']*)'"""
+_BASH = re.compile(r"""(?P<space>\s+)|(?P<joined>\\[ \t]*(?:\n|$))|\\(?P<escaped>.)|'(?P<single>[^']*)'"""
                    r"""|\$'(?P<ansi>(?:\\.|[^\\'])*)'|"(?P<double>(?:\\.|[^\\"])*)"|(?P<plain>[^\s\\'"$]+|\$)""", re.S)
 _EXAMPLE = "e.g. curl https://api.example.com/v1/orders -H 'Accept: application/json'"
 
@@ -712,8 +712,9 @@ class CurlImport:
 
 
 def _bash_words(text: str) -> list[str]:
-    """The words of a command as bash reads them: \\ at a line's end goes on on the next line; 'single', "double" (\\
-    takes ", \\, $ and ` as they are) and $'ANSI-C' quotes (as browsers write \\n and \\'); nothing is expanded."""
+    """The words of a command as bash reads them: \\ at a line's end (spaces copied after it too) goes on on the next
+    line; 'single', "double" (\\ takes ", \\, $ and ` as they are) and $'ANSI-C' quotes (as browsers write \\n and
+    \\'); nothing is expanded."""
     words, word, at = [], None, 0
     while at < len(text):
         m = _BASH.match(text, at)
@@ -794,13 +795,13 @@ def from_curl(text: str) -> CurlImport:
     reads it (as an API's documentation or a browser's Copy as cURL writes it), its body as the command has it, with
     each {{ written {{{{ so that it is sent as it is. ValueError, saying why, for text that is not a curl command with a
     URL."""
-    text = re.sub(r"[ \t]+\n", "\n", text.replace("\r\n", "\n")).strip()  # (a \ or ^ before spaces copied with it)
+    text = text.replace("\r\n", "\n").strip()
     start = re.match(r"(?:\$\s+)?curl(?:\.exe)?(?:\s|$)", text, re.IGNORECASE)  # (a $ prompt, as documentation shows)
     if start is None:
         first = text.split(None, 1)[0] if text else ""
         raise ValueError(f"This is not a curl command: it starts with {first!r}, not curl. Paste a curl command, "
                          f"{_EXAMPLE}" if first else f"Paste a curl command first, {_EXAMPLE}")
-    cmd = re.search(r"\^\n", text) or '^"' in text  # (cmd's line ends and quotes)
+    cmd = re.search(r"\^[ \t]*\n", text) or '^"' in text  # (cmd's line ends, spaces copied after a ^, and quotes)
     words = (_cmd_words if cmd else _bash_words)(text[start.end():])
 
     method = url = user = timeout = None

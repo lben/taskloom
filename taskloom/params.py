@@ -75,9 +75,9 @@ def resolve(specs: dict, overrides: dict, funcs: dict) -> dict:
     return values
 
 
-# The one brace rule of every text that is filled: {{name}} or {{name:format}} (spaces inside do not matter) is a
-# placeholder, {{{{ a literal {{; a single brace, a lone }} and a backslash are plain text. A placeholder is on one
-# line.
+# The one brace rule of every text that is filled: {{name}} or {{name:format}} (spaces inside, around the colon too,
+# do not matter) is a placeholder, {{{{ a literal {{; a single brace, a lone }} and a backslash are plain text. A
+# placeholder is on one line.
 _BRACES = re.compile(r"\{\{\{\{|\{\{(?!\{)(?:(.*?)\}\})?")
 LITERAL_BRACES = "write {{{{ for a literal {{"
 
@@ -109,7 +109,7 @@ def parse(text: str) -> list[tuple[str, str | None, str]]:
         name, _, spec = (inside or "").partition(":")
         if inside is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name.strip()):
             raise ValueError(f"{{{{{inside}}}}} is not a name ({LITERAL_BRACES})")
-        parts.append((plain, name.strip() if inside is not None else None, spec))
+        parts.append((plain, name.strip() if inside is not None else None, spec.strip()))
     return parts
 
 
