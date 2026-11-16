@@ -540,8 +540,8 @@ def test_a_blocks_error_connected_into_data_is_named_after_the_block_and_shown_a
 # --- HTML Table and Jinja2 are gone ----------------------------------------------------------
 
 def test_html_table_the_inputs_setting_and_jinja_syntax_are_gone(env, smtp):
-    """E25: reports.html_table is an unknown block type, the old `inputs:` an unknown setting, and Jinja's {{ }}
-    is literal braces."""
+    """E25: reports.html_table is an unknown block type, the old `inputs:` an unknown setting, and a Jinja-like
+    expression in single braces, { params.day }, is sent as typed."""
     table = write(env, {"table": {"type": "reports.html_table"}}, name="table.yaml")
     old = write(env, {"body": template("<p>x</p>", inputs=["totals"])}, name="old.yaml")
     jinja = write(env, {"body": template("<p>Sales { params.day }</p>"), "mail": MAIL}, ["body.html -> mail.body"],

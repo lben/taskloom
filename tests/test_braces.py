@@ -205,6 +205,8 @@ FILLED = {
     "B1": ("{{p}}", V),
     "B3": ("{{day:%d.%m.%Y}}", "16.11.2026"),
     "B7": ("{{ p }}", V),
+    "B7-spaces-around-the-colon": ("{{ day : %d %m %Y }}", "16 11 2026"),
+    "B7-space-after-the-colon": ("{{day: %Y}}", "2026"),
     "B8": ("{{a}}{{b}}", "A1B2"),
 }
 
@@ -213,8 +215,9 @@ FILLED = {
 @pytest.mark.parametrize("setting", KINDS, indirect=True)
 @pytest.mark.parametrize("typed, expected", list(FILLED.values()), ids=list(FILLED))
 def test_double_braces_give_the_parameters_value_formatted_and_with_spaces_inside(setting, typed, expected):
-    """B1, B3, B7, B8 (BR-1): {{p}} is p's value; {{day:%d.%m.%Y}} formats the date; {{ p }} is {{p}}; {{a}}{{b}}
-    gives a's value then b's, adjacent."""
+    """B1, B3, B7, B8 (BR-1): {{p}} is p's value; {{day:%d.%m.%Y}} formats the date; {{ p }} is {{p}}, and spaces
+    around the colon do not matter either: {{ day : %d %m %Y }} is {{day:%d %m %Y}} (the spaces inside the format
+    kept), {{day: %Y}} is {{day:%Y}}; {{a}}{{b}} gives a's value then b's, adjacent."""
     assert gave(setting, typed) == expected
 
 
@@ -427,6 +430,26 @@ def test_inspects_message_takes_a_python_expression_in_double_braces_and_single_
     assert """{'id': 42, 'n': 3} | 2 | 42 | V7 | {"k": 1}""" in logged(env), logged(env)
 
 
+STARTING_WITH_A_BRACE = {
+    "dict": ('{{ {"a": 1}["a"] }}', "1"),
+    "dict-comprehension": ("{{ {k: v for k, v in value.items() if v} }}", "{'id': 42}"),
+}
+
+
+@pytest.mark.invariant("BR-10")
+@pytest.mark.parametrize("message, expected", list(STARTING_WITH_A_BRACE.values()), ids=list(STARTING_WITH_A_BRACE))
+def test_inspects_expression_may_start_with_a_brace_of_its_own(env, message, expected):
+    """BR-10: an expression in {{ }} that starts with { of its own (a dict, a dict comprehension), written with a space
+    after {{, passes Validate and gives its value, like any other expression."""
+    flow = inspect_flow(env, message, arriving={"id": 42, "n": 0})
+
+    validated, result = env.taskloom("validate", flow), env.taskloom("run", flow)
+
+    assert validated.returncode == 0, said(validated)
+    assert result.returncode == 0, said(result)
+    assert expected in logged(env), logged(env)
+
+
 def single_braced(text: str) -> list[str]:
     """Every {...} of `text` outside {{ }}."""
     return re.findall(r"\{[^{}]*\}", re.sub(r"\{\{.*?\}\}", " ", text, flags=re.S))
@@ -593,13 +616,16 @@ def test_python_code_is_not_filled(env):
 
 # --- BR-7: Import from cURL keeps the body ---------------------------------------------------------------------------
 
-def imported_and_run(win, tmp_path, body: str) -> tuple[str, bytes]:
-    """A curl command sending `body` as JSON, imported into a new API Request and run: (the Content the flow file
-    holds, the body the web server got)."""
+CURL = "curl -X POST {base}/orders -H 'Content-Type: application/json' -d '{body}'"
+
+
+def imported_and_run(win, tmp_path, body: str, command: str = CURL) -> tuple[str, bytes]:
+    """A curl command (`command`, {base} the web server's address) sending `body` as JSON, imported into a new API
+    Request and run: (the Content the flow file holds, the body the web server got)."""
     path = tmp_path / "imported.yaml"
     with editing(win), Site() as site:
         tab, api = new_api(win)
-        fill_in(win, f"curl -X POST {site.base}/orders -H 'Content-Type: application/json' -d '{body}'")
+        fill_in(win, command.replace("{base}", site.base).replace("{body}", body))
         result = run_flow(win, tab, path, api)
         assert result.returncode == 0, output(result)
         sent = site.only().body
@@ -629,6 +655,19 @@ def test_import_from_curl_writes_double_braces_in_the_body_with_four_so_the_run_
 
     assert sent == body.encode("utf-8")
     assert content == body.replace("{{", "{{{{")
+
+
+@pytest.mark.invariant("BR-7")
+def test_import_from_curl_keeps_spaces_and_a_tab_at_the_ends_of_the_bodys_lines(win, tmp_path):
+    """BR-7: spaces and a tab at the end of lines inside the quoted body are kept, and the run sends them; spaces or a
+    tab copied after a line-ending backslash of the command (outside the quotes) still continue the command."""
+    body = '{"item": "widget",  \n\t"count": 2,\t\n\t"tags": []}'
+    command = "curl -X POST {base}/orders \\  \n  -H 'Content-Type: application/json' \\\t\n  -d '{body}'"
+
+    content, sent = imported_and_run(win, tmp_path, body, command)
+
+    assert sent == body.encode("utf-8")
+    assert content == body
 
 
 # --- BR-8: every shipped example, starter text, help text and docs page ---------------------------------------------
