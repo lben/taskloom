@@ -70,6 +70,13 @@ taskloom editor examples/daily-sales-report.yaml
   zoom, and **+** and **−** zoom in and out by the step between them (5% by default, change
   it with its arrows), from 20% to 300%. Or click the zoom, type one (`150` or `150%`) and
   press Enter.
+- **Zoom a pane:** **Ctrl +** (or Ctrl =) and **Ctrl -** (Cmd on macOS, also with the number
+  pad's keys) make the pane under the mouse pointer bigger or smaller, wherever you are
+  typing, and **Ctrl 0** puts it back to its normal size: a code box, the Log, Data preview,
+  Run history, the Blocks list, the documentation or the canvas (by the zoom's step). Over a
+  text pane, Ctrl and the mouse wheel do the same. Each kind of pane keeps its size in
+  `editor.ini`; the canvas keeps its zoom per flow until you close it. Pictures and Mermaid
+  drawings in the Log keep their size when you zoom it: only its text grows or shrinks.
 - **Copy and paste** (Ctrl+C, Ctrl+V or the Edit menu) the selected blocks and texts, in the
   same flow or into another one, at any zoom: the copies keep their layout and land where you
   are working. With the mouse pointer on the canvas, Ctrl+V puts their top-left corner at the

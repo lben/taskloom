@@ -22,6 +22,7 @@ from ..engine import _label
 from ..flow import (API_REQUEST, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, RESULT, RESULTS, SESSION, BlockSpec,
                     block_config)
 from .document import FlowDocument, edge_text
+from .zoom import mark
 
 BLOCK_MIME = "application/x-taskloom-block"
 TEXT_ITEM = "canvas.text"  # the Text item of the blocks tree: text on the canvas, not a block that runs
@@ -1280,6 +1281,7 @@ class FlowView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.setAcceptDrops(True)
         self._pan_from = None
+        mark(self, "canvas")
         self.zoom_bar = ZoomBar(self)  # a child of the view, not the scene: not saved, not scrolled with the flow
         self._show_zoom()
         self.center_on_flow()

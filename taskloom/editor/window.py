@@ -52,6 +52,7 @@ from .panels import (FindToggles, FlowSettingsPanel, FlowTabsStatus, HistoryPane
                      PreviewPanel, PropertiesPanel, mermaid_picture, scheduler_icon)
 from .runs import RunProcess
 from .safety import CRASH_LOG, Safety
+from .zoom import Zoom, mark
 
 CLIPBOARD_KEY = "taskloom_blocks"
 FLOW_FILTER = "Taskloom flows (*.yaml *.yml)"
@@ -243,6 +244,7 @@ class DocsBrowser(QTextBrowser):
         self.registry, self._pages = registry, None
         self.setOpenExternalLinks(True)
         self.document().setDefaultStyleSheet("code, pre { font-family: monospace; }")  # the editor's (MONO)
+        mark(self, "docs")
 
     def pages(self) -> dict:
         if self._pages is None:
@@ -420,6 +422,7 @@ class MainWindow(QMainWindow):
         self.home = home
         self.registry = discover(self.home.blocks_dir)
         self.settings = settings
+        self.zoom = Zoom(self, settings)  # Ctrl + and - over a pane
         self.safety = Safety(self.home.root)
         self._quitting = False
         self.resize(1440, 900)

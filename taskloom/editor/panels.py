@@ -46,6 +46,7 @@ from ..scheduler import counted_from
 from . import docs
 from .canvas import (BLOCK_ICONS, BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ICON,
                      TEXT_ITEM, USER_COLOR, USER_ICON, is_dark, paint_icon)
+from .zoom import mark
 
 # A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
 # <pre> (e.g. a table's rows in a tooltip) asks for on Qt's offscreen platform (as in the proofs): name real ones.
@@ -194,6 +195,7 @@ class Palette(QWidget):
         self.tree.setIndentation(14)
         self.tree.setIconSize(QSize(18, 18))  # (room for a block's icon)
         self.tree.setRootIsDecorated(True)
+        mark(self.tree, "blocks")
         layout.addWidget(title)
         layout.addWidget(self.search)
         layout.addWidget(self.tree)
@@ -315,6 +317,11 @@ class CodeEdit(QPlainTextEdit):
         self.setFont(MONO)
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(" "))
         self.setMinimumHeight(110)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.FontChange:  # (zoomed)
+            self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(" "))
 
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
@@ -520,6 +527,8 @@ class CodeEditor(CodeEdit):
         super().changeEvent(event)
         if event.type() == QEvent.PaletteChange:  # (e.g. the theme changed)
             self.highlighter.recolour()
+        elif event.type() == QEvent.FontChange and hasattr(self, "numbers"):  # zoomed (not the font it is made with)
+            self._fit_numbers()
 
     def paint_line_numbers(self, widget: QWidget, rect):
         """Each shown line's number (from 1, as in error messages), on its row."""
@@ -1282,6 +1291,7 @@ class PropertiesPanel(QScrollArea):
             code = f.language in ("python", "sql")
             wrap = self.settings.value("wrap_code", False, type=bool)  # (as chosen in any code box)
             w = CodeEditor(_to_text(value), f.language, wrap) if code else CodeEdit(_to_text(value))
+            mark(w, "code")
             w.setPlaceholderText(_to_text(default))
             w.setToolTip(_as_written(f.help))  # (the box's own: it may be under buttons)
             w.editing_finished.connect(lambda: self._set(key, w.toPlainText() or None))
@@ -1454,6 +1464,7 @@ class PropertiesPanel(QScrollArea):
                       textFormat=Qt.PlainText)
         hint.setStyleSheet("color: palette(placeholder-text);")
         command = CodeEditor("", "curl", True)
+        mark(command, "code")
         command.setPlaceholderText("curl https://api.example.com/v1/orders -H 'Accept: application/json'")
         fill = QPushButton("Fill in")
         fill.clicked.connect(lambda: self._fill_from_curl(command.toPlainText()))
@@ -2356,6 +2367,7 @@ class _LogView(QTextBrowser):
         self.setDocument(_LogDocument(self))
         self.document().setUndoRedoEnabled(False)
         self.setFont(MONO)
+        mark(self, "log")
 
     def createMimeDataFromSelection(self):
         # Plain text only; a picture adds nothing (its path is the line above it). The object must come from Qt: the
@@ -2424,7 +2436,28 @@ class LogPanel(QWidget):
             sideways.setValue(across)
             if not follow:
                 scroll.setValue(value)
+        elif event.type() == QEvent.FontChange:  # zoomed
+            self._reindent()
         return False
+
+    def _reindent(self):
+        """What is under the [block] column (notes, pictures, Markdown) under it again, in the Log's new font."""
+        indent, document = self._indent(), self.text.document()
+        root, cursor = document.rootFrame(), QTextCursor(document)
+        cursor.beginEditBlock()
+        for frame in root.childFrames():  # Markdown
+            fmt = frame.frameFormat()
+            fmt.setLeftMargin(indent)
+            frame.setFrameFormat(fmt)
+        block = document.begin()
+        while block.isValid():
+            fmt = block.blockFormat()
+            if fmt.leftMargin() and document.frameAt(block.position()) is root:
+                fmt.setLeftMargin(indent)
+                cursor.setPosition(block.position())
+                cursor.setBlockFormat(fmt)
+            block = block.next()
+        cursor.endEditBlock()
 
     def _pressed(self, link):
         entry = self._long.get(link.toString())
@@ -2504,8 +2537,8 @@ class LogPanel(QWidget):
         _start(cursor, fmt)
 
     def _indent(self) -> float:
-        """Under the [block] column: the width of "HH:MM:SS "."""
-        return QFontMetricsF(self.text.document().defaultFont()).horizontalAdvance("00:00:00 ")
+        """Under the [block] column: the width of "HH:MM:SS " (in the Log's font, which its text takes)."""
+        return QFontMetricsF(self.text.font()).horizontalAdvance("00:00:00 ")
 
     def _under(self) -> QTextBlockFormat:
         fmt = QTextBlockFormat()
@@ -2638,6 +2671,7 @@ class _TextBox(QPlainTextEdit):
     def __init__(self):
         super().__init__(readOnly=True)
         self.setFont(MONO)
+        mark(self, "preview_text")
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.whole, self.folds, self._rest = "", [], []
         self._more = QTimer(self, interval=0)
@@ -2707,6 +2741,7 @@ class PreviewPanel(QWidget):
         layout.addLayout(bar)
         self.view = QTableView()
         self.view.setFont(MONO)
+        mark(self.view, "preview_table")
         self.text = _TextBox()
         layout.addWidget(self.view)
         layout.addWidget(self.text)
@@ -2802,6 +2837,7 @@ class HistoryPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)  # one run, kept selected as runs come in
+        mark(self.table, "history")
         self.runs: list[dict] = []  # as listed
         hint = QLabel("Double-click a run to show it on the canvas.")
         hint.setStyleSheet("color: palette(placeholder-text); padding: 2px 6px;")
