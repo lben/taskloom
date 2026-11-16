@@ -395,7 +395,7 @@ class _Call:
     """A request as the block sends it, or as Copy as cURL writes it."""
     method: str
     url: str  # with the ticked Params as its query (and an API key in the query)
-    headers: dict  # {lower-case name: (name, value)}, in the order they are sent
+    headers: dict  # {lower-case name: (name, value)}, in the order they are sent (a name in more rows: once)
     credentials: set  # the lower-case names of those not sent on to another host: Authorization, and those that
     # carry a stored secret
     auth: tuple | None  # (Basic or Digest, user name, password)
@@ -428,13 +428,21 @@ def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
     query = [f"{quote(r['key'], safe='')}={quote(r['value'], safe='')}" for r in ticked(c["params"])]
     if auth == KEY_QUERY:  # (shown as hidden() shows it, as it is: Copy as cURL is read by people)
         query.append(f"{quote(own['key_name'], safe='')}={password if secret is hidden else quote(password, safe='')}")
-    rows = {r["key"].lower(): r for r in ticked(conn and conn["headers"])}
-    rows.update({r["key"].lower(): r for r in ticked(c["headers"])})  # the block's win
+    rows = {}  # {lower-case name: its rows}: the connection's, then the block's, which replace those of the same name
+    for whose in (conn and conn["headers"], c["headers"]):
+        mine = {}
+        for r in ticked(whose):
+            mine.setdefault(r["key"].lower(), []).append(r)
+        rows.update(mine)
+
     def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
         return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
 
-    headers = {name: (r["key"], value(r["value"])) for name, r in rows.items()}
-    credentials = {"authorization"} | {name for name, r in rows.items() if r["value"].startswith(SECRET_PREFIX)}
+    # A name in more rows: sent once, with their values in the list's order joined as HTTP allows (Cookie: with ;).
+    headers = {name: (rs[0]["key"], ("; " if name == "cookie" else ", ").join(value(r["value"]) for r in rs))
+               for name, rs in rows.items()}
+    credentials = {"authorization"} | {name for name, rs in rows.items()
+                                       if any(r["value"].startswith(SECRET_PREFIX) for r in rs)}
     if auth == BEARER:
         headers["authorization"] = ("Authorization", f"Bearer {password}")
     elif auth == KEY_HEADER:

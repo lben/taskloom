@@ -28,7 +28,7 @@ from PySide6.QtGui import (QAction, QColor, QDrag, QFont, QFontDatabase, QFontMe
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QCheckBox,
                                QComboBox, QDateEdit, QDateTimeEdit, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
+                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
                                QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStyledItemDelegate, QTableView,
                                QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QTimeEdit, QToolButton,
                                QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -740,6 +740,24 @@ GROUP_LINES = {API_REQUEST: ("params", "auth", "headers", "body", "response_as",
                                       "conditions")}
 
 
+class _RowsTable(QTableWidget):
+    """A name/value list's table (fields.KeyValues): a right-click on a row calls row_menu(its row, where). (A plain
+    call, not a signal: a right-press that ends a cell's edit builds Properties again before the menu is asked for,
+    which takes this table out of the window and blocks its signals; so the row is the one under the press.)"""
+    row_menu = None
+    _pressed = -1  # the row of the last right-press (-1: none)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self._pressed = self.indexAt(event.position().toPoint()).row()
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        row, self._pressed = self._pressed, -1
+        if row >= 0 and self.row_menu is not None:
+            self.row_menu(row, event.globalPos())
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -1322,10 +1340,11 @@ class PropertiesPanel(QScrollArea):
 
     def _rows_widget(self, key, f, value):
         """A key/value table (fields.KeyValues): a row per key and value, ticked when it is sent (with f.files, ticked
-        File when its value is a file's path), each cell changed where it is; a row whose key is emptied goes. Under it,
-        a line to add a row: key=value (f.sep), then Enter."""
+        File when its value is a file's path), each cell changed where it is (double-click); a row goes when its key is
+        emptied, when selected and Delete is pressed, or by right-click > Delete row: each change one undo step. Under
+        it, a line to add a row: key=value (f.sep), then Enter; and a grey hint on changing and deleting rows."""
         rows = [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []  # (by hand: Properties says)
-        table = QTableWidget(len(rows), 4 if f.files else 3)
+        table = _RowsTable(len(rows), 4 if f.files else 3)
         table.setHorizontalHeaderLabels(["", "Name", "Value"] + ["File"] * f.files)
         table.verticalHeader().hide()
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # (as tall as its rows, as wide as Properties)
@@ -1349,17 +1368,37 @@ class PropertiesPanel(QScrollArea):
         table.setFixedHeight(table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
                              + sum(table.rowHeight(r) for r in range(len(rows))))
 
-        def changed(_):
+        def kept(gone=()) -> list:
+            """The rows the table shows, but those numbered in `gone` and those whose name is emptied."""
             new = []
             for r in range(table.rowCount()):
                 name = table.item(r, 1).text().strip()
-                if name:
+                if name and r not in gone:
                     new.append({"key": name, "value": table.item(r, 2).text(),
                                 **({} if table.item(r, 0).checkState() == Qt.Checked else {"on": False}),
                                 **({"file": True} if f.files and table.item(r, 3).checkState() == Qt.Checked else {})})
-            self._set_rows(key, new)
+            return new
 
-        table.itemChanged.connect(changed)
+        table.itemChanged.connect(lambda _: self._set_rows(key, kept()))
+        delete = QAction("Delete row", table)  # the selected rows, with Delete (on a Mac's keyboard: Backspace)
+        delete.setShortcuts([QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)])
+        delete.setShortcutContext(Qt.WidgetShortcut)  # (not in a cell being edited: there Delete deletes text)
+        delete.triggered.connect(lambda: (gone := {i.row() for i in table.selectedIndexes()})
+                                 and self._set_rows(key, kept(gone)))
+        table.addAction(delete)
+
+        def row_menu(row: int, where: QPoint):  # right-click a row > Delete row
+            after = kept({row})  # (now: this table may be gone once the menu is chosen from)
+
+            def show():  # (once the click is done: the menu is not shown from inside a table that may be built again)
+                menu = QMenu()
+                menu.addAction("Delete row")
+                if menu.exec(where) is not None:
+                    self._set_rows(key, after)
+
+            QTimer.singleShot(0, self, show)
+
+        table.row_menu = row_menu
         sep = f.sep.strip()
         add = QLineEdit(placeholderText=f"add a row: name{f.sep}value, then Enter")
 
@@ -1374,6 +1413,9 @@ class PropertiesPanel(QScrollArea):
         column.setContentsMargins(0, 0, 0, 0)
         column.addWidget(table)
         column.addWidget(add)
+        hint = QLabel("Double-click a cell to change it. Delete removes the selected row.", wordWrap=True)
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        column.addWidget(hint)
         return box
 
     def _set_rows(self, key, rows: list):
