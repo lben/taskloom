@@ -460,8 +460,9 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
     win.resizeDocks([win.output], [log_height], Qt.Vertical)  # and back
 
     p.step("Click caption, the Python Code block, then the Data preview tab under the canvas.")
-    p.note("Code takes no placeholders: Python Code, Polars, If and Inspect's message are as they were. SQL takes "
-           "flow parameters only, as before; an HTML Template fills in its own {{name}}.")
+    p.note("Code takes no placeholders: Python Code, Polars and If are as they were; Inspect's message works out "
+           "each {{ }} as a Python expression. SQL takes flow parameters only, as before; an HTML Template fills in "
+           "its own {{name}}.")
     click_block(win, "caption")
     code = next(c for c in win.properties.findChildren(CodeEdit) if c.isVisible())
     written = (code, "output = 'Sales of {{region}}'")

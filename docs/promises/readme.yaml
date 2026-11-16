@@ -10,6 +10,9 @@ asked:
   - date: 2026-11-16
     # The rows below, and at most about 150 lines for the README (RD-1).
     words: "Approve all"
+  - date: 2026-11-16
+    # The new README's text, shown as a draft before it was committed (RD-1).
+    words: "Approve the draft"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_readme]
 rows:
