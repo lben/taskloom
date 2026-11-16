@@ -55,7 +55,9 @@ def test_h2_fixture_fails_clearly_when_its_server_does_not_come_up(tmp_path, han
     debug_port = free_port()
     if hangs:  # the JVM waits for a debugger before it runs anything: alive, never listening (a very slow start)
         options += f" -agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:{debug_port}"
-    env = {**os.environ, "JAVA_TOOL_OPTIONS": options, "COLUMNS": "500",  # (no cut summary lines)
+    # Not a by-hand CI run's list of tests (PYTEST_ADDOPTS): the inner run would look for those instead of its own file.
+    env = {**{k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"},
+           "JAVA_TOOL_OPTIONS": options, "COLUMNS": "500",  # (no cut summary lines)
            "PYTHONPATH": os.pathsep.join([str(HERE), os.environ.get("PYTHONPATH", "")])}  # its helper modules
     log = session / "output.txt"
     try:
