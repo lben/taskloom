@@ -569,7 +569,7 @@ def test_validate_warns_about_a_file_path_inside_the_loop_without_a_placeholder(
     assert code == 0, errors
     assert [w for w in warnings if "save" in w and label in w], warnings
 
-    code, errors, warnings = validate(env, flow_with(config[key].replace("/", "/{day}_", 1)))
+    code, errors, warnings = validate(env, flow_with(config[key].replace("/", "/{{day}}_", 1)))
 
     assert code == 0, errors
     assert not [w for w in warnings if "save" in w and label in w], warnings

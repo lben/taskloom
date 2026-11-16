@@ -362,7 +362,7 @@ def test_a_message_of_201_lines_is_long_the_log_shows_its_first_200_lines_then_s
 
 @pytest.mark.invariant("NC-1")
 @pytest.mark.parametrize("code, inspect", [(json_code(lines=250), {}), (text_code(lines=250), {}),
-                                           (text_code(lines=250), {"message": "{value}"})],
+                                           (text_code(lines=250), {"message": "{{value}}"})],
                          ids=["a dict", "a text", "a text written by the Inspect block's message"])
 def test_a_long_message_shows_its_first_200_lines_then_how_many_more_there_are_and_show_all(win, qtbot, tmp_path, code,
                                                                                             inspect):
@@ -578,7 +578,7 @@ def test_select_all_and_copy_in_the_log_with_a_long_message_takes_under_2_second
         win, qtbot, tmp_path):
     """A message of 8,000 lines, written by the Inspect block's own message."""
     code = 'orders = "\\n".join(f"order {i:05d} for customer {i:05d}" for i in range(1, 8001))'
-    run_in_editor(win, qtbot, orders_flow(tmp_path, code, message="{value}"))
+    run_in_editor(win, qtbot, orders_flow(tmp_path, code, message="{{value}}"))
     assert the_message(win, qtbot).lines[0] == "order 00001 for customer 00001"
 
     copied, took = copy_all(win, qtbot, win.log.text)

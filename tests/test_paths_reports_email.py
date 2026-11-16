@@ -205,7 +205,7 @@ def test_a_table_in_a_template_shows_every_value_escaped_in_an_inline_styled_tab
                                   "opened": [dt.date(2026, 10, 2), None, None]})
       table:
         type: reports.html_template
-        config: {template: "<h3>Totals for {day:%Y-%m-%d} {regions}</h3>{data}"}
+        config: {template: "<h3>Totals for {{day:%Y-%m-%d}} {{regions}}</h3>{{data}}"}
       mail:
         type: email.send
         config: {connection: mailer, to: [team@example.com], subject: Totals}
@@ -271,7 +271,7 @@ def test_a_template_with_an_empty_table_still_sends_its_header(env, smtp):
         config: {inputs: [], sql: "select 'x' as region, 1.5 as total where false"}
       table:
         type: reports.html_template
-        config: {template: "<h3>No sales today</h3>{data}"}
+        config: {template: "<h3>No sales today</h3>{{data}}"}
       mail:
         type: email.send
         config: {connection: mailer, to: [team@example.com], subject: Empty}
@@ -289,7 +289,7 @@ def test_a_template_with_an_empty_table_still_sends_its_header(env, smtp):
 
 def test_every_chart_kind_goes_into_the_email_as_an_inline_image_of_the_size_set(env, smtp):
     charts = {
-        "bar": "{kind: bar, x: region, y: [total, stores], title: 'Sales {day}', width: 300, height: 200}",
+        "bar": "{kind: bar, x: region, y: [total, stores], title: 'Sales {{day}}', width: 300, height: 200}",
         "barh": "{kind: barh, x: region, y: [total], width: 300, height: 200}",
         "line": "{kind: line, x: opened, y: [total], width: 300, height: 200}",
         "area": "{kind: area, x: opened, y: [total, stores], width: 300, height: 200}",
@@ -511,20 +511,20 @@ def test_html_template_mixes_text_parameters_tables_charts_and_html_from_other_b
         config: {{kind: bar, x: region, y: [total]}}
       detail:
         type: reports.html_template
-        config: {{template: "<h3>Detail by region</h3>{{data}}"}}
+        config: {{template: "<h3>Detail by region</h3>{{{{data}}}}"}}
       inner:
         type: reports.html_template
-        config: {{template: "<p>Inner part</p>{{chart}}"}}
+        config: {{template: "<p>Inner part</p>{{{{chart}}}}"}}
       body:
         type: reports.html_template
         config:
           template: |
-            {{logo}}
-            <h2>Ventas del {{day}} — Zürich</h2>
-            {{data}}
-            {{inner}}
-            {{detail}}
-            <p>{{note}}</p>
+            {{{{logo}}}}
+            <h2>Ventas del {{{{day}}}} — Zürich</h2>
+            {{{{data}}}}
+            {{{{inner}}}}
+            {{{{detail}}}}
+            <p>{{{{note}}}}</p>
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Template}}
@@ -561,7 +561,7 @@ def test_an_html_template_with_its_one_input_renders_a_table(env, smtp):
     blocks:
 {DATA}      body:
         type: reports.html_template
-        config: {{template: "<p>Totals</p>{{data}}"}}
+        config: {{template: "<p>Totals</p>{{{{data}}}}"}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Default}}
@@ -579,10 +579,10 @@ def test_html_template_mistakes_are_refused_before_the_run_and_send_nothing(env,
     blocks:
 {DATA}      typo:
         type: reports.html_template
-        config: {{template: "<p>{{totls}}</p>"}}
+        config: {{template: "<p>{{{{totls}}}}</p>"}}
       broken:
         type: reports.html_template
-        config: {{template: "{{data"}}
+        config: {{template: "{{{{data"}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Template}}
@@ -594,8 +594,8 @@ def test_html_template_mistakes_are_refused_before_the_run_and_send_nothing(env,
     """)
 
     assert result.returncode == 2
-    assert "error: typo: Template: {totls} is not an input or a flow parameter (inputs: data;" in result.stderr
-    assert "error: broken: Template: expected '}' before end of string;" in result.stderr
+    assert "error: typo: Template: {{totls}} is not an input or a flow parameter (inputs: data;" in result.stderr
+    assert "error: broken: Template: {{ with no }} after it (write {{{{ for a literal {{)" in result.stderr
     assert smtp.messages == []
     assert not (env.home / "history.db").exists() or env.query("SELECT count(*) FROM runs") == [(0,)]
 
@@ -620,7 +620,7 @@ def test_to_excel_writes_one_sheet_per_table_with_all_its_data(env, smtp):
         config: {{inputs: [], outputs: [table], code: "table = pl.DataFrame({{'region': ['EU'], 'total': [10.75]}})"}}
       excel:
         type: reports.excel
-        config: {{path: "out/{{day:%Y}}/report_{{day:%Y%m%d}}.xlsx", sheets: [sales, totals]}}
+        config: {{path: "out/{{{{day:%Y}}}}/report_{{{{day:%Y%m%d}}}}.xlsx", sheets: [sales, totals]}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Excel}}
@@ -664,7 +664,7 @@ def test_to_excel_adds_each_kind_of_native_excel_chart(env):
           chart_sheet: by_region
           chart_x: region
           chart_y: [total, stores]
-          chart_title: "Totals {{day}}"
+          chart_title: "Totals {{{{day}}}}"
     edges:
 {edges}      - data.table -> second.first
       - data.table -> second.by_region
@@ -786,7 +786,7 @@ def test_send_email_puts_the_message_first_then_each_body_part_in_order(env, smt
         config: {{inputs: [], outputs: [text], code: "text = 'First line\\\\nsecond line\\\\n\\\\nNew paragraph'"}}
       detail:
         type: reports.html_template
-        config: {{template: "<h3>Detail by region</h3>{{data}}"}}
+        config: {{template: "<h3>Detail by region</h3>{{{{data}}}}"}}
       mail:
         type: email.send
         config: {{connection: mailer, to: [team@example.com], subject: Report, message: "Hello team,"}}
@@ -818,8 +818,8 @@ def test_send_email_to_cc_subject_template_and_unusual_characters(env, smtp):
           connection: mailer
           to: ["Ana Pérez <ana@example.com>", bob@example.com]
           cc: [carol@example.com, dan@example.com]
-          subject: "Ventas {{day:%d/%m/%Y}} — Zürich ✓"
-          message: "Grüße aus 東京 ✓ {{day:%d.%m.}}"
+          subject: "Ventas {{{{day:%d/%m/%Y}}}} — Zürich ✓"
+          message: "Grüße aus 東京 ✓ {{{{day:%d.%m.}}}}"
     """)
 
     assert result.returncode == 0, result.stderr
@@ -925,16 +925,16 @@ def test_a_bcc_or_a_misspelt_parameter_is_refused_before_anything_is_sent(env, s
         config: {{connection: mailer, to: [team@example.com], bcc: [auditor@example.com], subject: Hi, message: Hello}}
       subject_typo:
         type: email.send
-        config: {{connection: mailer, to: [team@example.com], subject: "Sales {{dya:%Y}}", message: Hello}}
+        config: {{connection: mailer, to: [team@example.com], subject: "Sales {{{{dya:%Y}}}}", message: Hello}}
       message_typo:
         type: email.send
-        config: {{connection: mailer, to: [team@example.com], subject: Hi, message: "Totals for {{regon}}"}}
+        config: {{connection: mailer, to: [team@example.com], subject: Hi, message: "Totals for {{{{regon}}}}"}}
     """)
 
     assert result.returncode == 2 and smtp.messages == []
     assert "blind: unknown setting(s) ['bcc']" in result.stderr
-    assert "subject_typo: Subject: {dya} is neither a flow parameter nor an input of this block" in result.stderr
-    assert "message_typo: Message: {regon} is neither a flow parameter nor an input of this block" in result.stderr
+    assert "subject_typo: Subject: {{dya}} is neither a flow parameter nor an input of this block" in result.stderr
+    assert "message_typo: Message: {{regon}} is neither a flow parameter nor an input of this block" in result.stderr
 
 
 def test_a_subject_from_data_cannot_add_recipients_or_headers(env):
@@ -1089,7 +1089,7 @@ def test_save_copy_writes_the_email_that_was_sent_as_an_eml_file(env, smtp):
         config: {{x: region, y: [total]}}
       mail:
         type: email.send
-        config: {{connection: mailer, to: [team@example.com], subject: Saved, save_copy: "copies/{{day:%Y%m%d}}/report.eml"}}
+        config: {{connection: mailer, to: [team@example.com], subject: Saved, save_copy: "copies/{{{{day:%Y%m%d}}}}/report.eml"}}
     edges:
       - data.table -> chart.table
       - chart.image -> mail.body
@@ -1592,7 +1592,7 @@ def test_a_send_email_block_set_up_in_its_properties_emails_everyone_named(env, 
     combo.setCurrentIndex(combo.findData("mailer"))
     combo.activated.emit(combo.currentIndex())
     for label, text in (("To", "ana@example.com, bob@example.com"), ("Cc", "carol@example.com"),
-                        ("Subject", "Weekly {day:%Y-%m-%d}"), ("Message", "Hello team,")):
+                        ("Subject", "Weekly {{day:%Y-%m-%d}}"), ("Message", "Hello team,")):
         edit = field(label)
         edit.setText(text)
         edit.editingFinished.emit()

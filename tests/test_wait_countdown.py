@@ -341,14 +341,14 @@ def test_a_wait_block_has_the_schedule_blocks_line_saying_how_long_it_waits_upda
     """Spec 2 (a Wait block always has a line of its own at its bottom, just above its result line, where and in the
     colour a Schedule block draws its countdown, "⏱ "; when it does not wait it says how long it waits, the seconds as
     written, a placeholder as written; updated when Seconds is edited in Properties)."""
-    path = flow_file(tmp_path / "lines.yaml", {"five": wait(5), "half": wait(0.5), "given": wait("{value}")},
+    path = flow_file(tmp_path / "lines.yaml", {"five": wait(5), "half": wait(0.5), "given": wait("{{value}}")},
                      start={"type": "trigger.schedule", "config": {"cron": "0 7 * * *"}})
     tab = win.open_flow(path)
     QApplication.processEvents()
 
     schedule = clock_line(tab, "start")
     assert schedule is not None, f"the Schedule block draws no ⏱ line: {drawn(tab, 'start')}"
-    for block, says in (("five", "⏱ waits 5 s"), ("half", "⏱ waits 0.5 s"), ("given", "⏱ waits {value} s")):
+    for block, says in (("five", "⏱ waits 5 s"), ("half", "⏱ waits 0.5 s"), ("given", "⏱ waits {{value}} s")):
         found = clock_line(tab, block)
         assert found is not None and found[1] == says, f"{block} does not draw {says!r}: {drawn(tab, block)}"
         assert_line_above_the_result(tab, block)
@@ -360,8 +360,8 @@ def test_a_wait_block_has_the_schedule_blocks_line_saying_how_long_it_waits_upda
     try:
         type_in(field(win, "Seconds"), "90")
         assert line(tab, "five") == "⏱ waits 90 s", drawn(tab, "five")
-        type_in(field(win, "Seconds"), "{value}")
-        assert line(tab, "five") == "⏱ waits {value} s", drawn(tab, "five")
+        type_in(field(win, "Seconds"), "{{value}}")
+        assert line(tab, "five") == "⏱ waits {{value}} s", drawn(tab, "five")
     finally:
         tab.doc.dirty = False  # (closing the editor after the test does not ask to save)
 
@@ -525,10 +525,10 @@ def test_a_wait_of_value_counts_down_the_seconds_that_arrived(win, qtbot, tmp_pa
     """Spec 2 (the user's {value} case: before the run the line says "⏱ waits {value} s"; while it waits it counts
     down the seconds that arrived at its value input) and spec 1 (the Log says those seconds)."""
     make = {"type": "logic.python", "config": {"inputs": [], "code": "output = 20"}}
-    tab = win.open_flow(flow_file(tmp_path / "given.yaml", {"make": make, "pause": wait("{value}")},
+    tab = win.open_flow(flow_file(tmp_path / "given.yaml", {"make": make, "pause": wait("{{value}}")},
                                   edges=["make.output -> pause.value"]))
     QApplication.processEvents()
-    assert line(tab, "pause") == "⏱ waits {value} s", drawn(tab, "pause")
+    assert line(tab, "pause") == "⏱ waits {{value}} s", drawn(tab, "pause")
     with started(win, tab, "pause") as watch:
         text = wait_counting(qtbot, watch)
         assert abs(seconds_left(text) - watch.left_now(20)) <= TOLERANCE, (text, watch.left_now(20))
@@ -536,7 +536,7 @@ def test_a_wait_of_value_counts_down_the_seconds_that_arrived(win, qtbot, tmp_pa
         win.stop(tab)
         wait_ended(qtbot, watch)
 
-    assert watch.after_finished() == "⏱ waits {value} s", watch.seen
+    assert watch.after_finished() == "⏱ waits {{value}} s", watch.seen
     assert_nothing_left_counting(qtbot, tab)
 
 

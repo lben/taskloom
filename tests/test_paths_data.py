@@ -298,11 +298,11 @@ def test_read_file_path_from_parameters_and_a_missing_file_goes_to_the_error_out
         params:
           day: {type: date, value: 2026-10-01}
         blocks:
-          sales: {type: data.read_file, config: {path: "in/sales_{day:%Y%m%d}.csv"}}
+          sales: {type: data.read_file, config: {path: "in/sales_{{day:%Y%m%d}}.csv"}}
           count:
             type: data.duckdb_sql
             config: {inputs: [sales], sql: "select count(*) as n from sales"}
-          save: {type: data.write_file, config: {path: "out/count_{day:%Y%m%d}.csv"}}
+          save: {type: data.write_file, config: {path: "out/count_{{day:%Y%m%d}}.csv"}}
           missing:
             type: logic.python
             config: {inputs: [err], outputs: [], code: "open('missing.txt', 'w').write(err['error'])"}
@@ -579,7 +579,7 @@ def test_write_csv_to_a_dated_path_in_new_folders_and_pass_the_file_on(env):
             config:
               inputs: []
               sql: "select :day as day, 'EU' as region, 3 as stores, 753.73 as total, null::varchar as note"
-          save: {type: data.write_file, config: {path: "reports/{day:%Y}/sales_{day:%Y-%m-%d}.csv"}}
+          save: {type: data.write_file, config: {path: "reports/{{day:%Y}}/sales_{{day:%Y-%m-%d}}.csv"}}
           use:
             type: logic.python
             config: {inputs: [file], outputs: [], code: "open('written.txt', 'w').write(file)"}
@@ -762,7 +762,7 @@ def test_write_file_replaces_the_file_of_an_earlier_run(env):
         params:
           n: {type: int, value: 3}
         blocks:
-          q: {type: data.duckdb_sql, config: {inputs: [], sql: "select {n} as run, range as i from range({n})"}}
+          q: {type: data.duckdb_sql, config: {inputs: [], sql: "select {{n}} as run, range as i from range({{n}})"}}
           csv: {type: data.write_file, config: {path: out/rows.csv}}
           parquet: {type: data.write_file, config: {path: out/rows.parquet}}
           excel: {type: data.write_file, config: {path: out/rows.xlsx}}
@@ -979,7 +979,7 @@ def test_sql_bind_parameters_keep_their_types_and_text_templates_fill_text(env):
               inputs: []
               sql: |
                 select :name as name, :n as n, :n * 2 as twice, :rate as rate, :flag as flag,
-                       :day as day, :day + 1 as next_day, :at as at, '{day:%Y-%m}' as month
+                       :day as day, :day + 1 as next_day, :at as at, '{{day:%Y-%m}}' as month
           save: {type: data.write_file, config: {path: out.parquet}}
         edges:
           - q.result -> save.table

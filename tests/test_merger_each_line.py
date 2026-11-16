@@ -483,7 +483,7 @@ def test_validate_warns_about_a_file_path_a_block_run_once_per_line_writes_to_wi
     assert not [w for w in warnings if re.search(r"\bfinal\b", w) and label in w], warnings
     assert not [w for w in warnings if re.search(r"\bgather\b", w)], warnings
 
-    code, errors, warnings = validate(env, flow_with(config[key].replace("/", "/{day}_", 1)))
+    code, errors, warnings = validate(env, flow_with(config[key].replace("/", "/{{day}}_", 1)))
 
     assert code == 0, errors
     assert not [w for w in warnings if re.search(r"\bsave\b", w) and label in w], warnings
