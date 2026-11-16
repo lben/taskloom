@@ -23,21 +23,21 @@ REPORT_FLOW = """
         config: {kind: bar, x: region, y: [total], title: "Sales by region"}
       excel:
         type: reports.excel
-        config: {path: "out/sales_{day:%Y%m%d}.xlsx", sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
+        config: {path: "out/sales_{{day:%Y%m%d}}.xlsx", sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
       body:
         type: reports.html_template
         config:
           template: |
-            <style>h2 {{ color: #2c5d8f; font-size: 18px; }}</style>
-            <h2>Sales for {day}</h2>
-            {chart}
-            {totals}
+            <style>h2 { color: #2c5d8f; font-size: 18px; }</style>
+            <h2>Sales for {{day}}</h2>
+            {{chart}}
+            {{totals}}
       mail:
         type: email.send
         config:
           connection: mailer
           to: [team@example.com]
-          subject: "Daily sales {day:%Y-%m-%d}"
+          subject: "Daily sales {{day:%Y-%m-%d}}"
           save_copy: out/report.eml
     edges:
       - sales.table -> totals.sales

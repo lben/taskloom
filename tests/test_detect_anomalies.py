@@ -289,7 +289,7 @@ def emailed_flow(env, name: str, rows) -> dict:
         "any": {"type": "logic.if", "config": {"condition": "value > 0"}, "ui": {"x": 400, "y": 0}},
         "body": {"type": "reports.html_template", "ui": {"x": 800, "y": 0}, "config": {
             "names": {"detect.anomalies": "anomalies", "detect.charts": "charts"},
-            "template": "<h2>Unusual row counts</h2>{anomalies}<br>{charts}"}},
+            "template": "<h2>Unusual row counts</h2>{{anomalies}}<br>{{charts}}"}},
         "mail": {"type": "email.send", "ui": {"x": 1200, "y": 0},
                  "config": {"connection": "mailer", "to": ["team@example.com"], "subject": "Unusual row counts"}},
         "keep": keep(name, "count", "charts", y=400),

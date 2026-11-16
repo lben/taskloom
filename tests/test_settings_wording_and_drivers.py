@@ -36,7 +36,7 @@ blocks:
     config: {connection: nope, sql: "select * from sales where day = :day_key"}
   mail:
     type: email.send
-    config: {connection: mailer, subject: "Sales {region}", message: "Total {"}
+    config: {connection: mailer, subject: "Sales {{region}}", message: "Total {{"}
   cmd:
     type: servers.ssh_command
     config: {connection: mailer, command: uptime}
@@ -53,7 +53,7 @@ EXPECTED = [  # (block, the setting as Properties labels it, what else the messa
     ("code", "Run in my Python environment", "expected true or false"),  # a wrong value
     ("query", "Connection", "'nope'"),  # an unknown connection
     ("query", "SQL", ":day_key"),  # an unknown bind parameter
-    ("mail", "Subject", "{region}"),  # an unknown parameter in a template
+    ("mail", "Subject", "{{region}}"),  # an unknown parameter in a template
     ("mail", "Message", ""),  # a template that cannot be read
     ("cmd", "Connection", "'mailer'"),  # a connection of another kind
 ]

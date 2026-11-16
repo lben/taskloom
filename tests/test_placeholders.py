@@ -79,7 +79,7 @@ WAIT_FROM_VALUE = """
     blocks:
       start: {type: trigger.manual}
       make: {type: logic.python, config: {inputs: [], code: "output = VALUE"}}
-      hold: {type: logic.wait, config: {seconds: "{value}"}}
+      hold: {type: logic.wait, config: {seconds: "{{value}}"}}
     edges:
       - start.start -> make.after
       - make.output -> hold.value
@@ -108,7 +108,7 @@ def test_wait_waits_the_seconds_of_a_flow_parameter_and_follows_an_override(env)
           pause: {type: float, value: 1.2}
         blocks:
           start: {type: trigger.manual}
-          hold: {type: logic.wait, config: {seconds: "{pause}"}}
+          hold: {type: logic.wait, config: {seconds: "{{pause}}"}}
         edges:
           - start.start -> hold.after
     """)
@@ -128,7 +128,7 @@ def test_wait_fails_clearly_when_its_filled_in_seconds_is_not_a_number(env):
         blocks:
           start: {type: trigger.manual}
           make: {type: logic.python, config: {inputs: [], code: "output = 'abc'"}}
-          hold: {type: logic.wait, config: {seconds: "{value}"}}
+          hold: {type: logic.wait, config: {seconds: "{{value}}"}}
           next: {type: logic.python, config: {inputs: [], code: "output = 1"}}
         edges:
           - start.start -> make.after
@@ -145,13 +145,13 @@ def test_wait_fails_clearly_when_its_filled_in_seconds_is_not_a_number(env):
     assert env.block_status(run_id).get("next") != "success"
     told = failure_told(env, "hold")
     assert told.startswith("hold "), told  # names the block
-    assert "seconds" in told.lower() and "{value} gave 'abc', which is not a number" in told, told
+    assert "seconds" in told.lower() and "{{value}} gave 'abc', which is not a number" in told, told
 
 
 NOT_CONNECTED = """
     blocks:
       start: {type: trigger.manual}
-      hold: {type: logic.wait, config: {seconds: "{value}"}}
+      hold: {type: logic.wait, config: {seconds: "{{value}}"}}
     edges:
       - start.start -> hold.after
 """
@@ -169,7 +169,7 @@ def test_wait_fails_clearly_when_its_value_input_is_not_connected_or_nothing_arr
         result = env.taskloom("run", flow, "--only", "hold", "--input", "value=")
 
     told = told_before_or_as_it_failed(env, result, "hold")
-    assert "hold" in told and "seconds" in told.lower() and "{value}" in told, told
+    assert "hold" in told and "seconds" in told.lower() and "{{value}}" in told, told
     assert "connected" in told or "arrived" in told, told  # why: nothing is there to fill it with
 
 
@@ -226,9 +226,9 @@ def test_text_path_whole_number_number_and_list_settings_take_parameters_and_inp
     flow = settings_flow(
         env,
         "import datetime\nvalue = 4\nregion = 'North'\nwhen = datetime.date(2026, 10, 2)",
-        "label: '{region} {value:.1f} {when:%d.%m.%Y} {{literal}}', count: '{value}0', ratio: ' {value}.5 ', "
-        "items: ['{region}', '{n:02d}', plain, '{{x}}'], where: 'out/{region}/{value}.txt', code: \"x = '{value}'\", "
-        "query: 'select {n}'",
+        "label: '{{region}} {{value:.1f}} {{when:%d.%m.%Y}} {literal}', count: '{{value}}0', ratio: ' {{value}}.5 ', "
+        "items: ['{{region}}', '{{n:02d}}', plain, '{x}'], where: 'out/{{region}}/{{value}}.txt', code: \"x = '{value}'\", "
+        "query: 'select {{n}}'",
         outputs=("value", "region", "when"), params="{n: {type: int, value: 3}}")
 
     result = env.taskloom("run", flow)
@@ -242,20 +242,20 @@ def test_text_path_whole_number_number_and_list_settings_take_parameters_and_inp
 def test_sql_code_takes_flow_parameters_but_not_the_blocks_inputs(env):
     """Spec 1 (unchanged): SQL code takes flow parameters only; a placeholder naming one of the block's inputs is
     refused before any run, as today."""
-    flow = settings_flow(env, "value = 4", "query: 'select {value}'")
+    flow = settings_flow(env, "value = 4", "query: 'select {{value}}'")
 
     validated, ran = env.taskloom("validate", flow), env.taskloom("run", flow)
 
     assert validated.returncode == 2 and ran.returncode == 2, validated.stderr + ran.stderr
-    assert any("report" in line and "Query" in line and "{value}" in line for line in error_lines(validated)), \
+    assert any("report" in line and "Query" in line and "{{value}}" in line for line in error_lines(validated)), \
         validated.stderr
     assert runs_recorded(env) == 0 and not (env.root / "report.json").exists()
 
 
 FAILS = {
-    "a table arrives": ("value = pl.DataFrame({'a': [1, 2]})", "label: '{value}'", "Label", ["table"]),
-    "below the minimum": ("value = 0", "count: '{value}'", "Count", [r"\b0\b", r"\b1\b"]),
-    "not a whole number": ("value = 2.5", "count: '{value}'", "Count", [r"2\.5"]),
+    "a table arrives": ("value = pl.DataFrame({'a': [1, 2]})", "label: '{{value}}'", "Label", ["table"]),
+    "below the minimum": ("value = 0", "count: '{{value}}'", "Count", [r"\b0\b", r"\b1\b"]),
+    "not a whole number": ("value = 2.5", "count: '{{value}}'", "Count", [r"2\.5"]),
 }
 
 
@@ -274,7 +274,7 @@ def test_a_setting_that_cannot_take_what_arrived_fails_the_block_before_it_does_
     assert status == "failed" and env.block_status(run_id)["report"] == "failed", env.block_status(run_id)
     assert not (env.root / "report.json").exists()  # it did nothing
     told = failure_told(env, "report")
-    assert told.startswith("report ") and label in told and "{value}" in told, told
+    assert told.startswith("report ") and label in told and "{{value}}" in told, told
     assert all(re.search(pattern, told.lower()) for pattern in says), told
 
 
@@ -285,10 +285,10 @@ NEITHER = """
       pause: {type: float, value: 1}
     blocks:
       start: {type: trigger.manual}
-      typo: {type: logic.wait, config: {seconds: "{pasue}"}}
-      run_after: {type: logic.wait, config: {seconds: "{after}"}}
-      ask: {type: logic.ask_user, config: {prompt: "Go on after {nope}?"}}
-      pick: {type: logic.ask_user, config: {prompt: "Which?", kind: choice, options: ["{nope}", later]}}
+      typo: {type: logic.wait, config: {seconds: "{{pasue}}"}}
+      run_after: {type: logic.wait, config: {seconds: "{{after}}"}}
+      ask: {type: logic.ask_user, config: {prompt: "Go on after {{nope}}?"}}
+      pick: {type: logic.ask_user, config: {prompt: "Which?", kind: choice, options: ["{{nope}}", later]}}
     edges:
       - start.start -> typo.after
       - start.start -> run_after.after
@@ -296,8 +296,8 @@ NEITHER = """
       - start.start -> pick.after
 """
 # Each block, the setting as Properties names it, and the placeholder that is neither.
-NEITHER_SAID = [("typo", "Seconds", "{pasue}"), ("run_after", "Seconds", "{after}"), ("ask", "Prompt", "{nope}"),
-                ("pick", "Options", "{nope}")]
+NEITHER_SAID = [("typo", "Seconds", "{{pasue}}"), ("run_after", "Seconds", "{{after}}"), ("ask", "Prompt", "{{nope}}"),
+                ("pick", "Options", "{{nope}}")]
 
 
 def neither_said(lines: list[str]) -> list:
@@ -328,12 +328,12 @@ BOTH = """
     blocks:
       start: {type: trigger.manual}
       make: {type: logic.python, config: {inputs: [], code: "output = 2"}}
-      hold: {type: logic.wait, config: {seconds: "{value}"}}
+      hold: {type: logic.wait, config: {seconds: "{{value}}"}}
     edges:
       - start.start -> make.after
       - make.output -> hold.value
 """
-BOTH_SAID = "{value} could be the parameter value or the input value: rename one"
+BOTH_SAID = "{{value}} could be the parameter value or the input value: rename one"
 
 
 def test_a_placeholder_naming_both_a_parameter_and_an_input_of_the_block_is_refused_before_any_run(env):
@@ -361,9 +361,9 @@ def test_a_well_formed_placeholder_in_a_number_setting_is_no_problem_for_validat
         blocks:
           start: {type: trigger.manual}
           make: {type: logic.python, config: {inputs: [], code: "output = 1"}}
-          from_input: {type: logic.wait, config: {seconds: "{value}"}}
-          tenfold: {type: logic.wait, config: {seconds: "{value}0"}}
-          from_param: {type: logic.wait, config: {seconds: "{pause}"}}
+          from_input: {type: logic.wait, config: {seconds: "{{value}}"}}
+          tenfold: {type: logic.wait, config: {seconds: "{{value}}0"}}
+          from_param: {type: logic.wait, config: {seconds: "{{pause}}"}}
         edges:
           - start.start -> make.after
           - make.output -> from_input.value
@@ -403,14 +403,14 @@ def test_properties_takes_a_placeholder_in_a_number_setting_and_f7_finds_no_prob
     settle()
 
     select_only(tab, "hold")
-    type_in(field(win, "Seconds"), "{value}")
+    type_in(field(win, "Seconds"), "{{value}}")
     assert error_shown(win) == ""
-    assert tab.doc.blocks["hold"]["config"]["seconds"] == "{value}"
+    assert tab.doc.blocks["hold"]["config"]["seconds"] == "{{value}}"
     type_in(field(win, "Seconds"), "soon")
     assert "Seconds" in error_shown(win)  # no placeholder: not a number, as today
-    assert tab.doc.blocks["hold"]["config"]["seconds"] == "{value}"
+    assert tab.doc.blocks["hold"]["config"]["seconds"] == "{{value}}"
     select_only(tab, "body")
-    type_in(field(win, "Max table rows"), "{rows}")
+    type_in(field(win, "Max table rows"), "{{rows}}")
     assert error_shown(win) == ""
 
     win.validate_action.trigger()  # F7: saves, then checks the flow
@@ -418,7 +418,7 @@ def test_properties_takes_a_placeholder_in_a_number_setting_and_f7_finds_no_prob
     assert win.message_boxes == []
     assert "no problems found" in win.statusBar().currentMessage()
     config = {b: (s.get("config") or {}) for b, s in yaml.safe_load(path.read_text(encoding="utf-8"))["blocks"].items()}
-    assert config["hold"]["seconds"] == "{value}" and config["body"]["max_rows"] == "{rows}"
+    assert config["hold"]["seconds"] == "{{value}}" and config["body"]["max_rows"] == "{{rows}}"
 
 
 def test_f7_reports_a_placeholder_that_is_neither_a_parameter_nor_an_input_and_one_that_is_both(win, tmp_path):
@@ -430,8 +430,8 @@ def test_f7_reports_a_placeholder_that_is_neither_a_parameter_nor_an_input_and_o
         blocks:
           start: {type: trigger.manual}
           make: {type: logic.python, config: {inputs: [], code: "output = 1"}}
-          typo: {type: logic.wait, config: {seconds: "{pasue}"}}
-          hold: {type: logic.wait, config: {seconds: "{value}"}}
+          typo: {type: logic.wait, config: {seconds: "{{pasue}}"}}
+          hold: {type: logic.wait, config: {seconds: "{{value}}"}}
         edges:
           - start.start -> make.after
           - start.start -> typo.after
@@ -446,7 +446,7 @@ def test_f7_reports_a_placeholder_that_is_neither_a_parameter_nor_an_input_and_o
     win.message_boxes.clear()
     assert [(kind, title) for kind, (title, _) in said] == [("warning", "The flow has problems")], said
     lines = said[0][1][1].splitlines()
-    assert any("typo" in line and "Seconds" in line and "{pasue}" in line and "neither" in line for line in lines), \
+    assert any("typo" in line and "Seconds" in line and "{{pasue}}" in line and "neither" in line for line in lines), \
         lines
     assert any("hold" in line and "Seconds" in line and BOTH_SAID in line for line in lines), lines
     assert not tab.runs
@@ -468,7 +468,7 @@ def help_on_hover(win, label: str) -> str:
 
 
 def says_placeholders(text: str) -> bool:
-    return "placeholder" in text.lower() or "{name}" in text
+    return "placeholder" in text.lower() or "{{name}}" in text
 
 
 def test_the_help_on_hover_of_number_and_text_settings_says_placeholders_can_be_used(win, tmp_path):
@@ -495,6 +495,6 @@ def test_the_help_on_hover_of_number_and_text_settings_says_placeholders_can_be_
         shown[block, label] = help_on_hover(win, label)
 
     wait = shown.pop(("hold", "Seconds"))
-    assert "{value}" in wait and "value input" in wait and "{name}" in wait and "flow parameter" in wait, wait
+    assert "{{value}}" in wait and "value input" in wait and "{{name}}" in wait and "flow parameter" in wait, wait
     assert not says_placeholders(shown.pop(("save", "Format"))), "a choice takes no placeholders"
     assert [where for where, text in shown.items() if not says_placeholders(text)] == [], shown

@@ -879,7 +879,7 @@ CODE_SETTINGS = [  # each block type with a code setting: the block, its type an
     ("polars_step", "data.polars", {"code": "df.filter(pl.col('animal') == 'zebra')"}),
     ("html_step", "reports.html_template", {"template": "<b>Zebra</b> crossings"}),
     ("if_step", "logic.if", {"condition": "value == 'zebra'"}),
-    ("inspect_step", "logic.inspect", {"message": "Saw {value} zebra"}),
+    ("inspect_step", "logic.inspect", {"message": "Saw {{value}} zebra"}),
     ("query_step", "db.run_query", {"connection": "warehouse", "sql": "select * from zebra"}),
     ("tally_step", "user.tally", {"formula": "len(value) + len('zebra')"}),
 ]

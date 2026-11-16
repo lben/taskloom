@@ -713,8 +713,8 @@ def test_placeholders_are_filled_in_the_url_params_headers_and_body(env):
     """Spec 3 (placeholders {name} work in the URL, params, headers and body, with flow parameters)."""
     with serving() as api:
         result, _, status = run(env, {"call": request(
-            "{base}/orders/{id}", json_body('["{region}", {id}]'), method="POST",
-            params=rows(("region", "{region}")), headers=rows(("X-Region", "{region}-{id}")))},
+            "{{base}}/orders/{{id}}", json_body('["{{region}}", {{id}}]'), method="POST",
+            params=rows(("region", "{{region}}")), headers=rows(("X-Region", "{{region}}-{{id}}")))},
             params={"base": {"type": "text", "value": api.base}, "id": {"type": "int", "value": 7},
                     "region": {"type": "text", "value": "north"}})
 
@@ -730,8 +730,8 @@ def test_placeholders_are_filled_from_the_blocks_input_in_the_url_params_and_hea
     parameters): the text reaching the body input fills {body} in each (and is the body, sent as is)."""
     with serving() as api:
         blocks = {"value": make("'abc'"),
-                  "call": request(f"{api.base}/orders/{{body}}", method="POST", params=rows(("q", "{body}")),
-                                  headers=rows(("X-Value", "{body}")))}
+                  "call": request(f"{api.base}/orders/{{{{body}}}}", method="POST", params=rows(("q", "{{body}}")),
+                                  headers=rows(("X-Value", "{{body}}")))}
         result, _, status = run(env, blocks, ["value.output -> call.body"])
 
     assert status == {"value": "success", "call": "success"}, result.stdout[-3000:] + result.stderr[-3000:]
@@ -1085,7 +1085,7 @@ def test_a_connection_gives_its_base_url_auth_and_default_headers_and_the_blocks
     with serving() as api:
         write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop_token"),
                                                    headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
-        blocks = {"order": request("/orders/{id}", connection="shop",
+        blocks = {"order": request("/orders/{{id}}", connection="shop",
                                    headers=rows(("X-Version", "2"), ("X-Extra", "yes"))),
                   "health": request(f"{api.base}/health", connection="shop", y=200)}
         result, _, status = run(env, blocks, params={"id": {"type": "int", "value": 7}})
@@ -1229,10 +1229,10 @@ def test_copy_as_curl_copies_the_request_filled_in_with_every_secret_hidden(env,
         write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop_token"),
                                                    headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
         blocks = {
-            "create": request("{base}/orders", basic("report", "api_password"), json_body('["{region}", 2]'),
-                              method="POST", params=rows(("region", "{region}"), ("debug", "1"), off=("debug",)),
-                              headers=rows(("Accept", "application/json"), ("X-Trace", "{region}-1"))),
-            "fetch": request("/orders/{region}", connection="shop", headers=rows(("X-Version", "2")), y=300),
+            "create": request("{{base}}/orders", basic("report", "api_password"), json_body('["{{region}}", 2]'),
+                              method="POST", params=rows(("region", "{{region}}"), ("debug", "1"), off=("debug",)),
+                              headers=rows(("Accept", "application/json"), ("X-Trace", "{{region}}-1"))),
+            "fetch": request("/orders/{{region}}", connection="shop", headers=rows(("X-Version", "2")), y=300),
         }
         params = {"base": {"type": "text", "value": api.base}, "region": {"type": "text", "value": "north"}}
         path = flow_file(env.root / "copy.yaml", blocks, (), params=params)
@@ -1253,7 +1253,7 @@ def test_copy_as_curl_copies_the_request_filled_in_with_every_secret_hidden(env,
         for block, command in copied.items():
             for value in values.values():
                 assert value not in command, command
-            assert "{region}" not in command and "north" in command, command
+            assert "{{region}}" not in command and "north" in command, command
             done = subprocess.run([shutil.which("curl"), "--silent", "--show-error", "--output", os.devnull,
                                    *curl_args(command, values)], env=env.env, capture_output=True, text=True,
                                   timeout=60)

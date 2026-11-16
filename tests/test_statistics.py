@@ -834,7 +834,7 @@ def test_read_file_then_statistics_its_charts_and_stats_into_an_html_template_fo
         "keep": keep("email", "charts", y=600),
         "body": {"type": "reports.html_template", "ui": {"x": 400, "y": 0}, "config": {
             "names": {"summary.stats": "stats", "summary.charts": "charts"},
-            "template": "<h2>Sales statistics</h2>{stats}<br>{charts}"}},
+            "template": "<h2>Sales statistics</h2>{{stats}}<br>{{charts}}"}},
         "mail": {"type": "email.send", "ui": {"x": 800, "y": 0},
                  "config": {"connection": "mailer", "to": ["team@example.com"], "subject": "Sales statistics"}},
     }

@@ -30,19 +30,19 @@ from tests.test_paths_editor_editing import (add_param, clean, error_shown, fiel
 from tests.test_paths_reports_email import errors, html_of, inline_images, png_size  # noqa: E402
 
 # The user's sentence, verbatim (D24).
-SENTENCE = "Hi {input1}, please see below the chart<br>{chart}<br>and below the table<br>{my_table}<br>thank you"
+SENTENCE = "Hi {{input1}}, please see below the chart<br>{{chart}}<br>and below the table<br>{{my_table}}<br>thank you"
 TOTALS_SQL = "select * from (values ('APAC', 10.5), ('EU', 20.0)) t(region, total)"
 DAY = {"day": {"type": "date", "value": dt.date(2026, 10, 2)}}
 MAIL = {"type": "email.send", "config": {"connection": "mailer", "to": ["team@example.com"], "subject": "Report"}}
 
 # Wording the spec gives (A4, B10, C11).
-TEMPLATE_HELP = ("The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
-                 "date, e.g. {total:,.2f} or {day:%d %B %Y}; {name:html} puts text in as HTML, as it is; write {{ and }} "
-                 "for literal braces. Enter makes no new line in the email: use <br> (New line). Empty: every input in "
-                 "turn.")
+TEMPLATE_HELP = ("The email body, in HTML. {{name}} shows an input or a flow parameter; {{name:format}} formats a "
+                 "number or date, e.g. {{total:,.2f}} or {{day:%d %B %Y}}; {{name:html}} puts text in as HTML, as it "
+                 "is. Single braces, as in CSS, are plain text; write {{{{ for a literal {{. Enter makes no new line in "
+                 "the email: use <br> (New line). Empty: every input in turn.")
 HINT = ("Nothing is connected yet. Connect blocks (tables, charts, text…) to this block's data input; each one is "
         "listed here with a name, at first its block's name.")
-ROWS_NOTE = ("Write {name} in the Template where an input should go; flow parameters work the same way. An empty "
+ROWS_NOTE = ("Write {{name}} in the Template where an input should go; flow parameters work the same way. An empty "
              "Template shows every input in turn.")
 
 
@@ -212,7 +212,7 @@ def test_the_users_sentence_sends_hi_bob_on_one_line_then_the_chart_then_the_tab
 
 def test_a_single_connection_without_names_in_the_file_is_named_after_its_block(env, smtp):
     """B6, B8: one edge, and a flow file with no `names` (written by hand): the input is {totals}; the file is valid."""
-    flow = write(env, {"totals": sql(), "body": template("<p>Totals</p>{totals}"), "mail": MAIL},
+    flow = write(env, {"totals": sql(), "body": template("<p>Totals</p>{{totals}}"), "mail": MAIL},
                  ["totals.result -> body.data", "body.html -> mail.body"])
 
     assert env.taskloom("validate", flow).returncode == 0
@@ -221,7 +221,7 @@ def test_a_single_connection_without_names_in_the_file_is_named_after_its_block(
     assert result.returncode == 0, result.stderr
     html = html_of(smtp.messages[0])
     assert ">APAC<" in html and ">EU<" in html
-    assert "{totals}" not in html
+    assert "{{totals}}" not in html
 
 
 def test_two_outputs_of_one_block_and_a_block_named_like_a_parameter_get_names_of_their_own(env, smtp):
@@ -230,7 +230,7 @@ def test_two_outputs_of_one_block_and_a_block_named_like_a_parameter_get_names_o
     flow = write(env, {
         "check": python("result = 'ok'\ndetails = '3 late'", outputs=["result", "details"]),
         "day": python("output = 'Mon'"),
-        "body": template("{check} / {check_details} / {day_output} / {day:%Y}", {"gone.result": "old"}),
+        "body": template("{{check}} / {{check_details}} / {{day_output}} / {{day:%Y}}", {"gone.result": "old"}),
         "mail": MAIL,
     }, ["check.result -> body.data", "check.details -> body.data", "day.output -> body.data",
         "body.html -> mail.body"], params=DAY)
@@ -263,9 +263,9 @@ def test_text_numbers_dates_lists_and_dicts_are_shown_escaped_as_written_without
     """D20, D21, D22: text escaped (also inside an attribute) with its line breaks as <br>, no <p>; None as nothing,
     even with a format; numbers as written unless formatted; dates formatted; a list item by item; a dict as its
     text; flow parameters too; an input the template does not mention is left out."""
-    text = ("Note: {note}|Nothing: [{nothing}][{nothing:,.2f}]|Revenue: {revenue:,.2f} or {revenue}|Year: {year}|"
-            "Day: {day:%d %B %Y}|Opened: {opened:%A %d %B %Y}|Items: {items}|Info: {info}|"
-            '<a href="{url}">site</a>|end')
+    text = ("Note: {{note}}|Nothing: [{{nothing}}][{{nothing:,.2f}}]|Revenue: {{revenue:,.2f}} or {{revenue}}|"
+            "Year: {{year}}|Day: {{day:%d %B %Y}}|Opened: {{opened:%A %d %B %Y}}|Items: {{items}}|Info: {{info}}|"
+            '<a href="{{url}}">site</a>|end')
     flow = write(env, {
         "v": python(VALUES, outputs=VALUE_NAMES),
         "body": template(text, {f"v.{n}": n for n in VALUE_NAMES}),
@@ -291,7 +291,7 @@ def test_tables_are_outlook_tables_cut_at_max_table_rows_and_an_empty_one_keeps_
     flow = write(env, {
         "big": python("table = pl.DataFrame({'n': list(range(1, 13))})", outputs=["table"]),
         "empty": sql("select 'x' as region, 1.5 as total where false"),
-        "body": template("{big}<br>{empty}", max_rows=5),
+        "body": template("{{big}}<br>{{empty}}", max_rows=5),
         "mail": MAIL,
     }, ["big.table -> body.data", "empty.result -> body.data", "body.html -> mail.body"])
 
@@ -315,8 +315,9 @@ def test_pictures_and_html_from_another_template_keep_their_images_and_a_chart_u
         "totals": sql(),
         "chart": chart(),
         "pics": python(f"logo = {str(logo)!r}\nold = 'old/chart.png'", outputs=["logo", "old"]),
-        "inner": template("<p>Inner part</p>{chart}"),
-        "body": template("{inner}<br>{chart}<br>{chart}<br>{logo}<br>{old}", {"pics.logo": "logo", "pics.old": "old"}),
+        "inner": template("<p>Inner part</p>{{chart}}"),
+        "body": template("{{inner}}<br>{{chart}}<br>{{chart}}<br>{{logo}}<br>{{old}}",
+                         {"pics.logo": "logo", "pics.old": "old"}),
         "mail": MAIL,
     }, ["totals.result -> chart.table", "chart.image -> inner.data", "inner.html -> body.data",
         "chart.image -> body.data", "pics.logo -> body.data", "pics.old -> body.data", "body.html -> mail.body"])
@@ -358,7 +359,7 @@ def test_a_bare_html_template_is_valid_and_with_nothing_connected_shows_text_and
     """A2: `type: reports.html_template` with no config validates (rc 0); D23: with nothing connected it runs with
     its text and the flow parameters."""
     bare = write(env, {"body": {"type": "reports.html_template"}}, name="bare.yaml")
-    flow = write(env, {"body": template("Report for {day:%Y-%m-%d}"), "mail": MAIL}, ["body.html -> mail.body"],
+    flow = write(env, {"body": template("Report for {{day:%Y-%m-%d}}"), "mail": MAIL}, ["body.html -> mail.body"],
                  params=DAY)
 
     checked = env.taskloom("validate", bare)
@@ -376,7 +377,7 @@ def _duplicate():
     """Both names stored, as the editor stores them (a stored name is taken: a default never repeats it)."""
     return ({"data": python("table = pl.DataFrame({'region': ['EU'], 'total': [1.5]})", outputs=["table"]),
              "chart": chart(), "logo": chart(),
-             "body": template("{chart}", {"chart.image": "chart", "logo.image": "chart"}), "mail": MAIL},
+             "body": template("{{chart}}", {"chart.image": "chart", "logo.image": "chart"}), "mail": MAIL},
             ["data.table -> chart.table", "data.table -> logo.table", "chart.image -> body.data",
              "logo.image -> body.data", "body.html -> mail.body"], {})
 
@@ -392,26 +393,26 @@ def _totals_into(body):
 PROBLEMS = {
     "duplicate (C13)": (_duplicate, "Inputs: chart is the name of more than one input (chart.image, logo.image); "
                                     "give each its own name"),
-    "parameter (C14)": (lambda: ({"dates": sql(), "body": template("{day}", {"dates.result": "day"}), "mail": MAIL},
+    "parameter (C14)": (lambda: ({"dates": sql(), "body": template("{{day}}", {"dates.result": "day"}), "mail": MAIL},
                                  ["dates.result -> body.data", "body.html -> mail.body"], DAY),
                         "Inputs: day (from dates.result) is also a flow parameter; give the input another name"),
-    "unknown (C15)": (lambda: (*users_flow("Hi {input1}<br>{chart}<br>{my_tabel}"), {}),
-                      "Template: {my_tabel} is not an input or a flow parameter (inputs: input1, chart, my_table; "
-                      "write {{ and }} for literal braces)"),
-    "unknown, nothing connected (C15)": (lambda: _template_only("Hi {who}"),
-                                         "Template: {who} is not an input or a flow parameter (inputs: none; "
-                                         "write {{ and }} for literal braces)"),
-    "css braces (C16)": (lambda: _template_only('<style>.big { font-size: 20px; }</style><p class="big">Hi</p>'),
-                         "Template: '{ font-size}' is not a name; write {{ and }} for literal braces"),
-    "empty braces (C16)": (lambda: _template_only("Total: {}"),
-                           "Template: '{}' is not a name; write {{ and }} for literal braces"),
-    "conversion (C16)": (lambda: _template_only("{x!r}", {"x": {"type": "text", "value": "hi"}}),
-                         "Template: '{x!r}' is not a name; write {{ and }} for literal braces"),
-    "unmatched brace (C17)": (lambda: _template_only("Total } here"),
-                              "Template: Single '}' encountered in format string; write {{ and }} for literal braces"),
-    "not a name in the file (C18)": (lambda: _totals_into(template("{totals}", {"totals.result": "2nd"})),
+    "unknown (C15)": (lambda: (*users_flow("Hi {{input1}}<br>{{chart}}<br>{{my_tabel}}"), {}),
+                      "Template: {{my_tabel}} is not an input or a flow parameter (inputs: input1, chart, my_table; "
+                      "write {{{{ for a literal {{)"),
+    "unknown, nothing connected (C15)": (lambda: _template_only("Hi {{who}}"),
+                                         "Template: {{who}} is not an input or a flow parameter (inputs: none; "
+                                         "write {{{{ for a literal {{)"),
+    "css braces (C16)": (lambda: _template_only('<style>.big {{ font-size: 20px; }}</style><p class="big">Hi</p>'),
+                         "Template: {{font-size: 20px;}} is not a name (write {{{{ for a literal {{)"),
+    "empty braces (C16)": (lambda: _template_only("Total: {{}}"),
+                           "Template: {{}} names nothing (write {{{{ for a literal {{)"),
+    "conversion (C16)": (lambda: _template_only("{{x!r}}", {"x": {"type": "text", "value": "hi"}}),
+                         "Template: {{x!r}} is not a name (write {{{{ for a literal {{)"),
+    "unmatched brace (C17)": (lambda: _template_only("Total {{ here"),
+                              "Template: {{ with no }} after it (write {{{{ for a literal {{)"),
+    "not a name in the file (C18)": (lambda: _totals_into(template("{{totals}}", {"totals.result": "2nd"})),
                                      not_a_name("2nd")),
-    "max table rows below 1 (A1)": (lambda: _totals_into(template("{totals}", max_rows=0)),
+    "max table rows below 1 (A1)": (lambda: _totals_into(template("{{totals}}", max_rows=0)),
                                     "Max table rows: expected 1 or more, got 0"),
 }
 
@@ -436,7 +437,7 @@ def test_a_problem_stops_validate_and_run_with_its_message_and_nothing_is_sent(e
 
 def test_a_stored_name_whose_key_is_not_block_port_is_refused_under_inputs(env, smtp):
     """C18: a hand-written `names` entry keyed by something other than block.port fails with an Inputs: message."""
-    blocks, edges, _ = _totals_into(template("{totals}", {"totals": "sales"}))
+    blocks, edges, _ = _totals_into(template("{{totals}}", {"totals": "sales"}))
     flow = write(env, blocks, edges)
 
     for result in (env.taskloom("validate", flow), env.taskloom("run", flow)):
@@ -453,11 +454,11 @@ def test_a_format_a_value_cannot_take_fails_its_template_when_it_runs_and_nothin
         "chart": chart(),
         "v": python("name = 'Bob'\nitems = ['a', 'b']", outputs=["name", "items"]),
         "inner": template(),
-        "pic": template("{chart:,.2f}"),
-        "tab": template("{data:,.2f}"),
-        "lst": template("{items:>5}", {"v.items": "items"}),
-        "part": template("{inner:>5}"),
-        "txt": template("{name:,.2f}", {"v.name": "name"}),
+        "pic": template("{{chart:,.2f}}"),
+        "tab": template("{{data:,.2f}}"),
+        "lst": template("{{items:>5}}", {"v.items": "items"}),
+        "part": template("{{inner:>5}}"),
+        "txt": template("{{name:,.2f}}", {"v.name": "name"}),
         "mail": MAIL,
     }, ["data.table -> chart.table", "chart.image -> pic.data", "data.table -> tab.data", "v.items -> lst.data",
         "inner.html -> part.data", "v.name -> txt.data"] + [f"{b}.html -> mail.body" for b in ("pic", "tab", "lst",
@@ -468,17 +469,17 @@ def test_a_format_a_value_cannot_take_fails_its_template_when_it_runs_and_nothin
     assert result.returncode == 1, result.stderr
     failed = errors(env)
     assert set(failed) == {"pic", "tab", "lst", "part", "txt"}, failed
-    for block, placeholder in (("pic", "{chart:,.2f}"), ("tab", "{data:,.2f}"), ("lst", "{items:>5}"),
-                               ("part", "{inner:>5}")):
+    for block, placeholder in (("pic", "{{chart:,.2f}}"), ("tab", "{{data:,.2f}}"), ("lst", "{{items:>5}}"),
+                               ("part", "{{inner:>5}}")):
         assert f"Template: {placeholder}: a format applies only to text, numbers and dates" in failed[block]
-    assert "Template: {name:,.2f}: Unknown format code 'f' for object of type 'str'" in failed["txt"]
+    assert "Template: {{name:,.2f}}: Unknown format code 'f' for object of type 'str'" in failed["txt"]
     assert smtp.messages == []
     assert env.block_status(env.last_run()[0])["mail"] == "skipped"
 
 
 def test_css_with_doubled_braces_still_moves_into_style_attributes_for_outlook(env, smtp):
     """D19: a <style> block doubles its braces; the CSS still ends up in style attributes, with no <style> left."""
-    flow = write(env, {"body": template('<style>.big {{ font-size: 20px; color: #2c5d8f; }}</style>\n'
+    flow = write(env, {"body": template('<style>.big { font-size: 20px; color: #2c5d8f; }</style>\n'
                                         '<p class="big">Totals</p>'), "mail": MAIL}, ["body.html -> mail.body"])
 
     result = env.taskloom("run", flow)
@@ -510,7 +511,7 @@ def test_a_source_that_is_skipped_skips_the_template_and_no_email_is_sent(env, s
     flow = write(env, {
         "gate": {"type": "logic.if", "config": {"condition": "1 > 2"}},
         "note": python("output = 'hello'"),
-        "body": template("{gate} {note}"),
+        "body": template("{{gate}} {{note}}"),
         "mail": MAIL,
     }, ["gate.true -> body.data", "note.output -> body.data", "body.html -> mail.body"])
 
@@ -526,7 +527,7 @@ def test_a_source_that_is_skipped_skips_the_template_and_no_email_is_sent(env, s
 
 def test_a_blocks_error_connected_into_data_is_named_after_the_block_and_shown_as_text(env, smtp):
     """Edge path: an `error` output into `data` gets its block's name by default ({load}); the error arrives as text."""
-    flow = write(env, {"load": python("raise ValueError('no file today')"), "body": template("Failed: {load}"),
+    flow = write(env, {"load": python("raise ValueError('no file today')"), "body": template("Failed: {{load}}"),
                        "mail": MAIL}, ["load.error -> body.data", "body.html -> mail.body"])
 
     result = env.taskloom("run", flow)
@@ -543,7 +544,7 @@ def test_html_table_the_inputs_setting_and_jinja_syntax_are_gone(env, smtp):
     is literal braces."""
     table = write(env, {"table": {"type": "reports.html_table"}}, name="table.yaml")
     old = write(env, {"body": template("<p>x</p>", inputs=["totals"])}, name="old.yaml")
-    jinja = write(env, {"body": template("<p>Sales {{ params.day }}</p>"), "mail": MAIL}, ["body.html -> mail.body"],
+    jinja = write(env, {"body": template("<p>Sales { params.day }</p>"), "mail": MAIL}, ["body.html -> mail.body"],
                   name="jinja.yaml", params=DAY)
 
     old_type, old_setting = env.taskloom("validate", table), env.taskloom("validate", old)
@@ -569,7 +570,7 @@ def test_reports_are_made_without_jinja2_which_is_no_longer_a_dependency(env, sm
     assert not [d for d in dependencies if re.match(r"(?i)\s*(jinja2|markupsafe)\b", d)], dependencies
     lock = (REPO / "uv.lock").read_text(encoding="utf-8")
     assert 'name = "jinja2"' not in lock and 'name = "markupsafe"' not in lock
-    flow = write(env, {"totals": sql(), "body": template("Hi team<br>{totals}"), "mail": MAIL},
+    flow = write(env, {"totals": sql(), "body": template("Hi team<br>{{totals}}"), "mail": MAIL},
                  ["totals.result -> body.data", "body.html -> mail.body"])
 
     result = subprocess.run([sys.executable, "-c", WITHOUT_JINJA, "run", str(flow)], env=env.env, cwd=env.root,
@@ -741,7 +742,7 @@ def test_a_stored_name_that_is_a_number_in_the_file_shows_in_red_in_properties_a
     try:
         path = flow_file(tmp_path / "number.yaml", {
             "totals": at(sql(), 0, 0),
-            "body": at(template("{totals}", {"totals.result": 123}), 300, 0),
+            "body": at(template("{{totals}}", {"totals.result": 123}), 300, 0),
         }, ["totals.result -> body.data"])
         tab = win.open_flow(path)
         settle()
@@ -808,9 +809,9 @@ def test_renaming_a_source_block_or_a_python_code_output_keeps_the_input_name_an
         path = flow_file(tmp_path / "renamed.yaml", {
             "ask_name": at(python("answer = reply = 'Bob'", outputs=["answer"]), 0, 0),
             "totals": at(sql(), 0, 160),
-            "body": at(template("Hi {input1}<br>{my_table}", {"ask_name.answer": "input1", "totals.result": "my_table"}),
-                       300, 0),
-            "footer": at(template("{sums}", {"totals.result": "sums"}), 300, 200),
+            "body": at(template("Hi {{input1}}<br>{{my_table}}",
+                                {"ask_name.answer": "input1", "totals.result": "my_table"}), 300, 0),
+            "footer": at(template("{{sums}}", {"totals.result": "sums"}), 300, 200),
             "mail": at(MAIL, 550, 100),
         }, ["ask_name.answer -> body.data", "totals.result -> body.data", "totals.result -> footer.data",
             "body.html -> mail.body", "footer.html -> mail.body"])
@@ -886,7 +887,7 @@ def test_a_pasted_template_keeps_the_names_of_its_copied_sources_and_drops_the_o
         path = flow_file(tmp_path / "pasted.yaml", {
             "ask_name": at(python("answer = 'Bob'", outputs=["answer"]), 0, 0),
             "totals": at(sql(), 0, 160),
-            "body": at(template("Hi {input1}<br>{my_table}", names), 300, 80),
+            "body": at(template("Hi {{input1}}<br>{{my_table}}", names), 300, 80),
         }, ["ask_name.answer -> body.data", "totals.result -> body.data"])
         tab = win.open_flow(path)
         settle()
@@ -902,8 +903,8 @@ def test_a_pasted_template_keeps_the_names_of_its_copied_sources_and_drops_the_o
         assert into(tab, "body_2") == ["totals_2.result"]
         select_only(tab, "body_2")
         assert rows(win) == [("from totals_2.result", "my_table")]
-        assert ("Template: {input1} is not an input or a flow parameter (inputs: my_table; write {{ and }} for literal "
-                "braces)") in error_shown(win).splitlines()
+        assert ("Template: {{input1}} is not an input or a flow parameter (inputs: my_table; write {{{{ for a "
+                "literal {{)") in error_shown(win).splitlines()
         undo(win)  # the paste, in one step
         assert tab.doc.data == original
 
@@ -915,8 +916,8 @@ def test_a_pasted_template_keeps_the_names_of_its_copied_sources_and_drops_the_o
         assert names_of(tab, "body_2") == {}
         assert names_of(tab, "body") == names
         select_only(tab, "body_2")
-        assert ("Template: {my_table} is not an input or a flow parameter (inputs: none; write {{ and }} for literal "
-                "braces)") in error_shown(win).splitlines()
+        assert ("Template: {{my_table}} is not an input or a flow parameter (inputs: none; write {{{{ for a literal "
+                "{{)") in error_shown(win).splitlines()
         select_only(tab, "body")
         assert error_shown(win) == ""
     finally:

@@ -254,7 +254,7 @@ def test_a_mermaid_fence_in_an_inspect_message_is_drawn_in_the_log(win, qtbot, t
     flow = write_flow(tmp_path / "steps.yaml", {
         "manual": {"type": "trigger.manual"},
         "make": python("output = 'nightly'"),
-        "look": look(message="## Run {value}\n\n" + fence(SMALL) + "\nAll steps.", markdown=True),
+        "look": look(message="## Run {{value}}\n\n" + fence(SMALL) + "\nAll steps.", markdown=True),
     }, ["manual.start -> make.after", "make.output -> look.value"])
 
     run_in_editor(win, qtbot, flow)

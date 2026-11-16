@@ -15,7 +15,6 @@ text is example code; consecutive such lines are one example. Uncommented, each 
 
 import os
 import re
-import string
 import textwrap
 from html.parser import HTMLParser
 
@@ -224,12 +223,9 @@ def params_for(example: str, language: str) -> dict:
     if language == "python":
         specs.update((name, "") for name in re.findall(r"""\bparams\[\s*["']([A-Za-z_]\w*)["']\s*\]""", example))
     if language in ("sql", "html"):
-        try:
-            for _, name, spec, _ in string.Formatter().parse(example):
-                if name and (spec or name not in specs):
-                    specs[name] = spec or ""
-        except ValueError:
-            pass  # (an unmatched brace: the run says so)
+        for name, spec in re.findall(r"(?<!\{)\{\{(?!\{)\s*([A-Za-z_]\w*)\s*(?::([^{}\n]*?))?\s*\}\}", example):
+            if spec or name not in specs:
+                specs[name] = spec
     return {name: AMOUNT if spec and not re.search(r"%[A-Za-z]", spec) else DAY for name, spec in specs.items()}
 
 
@@ -546,7 +542,7 @@ def test_an_html_template_sends_the_same_email_with_its_starter_comments_as_with
         clean(win)
     starter = config["template"] if isinstance(config.get("template"), str) else ""
     assert starter.strip(), f"a new HTML Template block starts empty: {config}"
-    body = "<b>Hello {who}</b>, the totals are below.<br>Thank you"
+    body = "<b>Hello {{who}}</b>, the totals are below.<br>Thank you"
     templates = {"plain": body, "below": below(starter, body), "between": between(starter, body, "html"),
                  "only": starter, "empty": None}
     blocks, edges = {"who": python("output = 'Bob'")}, []
@@ -739,7 +735,7 @@ def test_an_existing_templates_outlook_conditional_comments_still_reach_the_emai
     opening = '<!--[if mso]><table role="presentation" width="600"><tr><td><![endif]-->'
     closing = "<!--[if mso]></td></tr></table><![endif]-->"
     blocks = {"who": python("output = 'Bob'"),
-              "body": {"type": "reports.html_template", "config": {"template": f"{opening}Hello {{who}}{closing}"}},
+              "body": {"type": "reports.html_template", "config": {"template": f"{opening}Hello {{{{who}}}}{closing}"}},
               "send": mail("report")}
 
     result = env.taskloom("run", flow_file(env, blocks, ["who.output -> body.data", "body.html -> send.body"]))

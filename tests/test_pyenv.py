@@ -84,7 +84,7 @@ def test_secrets_never_reach_logs_or_files_through_inspect_or_the_environment(en
             config: {prompt: "Password?", kind: password, secret: db_pw}
           message:
             type: logic.inspect
-            config: {message: "password is {value}"}
+            config: {message: "password is {{value}}"}
           outside:
             type: logic.python
             config: {inputs: [pw], outputs: [n, same, built], use_environment: true,

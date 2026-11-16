@@ -77,7 +77,7 @@ for step in range(steps):
         if edits:
             e = rnd.choice(edits)
             e.setFocus()
-            e.setText(rnd.choice(["", "x", "42", "data/sales.csv", "{day}", "a, b", "-1", "3.5"]))
+            e.setText(rnd.choice(["", "x", "42", "data/sales.csv", "{{day}}", "a, b", "-1", "3.5"]))
             e.editingFinished.emit()
     elif action == "toggle":
         boxes = [b for b in window.properties.findChildren(QCheckBox) if b.isVisible()]

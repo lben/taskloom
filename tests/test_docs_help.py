@@ -14,7 +14,6 @@ import json
 import os
 import re
 import shutil
-import string
 import subprocess
 import sys
 import time
@@ -762,14 +761,12 @@ def params_used(f, examples) -> dict:
     a date where the template gives a date format, else text."""
     found = {}
     for example in examples:
-        if f.template:
-            try:
-                for _, name, spec, _ in string.Formatter().parse(example):
-                    if name:
-                        found[name] = ({"type": "date", "value": "2026-01-16"} if spec and "%" in spec
-                                       else {"type": "text", "value": "east"})
-            except ValueError:
-                pass  # (validate says what is wrong with it)
+        inspect = isinstance(f, fields.Code) and f.language == "f-string"  # Inspect's {{ }}: a parameter by its name
+        if f.template or inspect:
+            for name, spec in re.findall(r"(?<!\{)\{\{(?!\{)\s*([A-Za-z_]\w*)\s*(?::([^{}\n]*?))?\s*\}\}", example):
+                if not (inspect and name in ("value", "params")):
+                    found[name] = ({"type": "date", "value": "2026-01-16"} if spec and "%" in spec
+                                   else {"type": "text", "value": "east"})
         if isinstance(f, fields.Code) and f.language == "sql":
             found.update({name: {"type": "text", "value": "east"} for name in P.to_qmark(example)[1]})
     return found
@@ -1485,7 +1482,7 @@ def test_a_user_blocks_settings_without_help_or_examples_show_the_hint_and_their
         caption = row_named(mine, "Caption", "", tally)
         card = hover(qtbot, mine, caption.inputs[0], "Caption", "Tally › Caption")
         lines = card_lines(card)[1:]  # a text setting: and what placeholders it takes
-        assert lines[:2] == [NO_HELP, NO_EXAMPLES] and "{name}" in lines[2] and lines[3:] == [LEARN_MORE], lines
+        assert lines[:2] == [NO_HELP, NO_EXAMPLES] and "{{name}}" in lines[2] and lines[3:] == [LEARN_MORE], lines
         mode = row_named(mine, "Mode", "", tally)
         card = hover(qtbot, mine, mode.inputs[0], "Mode", "Tally › Mode")
         assert card_lines(card)[1:] == [NO_HELP, "One of: rows · distinct", LEARN_MORE], card_lines(card)

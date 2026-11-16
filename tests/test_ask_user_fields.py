@@ -267,7 +267,7 @@ def answer_flow(path: Path, config: str) -> Path:
             config: {config}
           show:
             type: logic.inspect
-            config: {{message: "got {{value}}"}}
+            config: {{message: "got {{{{value}}}}"}}
           save:
             type: logic.python
             config:
@@ -315,7 +315,7 @@ def test_a_password_ask_user_run_nobody_can_answer_uses_its_stored_secret_hidden
             config: {{prompt: 'Password?', kind: password, default: other-pass, secret: api_token}}
           show:
             type: logic.inspect
-            config: {{message: "got {{value}}"}}
+            config: {{message: "got {{{{value}}}}"}}
           use:
             type: logic.python
             config:

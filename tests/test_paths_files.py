@@ -272,7 +272,7 @@ def test_parameters_fill_in_source_and_destination(env):
         blocks:
           archive:
             type: files.copy
-            config: {source: "exports/sales_{day:%Y-%m-%d}.csv", destination: "archive/{day:%Y}/{day:%m}/"}
+            config: {source: "exports/sales_{{day:%Y-%m-%d}}.csv", destination: "archive/{{day:%Y}}/{{day:%m}}/"}
     """)
 
     assert result.returncode == 0, result.stderr

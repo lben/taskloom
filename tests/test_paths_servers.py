@@ -286,7 +286,7 @@ def test_ssh_command_with_fail_on_error_off_passes_the_exit_code_on(env, server)
 
 
 def test_ssh_command_fills_in_parameters_and_keeps_doubled_braces(env, server):
-    blocks = {"cmd": _ssh("echo report-{day}; echo x | awk '{{print \"got\", $1}}'"), "out": _save("stdout.json")}
+    blocks = {"cmd": _ssh("echo report-{{day}}; echo x | awk '{print \"got\", $1}'"), "out": _save("stdout.json")}
     edges = ["cmd.stdout -> out.input"]
     params = {"day": {"type": "text", "value": "2026-10-02"}}
 
@@ -300,7 +300,7 @@ def test_ssh_command_fills_in_parameters_and_keeps_doubled_braces(env, server):
 
 
 def test_ssh_command_with_single_braces_is_refused_before_anything_runs(env, server):
-    flow = _write_flow(env, {"cmd": _ssh("touch ran.txt; echo ${HOME}")})
+    flow = _write_flow(env, {"cmd": _ssh("touch ran.txt; echo ${{HOME}}")})
 
     result = env.taskloom("run", flow)
 
@@ -928,7 +928,7 @@ def _health_flow(**config):
 
 def test_health_check_of_a_web_address_that_answers(env):
     with _web() as base:
-        blocks, edges = _health_flow(url="{base}/200")
+        blocks, edges = _health_flow(url="{{base}}/200")
         result, run_id, status = _run(env, blocks, edges, params={"base": {"type": "text", "value": base}})
 
     assert result.returncode == 0, result.stderr
@@ -1133,7 +1133,7 @@ def test_remote_extract_into_a_folder_named_with_a_parameter(env, server):
 
     result, _, status = _run(env, {
         "extract": {"type": "servers.remote_extract", "config": {
-            "connection": "appserver", "archive": "~/upload/app-{version}.zip", "destination": "~/releases/{version}"}},
+            "connection": "appserver", "archive": "~/upload/app-{{version}}.zip", "destination": "~/releases/{{version}}"}},
         "folder": _save("folder.json"),
     }, ["extract.folder -> folder.input"], params={"version": {"type": "text", "value": "2.4"}})
 

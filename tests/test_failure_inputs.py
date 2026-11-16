@@ -185,7 +185,7 @@ def test_paths_after_an_if_meeting_in_an_input_that_takes_any_one_show_which_cam
         "route": {"type": "logic.if", "config": {"condition": "len(value) > 5"}},
         "many": python("output = 'many'", ("input",)),
         "few": python("output = 'few'", ("input",)),
-        "check": {"type": "logic.inspect", "config": {"message": "{value['missing']}"}},
+        "check": {"type": "logic.inspect", "config": {"message": "{{value['missing']}}"}},
         "stop": failing(),
     }, ["rows.output -> route.value", "route.true -> many.input", "route.false -> few.input",
         "many.output -> check.value", "few.output -> check.value",
