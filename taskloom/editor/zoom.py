@@ -40,6 +40,7 @@ class Zoom(QObject):
     def __init__(self, window, settings):
         super().__init__(window)
         self.window, self.settings = window, settings
+        self._turned = 0  # the wheel's turns not yet a notch (120 units): a trackpad sends smaller ones
         QApplication.instance().installEventFilter(self)
 
     def eventFilter(self, watched, event):
@@ -52,15 +53,20 @@ class Zoom(QObject):
             return False
         if kind == QEvent.KeyPress and _ctrl(event) and event.key() in KEYS:
             by = KEYS[event.key()]
-        elif kind == QEvent.Wheel and _ctrl(event) and event.angleDelta().y():
-            by = 1 if event.angleDelta().y() > 0 else -1
-        else:
+        elif not (kind == QEvent.Wheel and _ctrl(event) and event.angleDelta().y()):
             return False
         pane = _pane_under_pointer()
         if pane is None or (kind == QEvent.Wheel and not isinstance(pane, (QTextEdit, QPlainTextEdit))):
             return kind == QEvent.KeyPress  # over anything else the keys do nothing (nothing typed); the wheel scrolls
         if not self._mine(pane):
             return False  # (another editor window's)
+        if kind == QEvent.Wheel:  # a step a notch; smaller turns add up to one
+            self._turned += event.angleDelta().y()
+            by = int(self._turned / 120)
+            self._turned -= by * 120
+            if not by:
+                event.accept()
+                return True
         if pane.property("zoom") == "canvas":
             pane.zoom_to(100 if by == 0 else pane.zoom_percent() + by * pane.zoom_bar.step.value())
         else:
@@ -79,7 +85,8 @@ class Zoom(QObject):
 
     def _show(self, pane, step: int) -> int:
         """Show the pane `step` points bigger than its normal font (kept between the smallest and the largest size):
-        that step. A text pane keeps its top line, or its last if it is scrolled to its end (the Log follows it)."""
+        that step. A text pane keeps its top line (of a paragraph it wraps, that line, not the paragraph's first), or
+        its last if it is scrolled to its end (the Log follows it). Already at that size, nothing happens."""
         normal = pane.property("zoom_normal")
         if normal is None:
             normal = QFont(pane.font())
@@ -89,15 +96,17 @@ class Zoom(QObject):
         font = QFont(normal)
         if step:
             font.setPointSizeF(size + step)
+        if font == pane.font():  # (at the smallest or the largest size: not even a scroll)
+            return step
         bar = pane.verticalScrollBar() if isinstance(pane, QTextEdit) else None  # (a QPlainTextEdit keeps its own)
         if bar is not None:
             end, scrolled = bar.value() == bar.maximum(), bar.maximum() > 0
-            top = pane.cursorForPosition(QPoint(0, 1)).block()  # (at 0 it can be the one just above, not shown)
+            top = pane.cursorForPosition(QPoint(0, 1))  # its top line's start (at 0 it can be the line just above)
         pane.setFont(font)
         if isinstance(pane, QTableView):  # rows as high as their text, as Qt makes them for the font they start in
             rows = pane.verticalHeader()
             rows.setDefaultSectionSize(max(rows.minimumSectionSize(), pane.style().pixelMetric(
                 QStyle.PM_HeaderDefaultSectionSizeVertical, None, rows)))
         if bar is not None and scrolled:
-            bar.setValue(bar.maximum() if end else int(pane.document().documentLayout().blockBoundingRect(top).top()))
+            bar.setValue(bar.maximum() if end else bar.value() + pane.cursorRect(top).top())  # (laid out again)
         return step
