@@ -712,3 +712,23 @@ def test_two_rows_with_the_same_name_are_both_kept_and_both_sent_in_the_lists_or
         else:
             assert pairs == rows, pairs
 
+
+
+@pytest.mark.invariant("AP-5")
+def test_the_note_under_connection_shows_a_repeated_headers_values_as_they_are_sent(qtbot, win, tmp_path):
+    """A12, as Properties says it: with an API connection chosen whose headers X-Tag and Cookie the block's own
+    replace, and the block's Headers holding two rows of each name, the note under Connection shows each replacing
+    header with the value that is sent: its rows' values in the list's order, joined by ", " (by "; " for Cookie), as
+    Copy as cURL shows them (-H 'X-Tag: one, two', -H 'Cookie: a=1; b=2')."""
+    with editing(win):
+        (win.home.root / "connections.yaml").write_text(yaml.safe_dump({"shop": {
+            "kind": "api", "base_url": "http://127.0.0.1:9/api",
+            "headers": as_rows([("X-Tag", "zero"), ("Cookie", "theme=dark")])}}), encoding="utf-8")
+        rows = [("X-Tag", "one"), ("Cookie", "a=1"), ("Accept", "text/plain"), ("X-Tag", "two"), ("Cookie", "b=2")]
+        open_list(qtbot, win, tmp_path, HEADERS._replace(config={**HEADERS.config, "connection": "shop"}), rows=rows)
+        notes = [w.text() for w in win.properties.widget().findChildren(QLabel)
+                 if w.isVisibleTo(win) and w.text().startswith("From the connection shop")]
+        assert len(notes) == 1, f"Properties shows {len(notes)} notes from the connection shop"
+        lines = notes[0].splitlines()
+        assert "Header X-Tag: zero (replaced by this block's X-Tag: one, two)" in lines, lines
+        assert "Header Cookie: theme=dark (replaced by this block's Cookie: a=1; b=2)" in lines, lines
