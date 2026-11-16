@@ -2091,6 +2091,9 @@ class FindBar(QWidget):
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Hide and watched.isHidden() and not self.isHidden():
             self.close_bar()  # its view was put away (Data preview shows a table, or text, instead)
+        elif event.type() == QEvent.FontChange and not self.table:  # (zoomed) other lines in view, which a plain text
+            # box's scroll bar (it counts lines) may not say: theirs highlighted once the view has laid out in it
+            QTimer.singleShot(0, self, self._scrolled)
         return False
 
     def _toggled(self):
