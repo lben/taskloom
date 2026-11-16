@@ -144,15 +144,16 @@ def press(*keys):
         settle()
 
 
-def wheel(notches: int, modifiers=CTRL):
-    """The mouse wheel turned `notches` notches (more than 0: up, away from you) with `modifiers` held, sent to the
-    widget under the pointer, as the system sends it."""
+def wheel(turns: int, modifiers=CTRL, units: int = 120):
+    """The mouse wheel turned `turns` times (more than 0: up, away from you) by `units` each with `modifiers` held,
+    sent to the widget under the pointer, as the system sends it. 120 units are one notch of a mouse wheel, as Qt
+    counts them; a trackpad, or a wheel that turns freely, sends turns of fewer units."""
     at = QCursor.pos()
     under = QApplication.widgetAt(at)
     assert under is not None, "nothing is under the pointer"
-    for _ in range(abs(notches)):
+    for _ in range(abs(turns)):
         event = QWheelEvent(QPointF(under.mapFromGlobal(at)), QPointF(at), QPoint(0, 0),
-                            QPoint(0, 120 if notches > 0 else -120), Qt.NoButton, modifiers, Qt.NoScrollPhase, False)
+                            QPoint(0, units if turns > 0 else -units), Qt.NoButton, modifiers, Qt.NoScrollPhase, False)
         QApplication.sendEvent(under, event)
         settle()
 
@@ -312,6 +313,55 @@ def ready(win, folder: Path, kind: str) -> Pane:
     focus_on(elsewhere(win, kind))
     pointer_over(pane.widget, kind)
     return pane
+
+
+DOCS_PAGE = "the-editor.html"  # the guide's page on the editor: long paragraphs, which the docs column wraps
+
+
+def docs_page(win):
+    """The docs (showing, the pointer over them) at the guide's page on the editor: their view."""
+    win.docs.open_at(DOCS_PAGE)
+    settle()
+    view = win.docs.browser
+    pointer_over(view, "docs")
+    return view
+
+
+def wrapped_paragraph(view, lines: int):
+    """A paragraph in the middle of the page that the view wraps into at least `lines` lines."""
+    view.document().documentLayout().blockBoundingRect(view.document().lastBlock())  # (the whole page laid out)
+    height = view.document().size().height()
+    block = view.document().begin()
+    while block.isValid():
+        layout = block.layout()
+        if (block.blockFormat().headingLevel() == 0 and layout.lineCount() >= lines
+                and 0.3 < layout.position().y() / height < 0.7):
+            return block
+        block = block.next()
+    raise AssertionError(f"the middle of {view.source().toString()} has no paragraph wrapped into {lines} lines")
+
+
+def line_holding(view, position: int) -> tuple[int, str]:
+    """The line the view shows the character at `position` on: where it starts, and its text."""
+    block = view.document().findBlock(position)
+    view.document().documentLayout().blockBoundingRect(block)  # (laid out)
+    line = block.layout().lineForTextPosition(position - block.position())
+    assert line.isValid(), f"no line shows the character at {position}"
+    return block.position() + line.textStart(), block.text()[line.textStart():line.textStart() + line.textLength()]
+
+
+def top_of(view) -> int:
+    """Where the line at the top of the view starts."""
+    return line_holding(view, view.cursorForPosition(QPoint(1, 1)).position())[0]
+
+
+def scroll_line_to_top(view, position: int):
+    """Scroll so that the line holding `position` is the top line in view."""
+    bar = view.verticalScrollBar()
+    bar.setValue(bar.value() + rect_at(view, position).top())
+    settle()
+    assert top_of(view) == line_holding(view, position)[0], (
+        f"the top line is {line_holding(view, top_of(view))[1]!r}, not {line_holding(view, position)[1]!r}")
 
 
 def started_again(qtbot, home: Path) -> MainWindow:
@@ -493,6 +543,29 @@ def test_ctrl_and_the_wheel_over_a_text_pane_do_as_the_keys_and_the_size_is_kept
     assert shown == kept, f"Taskloom started again: the {kind} shows at {shown}, not at the size the wheel gave {kept}"
 
 
+@pytest.mark.invariant("ZM-1")
+def test_small_turns_of_a_trackpad_add_up_to_one_step_a_notch(win, qtbot, tmp_path):
+    """ZM-1: a trackpad sends many turns smaller than a mouse wheel's notch (120 units). Over the Log, with Ctrl held,
+    turns of 15 that add up to less than a notch change no size; the one that makes them a notch gives the size one
+    Ctrl + gives; turns of 30 down that add up to a notch give the normal size again."""
+    pane = ready(win, tmp_path, "Log")
+    try:
+        normal = pane.size()
+        press(IN)
+        grown = pane.size()
+        assert bigger(grown, normal), f"Ctrl + over the Log left it at {grown} (normal {normal})"
+        press(NORMAL)
+        wheel(7, units=15)
+        assert pane.size() == normal, (
+            f"Ctrl and 7 turns of 15 units up (105, less than a notch) over the Log: {pane.size()}, not {normal}")
+        wheel(1, units=15)
+        assert pane.size() == grown, f"Ctrl and 8 turns of 15 units up (a notch): {pane.size()}, Ctrl +: {grown}"
+        wheel(-4, units=30)
+        assert pane.size() == normal, f"then 4 turns of 30 units down (a notch): {pane.size()}, not {normal}"
+    finally:
+        clean(win)
+
+
 # --- ZM-2: over anything else the keys do nothing -----------------------------------------------------------------
 
 PLACES = ["menu bar", "open menu", "toolbar", "splitter", "Properties field"]
@@ -583,6 +656,36 @@ def test_there_is_a_smallest_and_a_largest_size_and_at_either_end_nothing_more_h
             assert pane.size() == smallest, f"Ctrl + wheel over the {kind} went past the smallest size {smallest}"
         press(IN)
         assert bigger(pane.size(), smallest), f"at its smallest, Ctrl + over the {kind} does nothing"
+    finally:
+        clean(win)
+
+
+@pytest.mark.invariant("ZM-4")
+@pytest.mark.parametrize("end", ["largest", "smallest"])
+def test_at_either_end_the_keys_and_the_wheel_do_not_scroll_the_docs(win, qtbot, tmp_path, end):
+    """ZM-4: the docs at their largest size (or smallest), scrolled to the middle of a long paragraph, its top line half
+    shown: Ctrl + (or Ctrl -) and Ctrl with the wheel turned up (or down) one notch over them change nothing, neither
+    the size nor where the docs are scrolled to."""
+    pane = ready(win, tmp_path, "docs")
+    try:
+        view = docs_page(win)
+        key, notch, name = (IN, 1, "Ctrl +") if end == "largest" else (OUT, -1, "Ctrl -")
+        at_end = climb(pane, key)
+        paragraph = wrapped_paragraph(view, 3)
+        line = paragraph.layout().lineAt(1)
+        scroll_line_to_top(view, paragraph.position() + line.textStart())
+        bar = view.verticalScrollBar()
+        bar.setValue(bar.value() + round(line.height() / 2))
+        settle()
+        scrolled = bar.value()
+        for how in (name, "Ctrl and the wheel"):
+            if how == name:
+                press(key)
+            else:
+                wheel(notch)
+            assert pane.size() == at_end, f"at the {end} size, the {how} changed the docs' size to {pane.size()}"
+            assert bar.value() == scrolled, (
+                f"at the {end} size, the {how} scrolled the docs from {scrolled} to {bar.value()}")
     finally:
         clean(win)
 
@@ -805,6 +908,27 @@ def test_zoom_keeps_the_text_the_selection_the_top_line_and_the_find_highlights(
             assert bar.count() == count, f"zoomed {step}: the find bar counts {bar.count()}, not {count}"
             assert unmarked(view) == [], f"zoomed {step}: matches in view not highlighted: {unmarked(view)}"
         assert set(matches_in_view(view)) - at_first, "zoomed out, no match came into view: nothing new was checked"
+    finally:
+        clean(win)
+
+
+@pytest.mark.invariant("ZM-5")
+def test_zoom_keeps_the_top_line_of_a_wrapped_paragraph_at_the_top(win, qtbot, tmp_path):
+    """ZM-5: the docs scrolled so that the third line of a long paragraph, which the column wraps, is the top line.
+    Each Ctrl + (twice) and Ctrl - (then below the normal size) over the docs keeps the line that was at the top at the
+    top: the text it started with is on the top line, wrapped again at the new size."""
+    pane = ready(win, tmp_path, "docs")
+    try:
+        view = docs_page(win)
+        paragraph = wrapped_paragraph(view, 6)
+        scroll_line_to_top(view, paragraph.position() + paragraph.layout().lineAt(2).textStart())
+        for name, key in [("Ctrl +", IN)] * 2 + [("Ctrl -", OUT)] * 5:
+            size, (start, text) = pane.size(), line_holding(view, top_of(view))
+            press(key)
+            assert pane.size() != size, f"{name} over the docs left them at {size}"
+            assert top_of(view) == line_holding(view, start)[0], (
+                f"{name} over the docs: the top line is {line_holding(view, top_of(view))[1]!r}; the line that was at "
+                f"the top, {text!r}, now starts on {line_holding(view, start)[1]!r}")
     finally:
         clean(win)
 
