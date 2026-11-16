@@ -630,7 +630,8 @@ def build_wheel(folder: Path) -> tuple[str, dict[str, bytes]]:
     assert uv, "uv is not installed: it builds the wheel, as in CI"
     source = folder / "source"
     shutil.copytree(REPO / "taskloom", source / "taskloom", ignore=shutil.ignore_patterns("__pycache__"))
-    for name in ("pyproject.toml", "README.md", "LICENSE"):
+    for name in ("pyproject.toml", "README.md", "LICENSE", "docs/guide.md"):  # the guide is in the wheel too
+        (source / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / name, source / name)
     done = subprocess.run([uv, "build", "--wheel", "--out-dir", str(folder / "out"), str(source)], capture_output=True,
                           text=True, encoding="utf-8", errors="replace", timeout=300)
