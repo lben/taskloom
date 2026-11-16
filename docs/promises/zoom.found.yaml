@@ -6,6 +6,18 @@ found:
     found_by: CI on Linux and Windows
     fixed_in: da46135
     guarded_by: tests/test_zoom_panes.py::test_zoom_keeps_the_text_the_selection_the_top_line_and_the_find_highlights
+  - what: Each turn of a trackpad, or of a wheel that turns freely, changed the size a whole step, however small the turn, so a short swipe with Ctrl held zoomed many steps; a mouse wheel's notch (120 units) is one step, and smaller turns now add up to it.
+    found_by: the reviewer
+    fixed_in: 1730125
+    guarded_by: tests/test_zoom_panes.py::test_small_turns_of_a_trackpad_add_up_to_one_step_a_notch
+  - what: At the largest or the smallest size, Ctrl +, Ctrl - and Ctrl with the wheel left the size as it was but still scrolled the docs, to the top of the paragraph at the top, because the size was set again and the top paragraph put back at the top.
+    found_by: the reviewer
+    fixed_in: 1730125
+    guarded_by: tests/test_zoom_panes.py::test_at_either_end_the_keys_and_the_wheel_do_not_scroll_the_docs
+  - what: A zoom over the docs with the top of the view in the middle of a paragraph the column wraps jumped to the paragraph's first line, because the paragraph that was at the top was kept, not the line.
+    found_by: the reviewer
+    fixed_in: 1730125
+    guarded_by: tests/test_zoom_panes.py::test_zoom_keeps_the_top_line_of_a_wrapped_paragraph_at_the_top
 lighter:
   - "Keys and wheel turns are sent offscreen as the system sends them; a real keyboard, mouse and screen were not used."
   - "Only a picture's size is checked in a zoomed Log; no Mermaid drawing is drawn in a test, though the guide's words on both are read."
