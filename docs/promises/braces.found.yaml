@@ -1,0 +1,18 @@
+# The bugs proving the one brace rule found, each fixed and guarded by a test since (the proof PDF counts and lists
+# them before the details; tests/test_promises_found.py checks each test exists), and where it is checked more lightly.
+found:
+  - what: 'An Inspect message whose expression in {{ }} starts with a brace of its own, such as {{ {"a": 1}["a"] }} or a dict comprehension, failed Validate or showed the expression as plain text, because the f-string that fills it in then began with {{, a literal brace.'
+    found_by: the reviewer
+    fixed_in: 808232a
+    guarded_by: tests/test_braces.py::test_inspects_expression_may_start_with_a_brace_of_its_own
+  - what: 'Import from cURL dropped the spaces and tabs at the ends of the body''s lines, inside its quotes too, so the run sent a body other than the command''s; only spaces copied after a line-ending backslash were meant to go.'
+    found_by: the reviewer
+    fixed_in: 808232a
+    guarded_by: tests/test_braces.py::test_import_from_curl_keeps_spaces_and_a_tab_at_the_ends_of_the_bodys_lines
+  - what: 'A space after the colon of {{day: %Y}} or {{ day : %d %m %Y }} was kept as the start of the format, so every kind of field, Inspect''s message too, gave the date with a space before it.'
+    found_by: the reviewer
+    fixed_in: 808232a
+    guarded_by: tests/test_braces.py::test_double_braces_give_the_parameters_value_formatted_and_with_spaces_inside
+lighter:
+  - "A Windows cmd command with spaces copied after a line-ending ^ is not tried by a test."
+  - "In Inspect's message, a format after an expression with a colon of its own in brackets, a slice or a lambda, such as {{ value[1:3] : >4 }}, is not tried by a test."
