@@ -1,0 +1,16 @@
+# The bugs proving name/value rows changed and deleted found, each fixed and guarded by a test since (the proof PDF
+# counts and lists them before the details; tests/test_promises_found.py checks each test exists), and where it is
+# checked more lightly.
+found:
+  - what: Two rows of one name in API Request's Headers sent only the last one's value, because the request kept one row per header name.
+    found_by: writing the tests
+    fixed_in: ca78980
+    guarded_by: tests/test_rows.py::test_two_rows_with_the_same_name_are_both_kept_and_both_sent_in_the_lists_order
+  - what: With an API connection chosen, the note under Connection showed only the last value of a header name the block's Headers repeat, not the joined value that is sent.
+    found_by: the implementer's own report
+    fixed_in: 6a8f522
+    guarded_by: tests/test_rows.py::test_the_note_under_connection_shows_a_repeated_headers_values_as_they_are_sent
+lighter:
+  - "A secret: value is tried in Headers only, not in the other six lists."
+  - "Repeated header names are sent as one header, their values joined (HTTP reads both alike); a server that needs the header on lines of its own is not tried."
+  - "Text typed in a cell just before right-click > Delete row makes an undo step of its own."

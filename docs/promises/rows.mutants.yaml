@@ -1,0 +1,26 @@
+# Mutation testing of name/value rows changed and deleted (read by packaging/mutants.py --explained). scope: what the
+# bugs are planted in, the functions the change touched, in groups: each group's bugs run the tests that can see them
+# (each line of tests: is one pytest run, a file with -k words or without). connection_note is the note under
+# Connection in Properties (PropertiesPanel._api_note shows it, unchanged): the fix of its repeated headers (AP-5)
+# changed it, and _sent_header joins a repeated header for it, the request and Copy as cURL alike. The change's other
+# lines are not functions of their own, so nothing is planted in them: the comment of _Call's headers, the import of
+# QMenu and the _RowsTable class line, which the AP-1 tests check. The mutants the tests let through are explained
+# here, by kind (kinds: a kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a
+# user could notice). Only those no user could notice are explained: the others stay without a reason until a test
+# catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/panels.py PropertiesPanel._rows_widget
+        - taskloom/editor/panels.py _RowsTable.mousePressEvent
+        - taskloom/editor/panels.py _RowsTable.contextMenuEvent
+      tests:
+        - tests/test_rows.py -k "not same_name and not note_under_connection"
+        - tests/test_api_request.py -k params_and_the_urls_query_stay_in_step
+    - mutate:
+        - taskloom/blocks/servers.py _sent_header
+        - taskloom/blocks/servers.py _call
+        - taskloom/blocks/servers.py connection_note
+      tests:
+        - tests/test_rows.py -k "same_name or note_under_connection"
+        - tests/test_api_request.py -k "params_are_added or headers_are_sent or auth_kind or secret_that_is_not_stored or connection_gives or connection_chosen_its_values or redirect_to_another_host or copy_as_curl or log_says_what_was_sent"

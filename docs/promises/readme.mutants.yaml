@@ -1,0 +1,18 @@
+# Mutation testing of a short README with its details in the guide (read by packaging/mutants.py --explained). scope:
+# what the bugs are planted in, the functions the change touched (each line of tests: is one pytest run, a file with
+# -k words or without). The change's other lines are not functions of their own, or changed only a docstring or a
+# comment, so nothing is planted in them: README.md, docs/guide.md, pyproject.toml and packaging/taskloom.spec; the
+# docstrings of docs.py and of _guide, of _documentation_shown (taskloom/editor/window.py), and a comment in
+# triggers.py. tests/test_readme_guide.py is not run here: its tests read README.md, pyproject.toml's wheel settings
+# and packaging/, which mutation testing's copy of the project does not hold (it holds the package, tests/ and
+# docs/guide.md); the guide an installed app reads (taskloom/guide.md, _guide_text's first place) is checked there.
+# The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it explains) or
+# one by one (mutant name: why it changes nothing a user could notice). Only those no user could notice are
+# explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/docs.py _guide_text
+        - taskloom/editor/docs.py pages
+      tests:
+        - tests/test_docs_help.py -k "guide or contents_begins or every_link_and_anchor or user_blocks_are_in_contents"

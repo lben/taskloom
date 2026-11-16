@@ -1,0 +1,16 @@
+# The design decisions of the one brace rule, one line each (read by packaging/proof_pdf.py): what was chosen, and
+# when to look at it again.
+- chosen: 'One tokenizer, params.split, cuts every text that is filled (each templated setting, the HTML Template and Inspect''s message): only {{ starts a placeholder, and Python''s string.Formatter is no longer used.'
+  revisit_if: a field needs a placeholder syntax of its own, e.g. a template language with its own {{ }} such as Jinja.
+- chosen: '{{{{ gives a literal {{ (agreed again for Windows paths), not \{{, so a backslash before a placeholder, as in C:\data\{{day}}.csv, stays plain text.'
+  revisit_if: a literal {{ is needed often, e.g. many Mermaid hexagons or Handlebars templates sent to an API.
+- chosen: 'Inside {{ }} only a name and a format: the other forms of a Python format string, {x!r} and a nested {a:{b}}, are gone.'
+  revisit_if: a conversion or a format taken from another value is needed, e.g. a width that is a parameter.
+- chosen: 'A single-brace {name} that names a flow parameter or one of the block''s inputs is a Validate warning (did you mean {{name}}?), not an error, and the run sends it as typed.'
+  revisit_if: flows from before the rule are found sending {name} by mistake, so that a warning is not enough.
+- chosen: 'Inspect''s message becomes a Python f-string, each {{expression}} as {expression} and its plain text''s braces doubled, evaluated with value, params, each parameter by its name and the expression functions; Validate checks the names in it.'
+  revisit_if: the message needs statements, not expressions, or a flow parameter must be named value or params.
+- chosen: 'An empty {{}} and a {{ with no }} on its line are errors, at Validate and at the run, where {} and a lone { were; {{{p}}} gives the value inside single braces.'
+  revisit_if: a placeholder must go over several lines, e.g. a long expression in Inspect's message.
+- chosen: Import from cURL keeps the body as the command has it, not indented again as JSON, each {{ in it written {{{{, so the run sends the same bytes.
+  revisit_if: imported JSON bodies are wanted indented, for reading in Properties.

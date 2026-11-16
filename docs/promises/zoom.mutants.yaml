@@ -1,0 +1,96 @@
+# Mutation testing of zooming the pane under the pointer (read by packaging/mutants.py --explained). scope: what the
+# bugs are planted in, the functions the change touched, in groups: each group's bugs run the tests that can see them
+# (each line of tests: is one pytest run, a file with -k words or without). The functions that are new or mostly
+# rewritten are tested whole. A function in which the change touched a line or two, among much that was there before,
+# is under not_tested: its bugs are planted and counted, not run, and its reason names the tests that check the
+# changed lines; most of these are a pane's mark(), one line where the pane is built. The change's other lines are not
+# functions of their own, so nothing is planted in them: zoom.py's constants (SMALLEST, LARGEST, KEYS) and the imports
+# of mark and Zoom. The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants
+# it explains) or one by one (mutant name: why it changes nothing a user could notice). Only those no user could
+# notice are explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/zoom.py mark
+        - taskloom/editor/zoom.py _ctrl
+        - taskloom/editor/zoom.py _pane_under_pointer
+        - taskloom/editor/zoom.py Zoom.__init__
+        - taskloom/editor/zoom.py Zoom.eventFilter
+        - taskloom/editor/zoom.py Zoom._mine
+        - taskloom/editor/zoom.py Zoom._step
+        - taskloom/editor/zoom.py Zoom._show
+      tests:
+        - tests/test_zoom_panes.py
+    - mutate:
+        - taskloom/editor/panels.py CodeEdit.changeEvent
+        - taskloom/editor/panels.py CodeEditor.changeEvent
+      tests:
+        - tests/test_zoom_panes.py -k "line_number or tab_in_a_zoomed or built_again"
+        - tests/test_theme.py -k code_box_open_takes
+    - mutate:
+        - taskloom/editor/panels.py LogPanel._reindent
+        - taskloom/editor/panels.py LogPanel._indent
+      tests:
+        - tests/test_zoom_panes.py -k "under_a_message or pictures_in_the_log"
+        - tests/test_inspect_log.py -k "charts_picture_shows_under or markdown_entry_draws"
+    - mutate:
+        - taskloom/editor/panels.py FindBar.eventFilter
+      tests:
+        - tests/test_zoom_panes.py -k find_highlights
+        - tests/test_find_bar.py -k "data_preview_finds or users_case"
+        - tests/test_long_output_mutants.py -k find_in_data_preview
+    - mutate:
+        - taskloom/editor/panels.py LogPanel.eventFilter
+        - taskloom/editor/panels.py Palette.__init__
+        - taskloom/editor/panels.py PropertiesPanel._field_widget
+        - taskloom/editor/panels.py PropertiesPanel._curl_box
+        - taskloom/editor/panels.py _LogView.__init__
+        - taskloom/editor/panels.py _TextBox.__init__
+        - taskloom/editor/panels.py PreviewPanel.__init__
+        - taskloom/editor/panels.py HistoryPanel.__init__
+        - taskloom/editor/window.py DocsBrowser.__init__
+        - taskloom/editor/window.py MainWindow.__init__
+        - taskloom/editor/canvas.py FlowView.__init__
+        - taskloom/editor/dialogs.py BlockResultsDialog.__init__
+      tests:
+        - tests/test_zoom_panes.py
+not_tested:
+  taskloom/editor/panels.py LogPanel.eventFilter: >-
+    The Log's events, to which this change added two lines (a change of its font puts what is under the [block]
+    column under it again, _reindent): test_the_logs_lines_under_a_message_stay_under_its_block_column_when_zoomed
+    checks them. The rest, the Log drawn again in a new theme's colours, is as it was.
+  taskloom/editor/panels.py Palette.__init__: >-
+    The blocks list as it is built, to which this change added one line (its tree is a pane, "blocks"): the zoom
+    tests' "blocks tree" cases zoom it, e.g. in
+    test_ctrl_plus_and_ctrl_equals_grow_the_pane_ctrl_minus_shrinks_it_ctrl_0_makes_it_normal.
+  taskloom/editor/panels.py PropertiesPanel._field_widget: >-
+    A setting's field in Properties as it is built, to which this change added one line (a code box is a pane,
+    "code"): the zoom tests' "Python code box", "SQL code box" and "HTML code box" cases zoom it, and
+    test_a_code_box_built_again_for_another_block_or_another_theme_has_the_remembered_size builds it again.
+  taskloom/editor/panels.py PropertiesPanel._curl_box: >-
+    Import from cURL's section as it is built, to which this change added one line (its box is a pane, "code"). No
+    test zooms that box; it is marked as the other code boxes are, which the tests zoom.
+  taskloom/editor/panels.py _LogView.__init__: >-
+    The Log's view as it is built, to which this change added one line (it is a pane, "log"): the zoom tests' "Log"
+    cases zoom it.
+  taskloom/editor/panels.py _TextBox.__init__: >-
+    Data preview's text box as it is built, to which this change added one line (it is a pane, "preview_text"): the
+    zoom tests' "Data preview text" cases zoom it.
+  taskloom/editor/panels.py PreviewPanel.__init__: >-
+    Data preview as it is built, to which this change added one line (its table is a pane, "preview_table"): the zoom
+    tests' "Data preview table" cases zoom it.
+  taskloom/editor/panels.py HistoryPanel.__init__: >-
+    Run history as it is built, to which this change added one line (its table is a pane, "history"): the zoom tests'
+    "Run history" cases zoom it.
+  taskloom/editor/window.py DocsBrowser.__init__: >-
+    The documentation column as it is built, to which this change added one line (it is a pane, "docs"): the zoom
+    tests' "docs" cases zoom it.
+  taskloom/editor/window.py MainWindow.__init__: >-
+    The window as it is built, to which this change added one line (its Zoom, the event filter on the whole
+    application): without it no pane zooms, which every zoom test checks.
+  taskloom/editor/canvas.py FlowView.__init__: >-
+    A flow's canvas as it is built, to which this change added one line (it is a pane, "canvas"): the zoom tests'
+    "canvas" cases zoom it, and test_ctrl_plus_over_the_canvas_zooms_that_flow_only_until_it_is_closed.
+  taskloom/editor/dialogs.py BlockResultsDialog.__init__: >-
+    Results of this block as it is built, to which this change added one line (the box of a run's values is a pane,
+    "results"): test_a_text_box_of_a_modal_dialog_zooms_under_the_pointer zooms it.

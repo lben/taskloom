@@ -1,0 +1,13 @@
+# The bugs proving zooming the pane under the pointer found, each fixed and guarded by a test since (the proof PDF
+# counts and lists them before the details; tests/test_promises_found.py checks each test exists), and where it is
+# checked more lightly.
+found:
+  - what: After a zoom out, the matches of an open find bar in the lines that came into view in Data preview's text showed without their highlight, because a plain text box counts its scroll bar in lines, so the zoom brought lines into view with no scroll signal.
+    found_by: CI on Linux and Windows
+    fixed_in: da46135
+    guarded_by: tests/test_zoom_panes.py::test_zoom_keeps_the_text_the_selection_the_top_line_and_the_find_highlights
+lighter:
+  - "Keys and wheel turns are sent offscreen as the system sends them; a real keyboard, mouse and screen were not used."
+  - "Only a picture's size is checked in a zoomed Log; no Mermaid drawing is drawn in a test, though the guide's words on both are read."
+  - "No modal dialog has a code box: the dialog zoomed in a test is Results of this block, its box of a run's values."
+  - "Import from cURL's box is marked as a code box, but no test zooms it."

@@ -1,0 +1,10 @@
+# The design decisions of a short README with its details in the guide, one line each (read by packaging/proof_pdf.py):
+# what was chosen, and when to look at it again.
+- chosen: The README is the approved short text (what Taskloom is, who it is for, what it can do, how to get and start it, where the docs are), and the old README moved whole, byte for byte, into docs/guide.md, so nothing is lost.
+  revisit_if: the guide is split into pages of its own, e.g. one file per section.
+- chosen: Help > Documentation and the website build their guide from docs/guide.md, which the wheel and the Windows build carry as taskloom/guide.md; an installed copy is read first, then docs/ above the package in a source checkout.
+  revisit_if: the website is built by another tool, e.g. a static site generator with search of its own.
+- chosen: The tests that read the README's words read docs/guide.md now, and those that check a word is no longer said read both.
+  revisit_if: the README must again hold facts the tests check, e.g. a table of supported versions.
+- chosen: The README's links are checked without the internet, so a web address may only be the project's own.
+  revisit_if: the README must link to other sites, e.g. a dependency's documentation.
