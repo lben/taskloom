@@ -1,0 +1,24 @@
+# What must always be true of the README and the guide, as agreed with the maintainer in chat on 2026-11-16.
+# Each row is checked by the tests marked @pytest.mark.invariant("RD-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: A short README, details in the guide
+agreed: 2026-11-16
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-13
+    words: "Too verbose, should sell it, give an overview of what it can do, for details there is the docs"
+  - date: 2026-11-16
+    # The rows below, and at most about 150 lines for the README (RD-1).
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_readme]
+rows:
+  RD-1: >-
+    The README says what Taskloom is, who it is for, what it can do, how to get it and start it, and where the docs
+    are, in at most about 150 lines.
+  RD-2: >-
+    Nothing is lost: the README's detailed text moves into a guide file in docs/, and Help > Documentation and the
+    website are built from that file. Every fact the old README held is in the guide, and the tests that checked the
+    README's words now check the guide's.
+  RD-3: >-
+    Every link in the README works.
