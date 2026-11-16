@@ -37,10 +37,11 @@ scope:
         - tests/test_engine.py -k validate_reports_all_problems
     - mutate:
         - taskloom/blocks/logic.py _message_source
+        - taskloom/blocks/logic.py _message_tree
         - taskloom/blocks/logic.py Inspect.problems
         - taskloom/blocks/logic.py Inspect.run
       tests:
-        - tests/test_braces.py -k inspect
+        - tests/test_braces.py -k "inspect or double_braces_give"
         - tests/test_paths_logic.py -k inspect
         - tests/test_inspect_log.py -k "values_that_are_not_pictures or message_line_comes_before or show_as_markdown_marks"
         - tests/test_pyenv.py -k secrets_never_reach_logs
