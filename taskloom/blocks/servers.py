@@ -412,6 +412,23 @@ def _sent_header(rows: list[dict], value=lambda text: text) -> tuple[str, str]:
     return name, ("; " if name.lower() == "cookie" else ", ").join(value(r.get("value", "")) for r in rows)
 
 
+def _row_headers(c: dict, conn: dict | None, secret) -> tuple[dict, set]:
+    """The headers the ticked Headers rows send, as _Call holds them: the connection's, then the block's, which replace
+    those of the same name; and the lower-case names of those that carry a stored secret. secret(name): as in _call."""
+    rows = {}  # {lower-case name: its rows}
+    for whose in (conn and conn["headers"], c["headers"]):
+        mine = {}
+        for r in ticked(whose):
+            mine.setdefault(r["key"].lower(), []).append(r)
+        rows.update(mine)
+
+    def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
+        return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
+
+    return ({name: _sent_header(rs, value) for name, rs in rows.items()},
+            {name for name, rs in rows.items() if any(r["value"].startswith(SECRET_PREFIX) for r in rs)})
+
+
 def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
     """The request of the API Request whose settings (their placeholders filled in) are `c`, with its API connection
     `conn` (api_connection; None: none), and what came to its body input (`given`). secret(name): a stored secret, as
@@ -435,19 +452,8 @@ def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
     query = [f"{quote(r['key'], safe='')}={quote(r['value'], safe='')}" for r in ticked(c["params"])]
     if auth == KEY_QUERY:  # (shown as hidden() shows it, as it is: Copy as cURL is read by people)
         query.append(f"{quote(own['key_name'], safe='')}={password if secret is hidden else quote(password, safe='')}")
-    rows = {}  # {lower-case name: its rows}: the connection's, then the block's, which replace those of the same name
-    for whose in (conn and conn["headers"], c["headers"]):
-        mine = {}
-        for r in ticked(whose):
-            mine.setdefault(r["key"].lower(), []).append(r)
-        rows.update(mine)
-
-    def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
-        return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
-
-    headers = {name: _sent_header(rs, value) for name, rs in rows.items()}
-    credentials = {"authorization"} | {name for name, rs in rows.items()
-                                       if any(r["value"].startswith(SECRET_PREFIX) for r in rs)}
+    headers, with_secret = _row_headers(c, conn, secret)
+    credentials = {"authorization"} | with_secret
     if auth == BEARER:
         headers["authorization"] = ("Authorization", f"Bearer {password}")
     elif auth == KEY_HEADER:

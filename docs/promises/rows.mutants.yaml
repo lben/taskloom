@@ -20,6 +20,7 @@ scope:
     - mutate:
         - taskloom/blocks/servers.py _sent_header
         - taskloom/blocks/servers.py _call
+        - taskloom/blocks/servers.py _row_headers
         - taskloom/blocks/servers.py connection_note
       tests:
         - tests/test_rows.py -k "same_name or note_under_connection"

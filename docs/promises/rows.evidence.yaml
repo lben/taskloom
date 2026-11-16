@@ -30,17 +30,18 @@ AP-3:
 AP-4:
   enforced: >-
     _rows_widget shows and edits a row's value as the flow file holds it, secret:NAME, and writes back what the cell
-    holds; the stored secret is read only by _call (taskloom/blocks/servers.py) as the request is made.
+    holds; the stored secret is read only by _call (taskloom/blocks/servers.py, through _row_headers for a header) as
+    the request is made.
   not_green: >-
     Tests edit a secret: row of Headers, its value and its name, and look for the secret in every window and the flow
     file; the other six lists are not tried with a secret: value.
 AP-5:
   enforced: >-
     _rows_widget keeps every row, also two of one name, in order (kept). _call (taskloom/blocks/servers.py) puts each
-    ticked row of Params in the query in order, and sends a header name of several rows once, through _sent_header:
-    their values in the list's order joined by ", " (by "; " for Cookie), as urllib cannot send a header twice;
-    _payload sends each row of Form and Parts in order. connection_note, the note under Connection, shows a replaced
-    header as _sent_header joins it.
+    ticked row of Params in the query in order, and sends a header name of several rows once, through _row_headers and
+    _sent_header: their values in the list's order joined by ", " (by "; " for Cookie), as urllib cannot send a header
+    twice; _payload sends each row of Form and Parts in order. connection_note, the note under Connection, shows a
+    replaced header as _sent_header joins it.
   not_green: >-
     Tests send two rows of one name in each of the four lists of API Request to a web server on this computer, and
     read the note under Connection with two repeated headers; no check tries every number of rows, and a server that
