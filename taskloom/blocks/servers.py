@@ -405,6 +405,13 @@ class _Call:
     verify: bool
 
 
+def _sent_header(rows: list[dict], value=lambda text: text) -> tuple[str, str]:
+    """The header that the rows of one name send: once, named as its first row spells it, with their values (each as
+    value(text) gives it) in the list's order joined as HTTP allows (Cookie: with ;)."""
+    name = rows[0]["key"]
+    return name, ("; " if name.lower() == "cookie" else ", ").join(value(r.get("value", "")) for r in rows)
+
+
 def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
     """The request of the API Request whose settings (their placeholders filled in) are `c`, with its API connection
     `conn` (api_connection; None: none), and what came to its body input (`given`). secret(name): a stored secret, as
@@ -438,9 +445,7 @@ def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
     def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
         return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
 
-    # A name in more rows: sent once, with their values in the list's order joined as HTTP allows (Cookie: with ;).
-    headers = {name: (rs[0]["key"], ("; " if name == "cookie" else ", ").join(value(r["value"]) for r in rs))
-               for name, rs in rows.items()}
+    headers = {name: _sent_header(rs, value) for name, rs in rows.items()}
     credentials = {"authorization"} | {name for name, rs in rows.items()
                                        if any(r["value"].startswith(SECRET_PREFIX) for r in rs)}
     if auth == BEARER:
@@ -959,14 +964,17 @@ def connection_note(home, name: str, headers) -> str:
         conn = api_connection(home, name)
     except (Failed, ValueError) as e:  # (ValueError: connections.yaml cannot be read)
         return str(e)
-    mine = {r["key"].lower(): r for r in ticked(headers) if "key" in r}
+    mine = {}  # {lower-case name: the block's rows of it}
+    for r in ticked(headers):
+        if "key" in r:
+            mine.setdefault(r["key"].lower(), []).append(r)
     said = [f"Base URL: {conn['base_url'] or '(none)'}",
             f"Auth: {conn['auth']}" + "".join(f", {words} {conn[k]}" for k, words in (
                 ("username", "user name"), ("key_name", "key name"), ("secret", "with the stored secret")) if conn[k])]
     for r in ticked(conn["headers"]):
         replaced = mine.get(r["key"].lower())
         said.append(f"Header {r['key']}: {r['value']}"
-                    + (f" (replaced by this block's {replaced['key']}: {replaced.get('value', '')})" if replaced else ""))
+                    + (f" (replaced by this block's {': '.join(_sent_header(replaced))})" if replaced else ""))
     if conn["ca_file"]:
         said.append(f"CA certificate file: {conn['ca_file']}")
     if conn["dont_verify"]:
