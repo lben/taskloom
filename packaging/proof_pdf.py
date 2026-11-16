@@ -489,14 +489,23 @@ def tally(feature: dict) -> list:
 
 
 def same_commit(release: dict, features: list) -> tuple:
-    """Whether every checker and test result is of the commit built: (what, passed, in words)."""
+    """Whether every checker and test result is of the commit built, but those CI took from an earlier run, whose
+    records say so (packaging/ci_reuse.py mark): (what, passed, in words)."""
     commit = str(release["commit"])[:7]
-    others = sorted({f"{c['name']} ran on {str(c['commit'])[:7]}" for f in features for c in f["checkers"] or []
-                     if str(c["commit"])[:7] != commit} |
+    checkers = [c for f in features for c in f["checkers"] or []]
+    reused = sorted({f"{c['name']} (CI run {c['reused_from']['run']}, commit {str(c['reused_from']['commit'])[:7]})"
+                     for c in checkers if c.get("reused_from")})
+    why = f"reused from an earlier CI run, as the files they read had not changed since: {'; '.join(reused)}"
+    others = sorted({f"{c['name']} ran on {str(c['commit'])[:7]}" for c in checkers
+                     if not c.get("reused_from") and str(c["commit"])[:7] != commit} |
                     {f"the tests of {f['name']} ran on {str(x)[:7]}" for f in features
                      for x in (f["ledger"] or {}).get("commits", []) if str(x)[:7] != commit})
-    return ("Commit", not others, f"Not all of this commit ({commit}): " + "; ".join(others) if others else
-            f"Every checker and test result here is of commit {commit}, the one built.")
+    if others:
+        words = f"Not all of this commit ({commit}): " + "; ".join(others) + (f". Also {why}" if reused else "")
+    else:
+        words = (f"Every checker and test result here is of commit {commit}, the one built"
+                 + (f", but these, {why}." if reused else "."))
+    return "Commit", not others, words
 
 
 def release_lines(release: dict, records: list, sessions: list, features: list) -> list:
@@ -743,8 +752,17 @@ def terminal(checker: dict, evidence: Path) -> str:
         lines += f"<p style=\"font-size: 9pt\">{mark(False, f'None of its final lines shows what to look for ({key})')}</p>"
     name, gloss = KINDS.get(checker["kind"], (checker["kind"], ""))
     about = name + (f" ({gloss})" if gloss else "") + f": {checker['summary']}"
+    # Taken from an earlier CI run (packaging/ci_reuse.py mark): which one, and what was not checked again.
+    origin, reused = checker.get("reused_from"), ""
+    if origin:
+        mutated = (" Other Taskloom files may have changed since; the scheduler's tests ran on this commit."
+                   if checker["kind"] == "mutation" else "")
+        reused = (f"<br><span style=\"font-size: 10pt\">Reused from <a href=\"{html.escape(origin['url'])}\" "
+                  f"style=\"color: {IDEA_BAR}\">CI run {esc(str(origin['run']))}</a> ({day(origin['date'])}, commit "
+                  f"{esc(str(origin['commit'])[:7])}): not run again, as the files it reads had not changed since."
+                  f"{esc(mutated)}</span>")
     return (f"<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top: 14px\">"
-            f"<tr><td style=\"padding-bottom: 6px; font-size: 11pt\">{mark(ok, about)}</td></tr>"
+            f"<tr><td style=\"padding-bottom: 6px; font-size: 11pt\">{mark(ok, about)}{reused}</td></tr>"
             f"<tr><td bgcolor=\"{TERMINAL_TOP}\" style=\"padding: 6px 12px; {MONO}; color: {TERMINAL_DIM}\">{top}</td>"
             f"</tr><tr><td bgcolor=\"{TERMINAL}\" style=\"padding: 8px 12px 10px\">{lines}</td></tr></table>")
 

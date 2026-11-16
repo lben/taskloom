@@ -277,7 +277,7 @@ def pytest_runtest_logreport(report):
 
 def pytest_sessionfinish(session):
     out = os.environ.get("TASKLOOM_LEDGER")
-    if out and _LEDGER:
+    if out:  # (also with no marked test: a CI machine's share of the files may have none, and its numbers count)
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True,
                                 timeout=30).stdout.strip()
         totals = {o: sum(v == o for v in _OUTCOMES.values()) for o in ("passed", "failed", "skipped")}
