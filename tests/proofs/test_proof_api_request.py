@@ -292,7 +292,7 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
            "this block is Postman's Send; right-click > Copy as cURL copies the request as a curl command.")
     p.why_simplest("It sends its requests with Python's own web library, which comes with Taskloom: nothing else to "
                    "install on the computers that run your flows.")
-    p.why_simplest("Every part of the request is an ordinary setting of a block. So placeholders such as {region}, "
+    p.why_simplest("Every part of the request is an ordinary setting of a block. So placeholders such as {{region}}, "
                    "the flow file, Retry and Timeout, the Log, the run history, Data preview and Run only this block "
                    "work for it as for every block, with nothing new to learn. Params, Headers and a form's fields "
                    "are one kind of table: a row per name and value, with a tick.")

@@ -25,7 +25,7 @@ HEADING = "Tonight's shipping"
 REPORT = f"""\
 ## {HEADING}
 
-**{{value}}** orders to ship tonight, from three warehouses.
+**{{{{value}}}}** orders to ship tonight, from three warehouses.
 
 | Warehouse | Orders | Van |
 |-----------|--------|-----|
@@ -45,7 +45,7 @@ Before the vans leave:
 - lock the warehouses
 
 The vans leave at 8 pm.
-"""  # filled in like a Python f-string: {value} is count_orders' number
+"""  # filled in like a Python f-string: {{value}} is count_orders' number
 FLOW = {
     "blocks": {
         "start_by_hand": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},

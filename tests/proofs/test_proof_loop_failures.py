@@ -525,7 +525,7 @@ def test_validate_refuses_a_connection_out_of_a_loop_and_warns_about_a_fixed_pat
            "block outside it is refused, naming the connection: a block inside connects out of the Loop only through "
            "the Loop's result, and the blocks outside take the Loop's results.")
     p.idea("Three things are warned about, in the Log, without refusing the flow: a block inside a Loop that writes a "
-           "file whose path has no {placeholder} (every item writes the same file, each over the one before); a Loop "
+           "file whose path has no {{placeholder}} (every item writes the same file, each over the one before); a Loop "
            "inside another Loop (its blocks run items × items times); and a Loop whose results is connected while "
            "nothing inside it is connected to its result (every item gives back nothing). This proof shows the first "
            "two.")
@@ -567,7 +567,7 @@ def test_validate_refuses_a_connection_out_of_a_loop_and_warns_about_a_fixed_pat
                "out of it only through the loop's result (connect it to each_region.result, and take "
                "each_region.results outside the loop)")
     same_file = ("save_totals: Path: every item of the loop each_region writes to out/totals.csv (it has no "
-                 "{placeholder}, so each item writes over what the one before wrote)")
+                 "{{placeholder}}, so each item writes over what the one before wrote)")
     nested = ("each_month: a loop inside the loop each_region: its blocks run for every item of each_month once per "
               "item of each_region (items × items times)")
 

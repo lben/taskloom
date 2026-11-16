@@ -42,14 +42,14 @@ sequenceDiagram
     participant Database
     participant Mail
     Taskloom->>Database: Read today's orders
-    Database-->>Taskloom: {value} rows
+    Database-->>Taskloom: {{value}} rows
     Taskloom->>Mail: Send the report
 """
 CODE = "keep   these   spaces"
 REPORT = f"""\
 # Nightly orders
 
-**{{value}}** orders came in today.
+**{{{{value}}}}** orders came in today.
 
 ## How the flow runs
 
@@ -69,7 +69,7 @@ REPORT = f"""\
 ```
 {CODE}
 ```
-"""  # the message is filled in like a Python f-string: {value} is count_orders' number
+"""  # the message is filled in like a Python f-string: {{value}} is count_orders' number
 MISTAKE = "    read[Read orders --> send"  # the ] that closes the label is missing
 DRAFT = f"""\
 ## Next week's plan
@@ -82,7 +82,7 @@ flowchart LR
 The rest of this message still shows.
 """
 ORDERS = 42
-FILLED = REPORT.replace("{value}", str(ORDERS))  # the message, as the run filled it in
+FILLED = REPORT.replace("{{value}}", str(ORDERS))  # the message, as the run filled it in
 FLOW = {
     "blocks": {
         "start_by_hand": {"type": "trigger.manual", "ui": {"x": 0, "y": 180}},
@@ -244,7 +244,7 @@ def test_inspect_draws_mermaid_diagrams_in_the_log(env, proof, win, qtbot, monke
     click(tab, "report")
     message_label, message_box = message_field(win)
     markdown_label, markdown_box = setting(win, "Show as Markdown")
-    p.shot(win, "① report's Message, its Markdown as you write it: a heading, the number in bold ({value} is "
+    p.shot(win, "① report's Message, its Markdown as you write it: a heading, the number in bold ({{value}} is "
                 "count_orders' number), a ```mermaid code block with the flowchart, another with the sequence diagram, "
                 "then a table (and a code block, further down the box). ② Show as Markdown is ticked.",
            highlight=[[message_label, message_box], [markdown_label, markdown_box]], badges=True,

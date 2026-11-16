@@ -400,7 +400,7 @@ def test_a_splitters_lines_run_at_the_same_time_or_one_after_another_and_the_mer
         # --- 3. At most 2 at once ---------------------------------------------------------------------------------
         p.step(f"Click {SPLITTER} and type 2 in its At most at once, then click an empty part of the canvas and press "
                "▶ Run now.")
-        p.note("At most at once takes a whole number, not a {placeholder}: Validate checks the lines with it before "
+        p.note("At most at once takes a whole number, not a {{placeholder}}: Validate checks the lines with it before "
                "the run.")
         click_block(win, SPLITTER)
         type_in(field(win, "At most at once"), "2")

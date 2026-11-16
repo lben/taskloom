@@ -364,7 +364,7 @@ def test_check_table_checks_a_table_before_the_flow_uses_it(proof, win, qtbot, t
            "and details. The block's error output carries results too, so a block that handles the failure knows "
            "which checks failed.")
     p.why_simplest("One block holds every check of a table, each an ordinary setting with a tick. So the flow file, "
-                   "{placeholders}, Validate, the Log, the run history and Data preview work for it as for every "
+                   "{{placeholders}}, Validate, the Log, the run history and Data preview work for it as for every "
                    "block, and one run of it reports on all of its checks at once.")
     p.why_simplest("The checks are worked out on the table's Parquet file, the file in which every table goes from "
                    "one block to the next, by DuckDB, which comes with Taskloom. The table is never read into memory, "

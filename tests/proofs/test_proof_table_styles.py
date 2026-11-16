@@ -1,4 +1,4 @@
-"""Proof: a template's own <style> rules win over a table's built-in look, and {name:html} puts text in as HTML. See
+"""Proof: a template's own <style> rules win over a table's built-in look, and {{name:html}} puts text in as HTML. See
 README.md here."""
 
 from proofs.test_proof_failure_inputs import finished, in_the_log, open_flow, press_run_now, scroll_log_to
@@ -10,12 +10,12 @@ from tests.test_template_styles import (DARK, HEAD_LOOK, STYLED, background_show
 
 ASKED = ("The HTML Template seems to override styles from df.style.apply / set_table_styles … cell padding 15px, "
          "font 15px, 1px black borders")
-RULE = "<style>td {{padding: 15px; border: 1px solid black; font-size: 15px}}</style>"
+RULE = "<style>td {padding: 15px; border: 1px solid black; font-size: 15px}</style>"
 PRICES = 'table = pl.DataFrame({"item": ["pen", "ink", "paper"], "price": [1.2, 4.5, 3.75], "stock": [1200, 80, 15]})'
 COLUMNS = ["item", "price", "stock"]
 BLACK = [("1px", "solid", "#000000")] * 4
 BY_HAND = "<table><tr><td>a table I wrote by hand</td></tr></table>"  # typed in the Template itself
-ONLY_TEXT = "Template: {my_table:html}: html applies only to text"
+ONLY_TEXT = "Template: {{my_table:html}}: html applies only to text"
 
 
 def python(code: str, x: int, y: int, output: str) -> dict:
@@ -35,9 +35,9 @@ def send(subject: str, x: int, y: int) -> dict:
 PRICES_FLOW = {
     "blocks": {"start": {"type": "trigger.manual", "ui": {"x": 0, "y": 90}},
                "prices": python(PRICES, 250, 90, "table"),
-               "report": template(RULE + "\nPrices this week:<br>\n{my_table}", 520, 0, {"prices.table": "my_table"}),
+               "report": template(RULE + "\nPrices this week:<br>\n{{my_table}}", 520, 0, {"prices.table": "my_table"}),
                "send": send("Prices, with my styles", 790, 0),
-               "report_plain": template("Prices this week:<br>\n{my_table}", 520, 190, {"prices.table": "my_table"}),
+               "report_plain": template("Prices this week:<br>\n{{my_table}}", 520, 190, {"prices.table": "my_table"}),
                "send_plain": send("Prices, built-in look", 790, 190)},
     "edges": ["start.start -> prices.after", "prices.table -> report.data", "report.html -> send.body",
               "prices.table -> report_plain.data", "report_plain.html -> send_plain.body"],
@@ -45,8 +45,8 @@ PRICES_FLOW = {
 STYLED_FLOW = {
     "blocks": {"start": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},
                "styled": python(f"output = '''{STYLED}'''", 250, 0, "output"),
-               "report": template("<b>With {{styled:html}}:</b><br>\n{styled:html}\n<br><b>With {{styled}}:</b><br>\n"
-                                  "{styled}", 520, 0),
+               "report": template("<b>With {{{{styled:html}}:</b><br>\n{{styled:html}}\n<br>"
+                                  "<b>With {{{{styled}}:</b><br>\n{{styled}}", 520, 0),
                "send": send("Scores", 790, 0)},
     "edges": ["start.start -> styled.after", "styled.output -> report.data", "report.html -> send.body"],
 }
@@ -56,22 +56,22 @@ STYLED_FLOW = {
 BY_HAND_FLOW = {
     "blocks": {"start": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},
                "prices": python(PRICES, 250, 0, "table"),
-               "report": template(RULE + "\n" + BY_HAND + "\n<br>\n{my_table}", 520, 0, {"prices.table": "my_table"}),
+               "report": template(RULE + "\n" + BY_HAND + "\n<br>\n{{my_table}}", 520, 0, {"prices.table": "my_table"}),
                "send": send("Prices, and a table of my own", 790, 0)},
     "edges": ["start.start -> prices.after", "prices.table -> report.data", "report.html -> send.body"],
 }
-# {my_table:html}, where my_table is a table and not text.
+# {{my_table:html}}, where my_table is a table and not text.
 HTML_ON_A_TABLE_FLOW = {
     "blocks": {"start": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},
                "prices": python(PRICES, 250, 0, "table"),
-               "report": template("Prices this week:<br>\n{my_table:html}", 520, 0, {"prices.table": "my_table"}),
+               "report": template("Prices this week:<br>\n{{my_table:html}}", 520, 0, {"prices.table": "my_table"}),
                "send": send("Prices", 790, 0)},
     "edges": ["start.start -> prices.after", "prices.table -> report.data", "report.html -> send.body"],
 }
 
 
 def prices_table(html: str):
-    """The table the email shows for {my_table}."""
+    """The table the email shows for {{my_table}}."""
     [table] = [t for t in document(html).all("table")
                if not t.all("table") and [th.text for th in t.all("th")] == COLUMNS]
     return table
@@ -87,7 +87,7 @@ def cell_html(html: str, text: str) -> str:
 def test_a_td_rule_in_the_templates_style_changes_the_tables_cells(proof, smtp, env, win, qtbot, monkeypatch):
     p = proof("Your own <style> rules win over a table's built-in look", ASKED)
     p.idea("A rule you write in the template's own <style> now changes how a table looks in the email. With "
-           "<style>td {padding: 15px; border: 1px solid black; font-size: 15px}</style> above {my_table}, every cell "
+           "<style>td {padding: 15px; border: 1px solid black; font-size: 15px}</style> above {{my_table}}, every cell "
            "gets 15px of padding, a black border and 15px text. You do not need !important.")
     p.idea("What you do not set stays as Taskloom draws it: the header stays dark with white text, the rows stay "
            "striped, numbers stay on the right. Without a <style> of your own, the table looks as it always did.")
@@ -102,21 +102,21 @@ def test_a_td_rule_in_the_templates_style_changes_the_tables_cells(proof, smtp, 
     p.alternative("Settings on the block for padding, borders and text size",
                   "That is the Table Stylizer block planned for later. A <style> rule is what people who know HTML "
                   "write first, and it already had a place in the template.")
-    p.fits("In a template braces are doubled, as everywhere in it: you type td {{ … }}, and the email gets td { … }.")
+    p.fits("In a template single braces are plain text, as everywhere: you type td { … }, and the email gets td { … }.")
     p.fits("The email's own frame around your text takes none of your rules: a td rule changes the cells of your "
            "tables, and puts no border around the whole email.")
 
     assert win.home.root == env.home, "the editor and the test mail server's connection use the same Taskloom folder"
     p.step("Open prices.yaml (File > Open…) and click the HTML Template block report. Its Template starts with the "
-           "<style> line, then {my_table}: the table that prices makes. report_plain, below it, has the same "
+           "<style> line, then {{my_table}}: the table that prices makes. report_plain, below it, has the same "
            "template without the <style> line, to compare.")
     tab = open_flow(win, monkeypatch, env.root / "prices.yaml", PRICES_FLOW)
     click_block(tab, "report")
     box = code_box(win)
-    p.shot(win, "① report, the HTML Template block. ② Its Template: the <style> line with the td rule (braces "
-                "doubled), then {my_table}.", highlight=["report", box], badges=True, zoom=[box])
-    p.check("② The Template holds the td rule and {my_table}",
-            box.toPlainText().startswith(RULE) and "{my_table}" in box.toPlainText())
+    p.shot(win, "① report, the HTML Template block. ② Its Template: the <style> line with the td rule (its braces "
+                "as in CSS), then {{my_table}}.", highlight=["report", box], badges=True, zoom=[box])
+    p.check("② The Template holds the td rule and {{my_table}}",
+            box.toPlainText().startswith(RULE) and "{{my_table}}" in box.toPlainText())
 
     p.step("Press ▶ Run now. Both emails are sent to team@example.com, through a mail server that this proof runs on "
            "this computer.")
@@ -167,12 +167,12 @@ def test_a_td_rule_in_the_templates_style_changes_the_tables_cells(proof, smtp, 
             around and not any(borders(td.style) == BLACK or paddings(td.style) == ["15px"] * 4 for td in around))
 
     p.step("Open own_table.yaml and click report. Under the same <style> line its Template has a table written by "
-           "hand, with one cell, then {my_table}. Press ▶ Run now and look at the email.")
+           "hand, with one cell, then {{my_table}}. Press ▶ Run now and look at the email.")
     tab = open_flow(win, monkeypatch, env.root / "own_table.yaml", BY_HAND_FLOW)
     click_block(tab, "report")
     box = code_box(win)
     p.shot(win, "The Template of report: the <style> line with the td rule, the table written by hand, then "
-                "{my_table}.", highlight=[box], zoom=[box])
+                "{{my_table}}.", highlight=[box], zoom=[box])
     press_run_now(win)
     finished(qtbot, tab, 1)
     p.check("The run succeeded and the mail server received a third email",
@@ -198,17 +198,17 @@ def test_a_td_rule_in_the_templates_style_changes_the_tables_cells(proof, smtp, 
 
 
 def test_name_html_puts_html_text_in_as_it_is(proof, smtp, env, win, qtbot, monkeypatch):
-    p = proof("{name:html} puts text in as the HTML it holds", ASKED)
-    p.idea("Write {styled:html} in a template, and the text that styled gives is put into the email as HTML, as it "
+    p = proof("{{name:html}} puts text in as the HTML it holds", ASKED)
+    p.idea("Write {{styled:html}} in a template, and the text that styled gives is put into the email as HTML, as it "
            "is. So a table you coloured yourself in a Python Code block, with pandas' "
            "df.style.apply(colour, axis=1).to_html(), shows in the email with its colours.")
-    p.idea("Plain {styled} still shows the text as text, tags and all: text from a query or a file must never turn "
+    p.idea("Plain {{styled}} still shows the text as text, tags and all: text from a query or a file must never turn "
            "into HTML by accident. Adding :html is how you say this text is HTML.")
     p.idea("pandas puts its colours in a <style> block at the top of that HTML. Outlook ignores <style> blocks, so "
            "Taskloom moves those rules into each cell, as it does with your own.")
-    p.why_simplest("A placeholder could already take a format after a colon, such as {total:.1f} or {day:%Y-%m-%d}. "
-                   "html is one more word in that place, and the step that moves styles into the cells was already "
-                   "there for the template's own <style>.")
+    p.why_simplest("A placeholder could already take a format after a colon, such as {{total:.1f}} or "
+                   "{{day:%Y-%m-%d}}. html is one more word in that place, and the step that moves styles into the "
+                   "cells was already there for the template's own <style>.")
     p.alternative("Treat any text that looks like HTML as HTML",
                   "A customer's name or a query's text that happens to hold < and > would change the email. You "
                   "decide, in the template, which text is HTML.")
@@ -220,17 +220,17 @@ def test_name_html_puts_html_text_in_as_it_is(proof, smtp, env, win, qtbot, monk
 
     assert win.home.root == env.home, "the editor and the test mail server's connection use the same Taskloom folder"
     p.step("Open scores.yaml and click the HTML Template block report. styled, a Python Code block, gives the HTML "
-           "that pandas writes for a table whose first row is painted green. The Template has {styled:html}, then "
-           "{styled}.")
+           "that pandas writes for a table whose first row is painted green. The Template has {{styled:html}}, then "
+           "{{styled}}.")
     tab = open_flow(win, monkeypatch, env.root / "scores.yaml", STYLED_FLOW)
     click_block(tab, "report")
     box = code_box(win)
-    p.shot(win, "① styled gives the HTML as text. ② The Template of report: {styled:html}, then {styled}.",
+    p.shot(win, "① styled gives the HTML as text. ② The Template of report: {{styled:html}}, then {{styled}}.",
            highlight=["styled", box], badges=True, zoom=[box])
     p.note("This computer has no pandas, so styled holds the HTML itself, in the shape pandas writes it: a <style> "
            "block with one rule for the green cells, then the table.")
-    p.check("② The Template holds {styled:html} and {styled}",
-            "\n{styled:html}\n" in box.toPlainText() and box.toPlainText().endswith("\n{styled}"))
+    p.check("② The Template holds {{styled:html}} and {{styled}}",
+            "\n{{styled:html}}\n" in box.toPlainText() and box.toPlainText().endswith("\n{{styled}}"))
 
     p.step("Press ▶ Run now, and look at the email the mail server received.")
     press_run_now(win)
@@ -239,19 +239,19 @@ def test_name_html_puts_html_text_in_as_it_is(proof, smtp, env, win, qtbot, monk
             tab.runs[0].status == "success" and len(smtp.messages) == 1)
     html = html_of(smtp.messages[0])
     reader, _ = email_reader(qtbot, smtp.messages[0])
-    p.shot(reader, "Under “With {styled:html}”: the table, its first row green. Under “With {styled}”: the same "
+    p.shot(reader, "Under “With {{styled:html}}”: the table, its first row green. Under “With {{styled}}”: the same "
                    "text shown as text, with its tags.")
     reader.close()
     table = styled_table(html)
-    p.check("{styled:html}: the email holds the table itself, with its cells",
+    p.check("{{styled:html}}: the email holds the table itself, with its cells",
             [td.text for td in table.all("td")] == ["EU", "10", "US", "20"])
     p.check("Its first row is green, the second is not: the colour is in each cell's own style, for Outlook",
             {td.text: td.style.get("background-color") for td in table.all("td")}
             == {"EU": "#008000", "10": "#008000", "US": None, "20": None})
     p.check("No <style> block is left in the email", "<style" not in html.lower())
-    p.check("{styled}: the email also shows the tags as text", "&lt;table" in html and "&lt;/table&gt;" in html)
+    p.check("{{styled}}: the email also shows the tags as text", "&lt;table" in html and "&lt;/table&gt;" in html)
 
-    p.step("Open prices.yaml and click report. Its Template reads {my_table:html}, and my_table is a table, not "
+    p.step("Open prices.yaml and click report. Its Template reads {{my_table:html}}, and my_table is a table, not "
            "text. Press ▶ Run now.")
     tab = open_flow(win, monkeypatch, env.root / "prices.yaml", HTML_ON_A_TABLE_FLOW)
     click_block(tab, "report")
@@ -264,7 +264,7 @@ def test_name_html_puts_html_text_in_as_it_is(proof, smtp, env, win, qtbot, monk
            highlight=["report", said], badges=True, zoom=[said])
     p.text("That line of the Log, in full",
            next(text for text in win.log.text.toPlainText().splitlines() if ONLY_TEXT in text))
-    p.check("The Template holds {my_table:html}", box.toPlainText().endswith("{my_table:html}"))
+    p.check("The Template holds {{my_table:html}}", box.toPlainText().endswith("{{my_table:html}}"))
     p.check("The run stopped: report failed and send did not run",
             tab.runs[0].status == "failed" and tab.scene.nodes["report"].status == "failed"
             and tab.scene.nodes["send"].status == "skipped")

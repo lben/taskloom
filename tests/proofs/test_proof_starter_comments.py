@@ -73,7 +73,7 @@ WRITTEN = {"run_query": "select region, count(*) as orders from orders group by 
            "duckdb_sql": "select * from input where day = :day",
            "polars": 'df.with_columns((pl.col("amount") * 1.2).alias("gross"))',
            "if": "value > 10"}
-BODY = "<b>Daily sales</b><br>Good morning, the figures are below.<br>{load_sales}"
+BODY = "<b>Daily sales</b><br>Good morning, the figures are below.<br>{{load_sales}}"
 NOTE = "This is a note"  # in the HTML Template's comments: never in the email
 # The tables of the Run Query examples, in a database that runs inside the run itself (H2, in memory).
 ORDERS = [(1, "North"), (2, "North"), (3, "South"), (4, "North"), (5, "East"), (6, "South")]
@@ -130,10 +130,10 @@ RUN_QUERY = {
 HTML = {
     "<b>Daily sales</b><br>Good morning, the figures are below.":
         ("that same text", lambda html: html == "<b>Daily sales</b><br>Good morning, the figures are below."),
-    "Hi team, please see the chart below<br>{chart}":
+    "Hi team, please see the chart below<br>{{chart}}":
         ("the text, then the chart's picture (an <img> inside the email)",
          lambda html: re.fullmatch(r'Hi team, please see the chart below<br><img src="cid:[^"]+"[^>]*>', html)),
-    "Total {total:,.2f} on {day:%d %B %Y}":
+    "Total {{total:,.2f}} on {{day:%d %B %Y}}":
         ("Total 1,234.50 on 30 October 2026", lambda html: html == "Total 1,234.50 on 30 October 2026"),
 }
 IF_CASES = {"value > 10": (12, 10), "value is True": (True, 1), "value == 'Option A'": ("Option A", "Option B")}
@@ -344,7 +344,7 @@ def examples_flows(starters: dict) -> dict:
     tried = {}
     for i, template in enumerate(examples(starters["HTML Template"], "html"), 1):
         blocks[f"html_{i}"] = {"type": "reports.html_template", "config": {"template": template}}
-        if "{chart}" in template:
+        if "{{chart}}" in template:
             edges.append(f"chart.image -> html_{i}.data")
         tried[f"html_{i}"] = template
     flow("HTML Template", "html-template-examples.yaml", blocks, edges, tried,
@@ -394,7 +394,7 @@ def test_new_code_blocks_start_with_comments_that_teach_them(proof, env, win, qt
            "turn, as an empty Template does.")
     p.idea("Write your code under the comments (or between them) and it runs as written, the comments aside. DuckDB "
            "SQL, Polars Transform and If skip them. Run Query sends them to the database with the query, and "
-           "databases skip comments. HTML Template leaves its notes out of the email, and a {name} written inside a "
+           "databases skip comments. HTML Template leaves its notes out of the email, and a {{name}} written inside a "
            "note shows nothing. Two kinds of comment are kept as written, because they do something in an email: "
            "Outlook's conditional comments (<!--[if mso]> … <![endif]-->) and <style> blocks.")
     p.idea("Only new blocks get the comments: a block already in a flow file keeps its code, and so does a block you "
@@ -409,7 +409,7 @@ def test_new_code_blocks_start_with_comments_that_teach_them(proof, env, win, qt
                    "anything runs. Python Code is the exception, as before: its code is a script that runs as it is, "
                    "comments and all.")
     p.why_simplest("Each language already skips its own comments: DuckDB, Python (for Polars Transform and If) and "
-                   "databases. Only HTML Template has to leave its notes out, because a note's {name} examples "
+                   "databases. Only HTML Template has to leave its notes out, because a note's {{name}} examples "
                    "would otherwise be taken for real ones.")
     p.alternative("Grey hint text in an empty box",
                   "It disappears as soon as you type, cannot be copied from, and is not in the flow file. You asked "
@@ -633,11 +633,11 @@ def see_it_working(p, env, win, qtbot, monkeypatch):
     second = run_now(p, win, qtbot, tab, 2)
     click_bottom_tab(win, win.preview)  # (a run shows the Log)
     shown = win.preview.text.toPlainText()
-    p.shot(win, "Data preview: html_template's html is your body, with load_sales' table where {load_sales} is. The "
+    p.shot(win, "Data preview: html_template's html is your body, with load_sales' table where {{load_sales}} is. The "
                 "note is not in it: only the two line breaks you typed after it are (an email shows none).",
            highlight=[(win.preview.text, "<b>Daily sales</b>")], zoom=preview_text(win, 4))
     p.check(f"Run #{second.run_id} succeeded", second.status == "success")
-    p.check("The html is your body, the table in place of {load_sales}, and the note is not in it",
+    p.check("The html is your body, the table in place of {{load_sales}}, and the note is not in it",
             shown.startswith("\n\n<b>Daily sales</b><br>Good morning, the figures are below.<br><table")
             and shown.endswith("</table>") and NOTE not in shown and "<!--" not in shown)
 

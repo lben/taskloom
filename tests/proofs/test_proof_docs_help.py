@@ -39,7 +39,7 @@ FLOW = """
         ui: {x: 480, y: 0}
       body:
         type: reports.html_template
-        config: {template: "<b>Daily sales</b><br>{chart}<br>{sales}"}
+        config: {template: "<b>Daily sales</b><br>{{chart}}<br>{{sales}}"}
         ui: {x: 720, y: 0}
       archive_sales:
         type: files.copy
@@ -201,7 +201,7 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
            "the window, with the canvas and Properties still in view.")
     p.idea("The card shows the row's name in bold, what it is for, then one line of valid values: “Examples:” with "
            "one to three values written as you would type them, or “One of:” with the choices of a box, or, for a "
-           "connection, which of your connections it takes; a setting that takes {name} placeholders adds a line "
+           "connection, which of your connections it takes; a setting that takes {{name}} placeholders adds a line "
            "saying so. Last comes Learn more ›. The card stays while the mouse "
            "is on the row or on the card, so you can reach the link, and goes when the mouse leaves both, when you "
            "type or press Esc, or when you switch to another program. It never takes the keyboard from the box "
@@ -264,7 +264,7 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
     label, what, values, last = card_says(card)
     parts = card_parts(win, card)
     p.shot(card, "The card, just under Source: its name in bold, ① what it is for, ② examples of valid values (and "
-                 "the {name} placeholders a text setting takes), ③ Learn more ›.", over=win, highlight=parts,
+                 "the {{name}} placeholders a text setting takes), ③ Learn more ›.", over=win, highlight=parts,
            badges=True, zoom=[card, source.label_widget, *parts])
     p.check("The card shows Source in bold", label == "Source" and label_is_bold(card))
     p.check("① It says what Source is for: the help Copy Files gives it", what == copy_files.config["source"].help)

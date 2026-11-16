@@ -58,7 +58,7 @@ blocks:
     ui: {x: 250, y: 0}
   pause:
     type: logic.wait
-    config: {seconds: "{value}"}
+    config: {seconds: "{{value}}"}
     ui: {x: 500, y: 0}
 edges:
   - start_by_hand.start -> how_long.after
@@ -209,7 +209,7 @@ def test_a_wait_block_counts_down_at_its_bottom_as_a_schedule_block_does(proof, 
     p.idea("A Wait block now has the line a Schedule block has at its bottom, just above its result. While it waits, "
            "that line counts down the time left, every second: “⏱ 00:01:29 left”, as a Schedule block counts down "
            "to its next run (“⏱ next run in 02:59:41”). When it is not waiting, the line says how long it waits: "
-           "“⏱ waits 90 s”, or “⏱ waits {value} s” when its Seconds is the number arriving at its value input.")
+           "“⏱ waits 90 s”, or “⏱ waits {{value}} s” when its Seconds is the number arriving at its value input.")
     p.idea("The Log says it once, when the wait begins: “waiting 90 s, until 14:06:30”, how long and until when on "
            "the computer's clock. Nothing more while it waits: no line every second.")
     p.idea("When the wait ends (the time is up, you press Stop, the block's Timeout ends it, or the run fails), the "
@@ -228,8 +228,8 @@ def test_a_wait_block_counts_down_at_its_bottom_as_a_schedule_block_does(proof, 
                   "run to the editor would also be traffic for nothing: the end time, sent once, is enough to count "
                   "down from.")
     p.alternative("The editor counting down by itself from Seconds, from when the block begins",
-                  "With {value} or a {parameter} the editor does not know the number: it arrives in the run. The run "
-                  "sends the end time once that number is filled in, so the countdown is right whatever Seconds "
+                  "With {{value}} or a {{parameter}} the editor does not know the number: it arrives in the run. The "
+                  "run sends the end time once that number is filled in, so the countdown is right whatever Seconds "
                   "says.")
     p.alternative("A line that shows only while it waits",
                   "The block would grow taller when it begins waiting and shrink when it ends, and could cover a "
@@ -241,8 +241,8 @@ def test_a_wait_block_counts_down_at_its_bottom_as_a_schedule_block_does(proof, 
     p.fits("It works for the runs the editor starts: ▶ Run now, and the block's menu (Run only this block, Run from "
            "this block on). The Log line is an ordinary line of the block's, kept with the run in Run history, and "
            "printed by taskloom run.")
-    p.fits("Seconds takes placeholders, as the text and number settings of every block now do: {value} for the "
-           "number arriving at the block's value input, or {name} for a flow parameter. The line shows Seconds as "
+    p.fits("Seconds takes placeholders, as the text and number settings of every block now do: {{value}} for the "
+           "number arriving at the block's value input, or {{name}} for a flow parameter. The line shows Seconds as "
            "written; the countdown, the number that arrived.")
 
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))  # (Save in Settings writes Windows' Startup script there)
@@ -347,21 +347,22 @@ def test_a_wait_block_counts_down_at_its_bottom_as_a_schedule_block_does(proof, 
             p.check("The block is still the same size", height(tab, "pause") == size_before)
             p.check("The Log still has just that one line from pause", lines_from(win, "pause") == [said])
 
-            # --- 5. Seconds {value} ---------------------------------------------------------------------------------
+            # --- 5. Seconds {{value}} ---------------------------------------------------------------------------------
             p.step("Open the flow wait-for-value.yaml (File > Open…). how_long, a Python block, makes 12 and gives it "
-                   "to pause's value input; pause's Seconds is {value}.")
+                   "to pause's value input; pause's Seconds is {{value}}.")
             tab2 = open_flow(win, monkeypatch, given)
             p.shot(win, f"① how_long gives its output to pause's value input. ② pause's line says "
                         f"“{says(tab2, 'pause')}”: its Seconds, as written.",
                    highlight=["how_long", "pause"], badges=True, zoom=["how_long", "pause"])
-            p.check("② Before the run, pause's line says “⏱ waits {value} s”", says(tab2, "pause") == "⏱ waits {value} s")
+            p.check("② Before the run, pause's line says “⏱ waits {{value}} s”",
+                    says(tab2, "pause") == "⏱ waits {{value}} s")
 
             p.step("Click pause.")
             click(tab2, "pause")
             label, seconds_field = setting(win, "Seconds")
-            p.shot(win, "① In Properties, pause's Seconds is {value}.", highlight=[[label, seconds_field]], badges=True,
-                   zoom=[label, seconds_field])
-            p.check("① Its Seconds is {value}", seconds_field.text() == "{value}")
+            p.shot(win, "① In Properties, pause's Seconds is {{value}}.", highlight=[[label, seconds_field]],
+                   badges=True, zoom=[label, seconds_field])
+            p.check("① Its Seconds is {{value}}", seconds_field.text() == "{{value}}")
 
             p.step("Click an empty part of the canvas, then press ▶ Run now.")
             click(tab2)
@@ -384,8 +385,8 @@ def test_a_wait_block_counts_down_at_its_bottom_as_a_schedule_block_does(proof, 
                    highlight=["pause"], badges=True, zoom=["how_long", "pause"])
             p.check("① The run succeeded, and pause shows it",
                     watch2.run.status == "success" and tab2.scene.nodes["pause"].status == "success")
-            p.check("At once, when the editor showed pause's result, its line said “⏱ waits {value} s” again",
-                    watch2.after_finished() == "⏱ waits {value} s")
+            p.check("At once, when the editor showed pause's result, its line said “⏱ waits {{value}} s” again",
+                    watch2.after_finished() == "⏱ waits {{value}} s")
             p.shot(win, "① In the Log, pause's one line, between the run's start and its success: how long it "
                         "waited, and until when.",
                    highlight=[(log, " waiting 12 s")], badges=True,
@@ -405,7 +406,7 @@ def test_a_wait_block_counts_down_at_its_bottom_as_a_schedule_block_does(proof, 
             p.check("The editor is dark", is_dark())
             p.check(f"① pause's line reads well: as it is on the screen, its strongest pixels ({glyph.name()}) have a "
                     f"contrast of {ratio:.1f} to 1 with its block ({fill.name()}), at least {READABLE} to 1",
-                    dark_wait == "⏱ waits {value} s" and ratio >= READABLE)
+                    dark_wait == "⏱ waits {{value}} s" and ratio >= READABLE)
 
             p.step("Click the tab morning-report.yaml and press ▶ Run now.")
             click_flow_tab(win, tab)

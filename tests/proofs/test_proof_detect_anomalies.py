@@ -60,7 +60,7 @@ DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sun
 ADDED = ["rows_expected", "rows_low", "rows_high", "anomaly", "reason"]
 LABELS = ["Date column", "Number columns", "Group by", "Pattern", "Compare with the last", "Sensitivity",
           "Only the latest"]  # its settings in Properties, in order
-TEMPLATE = "<h2>Unusual row counts</h2>{anomalies}<br>{charts}"
+TEMPLATE = "<h2>Unusual row counts</h2>{{anomalies}}<br>{{charts}}"
 NINE = [301, 296, 310, 305, 299, 318, 292, 307]  # the 09:00 run's seconds, on the 8 days before the latest
 SLOW = 912  # its seconds on the latest day
 JOB_FIRST, JOB_LATEST = datetime(2026, 10, 25, 9), datetime(2026, 11, 2, 9)  # (under 200 runs: Data preview shows 200)

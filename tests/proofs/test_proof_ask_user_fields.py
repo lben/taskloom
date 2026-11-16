@@ -49,11 +49,11 @@ blocks:
     ui: {x: 500, y: 70}
   big_day:
     type: logic.inspect
-    config: {message: "{value!r} orders: more than 10"}
+    config: {message: "{{value!r}} orders: more than 10"}
     ui: {x: 760, y: 0}
   quiet_day:
     type: logic.inspect
-    config: {message: "{value!r} orders: 10 or fewer"}
+    config: {message: "{{value!r}} orders: 10 or fewer"}
     ui: {x: 760, y: 150}
 edges:
   - start.start -> ask_count.after
@@ -76,7 +76,7 @@ blocks:
     ui: {x: 250, y: 70}
   show_user_name:
     type: logic.inspect
-    config: {message: "user name: {value}"}
+    config: {message: "user name: {{value}}"}
     ui: {x: 510, y: 0}
   ask_password:
     type: logic.ask_user
@@ -84,7 +84,7 @@ blocks:
     ui: {x: 510, y: 150}
   show_password:
     type: logic.inspect
-    config: {message: "password: {value}"}
+    config: {message: "password: {{value}}"}
     ui: {x: 770, y: 150}
 edges:
   - start.start -> ask_user_name.after

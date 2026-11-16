@@ -1,5 +1,6 @@
-"""Proof: {name} placeholders in every setting you type a value into: a flow parameter, or the value arriving at one of
-the block's own inputs. The Wait block's Seconds takes {value} or {pause}. How proofs are written: README.md here."""
+"""Proof: {{name}} placeholders in every setting you type a value into: a flow parameter, or the value arriving at one
+of the block's own inputs. The Wait block's Seconds takes {{value}} or {{pause}}. How proofs are written: README.md
+here."""
 
 import datetime as dt
 
@@ -64,12 +65,12 @@ CHART = """
         ui: {x: 260, y: 0}
       chart:
         type: reports.chart
-        config: {kind: bar, x: month, y: ["{col}"], title: "{region} sales", width: "{w}", height: 240}
+        config: {kind: bar, x: month, y: ["{{col}}"], title: "{{region}} sales", width: "{{w}}", height: 240}
         ui: {x: 520, y: 0}
       show: {type: logic.inspect, ui: {x: 780, y: 0}}
       caption:
         type: logic.python
-        config: {inputs: [], code: "output = 'Sales of {region}'"}
+        config: {inputs: [], code: "output = 'Sales of {{region}}'"}
         ui: {x: 260, y: 190}
     edges:
       - start.start -> sales.after
@@ -79,10 +80,10 @@ CHART = """
 """.replace("SALES", SALES)
 CHART_LINE = ["start", "sales", "chart", "show"]
 LOG_HEIGHT = 480  # the Log made taller for the chart's picture (320 pixels high there) and the line above it
-NEITHER = "wait_for_pause: Seconds: {pasue} is neither a flow parameter nor an input of this block"
-BOTH = "wait_for_value: Seconds: {value} could be the parameter value or the input value: rename one"
-NOT_A_NUMBER = "wait_for_value (Wait) failed: Seconds: {value} gave 'abc', which is not a number"
-NOT_CONNECTED = "wait_for_value (Wait) failed: Seconds: {value}: nothing is connected to the input value"
+NEITHER = "wait_for_pause: Seconds: {{pasue}} is neither a flow parameter nor an input of this block"
+BOTH = "wait_for_value: Seconds: {{value}} could be the parameter value or the input value: rename one"
+NOT_A_NUMBER = "wait_for_value (Wait) failed: Seconds: {{value}} gave 'abc', which is not a number"
+NOT_CONNECTED = "wait_for_value (Wait) failed: Seconds: {{value}}: nothing is connected to the input value"
 
 
 # --- doing it, as you would -----------------------------------------------------------------------------------
@@ -194,14 +195,14 @@ def log_lines(win, texts: list[str], clear: str) -> list:
 
 def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch):
     p = proof("Placeholders in every setting: a flow parameter, or one of the block's own inputs", ASKED)
-    p.idea("Every setting you type a value into, in every block, can now hold {name} placeholders, where name is a "
-           "flow parameter or one of the block's own inputs. The Wait block's Seconds can be {value} or {pause}.")
-    p.idea("As the block runs, each {name} is replaced by that parameter's value, or by the value arriving at that "
+    p.idea("Every setting you type a value into, in every block, can now hold {{name}} placeholders, where name is a "
+           "flow parameter or one of the block's own inputs. The Wait block's Seconds can be {{value}} or {{pause}}.")
+    p.idea("As the block runs, each {{name}} is replaced by that parameter's value, or by the value arriving at that "
            "input, and a number setting (Seconds, a width, a count) then reads the text it got as its number: 1.5 "
-           "arriving at the value input makes Seconds {value} wait 1.5 seconds, and so would the text 1.5 with "
+           "arriving at the value input makes Seconds {{value}} wait 1.5 seconds, and so would the text 1.5 with "
            "spaces around it. It works in text, paths, whole numbers, numbers and each item of a list, with a format "
-           "if you want one ({value:.1f}, {day:%Y-%m-%d}). Write {{ and }} for braces.")
-    p.idea("A placeholder is a name, not a calculation: {value * 60} is not one. Work a number out in a Python Code "
+           "if you want one ({{value:.1f}}, {{day:%Y-%m-%d}}). Single braces are plain text.")
+    p.idea("A placeholder is a name, not a calculation: {{value * 60}} is not one. Work a number out in a Python Code "
            "block first, and connect it. The run after input only says when a block starts: it is never a "
            "placeholder, so a Wait connected only there waits the seconds you type, or a flow parameter's.")
     p.idea("Nothing is filled in silently. Validate (F7) refuses a name that is neither a flow parameter nor an input "
@@ -210,34 +211,34 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
            "a table arrived (only a single value can be written into a setting), or a number setting got a text "
            "that is not a number.")
     p.idea("Code is as before. Python Code, Polars, If and Inspect's message take no placeholders: their braces are "
-           "Python's own. An HTML Template fills in its own {name}, and SQL takes flow parameters only. Yes/no and "
+           "Python's own. An HTML Template fills in its own {{name}}, and SQL takes flow parameters only. Yes/no and "
            "choice settings take none: you tick or pick them.")
-    p.why_simplest("Text settings already had {name} filled in with flow parameters, just before each block ran. "
+    p.why_simplest("Text settings already had {{name}} filled in with flow parameters, just before each block ran. "
                    "That same filling now also takes the values arriving at the block's own inputs, which have "
                    "arrived by then, and works in number and list settings too. A number setting is read as its "
                    "number after it, within its own limits: a whole number stays whole, a minimum stays.")
     p.why_simplest("So it is one rule for every block, in one place. The Wait block has no code of its own for "
-                   "{value}: it gets its Seconds as a number, filled in, as any block gets its settings.")
+                   "{{value}}: it gets its Seconds as a number, filled in, as any block gets its settings.")
     p.alternative("A Wait-only option, e.g. “take the seconds from the value input”",
                   "It would solve the Wait block alone, and each block that needs a value from its input would need "
                   "an option of its own. You asked for it to work outside the Wait block too.")
-    p.alternative("Expressions in settings, such as {value * 60} or a Python f-string",
+    p.alternative("Expressions in settings, such as {{value * 60}} or a Python f-string",
                   "A second language in every box, with its own ways to fail as a run goes, that Validate could not "
                   "check before it. A name can be checked before any run; a calculation already has the Python "
                   "Code block.")
     p.alternative("Filling in quietly: a name that is not known left as written, nothing when no value arrives, or "
                   "one of a parameter and an input of the same name chosen for you",
-                  "You would find out only when a Wait waited no time, or a title said {region}. Each of these is "
+                  "You would find out only when a Wait waited no time, or a title said {{region}}. Each of these is "
                   "now said, by Validate or as the block starts, so you decide what to change.")
-    p.fits("It is the {name} and {name:format} that text settings and SQL already took for flow parameters, and the "
-           "{name} an HTML Template fills in from its inputs: one way of writing it everywhere.")
+    p.fits("It is the {{name}} and {{name:format}} that text settings and SQL already took for flow parameters, and "
+           "the {{name}} an HTML Template fills in from its inputs: one way of writing it everywhere.")
     p.fits("Validate (F7), Tools > Check flows and the taskloom validate and check commands report a wrong name in the "
            "same words, and a run refuses to start for it. The help card of each setting that takes placeholders "
            "says so. A parameter you change in the Run dialog for one run fills in the placeholders of that run.")
 
     flow = write(tmp_path / "waits.yaml", WAITS)
 
-    # --- (1) {value} and {pause} in Properties, and the help on hover -------------------------------------------
+    # --- (1) {{value}} and {{pause}} in Properties, and the help on hover -------------------------------------------
     p.step("Open waits.yaml (File > Open…). make_number gives the number 1.5, connected into wait_for_value's value "
            "input; wait_for_pause runs after wait_for_value. Both Waits say 5 seconds for now. The flow has a "
            "parameter pause, 2.")
@@ -247,40 +248,41 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
                 "after wait_for_value. The line at the bottom of each Wait says how long it waits: ⏱ waits 5 s.",
            highlight=["wait_for_value", "wait_for_pause"], badges=True, zoom=LINE)
 
-    p.step("Click wait_for_value, type {value} into its Seconds in Properties, and press Enter.")
+    p.step("Click wait_for_value, type {{value}} into its Seconds in Properties, and press Enter.")
     click_block(win, "wait_for_value")
-    type_in(field(win, "Seconds"), "{value}")
+    type_in(field(win, "Seconds"), "{{value}}")
     seconds = field(win, "Seconds")  # (Properties shows the block again, with what you typed)
-    p.shot(win, "① Seconds says {value}, and Properties shows no red line above it: it is taken as it is. ② On the "
-                "canvas, wait_for_value's bottom line says ⏱ waits {value} s.",
+    p.shot(win, "① Seconds says {{value}}, and Properties shows no red line above it: it is taken as it is. ② On the "
+                "canvas, wait_for_value's bottom line says ⏱ waits {{value}} s.",
            highlight=[seconds, "wait_for_value"], badges=True, zoom=[win.properties.widget(), "wait_for_value"])
-    p.check("① Seconds says {value} and no red line says something is wrong",
-            seconds.text() == "{value}" and error_shown(win) == "")
-    p.check("The flow holds Seconds {value}, as you typed it",
-            tab.doc.blocks["wait_for_value"]["config"]["seconds"] == "{value}")
+    p.check("① Seconds says {{value}} and no red line says something is wrong",
+            seconds.text() == "{{value}}" and error_shown(win) == "")
+    p.check("The flow holds Seconds {{value}}, as you typed it",
+            tab.doc.blocks["wait_for_value"]["config"]["seconds"] == "{{value}}")
 
     p.step("Rest the mouse on Seconds.")
     card = hover(qtbot, win, seconds, "Seconds", "Wait › Seconds")
     label, what, values, last = card_says(card)
     parts = card_parts(win, card)
-    p.shot(card, "The card of Seconds: ① a number, {value} for the number arriving at its value input, or {name} for "
-                 "a flow parameter; ② its examples, and how placeholders work.",
+    p.shot(card, "The card of Seconds: ① a number, {{value}} for the number arriving at its value input, or {{name}} "
+                 "for a flow parameter; ② its examples, and how placeholders work.",
            over=win, highlight=parts[:2], badges=True, zoom=[card, *parts[:2]])
-    p.check("① The card says Seconds is “a number (0.5 for half a second), {value} for the number arriving at its "
-            "value input, or {name} for a flow parameter”",
-            label == "Seconds" and "a number (0.5 for half a second), {value} for the number arriving at its value "
-                                   "input, or {name} for a flow parameter" in what)
+    p.check("① The card says Seconds is “a number (0.5 for half a second), {{value}} for the number arriving at its "
+            "value input, or {{name}} for a flow parameter”",
+            label == "Seconds" and "a number (0.5 for half a second), {{value}} for the number arriving at its value "
+                                   "input, or {{name}} for a flow parameter" in what)
     p.check("② It says how placeholders work: “" + PLACEHOLDERS + "”", " ".join(values.split()).endswith(PLACEHOLDERS))
     dismiss(qtbot, win)
 
-    p.step("Click wait_for_pause, type {pause} into its Seconds, and press Enter.")
+    p.step("Click wait_for_pause, type {{pause}} into its Seconds, and press Enter.")
     click_block(win, "wait_for_pause")
-    type_in(field(win, "Seconds"), "{pause}")
-    p.shot(win, "① wait_for_pause's Seconds says {pause}, with no red line; ② its bottom line says ⏱ waits {pause} s.",
+    type_in(field(win, "Seconds"), "{{pause}}")
+    p.shot(win, "① wait_for_pause's Seconds says {{pause}}, with no red line; ② its bottom line says "
+                "⏱ waits {{pause}} s.",
            highlight=[field(win, "Seconds"), "wait_for_pause"], badges=True,
            zoom=[win.properties.widget(), "wait_for_pause"])
-    p.check("① Seconds says {pause}, with no red line, and the flow holds it",
-            error_shown(win) == "" and tab.doc.blocks["wait_for_pause"]["config"]["seconds"] == "{pause}")
+    p.check("① Seconds says {{pause}}, with no red line, and the flow holds it",
+            error_shown(win) == "" and tab.doc.blocks["wait_for_pause"]["config"]["seconds"] == "{{pause}}")
 
     # --- (2) run it: each Wait waits what it was given ---------------------------------------------------------
     p.step("Click an empty part of the canvas, so the Log shows every block's lines, and press ▶ Run now. The Run "
@@ -333,7 +335,7 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
 
     # --- (4) the clear failures ----------------------------------------------------------------------------------
     p.step("Make two mistakes on purpose. On the Parameters tab, press Add and name the new parameter value: "
-           "wait_for_value's {value} could now be either. Then click wait_for_pause and type {pasue}, a typo, into "
+           "wait_for_value's {{value}} could now be either. Then click wait_for_pause and type {{pasue}}, a typo, into "
            "its Seconds.")
     click_inspector_tab(win, win.parameters)
     click_button(win, "Add")
@@ -343,22 +345,22 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
            highlight=[(table, 1)], badges=True, zoom=parameters_zoom(win))
     p.check("① The flow has the parameters pause and value", list(tab.doc.data["params"]) == ["pause", "value"])
     click_block(win, "wait_for_pause")
-    type_in(field(win, "Seconds"), "{pasue}")
+    type_in(field(win, "Seconds"), "{{pasue}}")
 
     p.step("Press Validate in the toolbar (F7).")
     said = validate(p, win, monkeypatch, "Validate's box names both mistakes, each with its block and setting: "
-                                         "{value} could be the parameter value or the input value: rename one; "
-                                         "{pasue} is neither a flow parameter nor an input of this block.")
+                                         "{{value}} could be the parameter value or the input value: rename one; "
+                                         "{{pasue}} is neither a flow parameter nor an input of this block.")
     p.check(f"It says “{BOTH}”", BOTH in said)
     p.check(f"It says “{NEITHER}”", NEITHER in said)
 
-    p.step("Put both right: on the Parameters tab, click value and press Remove; type {pause} back into "
+    p.step("Put both right: on the Parameters tab, click value and press Remove; type {{pause}} back into "
            "wait_for_pause's Seconds. Press Validate again.")
     click_inspector_tab(win, win.parameters)
     QTest.mouseClick(table.viewport(), Qt.LeftButton, Qt.NoModifier, table.visualItemRect(table.item(1, 0)).center())
     click_button(win, "Remove")
     click_block(win, "wait_for_pause")
-    type_in(field(win, "Seconds"), "{pause}")
+    type_in(field(win, "Seconds"), "{{pause}}")
     press(win, win.validate_action)
     QTest.qWait(100)
     bar = win.statusBar()
@@ -379,7 +381,7 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
     p.shot(win, "On the canvas: ① wait_for_value failed (red); ② wait_for_pause did not run: skipped, as something "
                 "before it failed.", highlight=["wait_for_value", "wait_for_pause"], badges=True, zoom=LINE)
     line = (win.log.text, "gave 'abc', which is not a number")
-    p.shot(win, "③ The Log says why: Seconds: {value} gave 'abc', which is not a number. Under it, it shows what "
+    p.shot(win, "③ The Log says why: Seconds: {{value}} gave 'abc', which is not a number. Under it, it shows what "
                 "arrived at the value input: abc.",
            highlight=[line], badges=[3], zoom=[line, (win.log.text, f"run #{third} failed")])
     p.check(f"③ The Log says “{NOT_A_NUMBER}”", told == NOT_A_NUMBER)
@@ -389,16 +391,16 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
             statuses(tab)["wait_for_pause"] == "skipped" and not says_waiting(win, third, "wait_for_pause"))
 
     p.step("Connect make_number's output to wait_for_value's run after instead: drag it onto run after, then click "
-           "the connection into value and press Delete. Seconds still says {value}. Run it again.")
+           "the connection into value and press Delete. Seconds still says {{value}}. Run it again.")
     p.note("This is the other way you described: the Wait connected to run after only, with its seconds typed. "
-           "Here Seconds was left at {value}, which now has nothing to take its number from.")
+           "Here Seconds was left at {{value}}, which now has nothing to take its number from.")
     drag_port_to_port(tab, "make_number", "output", "wait_for_value", "after")
     win.activateWindow()  # (made active first: becoming active, the canvas would let go of the connection clicked)
     qtbot.waitUntil(lambda: QApplication.activeWindow() is win, timeout=5_000)
     delete_connection(win, tab, qtbot, "make_number.output -> wait_for_value.value")
     edges = tab.doc.edges()
     p.shot(win, "① make_number's output now goes into ② wait_for_value's run after; its value input has nothing "
-                "connected, and its bottom line still says ⏱ waits {value} s.",
+                "connected, and its bottom line still says ⏱ waits {{value}} s.",
            highlight=["make_number", "wait_for_value"], badges=True, zoom=["make_number", "wait_for_value"])
     p.check("① make_number's output now goes to wait_for_value's run after, and nothing into its value",
             ("make_number", "output", "wait_for_value", "after") in edges
@@ -407,8 +409,8 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
     fourth = run_now(p, win, qtbot, tab)
     told = error_of(win, fourth, "wait_for_value")
     line = (win.log.text, "nothing is connected to the input value")
-    p.shot(win, "wait_for_value failed again, and ③ the Log says: Seconds: {value}: nothing is connected to the input "
-                "value. What arrived came in at run after, which only says when the block starts.",
+    p.shot(win, "wait_for_value failed again, and ③ the Log says: Seconds: {{value}}: nothing is connected to the "
+                "input value. What arrived came in at run after, which only says when the block starts.",
            highlight=[line], badges=[3], zoom=[line, (win.log.text, f"run #{fourth} failed")])
     p.check(f"③ The Log says “{NOT_CONNECTED}”", told == NOT_CONNECTED)
     p.check("wait_for_value failed before it waited", statuses(tab)["wait_for_value"] == "failed"
@@ -416,15 +418,15 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
 
     # --- (3) other kinds of settings: a Chart's title, width and columns ---------------------------------------
     chart_flow = write(tmp_path / "sales-chart.yaml", CHART)
-    p.step("Open sales-chart.yaml and click its Chart block, chart. Its Title is {region} sales, its Width {w} and "
-           "its Y {col}: a text, a whole number and a list, each from a flow parameter.")
+    p.step("Open sales-chart.yaml and click its Chart block, chart. Its Title is {{region}} sales, its Width {{w}} and "
+           "its Y {{col}}: a text, a whole number and a list, each from a flow parameter.")
     tab = open_flow(win, monkeypatch, chart_flow)
     click_block(win, "chart")
     settings = [field(win, label) for label in ("Y", "Title", "Width")]
-    p.shot(win, "chart's settings: ① Y (the columns it draws) {col}, ② Title {region} sales, ③ Width {w}.",
+    p.shot(win, "chart's settings: ① Y (the columns it draws) {{col}}, ② Title {{region}} sales, ③ Width {{w}}.",
            highlight=settings, badges=True, zoom=[win.properties.widget(), *CHART_LINE])
-    p.check("① Y says {col}, ② Title {region} sales and ③ Width {w}, with no red line",
-            [s.text() for s in settings] == ["{col}", "{region} sales", "{w}"] and error_shown(win) == "")
+    p.check("① Y says {{col}}, ② Title {{region}} sales and ③ Width {{w}}, with no red line",
+            [s.text() for s in settings] == ["{{col}}", "{{region}} sales", "{{w}}"] and error_shown(win) == "")
 
     p.step("Click show, the Inspect block after chart: the Log shows its lines only. Press ▶ Run now, then Run.")
     click_block(win, "show")
@@ -459,16 +461,16 @@ def test_placeholders_in_every_setting(proof, win, qtbot, tmp_path, monkeypatch)
 
     p.step("Click caption, the Python Code block, then the Data preview tab under the canvas.")
     p.note("Code takes no placeholders: Python Code, Polars, If and Inspect's message are as they were. SQL takes "
-           "flow parameters only, as before; an HTML Template fills in its own {name}.")
+           "flow parameters only, as before; an HTML Template fills in its own {{name}}.")
     click_block(win, "caption")
     code = next(c for c in win.properties.findChildren(CodeEdit) if c.isVisible())
-    written = (code, "output = 'Sales of {region}'")
-    p.shot(win, "① caption's code: output = 'Sales of {region}'.", highlight=[written], badges=True,
+    written = (code, "output = 'Sales of {{region}}'")
+    p.shot(win, "① caption's code: output = 'Sales of {{region}}'.", highlight=[written], badges=True,
            zoom=[written, field(win, "Name")])
     click_bottom_tab(win, win.preview)
-    made = [(win.preview.text, "Sales of {region}"), win.preview.label]
-    p.shot(win, "② What caption made: Sales of {region}, its braces left as they are.", highlight=[made],
+    made = [(win.preview.text, "Sales of {{region}}"), win.preview.label]
+    p.shot(win, "② What caption made: Sales of {{region}}, its braces left as they are.", highlight=[made],
            badges=[2], zoom=[made, win.bottom_tabs.tabBar()])
-    p.check("② caption made the text “Sales of {region}”, braces and all",
-            win.preview.text.toPlainText().strip() == "Sales of {region}"
+    p.check("② caption made the text “Sales of {{region}}”, braces and all",
+            win.preview.text.toPlainText().strip() == "Sales of {{region}}"
             and kept(win, lambda h: h.blocks(chart_run))["caption"]["status"] == "success")

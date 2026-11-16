@@ -45,14 +45,14 @@ WORDS = {"keyword": ("for region", "for"), "string": ('"North"',), "comment": ("
 REPORT = """\
 ## This week's sales
 
-**{value}** sold in three regions.
+**{{value}}** sold in three regions.
 
 ```mermaid
 flowchart LR
     load[Load the sales] --> add(Add them up)
     add --> show[Show the report]
 ```
-"""  # filled in like a Python f-string: {value} is total_sales' number
+"""  # filled in like a Python f-string: {{value}} is total_sales' number
 FLOW = {
     "blocks": {
         "start_by_hand": {"type": "trigger.manual", "ui": {"x": 0, "y": 0}},

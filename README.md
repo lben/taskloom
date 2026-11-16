@@ -141,7 +141,7 @@ taskloom editor examples/daily-sales-report.yaml
   this kind has). Only a password answer is hidden (`***` in the Log, Inspect, Data preview
   and the run history); any other answer shows as it is. Runs nobody can answer (scheduled
   ones, `taskloom run`) use its **Default**, which every kind but password has; for kind
-  number it must be a number (or have `{name}` placeholders, read as the block runs), or
+  number it must be a number (or have `{{name}}` placeholders, read as the block runs), or
   Validate and runs refuse the flow. A password never comes
   from a Default: its **Stored secret** setting names a password saved in Taskloom's secret
   store (`taskloom secret set NAME`), and runs nobody can answer use that one. With no
@@ -167,7 +167,7 @@ taskloom editor examples/daily-sales-report.yaml
   SQL (`--`: each connected table by its name in Inputs, at first `input`; `:name`
   parameters; its `result`), Run Query (`--`: `:name` from the flow parameters or its
   `params` input; its `result`), Polars Transform (`#`: `df`, `pl`, `params["name"]`; its
-  `table`) and HTML Template (`<!-- -->`: `{name}`, `{name:format}`; its `html`). No need to
+  `table`) and HTML Template (`<!-- -->`: `{{name}}`, `{{name:format}}`; its `html`). No need to
   delete them: what you write below or between them runs as if they were not there (SQL is
   sent with its comments), and code that is only comments counts as empty, so Properties,
   Validate and runs say it is required (e.g. `load: SQL is required`); an HTML Template of
@@ -298,9 +298,9 @@ taskloom editor examples/daily-sales-report.yaml
   `… 236,565 more lines (4,830,112 characters in all) · show all`. Press **show all** and
   Data preview comes to the front with the whole of it, under
   `Log message of inspect_orders, 09:02:41: 236,765 lines`, until you select a block. In a
-  terminal the message is printed whole. Its **message** is written like a Python f-string, e.g.
-  `Healthy: {value['healthy']}`. Example: `examples/check-app-health.yaml` (Health Check's
-  `result` output says healthy or not).
+  terminal the message is printed whole. In its **message**, `{{ }}` holds a Python expression,
+  e.g. `Healthy: {{value['healthy']}}`; single braces are plain text. Example:
+  `examples/check-app-health.yaml` (Health Check's `result` output says healthy or not).
   - A value that is a picture's path (.png, .jpg, .jpeg, .gif, .bmp, .svg or .webp, e.g. a
     Chart's `image`; a relative path is in the flow's folder) shows in the Log as its full
     path with the picture under it, scaled down to fit 640 × 640 (in a terminal, just the
@@ -471,34 +471,35 @@ blocks:
     retry: {policy: exponential, initial: 30s, factor: 2, max_delay: 10m, max_attempts: 5}
   save:
     type: data.write_file
-    config: {path: "out/sales_{day:%Y-%m-%d}.csv"}
+    config: {path: "out/sales_{{day:%Y-%m-%d}}.csv"}
 edges:
   - q.result -> save.table
 ```
 
 - `:name` in SQL binds a parameter with its type (a `list` as its items, for
-  `where region in (:regions)`); `{name:format}` fills text.
-- `{name}` placeholders work in every setting you type a value into, in every block: text,
-  paths, whole numbers, numbers and each item of a list. `{name}` is the flow parameter
+  `where region in (:regions)`); `{{name:format}}` fills text.
+- `{{name}}` placeholders work in every setting you type a value into, in every block: text,
+  paths, whole numbers, numbers and each item of a list. `{{name}}` is the flow parameter
   `name`, or the value arriving at the block's own input `name` (not its run after);
-  `{name:format}` formats it (`{value:.1f}`, `{day:%Y-%m-%d}`) and `{{` and `}}` are
-  literal braces. A number setting reads the filled-in text as its number (spaces around it
-  ignored), within its own limits, e.g. `count: "{value}0"`. SQL code takes flow
+  `{{name:format}}` formats it (`{{value:.1f}}`, `{{day:%Y-%m-%d}}`); single braces are plain
+  text, and `{{{{` gives a literal `{{`. A number setting reads the filled-in text as its
+  number (spaces around it ignored), within its own limits, e.g. `count: "{{value}}0"`.
+  SQL code takes flow
   parameters only; other code (Python, Polars, If, Check File's Since and Check Table's Latest
-  at least, and an HTML Template, which fills in its own `{name}`), yes/no and choice
+  at least, and an HTML Template, which fills in its own `{{name}}`), yes/no and choice
   settings, and a Splitter's At most at once (Validate checks the lines with it before the
   run) take none. Validate
   (F7, `taskloom check`, `taskloom validate`) refuses a name that is neither a parameter
-  nor an input of the block, and one that is both (`{value} could be the parameter value or
+  nor an input of the block, and one that is both (`{{value}} could be the parameter value or
   the input value: rename one`). Nothing is filled in silently: the
   block fails before it does anything, naming the setting, the placeholder and why, when
   nothing is connected to that input or nothing arrived there, a table arrived (only a
   single value can be written into a setting: text, a number, a date or time, yes/no), or a
-  number setting's text is not a number (`Seconds: {value} gave 'abc', which is not a
+  number setting's text is not a number (`Seconds: {{value}} gave 'abc', which is not a
   number`).
 - **Wait** (`logic.wait`) pauses for its **Seconds**, then passes its `value` input on:
-  a number, `{value}` for the number arriving at its value input, or `{name}` for a flow
-  parameter, e.g. `seconds: "{pause}"`. The Log says once how long it waits and until when
+  a number, `{{value}}` for the number arriving at its value input, or `{{name}}` for a flow
+  parameter, e.g. `seconds: "{{pause}}"`. The Log says once how long it waits and until when
   (`waiting 90 s, until 14:05:30`). In the editor, the line at the bottom of the block says how
   long it waits (`⏱ waits 90 s`) and, while it waits, counts down the time left
   (`⏱ 00:01:29 left`), as a Schedule block's line counts down to its next run.
@@ -615,7 +616,7 @@ refuses it.
   *the order the lines finished* in the run it carries on from. A run from the start always
   goes in the order the lines finish.
 - Validate warns about a file path a block run once per line writes or copies to without a
-  `{placeholder}` (each line's run would write over the one before), and refuses a block run
+  `{{placeholder}}` (each line's run would write over the one before), and refuses a block run
   once per line that takes from the end of one of the Merger's lines (connect it to the
   Merger's output instead). It works inside a Loop's box, and in the runs of another Merger
   set to each line as it finishes: the blocks after the inner one then run once per line of
@@ -683,7 +684,7 @@ edges:
   that run, then what follows the Loop (**Run only this block** on the Loop does the same,
   without what follows). Run from here and Run only this block are not offered
   on a block inside a Loop yet: right-click the Loop.
-- Validate also warns when a block inside writes or copies to a path with no `{placeholder}`
+- Validate also warns when a block inside writes or copies to a path with no `{{placeholder}}`
   (every item would write the same file), and when the Loop's results is connected but its
   result is not.
 
@@ -712,7 +713,7 @@ Files' paths are. A folder is not a file: it does not count as one found.
 - **Size**: every file found is at least **Minimum** and/or at most **Maximum**, written with
   a unit: B, KB, MB or GB (1 KB = 1024 bytes, as Windows shows sizes), e.g. `1 KB` or
   `200 MB`. A size written another way is refused before the run (written with a
-  `{placeholder}`, as the block runs).
+  `{{placeholder}}`, as the block runs).
 
 With a pattern every check applies to each file found, and a failure names each file that
 breaks it, with its size or time. The Log lists each file found with its size and when it was
@@ -905,7 +906,7 @@ blocks:
     type: reports.html_template
     config:
       names: {summary.stats: stats, summary.charts: charts}
-      template: "<h2>Sales statistics</h2>{stats}<br>{charts}"
+      template: "<h2>Sales statistics</h2>{{stats}}<br>{{charts}}"
   mail:
     type: email.send
     config: {connection: mailer, to: [team@example.com], subject: Sales statistics}
@@ -1001,7 +1002,7 @@ blocks:
     type: reports.html_template
     config:
       names: {detect.anomalies: anomalies, detect.charts: charts}
-      template: "<h2>Unusual row counts</h2>{anomalies}<br>{charts}"
+      template: "<h2>Unusual row counts</h2>{{anomalies}}<br>{{charts}}"
   mail:
     type: email.send
     config: {connection: mailer, to: [team@example.com], subject: Unusual row counts}
@@ -1022,8 +1023,8 @@ for desktop Outlook: table layout, CSS moved into `style=""` attributes, charts 
 explicit sizes (never `data:` URIs or SVG), plus a plain-text version (one line per
 list item). Headings, paragraphs, lists and table cells get their font and spacing inline;
 a style you write yourself wins, over a table's built-in look too, property by property and
-without `!important`: with `<style>td {{padding: 15px; border: 1px solid black}}</style>` in
-the Template, every cell of `{my_table}` gets that padding and border and keeps the rest (the
+without `!important`: with `<style>td {padding: 15px; border: 1px solid black}</style>` in
+the Template, every cell of `{{my_table}}` gets that padding and border and keeps the rest (the
 dark header, the striped rows, numbers to the right). Your rules style what you show, not the
 email's own frame: that `td` rule puts no border around the whole body.
 
@@ -1032,23 +1033,24 @@ email's own frame: that `td` rule puts no border around the whole body.
 - **HTML Template** composes the email body. Connect any number of outputs to its `data`
   input: Properties lists each one under Inputs with a name, at first its block's name (a
   name already taken, e.g. by another input or a flow parameter, gets `block_output`, e.g.
-  `check_details`); change it there. The Template is HTML in which `{name}` shows an input
-  or a flow parameter and `{name:format}` formats a number or date, e.g. `{total:,.2f}` or
-  `{day:%d %B %Y}`; write `{{` and `}}` for literal braces (also in a `<style>` block), e.g.
-  `Hi {input1}, please see below the chart<br>{chart}<br>and below the table<br>{my_table}<br>thank you`.
+  `check_details`); change it there. The Template is HTML in which `{{name}}` shows an input
+  or a flow parameter and `{{name:format}}` formats a number or date, e.g. `{{total:,.2f}}` or
+  `{{day:%d %B %Y}}`; single braces are plain text (also in a `<style>` block), and `{{{{`
+  gives a literal `{{`, e.g.
+  `Hi {{input1}}, please see below the chart<br>{{chart}}<br>and below the table<br>{{my_table}}<br>thank you`.
   Each value is shown by its type: a table as an Outlook-safe table (at most **Max table
   rows**, 500 by default), a chart's picture inline, HTML from another template as it is, a
   list item by item, nothing for an empty value, and anything else as its text, escaped,
-  where you put it. `{name:html}` puts text in as HTML instead, as it is, with the `<style>`
+  where you put it. `{{name:html}}` puts text in as HTML instead, as it is, with the `<style>`
   block inside it applied, e.g. what `df.style.apply(colour, axis=1).to_html()` gives in
   Python Code; html applies only to text (and passes HTML from another template as it is):
   on a table, a number, a date, a list or a picture it stops the run. Enter makes no new line
   in the email: write `<br>`, and put a table or a chart between `<br>`s rather than inside
   a `<p>`. An empty Template shows every input in
   turn. A comment, `<!-- ... -->`, is a note for you: it is left out of the email, and a
-  `{name}` in it shows nothing; Outlook's conditional comments (`<!--[if mso]> ...
+  `{{name}}` in it shows nothing; Outlook's conditional comments (`<!--[if mso]> ...
   <![endif]-->`) and `<style>` elements are kept as written. A name the Template does not
-  know, or a brace left alone, is shown in red and stops
+  know, or a `{{` with no `}}` after it, is shown in red and stops
   Validate and runs; every connected block must deliver (after an If, the path not taken
   skips the template, and the email).
 - **Formatting buttons** above the Template box (and every html code box): B, I, U, Heading,
@@ -1356,7 +1358,7 @@ tabs, a line above each group in Properties:
   is sent), a **form (url-encoded)** (its **Form** table), **multipart form-data** (its
   **Parts**: a part ticked **File** sends the file its value names) or a **file** sent as it is.
   Each sets its Content-Type, unless Headers has one. Placeholders work in Content as in every
-  setting, so the braces of JSON are written `{{` and `}}`: `{{"region": "{region}"}}`.
+  setting; the single braces of JSON are plain text: `{"region": "{{region}}"}`.
 - **Response as**: **automatic** (JSON read into dicts and lists when the server says it is
   JSON, text otherwise, as its charset says), **text**, **table** (the answer must be a JSON
   list of records, an object per row; anything else fails it, saying so) or **file** (saved
@@ -1374,7 +1376,7 @@ tabs, a line above each group in Properties:
 - **Retry and timeout** as for every block, e.g. a Timeout of `30s` for a server that does not
   answer.
 
-`{name}` placeholders work in the URL, Params, Headers and Content. Its outputs are `response`
+`{{name}}` placeholders work in the URL, Params, Headers and Content. Its outputs are `response`
 (as Response as says), `status` (a number), `headers` (a dict; a `Set-Cookie` header shows as
 `***` in the Log, the results and Data preview, as a stored secret does, while the blocks after it
 get its value) and `done`. Its `body` input, when
@@ -1402,7 +1404,7 @@ Windows cmd (`^` at a line's end, `^"`, `\"`), and click **Fill in**. It fills t
   the URL (also `--url`), its query into Params;
 - Headers from `-H`/`--header`, a Cookie header from `-b`/`--cookie`, User-Agent and Referer from
   `-A`/`--user-agent` and `-e`/`--referer`;
-- the Body from `-d`/`--data`/`--data-raw`/`--data-binary`/`--json`: JSON (shown pretty-printed)
+- the Body from `-d`/`--data`/`--data-raw`/`--data-binary`/`--json`: JSON (as the command has it)
   when it is JSON, else text (with curl's `Content-Type: application/x-www-form-urlencoded` unless
   a header gives one), or a file with `@path`; `--json` also adds its two JSON headers.
   `--data-urlencode` makes a url-encoded form, `-F`/`--form` multipart Parts (`name=@path`: a
@@ -1421,13 +1423,13 @@ changes nothing. The request is replaced as a whole, Connection included (what t
 not give is left empty; Follow redirects, Don't verify certificates and the Timeout change only
 with `-L`, `-k` and `-m`), in one step for Undo. Then it says what it filled and lists what it could not use (an
 option it does not read, a second URL); text that is not a curl command is refused, saying so.
-Braces are written `{{` and `}}`, so they are sent as they are.
+Single braces are plain text, so they are sent as they are.
 
 **Connection**: none (everything is set in the block), or an API connection (Tools →
 Connections, New…, Kind Web API): its **Base URL**, **Auth** with its stored secret, the headers
 every request sends and its certificate settings. With one chosen, Properties shows what it gives
 (change it in the Connections window); the block's URL is then whole, or relative to the base URL
-(with `https://api.example.com/v1`, `/orders/{id}` calls `https://api.example.com/v1/orders/7`), and
+(with `https://api.example.com/v1`, `/orders/{{id}}` calls `https://api.example.com/v1/orders/7`), and
 the block's own Headers are added to the connection's, the block's winning on the same name
 (Properties says which of the connection's it replaces). For example, today's open orders saved as
 a file, then a report of them sent:
@@ -1443,11 +1445,11 @@ blocks:
     config:
       connection: shop
       url: /orders
-      params: [{key: status, value: open}, {key: day, value: "{day:%Y-%m-%d}"}]
+      params: [{key: status, value: open}, {key: day, value: "{{day:%Y-%m-%d}}"}]
       response_as: table
   save:
     type: data.write_file
-    config: {path: "out/orders_{day:%Y-%m-%d}.csv"}
+    config: {path: "out/orders_{{day:%Y-%m-%d}}.csv"}
   report:
     type: servers.api_request
     config:
@@ -1456,7 +1458,7 @@ blocks:
       auth: Bearer token
       secret: reports_token
       body: JSON
-      content: '{{"day": "{day:%Y-%m-%d}", "file": "orders_{day:%Y-%m-%d}.csv"}}'
+      content: '{"day": "{{day:%Y-%m-%d}}", "file": "orders_{{day:%Y-%m-%d}}.csv"}'
 edges:
   - start.start -> orders.after
   - orders.response -> save.table

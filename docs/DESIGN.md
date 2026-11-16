@@ -177,10 +177,10 @@ blocks:
     ui: {x: 120, y: 80}
   xl:
     type: report.to_excel
-    config: {path: "reports/sales_{day:%Y-%m-%d}.xlsx", chart: {kind: bar, x: day, y: total}}
+    config: {path: "reports/sales_{{day:%Y-%m-%d}}.xlsx", chart: {kind: bar, x: day, y: total}}
   mail:
     type: email.send
-    config: {connection: smtp, to: ["{settings.notify_email}"], subject: "Daily sales"}
+    config: {connection: smtp, to: ["{{settings.notify_email}}"], subject: "Daily sales"}
 edges:
   - q.result -> xl.table
   - xl.file -> mail.attachments
@@ -208,8 +208,8 @@ blocks on the canvas) and can be used by any block.
   the format is chosen where it is used:
   - SQL **bind parameters** `:name` pass the typed value to the driver
     (`:day` as a date, `:day_key` as the integer `20260101`) — safe from injection;
-  - **text templates** `{name}` / `{name:format}` in paths, subjects, commands, e.g.
-    `{day:%Y-%m-%d}` → `2026-01-01`, `{day:%Y%m%d}` → `20260101`. Inside SQL these are
+  - **text templates** `{{name}}` / `{{name:format}}` in paths, subjects, commands, e.g.
+    `{{day:%Y-%m-%d}}` → `2026-01-01`, `{{day:%Y%m%d}}` → `20260101`. Inside SQL these are
     raw text substitution, for things binds can't do (table or partition names).
 - **Business-day calendars** decide which days count:
   - a calendar has weekend days (default Saturday and Sunday) and a holiday list;
@@ -351,7 +351,7 @@ PySide6 (Qt) application:
 
 ## 11. Reports and email (Outlook-safe)
 
-- HTML built by the HTML Template block: plain HTML with `{name}` / `{name:format}` placeholders for its inputs
+- HTML built by the HTML Template block: plain HTML with `{{name}}` / `{{name:format}}` placeholders for its inputs
   and the flow parameters (as in Text fields), each value shown by its type (a table as an inline-styled
   table, a chart as an inline image, text escaped), then **CSS inlined** automatically.
 - Table-based layout; no flexbox/grid, no external CSS, no SVG, no background images.
