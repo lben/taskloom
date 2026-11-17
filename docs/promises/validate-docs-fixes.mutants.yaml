@@ -1,10 +1,9 @@
 # Mutation testing of Validate's status bar and the Documentation column's width (read by packaging/mutants.py
-# --explained). scope: what the bugs are planted in, the functions the change touched, in groups: each group's bugs
-# run the tests that can see them (each line of tests: is one pytest run, a file with -k words or without). The
-# change's other line is not in a function of the package, so nothing is planted in it: the README proof's copy of
-# the column's style (tests/proofs/test_proof_readme.py). A function in which the change touched a line, among much
-# that was there before, is under not_tested: its bugs are planted and counted, not run, and its reason names the
-# tests that check the changed line. The mutants the tests let through are explained here, by kind (kinds: a kind,
+# --explained). scope: what the bugs are planted in, the two functions the change touched, each whole (its lines from
+# before as well as the changed one), in groups: each group's bugs run the tests that can see them (each line of
+# tests: is one pytest run, of a file or several, with -k words or without). The change's other line is not in a
+# function of the package, so nothing is planted in it: the README proof's copy of the column's style
+# (tests/proofs/test_proof_readme.py). The mutants the tests let through are explained here, by kind (kinds: a kind,
 # its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could notice). Only
 # those no user could notice are explained: the others stay without a reason until a test catches them.
 scope:
@@ -17,12 +16,12 @@ scope:
     - mutate:
         - taskloom/editor/window.py MainWindow._ready_to_run
       tests:
-        - tests/test_paths_editor_editing.py -k finds_problems
-not_tested:
-  taskloom/editor/window.py MainWindow._ready_to_run: >-
-    The check that Validate and Run go through, to which this change added one line: the status bar's message
-    emptied just before the box of problems opens, a call with no arguments, in which mutmut plants nothing (listed with mutmut's
-    own code: all 85 of the function's mutants are in lines that were there before).
-    test_when_validate_finds_problems_the_status_bar_no_longer_says_no_problems_found and
-    test_when_run_finds_problems_the_status_bar_no_longer_says_no_problems_found check that line: each fails without
-    it.
+        - tests/test_paths_editor_editing.py tests/test_paths_editor_running.py tests/test_run_scope.py -k "finds_problems or cancelling_that_runs_nothing or editor_run_run_only_and_run_from or editor_validate_lists_every_problem"
+kinds:
+  - kind: Another name for the column's zoom
+    why: >-
+      The name the Documentation column's zoom is saved under in editor.ini: no other pane and no doc uses it, so the
+      column keeps its size the same way under any name.
+    mutants:
+      - taskloom.editor.window.xǁDocsBrowserǁ__init____mutmut_11
+      - taskloom.editor.window.xǁDocsBrowserǁ__init____mutmut_12

@@ -1,7 +1,7 @@
 """Proof: Validate's status bar and the Documentation column's width (docs/promises/validate-docs-fixes.yaml, VAL-1,
 DOC-1). Right after a Validate that found no problems, a Validate, and then a Run now, that find one open the box of
-problems with the status bar empty; in Help > Documentation, 360 px wide, the Checks page's long YAML line goes on to
-the next line, and no page scrolls sideways."""
+problems with the status bar back to its usual line, “No flows running”; in Help > Documentation, 360 px wide, the
+Checks page's long YAML line goes on to the next line, and no page scrolls sideways."""
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QUrl
 from PySide6.QtTest import QTest
@@ -82,7 +82,7 @@ def test_validates_status_bar_and_the_documentation_columns_width(proof, win, qt
     p.alternative("Shorten the guide's long code lines to fit 360 px",
                   "Ten or more of the guide's pages had such lines, not only Checks, and any new example could bring "
                   "one back; the rule wraps them all, now and later.")
-    p.alternative("Say “problems found” in the status bar instead of emptying it",
+    p.alternative("Say “problems found” in the status bar instead of setting it back to its usual line",
                   "The box and the Log already list the problems; the status bar would only say it a third time.")
     p.fits("The Log lists the problems as before, and the box's words are the same; a Validate with no problems "
            "says so in the status bar as before.")

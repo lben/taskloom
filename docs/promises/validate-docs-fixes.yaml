@@ -8,9 +8,10 @@ agreed: 2026-11-17
 proofs: [test_proof_validate_docs_fixes]
 rows:
   VAL-1: >-
-    When the flow has problems, the box listing them opens with the status bar empty. Any "no problems found" from an
-    earlier Validate is gone. A Validate that finds no problems still says "no problems found" for 5 seconds, as it
-    does today. Run opens the same box, so this also holds when Run finds the problems.
+    When the flow has problems, the box listing them opens with the status bar back to its usual line ("No flows
+    running"). Any "no problems found" from an earlier Validate is gone. A Validate that finds no problems still says
+    "no problems found" for 5 seconds, as it does today. Run opens the same box, so this also holds when Run finds the
+    problems.
   DOC-1: >-
     In Help > Documentation, at the width the column opens with (360 px), no page scrolls sideways. Long lines in code
     examples continue on the next line instead.

@@ -1171,21 +1171,27 @@ def test_a_time_zone_that_does_not_exist_is_named_when_checking_the_flow(win, tm
     clean(win)
 
 
+def what_the_status_bar_shows(win) -> tuple:
+    """The status bar's message, and its usual line (the flows running now) if it shows: a message hides it."""
+    return win.statusBar().currentMessage(), (win.running_flows.text() if win.running_flows.isVisible() else None)
+
+
 def validated_then_given_a_problem(win, tmp_path, monkeypatch) -> list:
-    """Validate a flow with no problems (the status bar says so for 5 s), then give it a problem at once (a time
-    zone that does not exist). The status bar's message as each box of problems opens from then on."""
+    """Validate a flow with no problems (the status bar says so for 5 s, in place of its usual line), then give it a
+    problem at once (a time zone that does not exist). What the status bar shows as each box of problems opens from
+    then on."""
     flow = flow_file(tmp_path / "zoned.yaml", {"start": {"type": "trigger.manual"},
                                                 "work": {"type": "logic.python", "config": {"inputs": [], "code": "pass"}}},
                      ["start.start -> work.after"])
     win.open_flow(flow)
     menu(win, "Validate").trigger()
-    assert win.statusBar().currentMessage() == "zoned.yaml: no problems found"
+    assert what_the_status_bar_shows(win) == ("zoned.yaml: no problems found", None)
     assert win.message_boxes == []
 
     status_when_the_box_opens = []
     record = QMessageBox.warning  # the win fixture's: notes the box instead of waiting for a click
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(
-        lambda *a, **k: status_when_the_box_opens.append(win.statusBar().currentMessage()) or record(*a, **k)))
+        lambda *a, **k: status_when_the_box_opens.append(what_the_status_bar_shows(win)) or record(*a, **k)))
     type_in(win.flow_settings.timezone, "Mars/Olympus_Mons")
     return status_when_the_box_opens
 
@@ -1199,12 +1205,13 @@ def the_box_of_problems(win) -> bool:
 @pytest.mark.invariant("VAL-1")
 def test_when_validate_finds_problems_the_status_bar_no_longer_says_no_problems_found(win, tmp_path, monkeypatch):
     """Validate a flow with no problems (the status bar says so for 5 s), give it a problem and Validate again at
-    once: the box listing the problem opens with the status bar empty, not still saying "no problems found"."""
+    once: the box listing the problem opens with the status bar back to its usual line ("No flows running"), not
+    still saying "no problems found"."""
     status_when_the_box_opens = validated_then_given_a_problem(win, tmp_path, monkeypatch)
     menu(win, "Validate").trigger()
 
     assert the_box_of_problems(win), win.message_boxes
-    assert status_when_the_box_opens == [""], status_when_the_box_opens
+    assert status_when_the_box_opens == [("", "No flows running")], status_when_the_box_opens
     win.message_boxes.clear()
     clean(win)
 
@@ -1212,12 +1219,12 @@ def test_when_validate_finds_problems_the_status_bar_no_longer_says_no_problems_
 @pytest.mark.invariant("VAL-1")
 def test_when_run_finds_problems_the_status_bar_no_longer_says_no_problems_found(win, tmp_path, monkeypatch):
     """The same with ▶ Run now at once after the Validate that found no problems: Run opens the same box, with the
-    status bar empty, and runs nothing."""
+    status bar back to its usual line ("No flows running"), and runs nothing."""
     status_when_the_box_opens = validated_then_given_a_problem(win, tmp_path, monkeypatch)
     win.run_action.trigger()
 
     assert the_box_of_problems(win), win.message_boxes
-    assert status_when_the_box_opens == [""], status_when_the_box_opens
+    assert status_when_the_box_opens == [("", "No flows running")], status_when_the_box_opens
     assert not win.current.runs
     win.message_boxes.clear()
     clean(win)
