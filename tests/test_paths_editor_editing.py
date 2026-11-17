@@ -1171,6 +1171,30 @@ def test_a_time_zone_that_does_not_exist_is_named_when_checking_the_flow(win, tm
     clean(win)
 
 
+def test_when_validate_finds_problems_the_status_bar_no_longer_says_no_problems_found(win, tmp_path, monkeypatch):
+    """Validate a flow with no problems (the status bar says so for 5 s), give it a problem and Validate again at
+    once: the box listing the problem opens with the status bar empty, not still saying "no problems found"."""
+    flow = flow_file(tmp_path / "zoned.yaml", {"start": {"type": "trigger.manual"},
+                                                "work": {"type": "logic.python", "config": {"inputs": [], "code": "pass"}}},
+                     ["start.start -> work.after"])
+    win.open_flow(flow)
+    menu(win, "Validate").trigger()
+    assert win.statusBar().currentMessage() == "zoned.yaml: no problems found"
+    assert win.message_boxes == []
+
+    status_when_the_box_opens = []
+    record = QMessageBox.warning  # the win fixture's: notes the box instead of waiting for a click
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(
+        lambda *a, **k: status_when_the_box_opens.append(win.statusBar().currentMessage()) or record(*a, **k)))
+    type_in(win.flow_settings.timezone, "Mars/Olympus_Mons")
+    menu(win, "Validate").trigger()
+
+    assert [kind for kind, _ in win.message_boxes] == ["warning"]
+    assert status_when_the_box_opens == [""], status_when_the_box_opens
+    win.message_boxes.clear()
+    clean(win)
+
+
 # --- text on the canvas ---------------------------------------------------------------------
 
 def test_a_texts_words_bold_underline_font_and_size_are_saved_and_come_back(win, tmp_path, monkeypatch):
