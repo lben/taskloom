@@ -1,0 +1,10 @@
+# The design decisions of name/value rows changed and deleted, one line each (read by packaging/proof_pdf.py): what
+# was chosen, and when to look at it again.
+- chosen: A row is deleted with Delete (Backspace on a Mac's keyboard) while its table has the focus, so Delete in a cell being edited still deletes text, or by right-click > Delete row; no remove button on each row (agreed).
+  revisit_if: people do not find how to delete a row even with the grey hint, e.g. they say so after trying.
+- chosen: The right-click menu is shown once the click is done, for the row under the press, through a plain call and not a signal, because a right-press that ends a cell's edit builds Properties again and takes the table out of the window.
+  revisit_if: Properties updates its fields in place instead of building them again.
+- chosen: 'A header name in several rows is sent once, its values joined in the list''s order by ", " (by "; " for Cookie), as urllib cannot send a header twice and HTTP reads both alike; the request, Copy as cURL and the note under Connection join them by the same rule, in one place (_sent_header).'
+  revisit_if: a server is found that reads a header only from lines of its own, e.g. one that takes the first of two.
+- chosen: Every change of a list writes the whole list, as one undo step.
+  revisit_if: lists grow so long that writing them whole on each change is slow, e.g. thousands of rows.

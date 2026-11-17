@@ -81,7 +81,7 @@ def test_a_diagram_in_the_log_is_drawn_again_on_the_new_background_when_the_them
     flow = write_flow(tmp_path / "nightly.yaml", {
         "manual": {"type": "trigger.manual"},
         "make": python("output = 'nightly'"),
-        "look": look(message="## Run {value}\n\n" + fence(unique(SMALL, tag)) + "\nAll steps.", markdown=True),
+        "look": look(message="## Run {{value}}\n\n" + fence(unique(SMALL, tag)) + "\nAll steps.", markdown=True),
     }, ["manual.start -> make.after", "make.output -> look.value"])
     run_in_editor(win, qtbot, flow)
     edit = win.log.text

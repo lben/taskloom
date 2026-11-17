@@ -1432,12 +1432,12 @@ def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, con
         for name in sorted(P.template_names(text) & own):
             if name not in inputs:
                 why = "nothing arrived at" if name in connected else "nothing is connected to"
-                raise Failed(f"{label}: {{{name}}}: {why} the input {name}")
+                raise Failed(f"{label}: {{{{{name}}}}}: {why} the input {name}")
             value = values[name] = inputs[name]
             if not isinstance(value, SINGLE_VALUES):
                 got = ("a table" if isinstance(value, Table) or Table.is_frame(value) else
                        "None" if value is None else f"a {type(value).__name__}")
-                raise Failed(f"{label}: {{{name}}}: the input {name} got {got}, but only a single value (text, a "
+                raise Failed(f"{label}: {{{{{name}}}}}: the input {name} got {got}, but only a single value (text, a "
                              "number, a date or time, yes/no) can be written into a setting")
         try:
             return P.render(text, values)

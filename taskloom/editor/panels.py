@@ -28,7 +28,7 @@ from PySide6.QtGui import (QAction, QColor, QDrag, QFont, QFontDatabase, QFontMe
 from PySide6.QtGui import Qt as GuiQt  # (Qt's functions for text, e.g. mightBeRichText)
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QCheckBox,
                                QComboBox, QDateEdit, QDateTimeEdit, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
+                               QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
                                QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStyledItemDelegate, QTableView,
                                QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QTimeEdit, QToolButton,
                                QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -46,6 +46,7 @@ from ..scheduler import counted_from
 from . import docs
 from .canvas import (BLOCK_ICONS, BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ICON,
                      TEXT_ITEM, USER_COLOR, USER_ICON, is_dark, paint_icon)
+from .zoom import mark
 
 # A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
 # <pre> (e.g. a table's rows in a tooltip) asks for on Qt's offscreen platform (as in the proofs): name real ones.
@@ -194,6 +195,7 @@ class Palette(QWidget):
         self.tree.setIndentation(14)
         self.tree.setIconSize(QSize(18, 18))  # (room for a block's icon)
         self.tree.setRootIsDecorated(True)
+        mark(self.tree, "blocks")
         layout.addWidget(title)
         layout.addWidget(self.search)
         layout.addWidget(self.tree)
@@ -315,6 +317,11 @@ class CodeEdit(QPlainTextEdit):
         self.setFont(MONO)
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(" "))
         self.setMinimumHeight(110)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.FontChange:  # (zoomed)
+            self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(" "))
 
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
@@ -520,6 +527,8 @@ class CodeEditor(CodeEdit):
         super().changeEvent(event)
         if event.type() == QEvent.PaletteChange:  # (e.g. the theme changed)
             self.highlighter.recolour()
+        elif event.type() == QEvent.FontChange and hasattr(self, "numbers"):  # zoomed (not the font it is made with)
+            self._fit_numbers()
 
     def paint_line_numbers(self, widget: QWidget, rect):
         """Each shown line's number (from 1, as in error messages), on its row."""
@@ -738,6 +747,24 @@ GROUP_LINES = {API_REQUEST: ("params", "auth", "headers", "body", "response_as",
                "checks.check_file": ("if_none", "not_empty", "modified", "size"),
                "checks.check_table": ("row_count", "compared", "missing", "unique", "types", "values", "freshness",
                                       "conditions")}
+
+
+class _RowsTable(QTableWidget):
+    """A name/value list's table (fields.KeyValues): a right-click on a row calls row_menu(its row, where). (A plain
+    call, not a signal: a right-press that ends a cell's edit builds Properties again before the menu is asked for,
+    which takes this table out of the window and blocks its signals; so the row is the one under the press.)"""
+    row_menu = None
+    _pressed = -1  # the row of the last right-press (-1: none)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self._pressed = self.indexAt(event.position().toPoint()).row()
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        row, self._pressed = self._pressed, -1
+        if row >= 0 and self.row_menu is not None:
+            self.row_menu(row, event.globalPos())
 
 
 class PropertiesPanel(QScrollArea):
@@ -1195,7 +1222,7 @@ class PropertiesPanel(QScrollArea):
             label = QLabel(f"from {source}")
             form.addRow(label, edit)
             self._field_help(cls, key, label, edit)
-        note = QLabel("Write {name} in the Template where an input should go; flow parameters work the same way. An "
+        note = QLabel("Write {{name}} in the Template where an input should go; flow parameters work the same way. An "
                       "empty Template shows every input in turn." if sources else
                       "Nothing is connected yet. Connect blocks (tables, charts, text…) to this block's data input; "
                       "each one is listed here with a name, at first its block's name.", wordWrap=True,
@@ -1264,6 +1291,7 @@ class PropertiesPanel(QScrollArea):
             code = f.language in ("python", "sql")
             wrap = self.settings.value("wrap_code", False, type=bool)  # (as chosen in any code box)
             w = CodeEditor(_to_text(value), f.language, wrap) if code else CodeEdit(_to_text(value))
+            mark(w, "code")
             w.setPlaceholderText(_to_text(default))
             w.setToolTip(_as_written(f.help))  # (the box's own: it may be under buttons)
             w.editing_finished.connect(lambda: self._set(key, w.toPlainText() or None))
@@ -1322,10 +1350,11 @@ class PropertiesPanel(QScrollArea):
 
     def _rows_widget(self, key, f, value):
         """A key/value table (fields.KeyValues): a row per key and value, ticked when it is sent (with f.files, ticked
-        File when its value is a file's path), each cell changed where it is; a row whose key is emptied goes. Under it,
-        a line to add a row: key=value (f.sep), then Enter."""
+        File when its value is a file's path), each cell changed where it is (double-click); a row goes when its key is
+        emptied, when selected and Delete is pressed, or by right-click > Delete row: each change one undo step. Under
+        it, a line to add a row: key=value (f.sep), then Enter; and a grey hint on changing and deleting rows."""
         rows = [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []  # (by hand: Properties says)
-        table = QTableWidget(len(rows), 4 if f.files else 3)
+        table = _RowsTable(len(rows), 4 if f.files else 3)
         table.setHorizontalHeaderLabels(["", "Name", "Value"] + ["File"] * f.files)
         table.verticalHeader().hide()
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # (as tall as its rows, as wide as Properties)
@@ -1349,17 +1378,37 @@ class PropertiesPanel(QScrollArea):
         table.setFixedHeight(table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth()
                              + sum(table.rowHeight(r) for r in range(len(rows))))
 
-        def changed(_):
+        def kept(gone=()) -> list:
+            """The rows the table shows, but those numbered in `gone` and those whose name is emptied."""
             new = []
             for r in range(table.rowCount()):
                 name = table.item(r, 1).text().strip()
-                if name:
+                if name and r not in gone:
                     new.append({"key": name, "value": table.item(r, 2).text(),
                                 **({} if table.item(r, 0).checkState() == Qt.Checked else {"on": False}),
                                 **({"file": True} if f.files and table.item(r, 3).checkState() == Qt.Checked else {})})
-            self._set_rows(key, new)
+            return new
 
-        table.itemChanged.connect(changed)
+        table.itemChanged.connect(lambda _: self._set_rows(key, kept()))
+        delete = QAction("Delete row", table)  # the selected rows, with Delete (on a Mac's keyboard: Backspace)
+        delete.setShortcuts([QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)])
+        delete.setShortcutContext(Qt.WidgetShortcut)  # (not in a cell being edited: there Delete deletes text)
+        delete.triggered.connect(lambda: (gone := {i.row() for i in table.selectedIndexes()})
+                                 and self._set_rows(key, kept(gone)))
+        table.addAction(delete)
+
+        def row_menu(row: int, where: QPoint):  # right-click a row > Delete row
+            after = kept({row})  # (now: this table may be gone once the menu is chosen from)
+
+            def show():  # (once the click is done: the menu is not shown from inside a table that may be built again)
+                menu = QMenu()
+                menu.addAction("Delete row")
+                if menu.exec(where) is not None:
+                    self._set_rows(key, after)
+
+            QTimer.singleShot(0, self, show)
+
+        table.row_menu = row_menu
         sep = f.sep.strip()
         add = QLineEdit(placeholderText=f"add a row: name{f.sep}value, then Enter")
 
@@ -1374,6 +1423,9 @@ class PropertiesPanel(QScrollArea):
         column.setContentsMargins(0, 0, 0, 0)
         column.addWidget(table)
         column.addWidget(add)
+        hint = QLabel("Double-click a cell to change it. Delete removes the selected row.", wordWrap=True)
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        column.addWidget(hint)
         return box
 
     def _set_rows(self, key, rows: list):
@@ -1386,7 +1438,7 @@ class PropertiesPanel(QScrollArea):
         """An API Request's URL with its ticked Params as its query, kept in step: a query typed in it becomes its
         Params (each ticked; those not ticked stay), the URL being what is before its ?."""
         shown = shown_url(config.get("url"), config.get("params"))
-        edit = QLineEdit(shown, placeholderText="relative to the connection's base URL, e.g. /orders/{id}, or whole"
+        edit = QLineEdit(shown, placeholderText="relative to the connection's base URL, e.g. /orders/{{id}}, or whole"
                          if config.get("connection") else "e.g. https://api.example.com/v1/orders")
 
         def commit():
@@ -1412,6 +1464,7 @@ class PropertiesPanel(QScrollArea):
                       textFormat=Qt.PlainText)
         hint.setStyleSheet("color: palette(placeholder-text);")
         command = CodeEditor("", "curl", True)
+        mark(command, "code")
         command.setPlaceholderText("curl https://api.example.com/v1/orders -H 'Accept: application/json'")
         fill = QPushButton("Fill in")
         fill.clicked.connect(lambda: self._fill_from_curl(command.toPlainText()))
@@ -2038,6 +2091,9 @@ class FindBar(QWidget):
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Hide and watched.isHidden() and not self.isHidden():
             self.close_bar()  # its view was put away (Data preview shows a table, or text, instead)
+        elif event.type() == QEvent.FontChange and not self.table:  # (zoomed) other lines in view, which a plain text
+            # box's scroll bar (it counts lines) may not say: theirs highlighted once the view has laid out in it
+            QTimer.singleShot(0, self, self._scrolled)
         return False
 
     def _toggled(self):
@@ -2314,6 +2370,7 @@ class _LogView(QTextBrowser):
         self.setDocument(_LogDocument(self))
         self.document().setUndoRedoEnabled(False)
         self.setFont(MONO)
+        mark(self, "log")
 
     def createMimeDataFromSelection(self):
         # Plain text only; a picture adds nothing (its path is the line above it). The object must come from Qt: the
@@ -2382,7 +2439,28 @@ class LogPanel(QWidget):
             sideways.setValue(across)
             if not follow:
                 scroll.setValue(value)
+        elif event.type() == QEvent.FontChange:  # zoomed
+            self._reindent()
         return False
+
+    def _reindent(self):
+        """What is under the [block] column (notes, pictures, Markdown) under it again, in the Log's new font."""
+        indent, document = self._indent(), self.text.document()
+        root, cursor = document.rootFrame(), QTextCursor(document)
+        cursor.beginEditBlock()
+        for frame in root.childFrames():  # Markdown
+            fmt = frame.frameFormat()
+            fmt.setLeftMargin(indent)
+            frame.setFrameFormat(fmt)
+        block = document.begin()
+        while block.isValid():
+            fmt = block.blockFormat()
+            if fmt.leftMargin() and document.frameAt(block.position()) is root:
+                fmt.setLeftMargin(indent)
+                cursor.setPosition(block.position())
+                cursor.setBlockFormat(fmt)
+            block = block.next()
+        cursor.endEditBlock()
 
     def _pressed(self, link):
         entry = self._long.get(link.toString())
@@ -2462,8 +2540,8 @@ class LogPanel(QWidget):
         _start(cursor, fmt)
 
     def _indent(self) -> float:
-        """Under the [block] column: the width of "HH:MM:SS "."""
-        return QFontMetricsF(self.text.document().defaultFont()).horizontalAdvance("00:00:00 ")
+        """Under the [block] column: the width of "HH:MM:SS " (in the Log's font, which its text takes)."""
+        return QFontMetricsF(self.text.font()).horizontalAdvance("00:00:00 ")
 
     def _under(self) -> QTextBlockFormat:
         fmt = QTextBlockFormat()
@@ -2596,6 +2674,7 @@ class _TextBox(QPlainTextEdit):
     def __init__(self):
         super().__init__(readOnly=True)
         self.setFont(MONO)
+        mark(self, "preview_text")
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.whole, self.folds, self._rest = "", [], []
         self._more = QTimer(self, interval=0)
@@ -2665,6 +2744,7 @@ class PreviewPanel(QWidget):
         layout.addLayout(bar)
         self.view = QTableView()
         self.view.setFont(MONO)
+        mark(self.view, "preview_table")
         self.text = _TextBox()
         layout.addWidget(self.view)
         layout.addWidget(self.text)
@@ -2760,6 +2840,7 @@ class HistoryPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)  # one run, kept selected as runs come in
+        mark(self.table, "history")
         self.runs: list[dict] = []  # as listed
         hint = QLabel("Double-click a run to show it on the canvas.")
         hint.setStyleSheet("color: palette(placeholder-text); padding: 2px 6px;")

@@ -1072,15 +1072,16 @@ def test_highlights_and_the_invalid_mark_read_well_in_light_and_dark(win, qtbot,
 
 # --- 7: the README -------------------------------------------------------------------------------------------------
 
-def test_the_readme_says_ctrl_f_finds_in_the_log_data_preview_run_history_and_code_boxes_with_its_two_toggles():
-    """Spec 7: where the README describes the Log, Data preview, Run history and the code boxes, it says Ctrl+F finds
+@pytest.mark.invariant("RD-2")
+def test_the_guide_says_ctrl_f_finds_in_the_log_data_preview_run_history_and_code_boxes_with_its_two_toggles():
+    """Spec 7: where the guide describes the Log, Data preview, Run history and the code boxes, it says Ctrl+F finds
     text there, with its two toggles (regular expressions, match case)."""
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    items = [" ".join(item.split()) for item in re.split(r"\n\s*\n|\n- ", readme)]
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    items = [" ".join(item.split()) for item in re.split(r"\n\s*\n|\n- ", guide)]
     found = [item for item in items if "Ctrl+F" in item]
-    assert found, "the README says nothing about Ctrl+F"
+    assert found, "the guide says nothing about Ctrl+F"
     said = " ".join(found)
     for place in ("Log", "Data preview", "Run history", "code box"):
-        assert place in said, f"the README's Ctrl+F does not say it works in the {place}"
+        assert place in said, f"the guide's Ctrl+F does not say it works in the {place}"
     assert any((".*" in item or "regular expression" in item.lower()) and ("Aa" in item or "case" in item.lower())
-               for item in found), "the README's Ctrl+F does not name its two toggles"
+               for item in found), "the guide's Ctrl+F does not name its two toggles"

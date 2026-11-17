@@ -1,0 +1,56 @@
+# How each agreed row of docs/promises/rows.yaml is kept, and why a row is not green (read by packaging/ledger.py; the
+# reviewer checks these words against the code). A bug fix or small feature has no model to check: its rows are
+# amber, checked by tests only, and not_green says what the tests leave out.
+AP-1:
+  enforced: >-
+    PropertiesPanel._rows_widget (taskloom/editor/panels.py) gives each name/value table a Delete row action on Delete
+    and Backspace, only while the table itself has the focus (so Delete in a cell being edited deletes text), which
+    writes every row but the selected ones; a right-click on a row (_RowsTable.mousePressEvent keeps the row under the
+    press, _RowsTable.contextMenuEvent asks for its menu) shows Delete row once the click is done, which writes every
+    row but that one; a row whose name is emptied is left out (kept) when a cell changes.
+  not_green: >-
+    Tests delete rows in each of the seven lists with the key, the menu and a cleared name, and try Delete in a cell
+    being edited and where no row is; no check tries every order of edits.
+AP-2:
+  enforced: >-
+    _rows_widget's table edits a cell in place on a double-click, as a QTableWidget does, and writes the rows when an
+    item changes; under the table, its hint in the placeholder colour says "Double-click a cell to change it. Delete
+    removes the selected row."
+  not_green: >-
+    Tests double-click a name and a value in each of the seven lists and read the hint under each; no check tries
+    every value typed.
+AP-3:
+  enforced: >-
+    Each change of a list (a cell changed, a row deleted or added) calls PropertiesPanel._set_rows once, one undo step,
+    with the whole list: the table's rows as kept reads them, or the rows shown and the one added; so the flow file
+    holds what the list shows.
+  not_green: >-
+    Tests undo and redo each edit and each delete and compare the flow file with the list after each; no check tries
+    every order of changes.
+AP-4:
+  enforced: >-
+    _rows_widget shows and edits a row's value as the flow file holds it, secret:NAME, and writes back what the cell
+    holds; the stored secret is read only by _call (taskloom/blocks/servers.py, through _row_headers for a header) as
+    the request is made.
+  not_green: >-
+    Tests edit a secret: row of Headers, its value and its name, and look for the secret in every window and the flow
+    file; the other six lists are not tried with a secret: value.
+AP-5:
+  enforced: >-
+    _rows_widget keeps every row, also two of one name, in order (kept). _call (taskloom/blocks/servers.py) puts each
+    ticked row of Params in the query in order, and sends a header name of several rows once, through _row_headers and
+    _sent_header: their values in the list's order joined by ", " (by "; " for Cookie), as urllib cannot send a header
+    twice; _payload sends each row of Form and Parts in order. connection_note, the note under Connection, shows a
+    replaced header as _sent_header joins it.
+  not_green: >-
+    Tests send two rows of one name in each of the four lists of API Request to a web server on this computer, and
+    read the note under Connection with two repeated headers; no check tries every number of rows, and a server that
+    needs a header repeated on lines of its own is not tried.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# rows.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/rows.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

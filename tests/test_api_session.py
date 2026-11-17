@@ -710,19 +710,20 @@ def test_the_documentation_and_the_hover_help_describe_the_session(win):
     assert "cookie" in plain(items[0].toolTip(0)), items[0].toolTip(0)
 
 
-def test_readme_has_a_section_on_the_session_with_a_login_then_a_call_that_needs_its_cookie():
-    """Spec 6: README has a section on the Session, telling that the API Request blocks inside it share their cookies,
-    with an example: a login request, then a call that needs its cookie."""
-    lines = (REPO / "README.md").read_text(encoding="utf-8").splitlines()
+@pytest.mark.invariant("RD-2")
+def test_the_guide_has_a_section_on_the_session_with_a_login_then_a_call_that_needs_its_cookie():
+    """Spec 6: the guide has a section on the Session, telling that the API Request blocks inside it share their
+    cookies, with an example: a login request, then a call that needs its cookie."""
+    lines = (REPO / "docs" / "guide.md").read_text(encoding="utf-8").splitlines()
     fenced = [line.startswith("```") for line in lines]
     in_code = [sum(fenced[:i]) % 2 == 1 for i in range(len(lines))]  # (a # line in an example is no heading)
     heads = [(i, len(m.group(1))) for i, line in enumerate(lines) if not in_code[i] and (m := re.match(r"(#+) ", line))]
     found = [(i, level) for i, level in heads if "Session" in lines[i]]
-    assert found, "README has no section whose heading names the Session"
+    assert found, "the guide has no section whose heading names the Session"
     start, level = found[0]
     end = next((i for i, lv in heads if i > start and lv <= level), len(lines))
     section = "\n".join(lines[start:end])
-    assert "```" in section or "example" in section.lower(), "README's Session section has no example"
+    assert "```" in section or "example" in section.lower(), "the guide's Session section has no example"
     said = plain(section)
     for words in ("cookie", "api request", "inside", "login"):
-        assert words in said, f"README's Session section does not tell about {words!r}"
+        assert words in said, f"the guide's Session section does not tell about {words!r}"

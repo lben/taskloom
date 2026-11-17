@@ -1,0 +1,34 @@
+# How each agreed row of docs/promises/readme.yaml is kept, and why a row is not green (read by packaging/ledger.py;
+# the reviewer checks these words against the code). A bug fix or small feature has no model to check: its rows are
+# amber, checked by tests only, and not_green says what the tests leave out.
+RD-1:
+  enforced: >-
+    README.md is the text the maintainer approved on 2026-11-16, 148 lines, with a link to docs/guide.md, the whole
+    guide; no code writes it.
+  not_green: >-
+    Tests count its lines and look for the words of each part (what Taskloom is, who it is for, what it can do, how to
+    get and start it, where the docs are); whether it reads well rests on the maintainer's approval of the draft.
+RD-2:
+  enforced: >-
+    docs/guide.md is README.md as it was before the move, byte for byte. _guide_text (taskloom/editor/docs.py) reads
+    it, as taskloom/guide.md next to the installed package or as docs/guide.md in a source checkout, and pages builds
+    Help > Documentation's guide pages from it, as packaging/docs_site.py builds the website; pyproject.toml's
+    force-include and packaging/taskloom.spec carry it into the wheel and the Windows build as taskloom/guide.md.
+  not_green: >-
+    Tests check that the guide keeps every heading the README had, in order, that Help > Documentation, the website
+    and the installed wheel and Windows build show its sections, and read the guide where they read the README's
+    words; that every line moved unchanged was checked once, when it moved, not by a test.
+RD-3:
+  enforced: >-
+    README.md's links lead to files and a folder of the repository (docs/guide.md, examples/, LICENSE and others) and
+    to the project's own pages, its GitHub releases and its documentation website; no code makes them.
+  not_green: >-
+    Checked without the internet: a web address is checked to be the project's own, not that its page answers.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# readme.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/readme.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

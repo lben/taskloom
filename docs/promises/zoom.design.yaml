@@ -1,0 +1,16 @@
+# The design decisions of zooming the pane under the pointer, one line each (read by packaging/proof_pdf.py): what was
+# chosen, and when to look at it again.
+- chosen: One event filter on the whole application, not a shortcut on each pane, so Ctrl + reaches the pane under the pointer wherever the keyboard focus is, also in a modal dialog.
+  revisit_if: a part of the editor needs Ctrl + or Ctrl - for itself, e.g. a field that steps a number with them.
+- chosen: A pane is a widget marked with its kind; each kind's size is kept in editor.ini as a step of one point from its normal font, from half to three times that size.
+  revisit_if: two panes of one kind must have sizes of their own, e.g. two code boxes side by side.
+- chosen: The canvas zooms by its zoom bar's step, Ctrl 0 to 100 %, and keeps its zoom per flow until the flow is closed, not after, as before.
+  revisit_if: people want each flow to open at the zoom it was left at.
+- chosen: Over anything that is not a pane the keys are swallowed, so nothing is typed and nothing zoomed; Ctrl with the wheel zooms only a text pane, and elsewhere scrolls as before.
+  revisit_if: a field of Properties must take Ctrl + itself.
+- chosen: Pictures and Mermaid drawings in the Log keep their size, only its text grows or shrinks (agreed), and the guide says so.
+  revisit_if: pictures in the Log must be read zoomed, e.g. small charts on a large screen.
+- chosen: A zoomed text pane keeps its top line, or its end if it was scrolled to its end, so the Log goes on following new lines.
+  revisit_if: the line under the pointer must stay where it is instead.
+- chosen: The find bar highlights the matches in view again one tick after its view's font changes, as a plain text box counts its scroll bar in lines and a zoom out brings lines into view with no scroll signal.
+  revisit_if: Qt gives a signal when the lines in view change, which the find bar could follow instead.

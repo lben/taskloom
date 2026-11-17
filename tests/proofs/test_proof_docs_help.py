@@ -15,9 +15,9 @@ from taskloom.editor import docs
 from taskloom.editor.canvas import HEADER_H, NODE_W
 from tests.test_docs_help import (CONNECTION_OF_KIND, CONNECTIONS, LEARN_MORE, NO_EXAMPLES, NO_HELP, Pages,
                                   add_block, anchor_at, card_lines, check_rows, clean_all, click_learn_more,
-                                  click_link, connect_into, examples_of_field, heading_at_top, hover,
+                                  click_link, connect_into, examples_of_field, guide_parts, heading_at_top, hover,
                                   label_is_bold, learn_more_href, listed, nav_button, needs_examples, page_and_anchor,
-                                  params_used, plain_line, problems_in_flow, property_rows, readme_parts, row_named,
+                                  params_used, plain_line, problems_in_flow, property_rows, row_named,
                                   setting_row, show_setting, type_in_row, wait_for)
 from tests.test_docs_help import choose as choose_in_box
 from tests.test_editor import write_flow
@@ -39,7 +39,7 @@ FLOW = """
         ui: {x: 480, y: 0}
       body:
         type: reports.html_template
-        config: {template: "<b>Daily sales</b><br>{chart}<br>{sales}"}
+        config: {template: "<b>Daily sales</b><br>{{chart}}<br>{{sales}}"}
         ui: {x: 720, y: 0}
       archive_sales:
         type: files.copy
@@ -201,7 +201,7 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
            "the window, with the canvas and Properties still in view.")
     p.idea("The card shows the row's name in bold, what it is for, then one line of valid values: “Examples:” with "
            "one to three values written as you would type them, or “One of:” with the choices of a box, or, for a "
-           "connection, which of your connections it takes; a setting that takes {name} placeholders adds a line "
+           "connection, which of your connections it takes; a setting that takes {{name}} placeholders adds a line "
            "saying so. Last comes Learn more ›. The card stays while the mouse "
            "is on the row or on the card, so you can reach the link, and goes when the mouse leaves both, when you "
            "type or press Esc, or when you switch to another program. It never takes the keyboard from the box "
@@ -264,7 +264,7 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
     label, what, values, last = card_says(card)
     parts = card_parts(win, card)
     p.shot(card, "The card, just under Source: its name in bold, ① what it is for, ② examples of valid values (and "
-                 "the {name} placeholders a text setting takes), ③ Learn more ›.", over=win, highlight=parts,
+                 "the {{name}} placeholders a text setting takes), ③ Learn more ›.", over=win, highlight=parts,
            badges=True, zoom=[card, source.label_widget, *parts])
     p.check("The card shows Source in bold", label == "Source" and label_is_bold(card))
     p.check("① It says what Source is for: the help Copy Files gives it", what == copy_files.config["source"].help)
@@ -407,18 +407,19 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
     p.step("Press Contents, at the top of the column.")
     QTest.mouseClick(nav_button(win, "Contents"), Qt.LeftButton)
     QApplication.processEvents()
-    intro, sections = readme_parts()
+    intro, sections = guide_parts()
     headings = [heading for heading, _ in sections]
     guide = browser.toPlainText()
-    p.shot(win, "Contents begins with the README's introduction. Then ① the guide: a page for each section of the "
-                "README; ② the reference: the rows of the Properties panel, then each kind of block, with its blocks.",
+    p.shot(win, "Contents begins with the guide's introduction. Then ① the guide: a page for each section of "
+                "docs/guide.md; ② the reference: the rows of the Properties panel, then each kind of block, with its "
+                "blocks.",
            highlight=[text_lines(win, browser, "Guide", headings[-1]),
                       text_lines(win, browser, "Reference", "My Tools")],
            badges=True, zoom=text_lines(win, browser, "Guide", "Properties panel"))
-    p.check("The column shows Contents, which begins with the README's introduction",
+    p.check("The column shows Contents, which begins with the guide's introduction",
             browser.source().fileName() == "index.html"
             and plain_line(intro) in " ".join(guide[:guide.index("Guide")].split()))
-    p.check(f"① The guide lists the README's {len(headings)} sections, in order: " + ", ".join(headings),
+    p.check(f"① The guide lists docs/guide.md's {len(headings)} sections, in order: " + ", ".join(headings),
             all(h in guide for h in headings)
             and [guide.index(h, guide.index("Guide")) for h in headings]
             == sorted(guide.index(h, guide.index("Guide")) for h in headings))
@@ -427,10 +428,10 @@ def test_documentation_inside_the_app(proof, win, qtbot, tmp_path, monkeypatch):
     click_link(browser, lambda href, text: page_and_anchor(href)[0] == "schedules.html")
     sentence = plain_line(dict(sections)["Schedules"])
     back, forward = nav_button(win, "Back"), nav_button(win, "Forward")
-    p.shot(win, "① The Schedules section of the README, as a page of its own. ② ‹ Back is now available; Forward › "
+    p.shot(win, "① The Schedules section of the guide, as a page of its own. ② ‹ Back is now available; Forward › "
                 "is not, yet.",
            highlight=[(browser, sentence), [back, forward]], badges=True, zoom=[back, (browser, sentence)])
-    p.check(f"① The page is the README's Schedules section: it says “{sentence}”",
+    p.check(f"① The page is the guide's Schedules section: it says “{sentence}”",
             browser.source().fileName() == "schedules.html" and sentence in " ".join(browser.toPlainText().split()))
     p.check("② ‹ Back is available, Forward › is not", back.isEnabled() and not forward.isEnabled())
 

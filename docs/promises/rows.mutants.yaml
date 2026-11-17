@@ -1,0 +1,83 @@
+# Mutation testing of name/value rows changed and deleted (read by packaging/mutants.py --explained). scope: what the
+# bugs are planted in, the functions the change touched, in groups: each group's bugs run the tests that can see them
+# (each line of tests: is one pytest run, a file with -k words or without). connection_note is the note under
+# Connection in Properties (PropertiesPanel._api_note shows it, unchanged): the fix of its repeated headers (AP-5)
+# changed it, and _sent_header joins a repeated header for it, the request and Copy as cURL alike. The change's other
+# lines are not functions of their own, so nothing is planted in them: the comment of _Call's headers, the import of
+# QMenu and the _RowsTable class line, which the AP-1 tests check. The mutants the tests let through are explained
+# here, by kind (kinds: a kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a
+# user could notice). Only those no user could notice are explained: the others stay without a reason until a test
+# catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/panels.py PropertiesPanel._rows_widget
+        - taskloom/editor/panels.py _RowsTable.mousePressEvent
+        - taskloom/editor/panels.py _RowsTable.contextMenuEvent
+      tests:
+        - tests/test_rows.py -k "not same_name and not note_under_connection"
+        - tests/test_api_request.py -k params_and_the_urls_query_stay_in_step
+    - mutate:
+        - taskloom/blocks/servers.py _sent_header
+        - taskloom/blocks/servers.py _row_headers
+        - taskloom/blocks/servers.py connection_note
+      tests:
+        - tests/test_rows.py -k "same_name or note_under_connection"
+        - tests/test_api_request.py -k "params_are_added or headers_are_sent or auth_kind or secret_that_is_not_stored or connection_gives or connection_chosen_its_values or redirect_to_another_host or copy_as_curl or log_says_what_was_sent"
+not_tested:
+  taskloom/blocks/servers.py _call: >-
+    The API Request's request as it is built, about 60 lines, in which this change replaced the lines that built the
+    headers from the rows by one call of _row_headers (mutated whole above) and kept the names that carry a secret
+    from it. test_two_rows_with_the_same_name_are_both_kept_and_both_sent_in_the_lists_order,
+    test_a_connection_gives_its_base_url_auth_and_default_headers_and_the_blocks_own_headers_win and
+    test_the_log_says_what_was_sent_and_what_came_back_and_never_a_secret check those lines.
+kinds:
+  - kind: The text of the action that holds the Delete and Backspace shortcuts
+    why: >-
+      That action only carries the list's Delete and Backspace shortcuts: it is in no menu or toolbar (the list's
+      right-click menu is built when it opens, with a Delete row item of its own), so its text is shown nowhere, and
+      its shortcuts work with any text or none.
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_164
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_166
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_167
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_168
+  - kind: The right-click menu shown on the next turn, 0 or 1 ms later, with or without Properties as the timer's object
+    why: >-
+      The menu is shown on the event loop's next turn after the right-click, 0 or 1 ms later alike for a person; the
+      timer's object (Properties, or none) only drops the call if Properties is gone by then, and Properties lives as
+      long as the window, which cannot close between a right-click and the next turn.
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_195
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_198
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_200
+  - kind: No row right-clicked, noted as another number below 0
+    why: >-
+      After a menu the list notes that no row is right-clicked, and it only ever asks whether that number is 0 or
+      more: -2 says no row as -1 does (a right-press notes its own row before the next menu).
+    mutants:
+      - taskloom.editor.panels.xǁ_RowsTableǁcontextMenuEvent__mutmut_3
+  - kind: A row with no on written is ticked either way
+    why: >-
+      A row is shown ticked unless its on is false. With these, a row with no on gives None instead of True, and None
+      is not false either, so it is ticked as before; a row with on: true or on: false is read as written.
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_51
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_53
+  - kind: The hint's style sheet in capitals
+    why: >-
+      Qt reads a style sheet's property names, functions and palette roles in any letter case: the hint is painted
+      in the same placeholder grey (test_a_grey_hint_under_the_list_says_to_double_click_to_change_and_delete_to_delete
+      checks it is fainter than the setting's name, and passes with it).
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_246
+  - kind: The hint always fits on one line
+    why: >-
+      Properties is a tab of the Inspector, which cannot be made narrower than its widest tab: Flow, whose row "If a
+      scheduled run starts while the last one is still going" and its choice hold it at least 539 pixels wide (at
+      the tests' font; Properties then 515). The hint's one line takes 383 pixels and Properties' margins 18; both
+      are text of the same font, so they grow together. The hint never needs to wrap, and it looks the same whether
+      it may wrap or not.
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_239
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_rows_widget__mutmut_243

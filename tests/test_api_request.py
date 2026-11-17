@@ -713,8 +713,8 @@ def test_placeholders_are_filled_in_the_url_params_headers_and_body(env):
     """Spec 3 (placeholders {name} work in the URL, params, headers and body, with flow parameters)."""
     with serving() as api:
         result, _, status = run(env, {"call": request(
-            "{base}/orders/{id}", json_body('["{region}", {id}]'), method="POST",
-            params=rows(("region", "{region}")), headers=rows(("X-Region", "{region}-{id}")))},
+            "{{base}}/orders/{{id}}", json_body('["{{region}}", {{id}}]'), method="POST",
+            params=rows(("region", "{{region}}")), headers=rows(("X-Region", "{{region}}-{{id}}")))},
             params={"base": {"type": "text", "value": api.base}, "id": {"type": "int", "value": 7},
                     "region": {"type": "text", "value": "north"}})
 
@@ -730,8 +730,8 @@ def test_placeholders_are_filled_from_the_blocks_input_in_the_url_params_and_hea
     parameters): the text reaching the body input fills {body} in each (and is the body, sent as is)."""
     with serving() as api:
         blocks = {"value": make("'abc'"),
-                  "call": request(f"{api.base}/orders/{{body}}", method="POST", params=rows(("q", "{body}")),
-                                  headers=rows(("X-Value", "{body}")))}
+                  "call": request(f"{api.base}/orders/{{{{body}}}}", method="POST", params=rows(("q", "{{body}}")),
+                                  headers=rows(("X-Value", "{{body}}")))}
         result, _, status = run(env, blocks, ["value.output -> call.body"])
 
     assert status == {"value": "success", "call": "success"}, result.stdout[-3000:] + result.stderr[-3000:]
@@ -1085,7 +1085,7 @@ def test_a_connection_gives_its_base_url_auth_and_default_headers_and_the_blocks
     with serving() as api:
         write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop_token"),
                                                    headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
-        blocks = {"order": request("/orders/{id}", connection="shop",
+        blocks = {"order": request("/orders/{{id}}", connection="shop",
                                    headers=rows(("X-Version", "2"), ("X-Extra", "yes"))),
                   "health": request(f"{api.base}/health", connection="shop", y=200)}
         result, _, status = run(env, blocks, params={"id": {"type": "int", "value": 7}})
@@ -1124,16 +1124,17 @@ def test_the_log_says_what_was_sent_and_what_came_back_and_never_a_secret(env):
 
 # --- 9: README and Help > Documentation -------------------------------------------------------------------------------------
 
-def test_the_readme_and_the_documentation_describe_the_block_with_an_example():
-    """Spec 9 (Help > Documentation and the README describe the block, with an example): README has a YAML example
+@pytest.mark.invariant("RD-2")
+def test_the_guide_and_the_documentation_describe_the_block_with_an_example():
+    """Spec 9 (Help > Documentation and the guide describe the block, with an example): the guide has a YAML example
     with an API Request whose settings the block accepts; Help > Documentation has the block's entry on the Servers
-    page, and its guide (made from README) shows the example."""
+    page, and its guide (made from docs/guide.md) shows the example."""
     from taskloom.editor import docs
 
     cls = api_class()
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    examples = [text for text in re.findall(r"```ya?ml\n(.*?)```", readme, re.S) if API in text]
-    assert examples, "README has no YAML example with an API Request (servers.api_request)"
+    guide_md = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    examples = [text for text in re.findall(r"```ya?ml\n(.*?)```", guide_md, re.S) if API in text]
+    assert examples, "the guide has no YAML example with an API Request (servers.api_request)"
 
     def api_specs(node):
         if isinstance(node, dict):
@@ -1229,10 +1230,10 @@ def test_copy_as_curl_copies_the_request_filled_in_with_every_secret_hidden(env,
         write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop_token"),
                                                    headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
         blocks = {
-            "create": request("{base}/orders", basic("report", "api_password"), json_body('["{region}", 2]'),
-                              method="POST", params=rows(("region", "{region}"), ("debug", "1"), off=("debug",)),
-                              headers=rows(("Accept", "application/json"), ("X-Trace", "{region}-1"))),
-            "fetch": request("/orders/{region}", connection="shop", headers=rows(("X-Version", "2")), y=300),
+            "create": request("{{base}}/orders", basic("report", "api_password"), json_body('["{{region}}", 2]'),
+                              method="POST", params=rows(("region", "{{region}}"), ("debug", "1"), off=("debug",)),
+                              headers=rows(("Accept", "application/json"), ("X-Trace", "{{region}}-1"))),
+            "fetch": request("/orders/{{region}}", connection="shop", headers=rows(("X-Version", "2")), y=300),
         }
         params = {"base": {"type": "text", "value": api.base}, "region": {"type": "text", "value": "north"}}
         path = flow_file(env.root / "copy.yaml", blocks, (), params=params)
@@ -1253,7 +1254,7 @@ def test_copy_as_curl_copies_the_request_filled_in_with_every_secret_hidden(env,
         for block, command in copied.items():
             for value in values.values():
                 assert value not in command, command
-            assert "{region}" not in command and "north" in command, command
+            assert "{{region}}" not in command and "north" in command, command
             done = subprocess.run([shutil.which("curl"), "--silent", "--show-error", "--output", os.devnull,
                                    *curl_args(command, values)], env=env.env, capture_output=True, text=True,
                                   timeout=60)

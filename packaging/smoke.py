@@ -60,7 +60,7 @@ def main():
             config: {path: out/report.xlsx, sheets: [totals], chart: bar, chart_x: region, chart_y: [total]}
           body:
             type: reports.html_template
-            config: {template: "<h2>Sales</h2>{chart}<br>{totals}"}
+            config: {template: "<h2>Sales</h2>{{chart}}<br>{{totals}}"}
           save:
             type: logic.python
             config: {inputs: [html], outputs: [], code: "open('out/body.html', 'w').write(html.html)"}

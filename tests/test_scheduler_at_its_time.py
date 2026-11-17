@@ -536,20 +536,22 @@ def test_the_service_never_reads_the_list_of_scheduled_flows_half_written(env, f
         "a mail server that does not answer", "a schedule saved while the service is off",
         "a run by hand while a scheduled run loads", "turned off and on while a run loads",
         "Stop now, then on again or with no service running"])
-def test_the_readme_explains_one_service_per_folder_and_what_a_mistake_does(case, patterns):
-    """README.md's Schedules section (also the editor's guide) explains, in one paragraph each, these cases where the
-    scheduler might surprise you, as the user asked that edge cases be clearly documented."""
+@pytest.mark.invariant("RD-2")
+def test_the_guide_explains_one_service_per_folder_and_what_a_mistake_does(case, patterns):
+    """docs/guide.md's Schedules section (the editor's guide) explains, in one paragraph each, these cases where
+    the scheduler might surprise you, as the user asked that edge cases be clearly documented."""
     explained = [p for p in schedules_prose() if all(re.search(pattern, p) for pattern in patterns)]
 
-    assert explained, f"no paragraph of the README's Schedules section explains {case} (looked for {patterns})"
+    assert explained, f"no paragraph of the guide's Schedules section explains {case} (looked for {patterns})"
 
 
 @pytest.mark.invariant("SCH-17")
 @pytest.mark.invariant("SCH-5")
-def test_the_readme_does_not_say_a_runs_program_is_started_early():
+@pytest.mark.invariant("RD-2")
+def test_the_guide_does_not_say_a_runs_program_is_started_early():
     """A run begins at its time, never before it, and no run's program is started before its time (SCH-5): no
-    paragraph of the README's Schedules section says the service starts a run's program (or process) early."""
+    paragraph of the guide's Schedules section says the service starts a run's program (or process) early."""
     early = [p for p in schedules_prose()
              if re.search(r"\b(?:start|load)\w*\b[^.]*\bearly\b|\bearly\b[^.]*\b(?:start|load)\w*\b", p)]
 
-    assert early == [], f"the README's Schedules section still says runs are started early: {early}"
+    assert early == [], f"the guide's Schedules section still says runs are started early: {early}"

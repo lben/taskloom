@@ -1,0 +1,30 @@
+# What must always be true of name/value lists in Properties, as agreed with the maintainer in chat on 2026-11-16.
+# Each row is checked by the tests marked @pytest.mark.invariant("AP-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+# The lists: API Request's Headers, Params, Form and Parts; Check Table's Column types and Allowed values;
+# Statistics' Custom statistics.
+feature: Name/value rows changed and deleted
+agreed: 2026-11-16
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-13
+    words: "Be able to edit and delete headers and params"
+  - date: 2026-11-16
+    # The rows below; repeated names in API Request's lists are kept and sent (AP-5); no remove button on each row.
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_rows]
+rows:
+  AP-1: >-
+    In every name/value list, a row is deleted by selecting it and pressing Delete, or by right-click and Delete row.
+    Clearing its name still deletes it.
+  AP-2: >-
+    A row's name and value are changed in place by double-clicking the cell, and a grey hint under the list says how
+    to change and delete rows.
+  AP-3: >-
+    Each change is one undo step, and the flow file holds exactly what the list shows.
+  AP-4: >-
+    A hidden value (secret:) stays hidden while its row is edited.
+  AP-5: >-
+    Two rows with the same name in API Request's Headers, Params, Form or Parts are both kept and both sent, in the
+    list's order.

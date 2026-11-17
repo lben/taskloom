@@ -628,8 +628,9 @@ def test_the_windows_build_carries_the_icons_and_tabler_icons_licence(monkeypatc
         "the Windows build has no copy of Tabler Icons' MIT licence")
 
 
+@pytest.mark.invariant("RD-2")
 def test_tabler_icons_licence_is_in_the_repository_and_named_with_the_third_party_licences():
-    """Style: Tabler Icons' MIT licence text is in the repository, and README's License section, where the project
+    """Style: Tabler Icons' MIT licence text is in the repository, and the guide's License section, where the project
     lists the third-party licences, names Tabler Icons and its MIT licence."""
     found = []
     for folder, dirs, files in os.walk(REPO):  # the repository's own files (not .git, .venv, builds, the tests)
@@ -637,8 +638,8 @@ def test_tabler_icons_licence_is_in_the_repository_and_named_with_the_third_part
         found += [f for f in files if Path(f).suffix not in (".py", ".svg")
                   and carries_tabler_licence({f: (Path(folder) / f).read_bytes()})]
     assert found, "Tabler Icons' MIT licence text is not in the repository (next to the icons, packaging/licenses)"
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    section = " ".join(readme.split("\n## License", 1)[1].split("\n## ", 1)[0].split())
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    section = " ".join(guide.split("\n## License", 1)[1].split("\n## ", 1)[0].split())
     assert re.search(r"Tabler Icons.{0,200}MIT|MIT.{0,200}Tabler Icons", section, re.I), section
 
 

@@ -1,0 +1,65 @@
+# How each agreed row of docs/promises/zoom.yaml is kept, and why a row is not green (read by packaging/ledger.py; the
+# reviewer checks these words against the code). A bug fix or small feature has no model to check: its rows are
+# amber, checked by tests only, and not_green says what the tests leave out.
+ZM-1:
+  enforced: >-
+    Zoom.eventFilter (taskloom/editor/zoom.py), an event filter on the whole application that MainWindow.__init__
+    sets up, takes Ctrl with +, =, - or 0 (KEYS; _ctrl lets Shift and the number pad's flag through) and Ctrl with
+    the wheel over a text pane, whatever widget has the focus, and acts on the pane under the pointer
+    (_pane_under_pointer: the widget there or the first of its parents marked by mark, in its own window). A text
+    pane, list or table gets its font from _show; the canvas zooms by its zoom bar's step, Ctrl 0 to 100 %.
+  not_green: >-
+    Tests send the keys and wheel turns as the system does, offscreen, to each kind of pane with the focus in
+    another, and to a modal dialog's box; a real keyboard and mouse are not used, and Import from cURL's box is not
+    among the panes tried.
+ZM-2:
+  enforced: >-
+    Zoom.eventFilter swallows the key when no pane is under the pointer, so nothing is typed and nothing zoomed, and
+    lets a wheel turn there go on as usual; _pane_under_pointer stops at a window, so a menu open over a pane is not
+    the pane, and the menu bar, the toolbars and the fields of Properties are no pane.
+  not_green: >-
+    Tests press the keys over the menu bar, an open menu, the toolbar, the splitter between panes and a field of
+    Properties; no check tries every widget that is not a pane.
+ZM-3:
+  enforced: >-
+    Zoom.eventFilter writes each kind's step to the editor's preferences (zoom/<kind> in editor.ini) as it zooms, and
+    gives a pane its kind's step when the pane is first shown (_step, _show). The canvas is zoomed with
+    FlowView.zoom_to and not written, so each flow's view keeps its zoom until its tab is closed.
+  not_green: >-
+    Tests zoom each kind of pane, then close the editor and open it again, and start Taskloom again in a new process;
+    no check tries every order of zooms and restarts.
+ZM-4:
+  enforced: >-
+    _show (taskloom/editor/zoom.py) keeps a pane's step between half and three times its normal font (SMALLEST,
+    LARGEST) and returns the step it kept, which is what is written, so a key at either end changes nothing;
+    FlowView.zoom_to keeps the canvas between 20 % and 300 %.
+  not_green: >-
+    Tests press the keys past either end over each kind of pane; no check tries every normal font size.
+ZM-5:
+  enforced: >-
+    _show sets only the pane's font, keeping a text pane's top line, or its end if it was scrolled to its end, and a
+    table's rows as high as their text; CodeEdit.changeEvent sets a tab to four spaces of the new font,
+    CodeEditor.changeEvent fits the line numbers (taskloom/editor/panels.py); LogPanel.eventFilter calls _reindent,
+    which puts what is under the [block] column under it again (_indent in the Log's own font); FindBar.eventFilter
+    highlights the matches in view again once the view's font has changed. Pictures in the Log are not scaled by a
+    font, and docs/guide.md says they and Mermaid drawings keep their size.
+  not_green: >-
+    Tests zoom a code box, the Log and Data preview's text with text selected, scrolled and found, and read the line
+    numbers, the tab stops, the Log's indent, the rows of the lists and a picture's size; no Mermaid drawing is
+    zoomed in a test, only a picture, and no check tries every text.
+ZM-6:
+  enforced: >-
+    PropertiesPanel._field_widget marks each code box it builds as a pane of kind "code" (mark), and Zoom.eventFilter
+    gives a pane its kind's step when it is first shown, so a code box built again for another block or after a theme
+    change has the remembered size.
+  not_green: >-
+    Tests zoom the Python code box, then select other blocks and change the theme; no check tries every way Properties
+    is built again.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# zoom.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/zoom.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

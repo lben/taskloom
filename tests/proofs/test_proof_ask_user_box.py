@@ -229,7 +229,7 @@ def test_ask_users_box_shows_the_default_as_a_grey_placeholder(proof, win, qtbot
 
     # --- number ------------------------------------------------------------------------------------------------------
     days = write_flow(tmp_path, DAYS, "ask_days", {"prompt": "How many days back?", "kind": "number", "default": "7"},
-                      {"message": "{value} days back: {value * 24} hours"})
+                      {"message": "{{value}} days back: {{value * 24}} hours"})
     p.step(f"Open {DAYS} and press ▶ Run now. ask_days is of kind number, with 7 as its Default; show_answer works "
            "out the hours, which it can do only with a number.")
     days_tab = open_flow(win, monkeypatch, days)

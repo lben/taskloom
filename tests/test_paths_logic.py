@@ -907,8 +907,8 @@ def test_wait_pauses_then_passes_its_input_on_unchanged(env):
     ("{type: logic.ask_user, config: {prompt: 'Go?', kind: date}}",
      "Kind: expected one of ['text', 'number', 'password', 'yes_no', 'choice']"),
     ("{type: logic.ask_user, config: {prompt: 'Go?', kind: choice, options: EU}}", "Options: expected a list"),
-    ("{type: logic.ask_user, config: {prompt: 'Region for {country}?'}}",
-     "{country} is neither a flow parameter nor an input of this block"),
+    ("{type: logic.ask_user, config: {prompt: 'Region for {{country}}?'}}",
+     "{{country}} is neither a flow parameter nor an input of this block"),
 ], ids=["if-no-condition", "wait-no-seconds", "wait-not-a-number", "ask-no-prompt", "ask-unknown-kind",
         "ask-options-not-a-list", "ask-unknown-parameter"])
 def test_logic_block_config_that_cannot_work_is_refused_by_validate(env, block, problem):
@@ -955,7 +955,7 @@ def test_ask_user_uses_its_default_answer_in_runs_nobody_can_answer(env, config,
 
 
 def test_ask_users_prompt_and_default_fill_in_parameters(env):
-    flow = ask_flow(env, "{prompt: 'Region for {region}?', default: '{region}-north'}",
+    flow = ask_flow(env, "{prompt: 'Region for {{region}}?', default: '{{region}}-north'}",
                     extra="params:\n          region: {type: text, value: EU}")
     result = env.taskloom("run", flow, "--param", "region=US")
 
@@ -988,7 +988,7 @@ def test_ask_users_secret_is_used_unattended_and_never_shows(env):
             config: {prompt: "API token?", kind: password, secret: api_token}
           show:
             type: logic.inspect
-            config: {message: "token is {value}"}
+            config: {message: "token is {{value}}"}
           use:
             type: logic.python
             config:
@@ -1057,7 +1057,7 @@ def test_a_password_with_escaped_characters_never_shows_in_summaries_prints_or_i
                 print('parts:', parts)
           message:
             type: logic.inspect
-            config: {message: "got {[value]}"}
+            config: {message: "got {{[value]}}"}
           whole:
             type: logic.inspect""", "build.pw", """
           - build.login -> message.value
@@ -1197,7 +1197,7 @@ def test_ask_users_question_in_the_editor_is_its_prompt_filled_in_with_the_param
         click(dialog, "OK")
 
     monkeypatch.setattr(RunDialog, "exec", run_for_sao_paulo)
-    ask_in_editor(win, qtbot, tmp_path, "{prompt: 'Restart the app in {region}?', default: '{region}-north'}", answer,
+    ask_in_editor(win, qtbot, tmp_path, "{prompt: 'Restart the app in {{region}}?', default: '{{region}}-north'}", answer,
                   extra="params:\n          region: {type: text, value: EU}")
 
     assert (tmp_path / "answer.txt").read_text(encoding="utf-8") == "'São Paulo-north'"
@@ -1314,8 +1314,8 @@ def test_inspect_without_a_message_shows_the_whole_value_and_passes_it_on(env):
 
 
 def test_inspect_message_is_filled_in_like_an_f_string_with_params_and_functions(env):
-    flow = inspect_flow(env, "config: {message: \"Healthy: {value['healthy']} {value['problems']} on {params['day']} "
-                             "({today():%A}), {{literal}}\"}",
+    flow = inspect_flow(env, "config: {message: \"Healthy: {{value['healthy']}} {{value['problems']}} on "
+                             "{{params['day']}} ({{today():%A}}), {literal}\"}",
                         extra="params:\n          day: {type: date, expr: today()}")
     result = env.taskloom("run", flow, "--as-of", "2026-10-19 09:00")
     run_id, _ = env.last_run()
@@ -1326,7 +1326,7 @@ def test_inspect_message_is_filled_in_like_an_f_string_with_params_and_functions
 
 
 def test_inspect_message_with_quotes_in_its_text(env):
-    flow = inspect_flow(env, "config:\n              message: |-\n                Status \"{value['healthy']}\", it's fine")
+    flow = inspect_flow(env, "config:\n              message: |-\n                Status \"{{value['healthy']}}\", it's fine")
     result = env.taskloom("run", flow)
     run_id, _ = env.last_run()
 
@@ -1335,7 +1335,7 @@ def test_inspect_message_with_quotes_in_its_text(env):
 
 
 def test_inspect_message_that_cannot_be_filled_in_fails_clearly(env):
-    result = env.taskloom("run", inspect_flow(env, "config: {message: \"{value['missing']}\"}"), "--json-events")
+    result = env.taskloom("run", inspect_flow(env, "config: {message: \"{{value['missing']}}\"}"), "--json-events")
     run_id, status = env.last_run()
 
     assert result.returncode == 1 and status == "failed" and result.stderr == ""
@@ -1359,7 +1359,7 @@ def test_inspect_shows_tables_and_values_from_several_blocks(env):
             config: {inputs: [], code: "output = 'from b'"}
           both:
             type: logic.inspect
-            config: {message: "got {value}"}
+            config: {message: "got {{value}}"}
           save:
             type: data.write_file
             config: {path: out.csv}

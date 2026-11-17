@@ -1118,21 +1118,22 @@ def test_each_checks_settings_show_only_while_it_is_ticked_each_check_under_a_li
 
 # --- 8: README and Help > Documentation -----------------------------------------------------------------------------------
 
-def test_the_readme_and_the_documentation_describe_the_block_and_each_check_with_an_example():
-    """Spec 8 (Help > Documentation, the hover help and the README describe the block and each check, with an example:
+@pytest.mark.invariant("RD-2")
+def test_the_guide_and_the_documentation_describe_the_block_and_each_check_with_an_example():
+    """Spec 8 (Help > Documentation, the hover help and the guide describe the block and each check, with an example:
     Read File, then Check Table, then the blocks that use the table) and 3h (the help says a missing value breaks a
-    condition: write amount is null or amount >= 0 to allow it): README lists the block, and its section about Check
+    condition: write amount is null or amount >= 0 to allow it): the guide lists the block, and its section about Check
     Table (under a heading naming it, as API Request and Session have) speaks of each check and of warning, with a YAML
     example the block accepts; Help > Documentation has its entry on the Checks page, every check's tick with its
     hover help, and a guide page showing the example."""
     from taskloom.editor import docs
 
     cls = check_class()
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    listed = re.search(r"Built-in blocks:(.*?)\n\n", readme, re.S)
-    assert listed and f"`{CHECK}`" in listed.group(1), "README's list of built-in blocks does not have Check Table"
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    listed = re.search(r"Built-in blocks:(.*?)\n\n", guide, re.S)
+    assert listed and f"`{CHECK}`" in listed.group(1), "the guide's list of built-in blocks does not have Check Table"
     section, level, fenced = [], None, False
-    for line in readme.splitlines():  # (a line starting with # inside a code block is no heading)
+    for line in guide.splitlines():  # (a line starting with # inside a code block is no heading)
         heading = None if fenced or line.startswith("```") else re.match(r"(#{1,6}) ", line)
         fenced ^= line.startswith("```")
         if level is None:
@@ -1141,7 +1142,7 @@ def test_the_readme_and_the_documentation_describe_the_block_and_each_check_with
             break
         else:
             section.append(line)
-    assert level is not None, "README has no heading naming Check Table"
+    assert level is not None, "the guide has no heading naming Check Table"
     about = "\n".join(section)
     text = " ".join(about.lower().split())
     spoken = {"row_count": ("row count",), "compared": ("last successful run", "earlier run", "previous run"),
@@ -1163,7 +1164,7 @@ def test_the_readme_and_the_documentation_describe_the_block_and_each_check_with
                    and any(e.startswith(f"{c}.table -> ") for e in edges) for c in checks)
 
     assert any(reads_checks_and_uses(flow) for flow in examples), (
-        "README has no YAML example of Read File, then Check Table, then a block using its table")
+        "the guide has no YAML example of Read File, then Check Table, then a block using its table")
 
     pages = docs.pages(discover(None))
     page = pages.get("blocks-checks.html", "")

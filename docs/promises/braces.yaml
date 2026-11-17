@@ -1,0 +1,48 @@
+# What must always be true of placeholders in text, as agreed with the maintainer in chat on 2026-11-16.
+# Each row is checked by the tests marked @pytest.mark.invariant("BR-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: One brace rule, {{name}}
+agreed: 2026-11-16
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    # The plan's one brace rule for the whole app, Inspect's message too.
+    words: "approve as listed (after you clarify me the points above, I am ok with the rest)"
+  - date: 2026-11-16
+    # The rows below and the recommended answers: spaces inside (BR-1), Inspect takes an expression inside {{ }}
+    # (BR-10).
+    words: "Approve all"
+  - date: 2026-11-16
+    # Asked again: \{{ for a literal {{ would turn C:\data\{{day}}.csv into plain text (BR-9).
+    words: "{{{{ gives {{"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_braces]
+rows:
+  BR-1: >-
+    In every field that takes placeholders, {{name}} is replaced by the value of the flow parameter or block input of
+    that name, and {{name:format}} formats it as before, such as {{day:%Y-%m-%d}}. Spaces inside the braces do not
+    matter: {{ name }} is the same as {{name}}.
+  BR-2: >-
+    Single braces stay exactly as typed, character for character: JSON such as {"k": 1}, CSS, ${VAR}, a regex \d{4}.
+  BR-3: >-
+    A {{name}} that names nothing is an error at Validate and at the run, naming the block, the field and the name. It
+    is never sent as typed and never emptied.
+  BR-4: >-
+    A single-brace {name} whose name is a flow parameter or one of the block's inputs gives a Validate warning: did you
+    mean {{name}}? The run treats it as plain text.
+  BR-5: >-
+    The rule is the same in every field that is filled: a test walks every such field of every block, so a new field
+    cannot be missed. Python code is not filled.
+  BR-6: >-
+    A value is put in once: braces inside a value are never filled again.
+  BR-7: >-
+    Import from cURL keeps the body exactly as it was in the cURL command, and a run sends that body.
+  BR-8: >-
+    Every shipped example, starter text, help text and docs page uses {{name}} and passes Validate with no BR-4
+    warning.
+  BR-9: >-
+    {{{{ gives a literal {{, so a Mermaid hexagon A{{text}} is written A{{{{text}}. A backslash is plain text, so a
+    Windows path C:\data\{{day}}.csv works. Otherwise {{ always starts a placeholder.
+  BR-10: >-
+    Inspect's message is the one place where {{ }} holds a Python expression: {{value}}, {{len(value)}} and
+    {{value["id"]}} all work. Single braces in it are plain text, and the block's help says so.

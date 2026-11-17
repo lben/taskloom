@@ -149,7 +149,7 @@ jobs:
       matrix:
         feature: ${{ fromJSON(needs.features.outputs.names) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 330  # (as the scheduler's: the one brace rule's mutation testing, 492 mutants, takes over 90 minutes)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -334,7 +334,7 @@ jobs:
         with: {files: "artifacts/*"}
 
   # The documentation website on GitHub Pages, from each release tag. No job needs it, so it never holds up or fails
-  # a release (it fails on its own until Settings > Pages > Source is GitHub Actions; see README, Development).
+  # a release (it fails on its own until Settings > Pages > Source is GitHub Actions; see docs/guide.md, Development).
   pages:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release

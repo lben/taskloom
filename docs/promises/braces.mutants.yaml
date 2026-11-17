@@ -1,0 +1,139 @@
+# Mutation testing of the one brace rule (read by packaging/mutants.py --explained). scope: what the bugs are planted
+# in, the functions the change touched, in groups: each group's bugs run the tests that can see them (each line of
+# tests: is one pytest run, a file with -k words or without). The functions that are new or mostly rewritten are
+# tested whole. A function in which the change touched a line or two, among much that was there before, is under
+# not_tested: its bugs are planted and counted, not run, and its reason names the tests that check the changed lines.
+# The change's other lines are not functions of their own, or changed only a docstring or a comment, so nothing is
+# planted in them: the help texts, examples and starter texts of the blocks' settings and docs.PLACEHOLDERS, which the
+# BR-8 and BR-10 tests read; params._BRACES and LITERAL_BRACES (constants, used by the functions below); the
+# docstrings of written_seconds and _shown and a comment in CheckFile._limit. The tests of tests/test_braces.py that
+# read the shipped example flows and README.md are not run here: mutation testing's copy of the project holds the
+# package, tests/ and docs/ only, with a pyproject.toml of its own (so the test that reads the project's
+# dependencies, test_reports_are_made_without_jinja2_which_is_no_longer_a_dependency, is not run here either). The mutants the tests let through are explained here, by kind (kinds: a
+# kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could notice).
+# Only those no user could notice are explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/params.py split
+        - taskloom/params.py parse
+        - taskloom/params.py render
+        - taskloom/params.py template_names
+        - taskloom/params.py single_braced
+      tests:
+        - tests/test_braces.py -k "double_braces_give or inside_single_braces or closing_braces_alone or four_opening or never_filled_again or naming_nothing or single_brace_parameter or single_and_double or single_brace_name_of_nothing or capital_letter or loops_at_the_same_time"
+        - tests/test_placeholders.py
+        - tests/test_html_template_inputs.py -k a_problem_stops_validate
+    - mutate:
+        - taskloom/engine.py _filled
+        - taskloom/flow.py placeholder_problems
+        - taskloom/block.py has_placeholders
+      tests:
+        - tests/test_placeholders.py
+        - tests/test_braces.py -k "double_braces_give or naming_nothing or every_setting_that_is_filled or python_code_is_not_filled or cannot_be_filled or header_rows or sql_code_fills"
+        - tests/test_loop_container.py -k without_a_placeholder
+        - tests/test_merger_each_line.py -k without_a_placeholder
+        - tests/test_paths_logic.py -k cannot_work_is_refused_by_validate
+        - tests/test_paths_flow_format.py -k a_setting_of_the_wrong_kind
+        - tests/test_engine.py -k validate_reports_all_problems
+    - mutate:
+        - taskloom/blocks/logic.py _message_source
+        - taskloom/blocks/logic.py _message_tree
+        - taskloom/blocks/logic.py Inspect.problems
+        - taskloom/blocks/logic.py Inspect.run
+      tests:
+        - tests/test_braces.py -k "inspect or double_braces_give"
+        - tests/test_paths_logic.py -k inspect
+        - tests/test_inspect_log.py -k "values_that_are_not_pictures or message_line_comes_before or show_as_markdown_marks"
+        - tests/test_pyenv.py -k secrets_never_reach_logs
+    - mutate:
+        - taskloom/blocks/reports.py _placed
+        - taskloom/blocks/reports.py HtmlTemplate.problems
+        - taskloom/blocks/reports.py HtmlTemplate.run
+      tests:
+        - tests/test_braces.py -k html
+        - tests/test_html_template_inputs.py -k "not the_example_whose_file and not without_jinja2"
+        - tests/test_template_styles.py
+        - tests/test_paths_reports_email.py -k html_template_mistakes
+    - mutate:
+        - taskloom/blocks/servers.py _literal
+      tests:
+        - tests/test_braces.py -k import_from_curl
+        - tests/test_curl_import.py -k "documentation or browser_or_written or each_curl_option"
+    - mutate:
+        - taskloom/flow.py validate
+        - taskloom/flow.py _loop_problems
+        - taskloom/flow.py _per_line_problems
+        - taskloom/blocks/servers.py from_curl
+        - taskloom/editor/panels.py PropertiesPanel._source_names_box
+        - taskloom/editor/panels.py PropertiesPanel._url_widget
+      tests:
+        - tests/test_braces.py -k "single_brace_parameter or editors_validate"
+not_tested:
+  taskloom/flow.py validate: >-
+    The check of a flow before it runs, to which this change added the did-you-mean warning (BR-4: the names a
+    {{name}} can name in the block, and a warning for each single-brace one of them in its settings), about fifteen
+    lines among about a hundred that were there before.
+    test_a_single_brace_parameter_name_is_sent_as_typed_and_validate_asks_did_you_mean,
+    test_single_and_double_braces_in_one_setting_fill_one_and_warn_about_the_other and
+    test_editors_validate_warns_did_you_mean_in_each_kind_of_setting check that warning;
+    test_a_single_brace_name_of_nothing_stays_with_no_warning checks that it names only parameters and inputs.
+  taskloom/flow.py _loop_problems: >-
+    Validate's checks of a Loop, in which this change touched one line: its warning about a path with no placeholder
+    says {{placeholder}}. test_validate_warns_about_a_file_path_inside_the_loop_without_a_placeholder checks the
+    warning, and the proof test_proof_loop_failures reads its words.
+  taskloom/flow.py _per_line_problems: >-
+    Validate's checks of the blocks a Merger runs once per line, in which this change touched one line: its warning
+    about a path with no placeholder says {{placeholder}}.
+    test_validate_warns_about_a_file_path_a_block_run_once_per_line_writes_to_without_a_placeholder checks the
+    warning, and the proof test_proof_merger_each_line reads its words.
+  taskloom/blocks/servers.py from_curl: >-
+    Import from cURL's reading of a command, about 160 lines, in which this change touched one line of code: the body
+    is kept as the command has it, not indented again as JSON.
+    test_import_from_curl_keeps_a_json_body_as_it_was_and_the_run_sends_it_byte_for_byte checks it.
+  taskloom/editor/panels.py PropertiesPanel._source_names_box: >-
+    An HTML Template's Inputs in Properties, in which this change touched one line: its note says Write {{name}}.
+    test_properties_shows_no_single_brace_placeholder_in_the_help_of_any_block reads that note, with an input
+    connected.
+  taskloom/editor/panels.py PropertiesPanel._url_widget: >-
+    An API Request's URL in Properties, in which this change touched one line: its hint, with a connection chosen,
+    says /orders/{{id}}. test_properties_shows_no_single_brace_placeholder_in_the_help_of_any_block reads that hint.
+kinds:
+  - kind: The f-string's prefix written in capitals
+    why: >-
+      Python reads a string's prefix in either case: RF"""...""" is the same f-string as rf"""...""", so Inspect's
+      message is filled in and shown the same, e.g. Day {{day}}: {{value}}.
+    mutants:
+      - taskloom.blocks.logic.x__message_source__mutmut_43
+  - kind: The moment the expression functions are made for
+    why: >-
+      Validate looks only at the names of the expression functions (today, now, days, len...), to tell a name an
+      expression in Inspect's message may use from a misspelt one; the moment they work from is used only when one
+      of them is called, which Validate never does. The names are the same for any moment.
+    mutants:
+      - taskloom.blocks.logic.xǁInspectǁproblems__mutmut_13
+  - kind: A frame that is not yet a Table
+    why: >-
+      What arrives at a block's input is never a bare Polars, pandas or Arrow frame: each block's output, each input
+      typed for Run this block and each input kept from an earlier run is stored as a Table first (engine._as_tables,
+      run_flow), so asking whether it is such a frame changes no message: a table arriving is told "got a table" all
+      the same.
+    mutants:
+      - taskloom.engine.x__filled__mutmut_24
+  - kind: The stand-in split after the last placeholder
+    why: >-
+      parse splits what is inside each {{ }} into a name and a format. After the last placeholder there is nothing
+      inside (None), and what it splits in its place is never used: that part gets no name, and its format is empty
+      whether the stand-in is "" or "XXXX" (neither holds a colon). Every other part has something inside it (split
+      refuses an empty {{}}), so there the stand-in is never used. The same parts, names and formats come out.
+    mutants:
+      - taskloom.params.x_parse__mutmut_7
+  - kind: The mark put where a placeholder was, before single braces are looked for
+    why: >-
+      single_braced puts a mark where each {{ }} (and each {{{{) was, so that a single-brace {name} is looked for in
+      the plain text only. Whether the mark is \0 or XX\0XX, it holds no brace, no $, no colon and no line break,
+      and its \0 ends any name that runs into it, so no {name} is found or lost because of it: Validate asks did you
+      mean about the same names. (Checked on every text of up to six of the characters { } $ : a X _ space, line
+      break, 0 and backslash, and 200,000 longer random ones.)
+    mutants:
+      - taskloom.params.x_single_braced__mutmut_13

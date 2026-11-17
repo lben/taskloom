@@ -179,7 +179,7 @@ def test_the_readme_flow_queries_by_day_key_and_saves_the_rows_to_csv(jdbc_env, 
             retry: {policy: exponential, initial: 30s, factor: 2, max_delay: 10m, max_attempts: 5}
           save:
             type: data.write_file
-            config: {path: "out/sales_{day:%Y-%m-%d}.csv"}
+            config: {path: "out/sales_{{day:%Y-%m-%d}}.csv"}
         edges:
           - q.result -> save.table
     """)
@@ -504,7 +504,7 @@ def test_text_templates_fill_sql_text_such_as_a_table_name(jdbc_env, h2_server):
     h2_sql(h2_server, "templated", "create table sales_20260116 (amount decimal(10, 2));"
            "insert into sales_20260116 values (1.00), (2.00)")
     add_connection(jdbc_env, h2_server, "sales_db", "templated", "")
-    flow = query_flow(jdbc_env, "select '{{literal braces}}' as braces, count(*) as n from sales_{day:%Y%m%d}",
+    flow = query_flow(jdbc_env, "select '{literal braces}' as braces, count(*) as n from sales_{{day:%Y%m%d}}",
                       connection="sales_db", params={"day": {"type": "date", "value": "2026-01-15"}})
 
     run = jdbc_env.taskloom("run", flow, "--param", "day=2026-01-16")
@@ -520,7 +520,7 @@ def test_validate_and_run_report_connection_and_parameter_mistakes(jdbc_env):
         "a": {"type": "db.run_query", "config": {"connection": "nope", "sql": "select 1"}},
         "b": {"type": "db.run_query", "config": {"connection": "appserver", "sql": "select 1"}},
         "c": {"type": "db.run_query", "config": {"connection": "warehouse", "sql": "select :missing_bind as x"}},
-        "d": {"type": "db.run_query", "config": {"connection": "warehouse", "sql": "select '{missing_text}' as x"}}}})
+        "d": {"type": "db.run_query", "config": {"connection": "warehouse", "sql": "select '{{missing_text}}' as x"}}}})
 
     checked = jdbc_env.taskloom("validate", flow)
     run = jdbc_env.taskloom("run", flow)
@@ -532,7 +532,7 @@ def test_validate_and_run_report_connection_and_parameter_mistakes(jdbc_env):
         assert errors[0].startswith("error: a: Connection: ") and "'nope'" in errors[0]
         assert errors[1].startswith("error: b: Connection: ") and "ssh" in errors[1] and "jdbc" in errors[1]
         assert errors[2].startswith("error: c: SQL: ") and ":missing_bind" in errors[2]
-        assert errors[3].startswith("error: d: SQL: ") and "{missing_text}" in errors[3]
+        assert errors[3].startswith("error: d: SQL: ") and "{{missing_text}}" in errors[3]
     assert not (jdbc_env.home / "history.db").exists() or jdbc_env.query("SELECT count(*) FROM runs") == [(0,)]
 
 

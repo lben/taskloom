@@ -221,7 +221,7 @@ def test_validate_reports_all_problems(env):
             config: {code: "output = input"}
           save:
             type: data.write_file
-            config: {path: "out_{missing}.csv"}
+            config: {path: "out_{{missing}}.csv"}
         edges:
           - a.output -> b.input
           - b.output -> a.input
@@ -231,7 +231,7 @@ def test_validate_reports_all_problems(env):
     result = env.taskloom("validate", flow)
 
     assert result.returncode == 2
-    assert "{missing} is neither a flow parameter nor an input of this block" in result.stderr
+    assert "{{missing}} is neither a flow parameter nor an input of this block" in result.stderr
     assert "'b' has no output 'nope'" in result.stderr
     assert env.taskloom("run", flow).returncode == 2
 
@@ -249,7 +249,7 @@ def test_date_parameters_bind_to_sql_as_date_and_integer_with_overrides(env):
               sql: "select :day as day, :day_key as day_key, :day_key + 1 as next_key"
           save:
             type: data.write_file
-            config: {path: "out/{day:%Y%m%d}.parquet"}
+            config: {path: "out/{{day:%Y%m%d}}.parquet"}
         edges:
           - q.result -> save.table
     """)

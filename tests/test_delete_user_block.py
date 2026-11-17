@@ -32,7 +32,7 @@ from taskloom.editor.window import MainWindow  # noqa: E402
 from tests.test_paths_editor_editing import GREET_BLOCK, clean, flow_file, select_only, settle  # noqa: E402
 from tests.test_reusable_block import block_files, groups, make_reusable, names_flow, user_created  # noqa: E402
 
-README = Path(__file__).resolve().parents[1] / "README.md"
+GUIDE = Path(__file__).resolve().parents[1] / "docs" / "guide.md"
 DELETE = "Delete block"  # the menu item, followed by an ellipsis: it asks first
 GREET_SAYS = "Says hello to whoever you name."  # GREET_BLOCK's description (its hover help)
 SHOUT_SAYS = "Says the text it is given, in capitals."
@@ -530,9 +530,10 @@ def test_the_user_created_group_goes_with_the_last_block_and_comes_back_when_one
 
 # --- README ------------------------------------------------------------------------------------------------------
 
-def test_readme_says_how_to_delete_a_user_created_block():
-    """Spec 5: where README describes User Created (reusable) blocks, it says how to delete one: Delete block…"""
-    text = README.read_text(encoding="utf-8")
+@pytest.mark.invariant("RD-2")
+def test_the_guide_says_how_to_delete_a_user_created_block():
+    """Spec 5: where the guide describes User Created (reusable) blocks, it says how to delete one: Delete block…"""
+    text = GUIDE.read_text(encoding="utf-8")
     passages = [p for p in re.split(r"\n\s*\n|\n(?=\s*[-*|] )", text)
                 if any(words in p for words in ("User Created", "Reusable", "of your own"))]
     said = " ".join(" ".join(passages).replace("*", "").split()).lower()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import builtins
 import datetime as dt
 import inspect
 import io
@@ -20,8 +22,9 @@ from rich.console import Console
 from rich import traceback as rich_traceback
 from rich.traceback import Traceback
 
+from .. import params as P
 from ..block import Block, fields, has_placeholders, ports, setting_label
-from ..expr import evaluate
+from ..expr import evaluate, functions
 from ..engine import Failed, SecretStr, _masked, inline, line_names, preview
 from ..flow import (ALL_LINES, AS_FINISHED, AT_MOST, AT_ONCE, EACH_LINE, INDEX, ITEM, ITEMS, LINE_ORDER, LINES,
                     LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, PASSES_ON, RESULT, RESULTS, RUNS_AGAIN, SAME_TIME,
@@ -296,8 +299,8 @@ class Wait(Block):
     category = "Logic"
     inputs = {"value": ports.Any(required=False)}
     outputs = {"value": ports.Any()}
-    config = {"seconds": fields.Float(help="How long to wait, in seconds: a number (0.5 for half a second), {value} "
-                                           "for the number arriving at its value input, or {name} for a flow "
+    config = {"seconds": fields.Float(help="How long to wait, in seconds: a number (0.5 for half a second), {{value}} "
+                                           "for the number arriving at its value input, or {{name}} for a flow "
                                            "parameter", examples=["5", "0.5", "90"])}
 
     def run(self, ctx, value=None):
@@ -316,7 +319,7 @@ class Wait(Block):
 _AT_MOST = fields.Int(required=False, minimum=1, label="At most at once", only_if={LINES_RUN: [SAME_TIME]},
                       help="How many of its lines run at once, at most: a whole number, 1 or more (empty: all of "
                            "them). The next line starts as soon as one ends, in line order. A limit protects the "
-                           "database and the computer from too many lines at once. No {placeholders}: Validate "
+                           "database and the computer from too many lines at once. No {{placeholders}}: Validate "
                            "checks the lines with it before the run.",
                       examples=["2", "4", "8"])
 _AT_MOST.template = False  # (see Splitter.problems)
@@ -400,7 +403,7 @@ class Merger(Block):
 
 
 def written_seconds(seconds) -> str:
-    """A Wait block's Seconds as written: 90 (not 90.0), 0.5, a placeholder such as {value}."""
+    """A Wait block's Seconds as written: 90 (not 90.0), 0.5, a placeholder such as {{value}}."""
     return str(int(seconds)) if isinstance(seconds, float) and seconds.is_integer() else str(seconds)
 
 
@@ -549,6 +552,31 @@ def _picture(value) -> Path | None:
         return None
 
 
+def _message_source(message: str) -> str:
+    """Inspect's message as the Python f-string that fills it in: its plain text as typed, each {{expression}} (or
+    {{expression:format}}) as an f-string's {expression}. Raises ValueError as params.split does."""
+    text = "".join(plain.replace("{", "{{").replace("}", "}}")
+                   + ("" if inside is None else "{" + " " * inside.startswith("{") + inside + "}")  # ({ { is no {{)
+                   for plain, inside in P.split(message))
+    # As written between the quotes of rf"""...""" (rf'''...''' if the text has """ in it): both kinds of quote can
+    # be in the text and in the {...} parts, backslashes stay as typed. {''} keeps a quote at the end from closing it
+    # early.
+    quotes = "'''" if '"""' in text else '"""'
+    return "rf" + quotes + text + "{''}" + quotes
+
+
+def _message_tree(message: str) -> ast.Expression:
+    """_message_source parsed, with the spaces after the colon of each {{expression:format}} left out (the f-string's
+    own colon, as Python finds it: not one in brackets, a slice or a dict), as in every other text that is filled.
+    Raises ValueError as params.split does, SyntaxError for an expression that is not Python."""
+    tree = ast.parse(_message_source(message), mode="eval")
+    for part in tree.body.values:
+        spec = getattr(part, "format_spec", None)
+        if spec is not None and spec.values and isinstance(spec.values[0], ast.Constant):
+            spec.values[0].value = spec.values[0].value.lstrip()
+    return tree
+
+
 class Inspect(Block):
     type_id = "logic.inspect"
     title = "Inspect"
@@ -561,10 +589,13 @@ class Inspect(Block):
     outputs = {"value": ports.Any()}
     config = {
         "message": fields.Code("f-string", required=False,
-                               help="Optional text written like a Python f-string, e.g. "
-                                    "Healthy: {value['healthy']} {value['problems']}. Empty shows the whole value.",
-                               examples=["Healthy: {value['healthy']}", "{len(value)} rows",
-                                         "Day {params['day']}: {value}"]),
+                               help="Optional text to show, in which {{ }} holds a Python expression: of value (what "
+                                    "arrives), params, a flow parameter by its name and the expression functions, "
+                                    "e.g. Healthy: {{value['healthy']}} {{len(value['problems'])}}; "
+                                    "{{expression:format}} formats it, e.g. {{day:%d %B %Y}}. Single braces are plain "
+                                    "text, shown as typed; write {{{{ for a literal {{. Empty shows the whole value.",
+                               examples=["Healthy: {{value['healthy']}}", "{{len(value)}} rows",
+                                         "Day {{day}}: {{value}}"]),
         "markdown": fields.Bool(default=False, label="Show as Markdown",
                                 help="Draw the message (or, with no message, a text value) as Markdown in the Log: "
                                      "# headings, **bold**, *italic*, lists, | tables |, `code` and ``` code blocks "
@@ -574,19 +605,32 @@ class Inspect(Block):
                                      "and line kept."),
     }
 
+    @classmethod
+    def problems(cls, config, sources, params):
+        if not config["message"]:
+            return []
+        try:
+            tree = _message_tree(config["message"])
+        except ValueError as e:  # e.g. a {{ with no }}
+            return [f"Message: {e}"]
+        except SyntaxError as e:
+            return [f"Message: an expression in {{{{ }}}} is not Python: {e.msg}"]
+        known = {"value", "params", *params, *functions(dt.datetime.now(), None, None), *dir(builtins)}
+        known |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
+        known |= {n.arg for n in ast.walk(tree) if isinstance(n, ast.arg)}  # (a lambda's)
+        return [f"Message: {name} is not value, params, a flow parameter or an expression function"
+                for name in sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} - known)]
+
     def run(self, ctx, value=None):
         markdown = "markdown" if self.config.markdown else None
         picture = _picture(value)
         if self.config.message:
             # Secrets show as *** here: this text goes to the log and the run history.
-            namespace = {**ctx.functions, "value": _masked(value), "params": _masked(ctx.params)}
-            # As written between the quotes of rf"""...""" (rf'''...''' if the text has """ in it): both kinds
-            # of quote can be in the text and in the {...} parts, backslashes stay as typed. {''} keeps a quote
-            # at the end from closing it early.
-            quotes = "'''" if '"""' in self.config.message else '"""'
-            source = "rf" + quotes + self.config.message + "{''}" + quotes
+            params = _masked(ctx.params)
+            namespace = {**ctx.functions, **params, "value": _masked(value), "params": params}
             try:
-                text = eval(compile(source, f"<block {ctx.block_id}>", "eval"), namespace)
+                text = eval(compile(_message_tree(self.config.message), f"<block {ctx.block_id}>", "eval"),
+                            namespace)
             except Exception as e:
                 raise ValueError(f"the message could not be filled in: {type(e).__name__}: {e}") from None
             ctx.log(text, show=markdown)

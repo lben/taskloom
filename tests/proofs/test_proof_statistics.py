@@ -62,7 +62,7 @@ TOP_SHARE = ('amounts = orders.scan().select("amount").drop_nulls().collect()["a
              "top = amounts.head(max(1, len(amounts) // 5))\n"
              'output = {"orders with an amount": len(amounts),\n'
              '          "share of the total from the biggest 20%": f"{top.sum() / amounts.sum():.1%}"}')
-TEMPLATE = "<h2>Order statistics</h2>{stats}<br>{charts}"
+TEMPLATE = "<h2>Order statistics</h2>{{stats}}<br>{{charts}}"
 P95 = ("p95", "quantile_cont(amount, 0.95)")
 NORTH_SHARE = ("north_share", "avg(case when region = 'north' then 1 else 0 end)")
 BROKEN = ("south_share", "avg(case when region = 'south' then 1 else 0)")  # no end: not valid SQL

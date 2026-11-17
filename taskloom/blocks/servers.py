@@ -395,7 +395,7 @@ class _Call:
     """A request as the block sends it, or as Copy as cURL writes it."""
     method: str
     url: str  # with the ticked Params as its query (and an API key in the query)
-    headers: dict  # {lower-case name: (name, value)}, in the order they are sent
+    headers: dict  # {lower-case name: (name, value)}, in the order they are sent (a name in more rows: once)
     credentials: set  # the lower-case names of those not sent on to another host: Authorization, and those that
     # carry a stored secret
     auth: tuple | None  # (Basic or Digest, user name, password)
@@ -403,6 +403,30 @@ class _Call:
     sends: object  # its content (text), its rows, the path of its file, or the input's value
     ca_file: str | None
     verify: bool
+
+
+def _sent_header(rows: list[dict], value=lambda text: text) -> tuple[str, str]:
+    """The header that the rows of one name send: once, named as its first row spells it, with their values (each as
+    value(text) gives it) in the list's order joined as HTTP allows (Cookie: with ;)."""
+    name = rows[0]["key"]
+    return name, ("; " if name.lower() == "cookie" else ", ").join(value(r.get("value", "")) for r in rows)
+
+
+def _row_headers(c: dict, conn: dict | None, secret) -> tuple[dict, set]:
+    """The headers the ticked Headers rows send, as _Call holds them: the connection's, then the block's, which replace
+    those of the same name; and the lower-case names of those that carry a stored secret. secret(name): as in _call."""
+    rows = {}  # {lower-case name: its rows}
+    for whose in (conn and conn["headers"], c["headers"]):
+        mine = {}
+        for r in ticked(whose):
+            mine.setdefault(r["key"].lower(), []).append(r)
+        rows.update(mine)
+
+    def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
+        return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
+
+    return ({name: _sent_header(rs, value) for name, rs in rows.items()},
+            {name for name, rs in rows.items() if any(r["value"].startswith(SECRET_PREFIX) for r in rs)})
 
 
 def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
@@ -428,13 +452,8 @@ def _call(c: dict, conn: dict | None, secret, given=NOTHING) -> _Call:
     query = [f"{quote(r['key'], safe='')}={quote(r['value'], safe='')}" for r in ticked(c["params"])]
     if auth == KEY_QUERY:  # (shown as hidden() shows it, as it is: Copy as cURL is read by people)
         query.append(f"{quote(own['key_name'], safe='')}={password if secret is hidden else quote(password, safe='')}")
-    rows = {r["key"].lower(): r for r in ticked(conn and conn["headers"])}
-    rows.update({r["key"].lower(): r for r in ticked(c["headers"])})  # the block's win
-    def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
-        return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
-
-    headers = {name: (r["key"], value(r["value"])) for name, r in rows.items()}
-    credentials = {"authorization"} | {name for name, r in rows.items() if r["value"].startswith(SECRET_PREFIX)}
+    headers, with_secret = _row_headers(c, conn, secret)
+    credentials = {"authorization"} | with_secret
     if auth == BEARER:
         headers["authorization"] = ("Authorization", f"Bearer {password}")
     elif auth == KEY_HEADER:
@@ -683,7 +702,7 @@ _CURL_SKIPPED = {"-o", "--output", "-w", "--write-out", "-x", "--proxy", "-U", "
                  "--retry", "--retry-delay", "--retry-max-time", "--max-redirs", "--resolve", "--interface",
                  "--limit-rate", "--oauth2-bearer", "--form-string", "--noproxy"}
 _SECRET_HEADER = re.compile(r"token|key|secret|password|^(proxy-)?authorization$", re.IGNORECASE)
-_BASH = re.compile(r"""(?P<space>\s+)|(?P<joined>\\(?:\n|$))|\\(?P<escaped>.)|'(?P<single>[^']*)'"""
+_BASH = re.compile(r"""(?P<space>\s+)|(?P<joined>\\[ \t]*(?:\n|$))|\\(?P<escaped>.)|'(?P<single>[^']*)'"""
                    r"""|\$'(?P<ansi>(?:\\.|[^\\'])*)'|"(?P<double>(?:\\.|[^\\"])*)"|(?P<plain>[^\s\\'"$]+|\$)""", re.S)
 _EXAMPLE = "e.g. curl https://api.example.com/v1/orders -H 'Accept: application/json'"
 
@@ -699,8 +718,9 @@ class CurlImport:
 
 
 def _bash_words(text: str) -> list[str]:
-    """The words of a command as bash reads them: \\ at a line's end goes on on the next line; 'single', "double" (\\
-    takes ", \\, $ and ` as they are) and $'ANSI-C' quotes (as browsers write \\n and \\'); nothing is expanded."""
+    """The words of a command as bash reads them: \\ at a line's end (spaces copied after it too) goes on on the next
+    line; 'single', "double" (\\ takes ", \\, $ and ` as they are) and $'ANSI-C' quotes (as browsers write \\n and
+    \\'); nothing is expanded."""
     words, word, at = [], None, 0
     while at < len(text):
         m = _BASH.match(text, at)
@@ -778,15 +798,16 @@ def _curl_options(words):
 
 def from_curl(text: str) -> CurlImport:
     """The API Request's settings for the request a curl command sends, the command written as bash or Windows' cmd
-    reads it (as an API's documentation or a browser's Copy as cURL writes it), with every brace written {{ }} so that
-    it is sent as it is. ValueError, saying why, for text that is not a curl command with a URL."""
-    text = re.sub(r"[ \t]+\n", "\n", text.replace("\r\n", "\n")).strip()  # (a \ or ^ before spaces copied with it)
+    reads it (as an API's documentation or a browser's Copy as cURL writes it), its body as the command has it, with
+    each {{ written {{{{ so that it is sent as it is. ValueError, saying why, for text that is not a curl command with a
+    URL."""
+    text = text.replace("\r\n", "\n").strip()
     start = re.match(r"(?:\$\s+)?curl(?:\.exe)?(?:\s|$)", text, re.IGNORECASE)  # (a $ prompt, as documentation shows)
     if start is None:
         first = text.split(None, 1)[0] if text else ""
         raise ValueError(f"This is not a curl command: it starts with {first!r}, not curl. Paste a curl command, "
                          f"{_EXAMPLE}" if first else f"Paste a curl command first, {_EXAMPLE}")
-    cmd = re.search(r"\^\n", text) or '^"' in text  # (cmd's line ends and quotes)
+    cmd = re.search(r"\^[ \t]*\n", text) or '^"' in text  # (cmd's line ends, spaces copied after a ^, and quotes)
     words = (_cmd_words if cmd else _bash_words)(text[start.end():])
 
     method = url = user = timeout = None
@@ -880,8 +901,7 @@ def from_curl(text: str) -> CurlImport:
                 parsed = json.loads(sent) if sent.lstrip().startswith(("{", "[")) else None
             except ValueError:
                 parsed = None
-            body, config["content"] = ((JSON_BODY, json.dumps(parsed, indent=2, ensure_ascii=False))
-                                       if parsed is not None else (TEXT_BODY, sent))
+            body, config["content"] = JSON_BODY if parsed is not None else TEXT_BODY, sent  # (as the command has it)
         if body != JSON_BODY and "content-type" not in {key.lower() for key, _ in headers}:
             headers.append(("Content-Type", "application/x-www-form-urlencoded"))  # (what curl sends with -d)
     if method is not None and method not in METHODS:
@@ -940,8 +960,8 @@ def from_curl(text: str) -> CurlImport:
 
 
 def _literal(text: str) -> str:
-    """Text as a setting that takes placeholders sends it as it is: its braces written {{ and }}."""
-    return text.replace("{", "{{").replace("}", "}}")
+    """Text as a setting that takes placeholders sends it as it is: each {{ in it written {{{{."""
+    return text.replace("{{", "{{{{")
 
 
 def connection_note(home, name: str, headers) -> str:
@@ -951,14 +971,17 @@ def connection_note(home, name: str, headers) -> str:
         conn = api_connection(home, name)
     except (Failed, ValueError) as e:  # (ValueError: connections.yaml cannot be read)
         return str(e)
-    mine = {r["key"].lower(): r for r in ticked(headers) if "key" in r}
+    mine = {}  # {lower-case name: the block's rows of it}
+    for r in ticked(headers):
+        if "key" in r:
+            mine.setdefault(r["key"].lower(), []).append(r)
     said = [f"Base URL: {conn['base_url'] or '(none)'}",
             f"Auth: {conn['auth']}" + "".join(f", {words} {conn[k]}" for k, words in (
                 ("username", "user name"), ("key_name", "key name"), ("secret", "with the stored secret")) if conn[k])]
     for r in ticked(conn["headers"]):
         replaced = mine.get(r["key"].lower())
         said.append(f"Header {r['key']}: {r['value']}"
-                    + (f" (replaced by this block's {replaced['key']}: {replaced.get('value', '')})" if replaced else ""))
+                    + (f" (replaced by this block's {': '.join(_sent_header(replaced))})" if replaced else ""))
     if conn["ca_file"]:
         said.append(f"CA certificate file: {conn['ca_file']}")
     if conn["dont_verify"]:
@@ -995,20 +1018,20 @@ class ApiRequest(Block):
         "connection": fields.Connection(
             kind="api", required=False,
             help="none (empty): everything is set in this block. Or an API connection (Tools > Connections): its base "
-                 "URL (the URL here may then be relative to it, e.g. /orders/{id}), its auth with its stored secret, "
+                 "URL (the URL here may then be relative to it, e.g. /orders/{{id}}), its auth with its stored secret, "
                  "its headers (this block's own Headers are added, this block's winning on the same name) and its "
                  "certificate settings."),
         "method": fields.Choice(METHODS, default="GET", help="The HTTP method of the request"),
         "url": fields.Text(help="The web address to call, with its ?query if it has one (kept in step with Params). "
                                 "With a Connection: whole, or relative to its base URL.",
-                           examples=["https://api.example.com/v1/orders", "/orders/{id}",
+                           examples=["https://api.example.com/v1/orders", "/orders/{{id}}",
                                      "https://api.example.com/v1/orders?status=open"]),
         "params": fields.KeyValues(
             required=False,
             help="Query parameters, added to the URL's query in their order (encoded as a URL needs): only the ticked "
                  "rows are sent. Type name=value in the line under the table to add one; empty a name to remove its "
                  "row. Kept in step with the URL's ?query.",
-            examples=["page=2", "region={region}", "limit=100"]),
+            examples=["page=2", "region={{region}}", "limit=100"]),
         "auth": fields.Choice(
             AUTHS, default=NO_AUTH, only_if=_NO_CONNECTION,
             help="How the request proves who sends it: Basic (a user name and password, sent with the request), a "
@@ -1030,7 +1053,7 @@ class ApiRequest(Block):
                  "one; empty a name to remove its row. A value secret:NAME sends the stored secret NAME (taskloom "
                  "secret set NAME), never written in the flow. A Content-Type here replaces the one Body sets; Auth's "
                  "header replaces one of the same name here.",
-            examples=["Accept: application/json", "X-Region: {region}", "X-Api-Key: secret:orders_key"]),
+            examples=["Accept: application/json", "X-Region: {{region}}", "X-Api-Key: secret:orders_key"]),
         "body": fields.Choice(
             BODIES, default=NO_BODY,
             help="What the request sends: nothing, JSON, text or XML (written in Content), a form url-encoded or "
@@ -1038,13 +1061,13 @@ class ApiRequest(Block):
                  "input connected, the body comes from it instead (set none here)."),
         "content": fields.Code(
             "text", only_if={"body": [JSON_BODY, TEXT_BODY, XML_BODY]},
-            help="The body to send, as it is (JSON is checked before it is sent). {name} fills in a placeholder: "
-                 "write {{ and }} for the braces of JSON.",
-            examples=['{{"region": "{region}", "top": 5}}', '["north", "south"]', '<order id="{id}"/>']),
+            help="The body to send, as it is (JSON is checked before it is sent). {{name}} fills in a placeholder; "
+                 "single braces, as in JSON, are sent as typed; write {{{{ for a literal {{.",
+            examples=['{"region": "{{region}}", "top": 5}', '["north", "south"]', '<order id="{{id}}"/>']),
         "form": fields.KeyValues(required=False, label="Form", only_if={"body": [FORM_BODY]},
                                  help="The form's fields, url-encoded: only the ticked rows are sent. Type name=value "
                                       "in the line under the table to add one.",
-                                 examples=["region=north", "day={day:%Y-%m-%d}"]),
+                                 examples=["region=north", "day={{day:%Y-%m-%d}}"]),
         "parts": fields.KeyValues(required=False, files=True, label="Parts", only_if={"body": [MULTIPART]},
                                   help="The multipart form's fields: only the ticked rows are sent; a row ticked File "
                                        "sends the file at the path its value gives. Type name=value in the line under "
@@ -1060,7 +1083,7 @@ class ApiRequest(Block):
                  "or a file (saved to Save to; the output is its path)."),
         "save_to": fields.Path(label="Save to", only_if={"response_as": [AS_FILE]}, writes=True,
                                help="The file the answer is saved to, as it came (its folder is made if missing)",
-                               examples=["downloads/orders.json", "out/report_{day:%Y-%m-%d}.pdf"]),
+                               examples=["downloads/orders.json", "out/report_{{day:%Y-%m-%d}}.pdf"]),
         "success": _Statuses(default="200-299", label="Statuses that count as success",
                              help="The answer's statuses that count as success, separated by commas: any other fails "
                                   "the block, its error output carrying the status, headers and body.",

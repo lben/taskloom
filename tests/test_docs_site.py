@@ -35,6 +35,7 @@ from taskloom import __version__
 from taskloom.block import setting_label
 from taskloom.editor import docs
 from taskloom.registry import discover
+from tests.test_readme_guide import guide_parts, plain_line
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "packaging" / "docs_site.py"
@@ -279,6 +280,25 @@ def test_the_site_documents_the_built_in_blocks_only_not_the_blocks_of_the_home_
     assert "blocks-my-tools.html" not in site_files(site), "the user's own category got a page on the site"
     found = {name: [i for i in read(site, name).ids if i.startswith("my.")] for name in html_files(site)}
     assert {name: ids for name, ids in found.items() if ids} == {}, "the user's own blocks are on the site"
+
+
+@pytest.mark.invariant("RD-2")
+def test_the_sites_guide_is_docs_guide_md_section_by_section_in_its_order(site):
+    """RD-2 on the website: the sidebar's Guide list is docs/guide.md's "## " sections, in the file's order (none of
+    the README's own sections), and each one's page has its heading and a sentence of it."""
+    _, sections = guide_parts()
+    expected = [slug(heading) + ".html" for heading, _ in sections]
+    index = read(site, "index.html")
+    names = [target[0] for link in index.links if link.sidebar and (target := resolve(link.href, "index.html"))]
+    guide = list(dict.fromkeys(name for name in names if name not in ("index.html", "properties.html")
+                               and not name.startswith("blocks-")))
+    assert guide == expected, f"the site's guide is {guide}, not docs/guide.md's sections {expected}"
+    problems = []
+    for (heading, lines), name in zip(sections, expected):
+        text, sentence = norm(read(site, name).text), plain_line(lines)
+        if norm(heading) not in text or (sentence and norm(sentence) not in text):
+            problems.append(f"{name} does not show the guide's section {heading!r}")
+    assert problems == [], "\n".join(problems)
 
 
 # --- P3 / P-T1: links and anchors ------------------------------------------------------------------------------------
@@ -676,12 +696,13 @@ def test_the_pages_job_publishes_the_site_from_each_release_tag_after_the_releas
         f"the site is built into {out!r} but the upload-pages-artifact step uploads {uploaded!r}")
 
 
-def test_readme_says_where_the_site_is_how_it_is_published_and_the_one_time_pages_switch():
-    """Correction b: README says the site is at https://lben.github.io/taskloom/, that it is built by
-    packaging/docs_site.py and published from each release tag, and the one-time switch of Settings > Pages >
+@pytest.mark.invariant("RD-2")
+def test_the_guide_says_where_the_site_is_how_it_is_published_and_the_one_time_pages_switch():
+    """Correction b: the guide (docs/guide.md) says the site is at https://lben.github.io/taskloom/, that it is built
+    by packaging/docs_site.py and published from each release tag, and the one-time switch of Settings > Pages >
     Source to GitHub Actions."""
-    text = (REPO / "README.md").read_text(encoding="utf-8")
+    text = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
     sections = re.split(r"(?m)^## ", text)
     words = (SITE_URL, "docs_site.py", "tag", "Settings", "Pages", "Source", "GitHub Actions")
     assert any(all(word in section for word in words) for section in sections), (
-        f"no README section says all of {words}")
+        f"no section of the guide says all of {words}")

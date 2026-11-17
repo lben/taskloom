@@ -1,0 +1,96 @@
+# How each agreed row of docs/promises/braces.yaml is kept, and why a row is not green (read by packaging/ledger.py;
+# the reviewer checks these words against the code). A bug fix or small feature has no model to check: its rows are
+# amber, checked by tests only, and not_green says what the tests leave out.
+BR-1:
+  enforced: >-
+    split, parse and render (taskloom/params.py) are the one tokenizer of every text that is filled: parse takes
+    {{name}} or {{name:format}} with the spaces inside stripped, and render puts in format(value, format). _filled
+    (taskloom/engine.py) fills each templated setting with it, from the flow parameters and, but in SQL, the block's
+    inputs; HtmlTemplate.run (taskloom/blocks/reports.py) cuts its Template with parse, and Inspect.run its message
+    with split, through _message_source (taskloom/blocks/logic.py).
+  not_green: >-
+    Tests try the cases of the stage's table of combinations in seven kinds of setting; a value arriving at the
+    block's input is tried in an API Request's URL, Send Email, the HTML Template and Inspect, not in Write File's path
+    or an API body (SQL takes parameters only); no check tries every text or every format.
+BR-2:
+  enforced: >-
+    split's pattern (_BRACES, taskloom/params.py) starts a placeholder only at {{ not followed by another {; a single
+    brace, a lone }} and a backslash stay in the plain text as typed.
+  not_green: >-
+    Tests type JSON, CSS, ${HOME}, a regex and a lone }} in each of the seven kinds of setting; no check tries every
+    text.
+BR-3:
+  enforced: >-
+    placeholder_problems (taskloom/flow.py) gives Validate an error naming the block and the setting for a {{name}}
+    that is neither a flow parameter nor one of the block's inputs (in SQL: not a parameter), and for an empty {{}} or
+    a {{ with no }} on its line, which split refuses; HtmlTemplate.problems and Inspect.problems do the same for the
+    Template and Inspect's message. run_flow (taskloom/engine.py) refuses a flow Validate finds an error in, so
+    nothing is sent; at the run, render raises "unknown parameter {{name}}", which _filled reports with the setting.
+  not_green: >-
+    Tests try a name of nothing, an unclosed {{ and an empty {{}} in each kind of setting, at Validate and at the run;
+    no check tries every way a placeholder can be written wrong.
+BR-4:
+  enforced: >-
+    validate (taskloom/flow.py) warns "{name} is plain text: did you mean {{name}}?" for each name single_braced
+    (taskloom/params.py) finds in a single-brace {name} or {name:format} outside the placeholders, when a {{name}}
+    there could name it: a flow parameter or one of the block's inputs (in SQL: a parameter); in every templated
+    setting and in HTML and f-string code. split leaves it as plain text, so the run sends it as typed.
+  not_green: >-
+    Tests try a parameter's and an input's name in single braces in each kind of setting, with taskloom validate and
+    with F7 in the editor; no check tries every text.
+BR-5:
+  enforced: >-
+    _filled (taskloom/engine.py) fills every setting whose field is templated (fields.Field.template in
+    taskloom/block.py: text, path, number, list and name/value fields, and code in SQL or text), so a new field of
+    these kinds takes the rule; the HTML Template's Template and Inspect's message are filled by their blocks with the
+    same tokenizer. fields.Code leaves Python code untemplated, so it is not filled.
+  not_green: >-
+    A test walks every templated setting of the built-in blocks; blocks of your own and plugins are not walked, and no
+    check tries every text.
+BR-6:
+  enforced: >-
+    render (taskloom/params.py) cuts the text once and appends each value as it formats it, never reading it again;
+    HtmlTemplate.run places each value the same way, and Inspect's message is one f-string, evaluated once.
+  not_green: >-
+    Tests give a parameter the value {{q}} (q being a parameter too) or }} in each kind of setting; no check tries
+    every value.
+BR-7:
+  enforced: >-
+    from_curl (taskloom/blocks/servers.py) keeps the body as the command has it, JSON or text, not indented again, and
+    _literal writes each {{ in it as {{{{, which the run's split gives back as {{, so the same bytes are sent.
+  not_green: >-
+    Tests import a JSON body with nested braces and one holding {{x}}, and run each; no check tries every curl
+    command.
+BR-8:
+  enforced: >-
+    The blocks' help texts, examples and starter texts, docs.PLACEHOLDERS (taskloom/editor/docs.py, the card's line on
+    placeholders), the hints of Properties, the flows in examples/, README.md and docs/guide.md are written with
+    {{name}}; nothing in the code writes them.
+  not_green: >-
+    Tests read the help, examples and starter texts of every built-in block, the documentation pages, README.md,
+    docs/guide.md and what Properties shows for each built-in block, and validate each shipped example flow; a
+    plugin's texts are not read.
+BR-9:
+  enforced: >-
+    split (taskloom/params.py) takes {{{{ first, as a literal {{, and leaves a backslash as plain text; each error
+    about braces ends with LITERAL_BRACES, "write {{{{ for a literal {{".
+  not_green: >-
+    Tests try {{{{p}}, a backslash before a placeholder and a Windows path in each kind of setting, and a Mermaid
+    hexagon in Inspect's Markdown; no check tries every text.
+BR-10:
+  enforced: >-
+    _message_source (taskloom/blocks/logic.py) writes Inspect's message as a Python f-string: its plain text with
+    each brace doubled, each {{expression}} as {expression}. Inspect.run evaluates it with value, params, each flow
+    parameter by its name and the expression functions (secrets masked); Inspect.problems checks at Validate that each
+    name in it is one of those or a Python builtin. The message's help says single braces are plain text.
+  not_green: >-
+    Tests try {{value}}, {{len(value)}}, {{value["id"]}}, a parameter by its name and single braces in one message,
+    and read Inspect's help; no check tries every Python expression.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# braces.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/braces.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import html as html_lib
 import re
-import string
 import uuid
 from pathlib import Path
 
 import polars as pl
 
 from .. import mail
-from ..block import IDENTIFIER, Block, fields, ports
+from .. import params as P
+from ..block import Block, fields, ports
 from ..report import CHART_KINDS, SERIES, Html, html_table, image_tag, render_chart
 from ..table import Table
 from .data import EXCEL_MAX_ROWS
@@ -89,7 +89,7 @@ class Chart(Block):
 
 
 def _shown(value, max_rows: int) -> Html:
-    """A value where a template says {name}: HTML (e.g. from another template) as it is, with its pictures; a table
+    """A value where a template says {{name}}: HTML (e.g. from another template) as it is, with its pictures; a table
     as an Outlook-safe table of at most max_rows rows; a picture inline; None as nothing; a list item by item, one
     per line; anything else as its text, escaped (also its quotes, for an attribute), its line breaks as <br>."""
     if isinstance(value, (list, tuple)):
@@ -108,10 +108,10 @@ def _text(text: str) -> Html:
 
 
 def _placed(value, name: str, spec: str, max_rows: int) -> Html:
-    """A value where a template says {name:spec} (spec empty: {name}; spec html: text as the HTML it holds)."""
+    """A value where a template says {{name:spec}} (spec empty: {{name}}; spec html: text as the HTML it holds)."""
     if not spec or value is None:
         return _shown(value, max_rows)
-    where = f"Template: {{{name}:{spec}}}"
+    where = f"Template: {{{{{name}:{spec}}}}}"
     if spec == "html":
         if isinstance(value, Html):
             return value
@@ -126,10 +126,9 @@ def _placed(value, name: str, spec: str, max_rows: int) -> Html:
         raise ValueError(f"{where}: {e}") from None
 
 
-BRACES = "write {{ and }} for literal braces"
-# A note in a Template, <!-- ... -->: left out of the email, and a {name} in it shows nothing. Kept as written: Outlook's
-# conditional comments (<!--[if mso]> ... <![endif]-->, <!--[if !mso]><!--> ... <!--<![endif]-->), and <style>
-# elements, whose CSS may be inside <!-- -->.
+# A note in a Template, <!-- ... -->: left out of the email, and a {{name}} in it shows nothing. Kept as written:
+# Outlook's conditional comments (<!--[if mso]> ... <![endif]-->, <!--[if !mso]><!--> ... <!--<![endif]-->), and
+# <style> elements, whose CSS may be inside <!-- -->.
 _NOTES = re.compile(r"(?is)(<style\b.*?</style>|<!--(?:\[if\b|<!\[endif\]).*?-->)|<!--.*?-->")
 
 
@@ -146,17 +145,17 @@ class HtmlTemplate(Block):
     outputs = {"html": ports.Any()}
     config = {
         "names": fields.SourceNames("data", label="Inputs", help=(
-            "The name of each output connected to data, for the Template, where {name} shows it: letters, digits "
+            "The name of each output connected to data, for the Template, where {{name}} shows it: letters, digits "
             "and _, not starting with a digit. At first its block's name (block_port if that is taken); left empty, "
             "it gets that name again."), examples=["chart", "my_table", "input1"]),
         "template": fields.Code("html", default="", help=(
-            "The email body, in HTML. {name} shows an input or a flow parameter; {name:format} formats a number or "
-            "date, e.g. {total:,.2f} or {day:%d %B %Y}; {name:html} puts text in as HTML, as it is; write {{ and }} "
-            "for literal braces. Enter makes no new line in the email: use <br> (New line). Empty: every input in "
-            "turn."),
+            "The email body, in HTML. {{name}} shows an input or a flow parameter; {{name:format}} formats a number "
+            "or date, e.g. {{total:,.2f}} or {{day:%d %B %Y}}; {{name:html}} puts text in as HTML, as it is. Single "
+            "braces, as in CSS, are plain text; write {{{{ for a literal {{. Enter makes no new line in the email: use "
+            "<br> (New line). Empty: every input in turn."),
                                 examples=["<b>Daily sales</b><br>Good morning, the figures are below.",
-                                          "Hi team, please see below the chart<br>{chart}<br>thank you",
-                                          "<h2>Sales</h2>{chart}"]),
+                                          "Hi team, please see below the chart<br>{{chart}}<br>thank you",
+                                          "<h2>Sales</h2>{{chart}}"]),
         "max_rows": fields.Int(default=500, minimum=1, label="Max table rows",
                                help="Emails get slow and get clipped with very long tables",
                                examples=["500", "100", "50"]),
@@ -168,12 +167,12 @@ class HtmlTemplate(Block):
   Write the email body in HTML. Enter makes no new line in the email; <br> does:
     <b>Daily sales</b><br>Good morning, the figures are below.
 
-  {name} shows an input (connected to data, named as in Inputs) or a flow
+  {{name}} shows an input (connected to data, named as in Inputs) or a flow
   parameter. A table shows as a table and a chart as its picture:
-    Hi team, please see the chart below<br>{chart}
+    Hi team, please see the chart below<br>{{chart}}
 
-  {name:format} formats a number or a date; write {{ and }} for literal braces:
-    Total {total:,.2f} on {day:%d %B %Y}
+  {{name:format}} formats a number or a date; single braces are plain text:
+    Total {{total:,.2f}} on {{day:%d %B %Y}}
 
   What goes out: html, the email body. With no body, it shows every input in turn.
 -->"""}
@@ -191,17 +190,14 @@ class HtmlTemplate(Block):
                 found.append(f"Inputs: {name} (from {', '.join(using)}) is also a flow parameter; "
                              "give the input another name")
         try:
-            placeholders = [(name, conversion) for _, name, _, conversion
-                            in string.Formatter().parse(_without_notes(config["template"])) if name is not None]
-        except ValueError as e:  # an unmatched brace
-            return found + [f"Template: {e}; {BRACES}"]
+            placeholders = [name for _, name, _ in P.parse(_without_notes(config["template"])) if name is not None]
+        except ValueError as e:  # e.g. a {{ with no }}
+            return found + [f"Template: {e}"]
         listed = ", ".join(dict.fromkeys(names.values())) or "none"
-        for name, conversion in placeholders:
-            if conversion is not None or not IDENTIFIER.fullmatch(name):
-                written = "{" + name + (f"!{conversion}" if conversion is not None else "") + "}"
-                found.append(f"Template: '{written}' is not a name; {BRACES}")
-            elif name not in names.values() and name not in params:
-                found.append(f"Template: {{{name}}} is not an input or a flow parameter (inputs: {listed}; {BRACES})")
+        for name in placeholders:
+            if name not in names.values() and name not in params:
+                found.append(f"Template: {{{{{name}}}}} is not an input or a flow parameter (inputs: {listed}; "
+                             f"{P.LITERAL_BRACES})")
         return list(dict.fromkeys(found))
 
     def run(self, ctx, data=None):
@@ -215,7 +211,7 @@ class HtmlTemplate(Block):
         names = fields.SourceNames.in_effect(c.names, list(data), ctx.params)
         values = {**ctx.params, **{name: data[source] for source, name in names.items()}}
         shown, parts = {}, []
-        for text, name, spec, _ in string.Formatter().parse(template):
+        for text, name, spec in P.parse(template):
             parts.append(text)
             if name is not None:
                 if (name, spec) not in shown:  # each once: a chart shown twice is attached once
@@ -231,9 +227,9 @@ class ToExcel(Block):
     category = "Reports"
     outputs = {"file": ports.Any()}
     config = {
-        "path": fields.Path(help="e.g. reports/sales_{day:%Y-%m-%d}.xlsx", files=["Excel workbook (*.xlsx)"],
+        "path": fields.Path(help="e.g. reports/sales_{{day:%Y-%m-%d}}.xlsx", files=["Excel workbook (*.xlsx)"],
                             writes=True,
-                            examples=["reports/sales_{day:%Y-%m-%d}.xlsx", "out/report.xlsx"]),
+                            examples=["reports/sales_{{day:%Y-%m-%d}}.xlsx", "out/report.xlsx"]),
         "sheets": fields.Names(default=["table"], help="One input and sheet per name",
                                examples=["table", "sales, totals"]),
         "chart": fields.Choice(["none"] + list(_EXCEL_CHART_TYPES), default="none", help="A native Excel chart"),
@@ -324,12 +320,13 @@ class SendEmail(Block):
                           examples=["ana@example.com", "ana@example.com, ops@example.com"]),
         "cc": fields.List(default=[], help="Addresses that get a copy",
                           examples=["lead@example.com", "lead@example.com, audit@example.com"]),
-        "subject": fields.Text(required=False, help="e.g. Daily sales {day:%Y-%m-%d}; a connected 'subject' input wins",
-                               examples=["Daily sales {day:%Y-%m-%d}", "Nightly load finished"]),
+        "subject": fields.Text(required=False,
+                               help="e.g. Daily sales {{day:%Y-%m-%d}}; a connected 'subject' input wins",
+                               examples=["Daily sales {{day:%Y-%m-%d}}", "Nightly load finished"]),
         "message": fields.Text(required=False, help="Text shown above the body",
                                examples=["Good morning, here are yesterday's sales.", "The load finished."]),
         "save_copy": fields.Path(required=False, writes=True, help="Also save the email as a .eml file",
-                                 examples=["out/email_{day:%Y-%m-%d}.eml", "sent/report.eml"]),
+                                 examples=["out/email_{{day:%Y-%m-%d}}.eml", "sent/report.eml"]),
     }
 
     def run(self, ctx, body=None, attachments=None, subject=None):

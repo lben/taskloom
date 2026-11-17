@@ -45,7 +45,7 @@ class fields:
     """Config field types. The editor builds the properties panel from these."""
 
     class Field:
-        # Templated fields get `{name}` / `{name:format}` placeholders filled in as the block runs (engine._filled):
+        # Templated fields get `{{name}}` / `{{name:format}}` placeholders filled in as the block runs (engine._filled):
         # with the flow parameter `name` or, but in SQL code, the value arriving at the block's own input `name`.
         # Code is templated in SQL and in text (e.g. a web request's body).
         template = False
@@ -61,7 +61,7 @@ class fields:
             # {another setting of the block: the values of it this one is for}, e.g. {"kind": ["choice"]}; empty: it
             # is for every value. See applies.
             self.only_if = dict(only_if or {})
-            # A path the block writes or copies to: Validate warns when one inside a Loop has no {placeholder} (every
+            # A path the block writes or copies to: Validate warns when one inside a Loop has no {{placeholder}} (every
             # item would write to the same file).
             self.writes = writes
 
@@ -248,8 +248,8 @@ class fields:
 
 
 def has_placeholders(value) -> bool:
-    """Whether a setting's value is a text with {name} placeholders (or braces) in it."""
-    return isinstance(value, str) and ("{" in value or "}" in value)
+    """Whether a setting's value is a text with {{name}} placeholders in it."""
+    return isinstance(value, str) and "{{" in value
 
 
 def setting_label(key: str, f: fields.Field) -> str:

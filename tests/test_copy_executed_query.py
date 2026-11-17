@@ -149,7 +149,7 @@ def assert_says_why_not(item: dict, menus):
 SUM_SQL = (
     "select :note as note, :region as region, :top as top, :ratio as ratio, :flag as flag, :day as day_v,"
     " :at as at_v,\n"
-    "       'sales_{day:%Y%m%d}' as source, 'why?' as question, ':region' as literal, 1::varchar as cast_text"
+    "       'sales_{{day:%Y%m%d}}' as source, 'why?' as question, ':region' as literal, 1::varchar as cast_text"
     "  -- any :top? rows\n"
     "from (values ('north'), ('south'), ('east')) t(r)\n"
     "where r in (:regions) /* is :flag ? here */"

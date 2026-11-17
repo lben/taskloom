@@ -342,13 +342,13 @@ WRONG_KINDS = {
     "connection: not in connections.yaml": ("label: x, server: nowhere", "server",
                                             "no connection named 'nowhere' in connections.yaml"),
     "connection: of another kind": ("label: x, server: mailer", "server", "connection 'mailer' is smtp, expected ssh"),
-    "text: an unknown parameter": ("label: '{missing}'", "label",
-                                   "{missing} is neither a flow parameter nor an input of this block"),
-    "text: a lone brace": ("label: 'a { b'", "label", "write {{ and }} for literal braces"),
-    "path: an unknown parameter": ("label: x, where: 'out/{day:%Y}/{nope}.txt'", "where",
-                                   "{nope} is neither a flow parameter nor an input of this block"),
+    "text: an unknown parameter": ("label: '{{missing}}'", "label",
+                                   "{{missing}} is neither a flow parameter nor an input of this block"),
+    "text: a lone brace": ("label: 'a {{ b'", "label", "write {{{{ for a literal {{"),
+    "path: an unknown parameter": ("label: x, where: 'out/{{day:%Y}}/{{nope}}.txt'", "where",
+                                   "{{nope}} is neither a flow parameter nor an input of this block"),
     "sql: an unknown bind parameter": ("label: x, query: 'select :nope'", "query", "unknown bind parameter :nope"),
-    "sql: an unknown parameter": ("label: x, query: 'select {nope}'", "query", "unknown parameter {nope}"),
+    "sql: an unknown parameter": ("label: x, query: 'select {{nope}}'", "query", "unknown parameter {{nope}}"),
     "required: left out": ("text: x", "label", "Label is required"),
 }
 
@@ -365,9 +365,9 @@ def test_a_setting_of_the_wrong_kind_is_refused_naming_the_block_the_setting_and
 
 
 def test_each_kind_of_setting_reaches_the_block_as_written_and_one_left_out_gets_its_default(env):
-    flow = kinds_flow(env, "label: 'Día {day:%d}', text: '{{literal}}', count: 3, ratio: 2, flag: true, mode: slow, "
+    flow = kinds_flow(env, "label: 'Día {{day:%d}}', text: '{literal}', count: 3, ratio: 2, flag: true, mode: slow, "
                            "items: [1, a], names: [x_1], outs: [result], code: pass, query: 'select :day', "
-                           "where: 'out/{day:%Y}/r.txt', server: appserver")
+                           "where: 'out/{{day:%Y}}/r.txt', server: appserver")
     flow.write_text(flow.read_text(encoding="utf-8") + "  plain: {type: test.kinds, config: {label: only}}\n",
                     encoding="utf-8")
 
@@ -401,7 +401,7 @@ TEMPLATED = """
 
 
 def test_parameters_fill_a_setting_with_their_format_and_double_braces_stay_braces(env):
-    flow = write(env, TEMPLATED.replace("PATH", "out/{region} {day:%Y-%m-%d}_{{v}}_{n:03d}.csv"))
+    flow = write(env, TEMPLATED.replace("PATH", "out/{{region}} {{day:%Y-%m-%d}}_{v}_{{n:03d}}.csv"))
 
     assert env.taskloom("validate", flow).returncode == 0
     first = env.taskloom("run", flow)
@@ -414,8 +414,8 @@ def test_parameters_fill_a_setting_with_their_format_and_double_braces_stay_brac
 
 
 def test_empty_braces_in_a_setting_are_refused_before_anything_runs(env):
-    # {0} is refused as an unknown parameter; {} is no parameter either.
-    flow = write(env, TEMPLATED.replace("PATH", "out/{}.csv"))
+    # {{0}} is refused as not a name; {{}} is no parameter either.
+    flow = write(env, TEMPLATED.replace("PATH", "out/{{}}.csv"))
 
     validated, ran = env.taskloom("validate", flow), env.taskloom("run", flow)
 
@@ -443,9 +443,10 @@ def test_every_duration_the_error_message_suggests_works_as_a_timeout_and_a_retr
 
 # --- what users read: the README's flow snippets and the examples folder ------------------------------------------
 
-def test_the_flow_schedule_notify_and_connection_snippets_of_the_readme_are_a_valid_flow(env):
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    snippets = re.findall(r"```yaml\n(.*?)```", readme, re.S)
+@pytest.mark.invariant("RD-2")
+def test_the_flow_schedule_notify_and_connection_snippets_of_the_guide_are_a_valid_flow(env):
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    snippets = re.findall(r"```yaml\n(.*?)```", guide, re.S)
     [flow_text] = [s for s in snippets if s.startswith("params:")]
     [notify] = [s for s in snippets if s.startswith("notify:")]
     [schedules] = [s for s in snippets if s.startswith("triggers:")]

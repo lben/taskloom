@@ -88,7 +88,7 @@ def test_inspect_shows_what_passes_through(env):
             config: {inputs: [], code: "output = {'rows': 3, 'region': 'EU'}"}
           look:
             type: logic.inspect
-            config: {message: "{len(value)} fields, region {value['region']}"}
+            config: {message: "{{len(value)}} fields, region {{value['region']}}"}
           use:
             type: logic.python
             config: {outputs: [], code: "assert input['rows'] == 3"}

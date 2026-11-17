@@ -1,0 +1,32 @@
+# What must always be true of zooming a pane, as agreed with the maintainer in chat on 2026-11-16.
+# Each row is checked by the tests marked @pytest.mark.invariant("ZM-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+# The panes: code boxes, Log, Data preview, Run history, the blocks tree, the docs, the canvas.
+feature: Zoom the pane under the pointer
+agreed: 2026-11-16
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    words: "Ctrl + / Ctrl - zooms the pane under the mouse pointer"
+  - date: 2026-11-16
+    # The rows below, and Ctrl + mouse wheel doing the same as the keys over a text pane (ZM-1).
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_zoom]
+rows:
+  ZM-1: >-
+    Ctrl with +, = or - (main keys and number pad) changes the size of the pane under the mouse pointer, wherever the
+    keyboard focus is, and Ctrl 0 puts that pane back to its normal size. Ctrl and the mouse wheel over a text pane do
+    the same as the keys.
+  ZM-2: >-
+    Over anything else the keys do nothing: the plain fields of the Properties form, menus, toolbars.
+  ZM-3: >-
+    Each kind of pane keeps its size when Taskloom is closed and opened again. The canvas keeps its zoom per flow until
+    the flow is closed, as before.
+  ZM-4: >-
+    There is a smallest and a largest size; at either end nothing more happens.
+  ZM-5: >-
+    Zoom changes only the size: the text, the selection, the top visible line, find highlights, line numbers and tab
+    stops stay right. Pictures and Mermaid drawings in the Log keep their size in this version, and the docs say so.
+  ZM-6: >-
+    A code box that is rebuilt (another block selected, another theme) has the remembered size.

@@ -346,8 +346,8 @@ def test_the_documentation_website(proof, win, qtbot, tmp_path, monkeypatch):
     p.idea("A documentation website in the Read the Docs layout, with a search box, made from the very pages of Help "
            "> Documentation; GitHub publishes it at https://lben.github.io/taskloom/ after each release.")
     p.idea("One command, python packaging/docs_site.py site, writes the website into the folder site: the guide (the "
-           "README, a page for each of its sections), the Properties panel page and a page for each kind of block, "
-           "under the same names and with the same anchors as in the app's Documentation column. It documents the "
+           "guide file docs/guide.md, a page for each of its sections), the Properties panel page and a page for each "
+           "kind of block, under the same names and with the same anchors as in the app's Documentation column. It documents the "
            "blocks that come with Taskloom, not those in the blocks folder of the computer that makes it.")
     p.idea("Every page has the same frame. On the left, a sidebar: Taskloom and its version, the search box, "
            "Contents, the Guide and the Reference lists, and under the page you are on, its sections. On the right, "

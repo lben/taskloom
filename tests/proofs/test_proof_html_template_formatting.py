@@ -174,7 +174,7 @@ def test_formatting_buttons_write_outlook_safe_html(proof, smtp, env, win, qtbot
            "puts each list item on its own line.")
     p.why_simplest("The buttons only type for you. What they write is ordinary text in the box, the same as if you had "
                    "typed the tags, so the rest stays as it was: the box is the same plain box, you see exactly the "
-                   "HTML you wrote, and the email carries it as you wrote it (only the {name} places are filled in, "
+                   "HTML you wrote, and the email carries it as you wrote it (only the {{name}} places are filled in, "
                    "and Send Email puts it in the email's layout and adds the font and spacing to each element), "
                    "and the Template is saved as before, when you leave the box or press Run or Save.")
     p.why_simplest("The tags are the few that every mail program shows, Outlook too: <b>, <i>, <u>, <h2>, <ul>, <ol>, "
@@ -211,8 +211,8 @@ def test_formatting_buttons_write_outlook_safe_html(proof, smtp, env, win, qtbot
            "gets neither that layout nor these rules.")
     p.fits("The plain-text part was already made from the HTML, with a line break at each <br>, paragraph, table "
            "row and heading; now also at the end of each list item.")
-    p.fits("The buttons work with HTML Template's {name} placeholders: select {total} and press B, and the total is "
-           "shown in bold.")
+    p.fits("The buttons work with HTML Template's {{name}} placeholders: select {{total}} and press B, and the total "
+           "is shown in bold.")
 
     assert win.home.root == env.home, "the editor and the test mail server's connection use the same Taskloom folder"
     flow = env.root / "weekly-email.yaml"

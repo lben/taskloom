@@ -394,11 +394,11 @@ def test_import_from_curl_fills_in_the_request(proof, win, qtbot, tmp_path, monk
                                              (True, "X-API-Key", f"secret:{KEY_NAME}")])
     scroll_to(win, "Method")
     body = [field(win, "Body"), content_box(win)]
-    p.shot(win, "① Body is JSON, and ② Content holds the data of -d, pretty-printed. Its braces are written twice, "
-                "{{ and }}: in a setting, {name} fills in a placeholder, and a brace written twice is sent as one.",
+    p.shot(win, "① Body is JSON, and ② Content holds the data of -d as the command has it. Its braces are single: "
+                "in a setting, {{name}} fills in a placeholder, and a single brace is sent as it is.",
            highlight=body, badges=True, zoom=body)
-    p.check("Body is JSON, pretty-printed (a line for each field, indented), its braces written {{ and }}",
-            now["Body"] == "JSON" and now["Content"] == '{{\n  "region": "north",\n  "day": "2026-11-03"\n}}')
+    p.check("Body is JSON, the data of -d exactly as the command has it, its braces single",
+            now["Body"] == "JSON" and now["Content"] == '{"region": "north", "day": "2026-11-03"}')
 
     # --- 3. a request already there: Approve or Cancel; one Undo ------------------------------------------------------
     p.step("Paste another command into orders' code box, now that orders is filled in, and press Fill in. A box asks "

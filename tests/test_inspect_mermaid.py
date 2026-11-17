@@ -254,7 +254,7 @@ def test_a_mermaid_fence_in_an_inspect_message_is_drawn_in_the_log(win, qtbot, t
     flow = write_flow(tmp_path / "steps.yaml", {
         "manual": {"type": "trigger.manual"},
         "make": python("output = 'nightly'"),
-        "look": look(message="## Run {value}\n\n" + fence(SMALL) + "\nAll steps.", markdown=True),
+        "look": look(message="## Run {{value}}\n\n" + fence(SMALL) + "\nAll steps.", markdown=True),
     }, ["manual.start -> make.after", "make.output -> look.value"])
 
     run_in_editor(win, qtbot, flow)
@@ -540,28 +540,30 @@ def sentences_about_mermaid(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+", " ".join(text.split())) if "Mermaid" in s]
 
 
-def readme_inspect() -> str:
-    """README's paragraph about the Inspect block, with its sub-points, up to the next point."""
-    text = (REPO / "README.md").read_text(encoding="utf-8")
+def guide_inspect() -> str:
+    """The guide's paragraph about the Inspect block, with its sub-points, up to the next point."""
+    text = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
     start = text.index("**Inspect** block")
     end = re.search(r"\n- ", text[start:])
     return text[start:start + end.start()] if end else text[start:]
 
 
-def test_the_help_the_description_and_readme_say_mermaid_diagrams_are_drawn():
-    """Decision 6: Show as Markdown's help, the Inspect block's description and README's Inspect paragraph say that
-    Mermaid diagrams are drawn; phase 1's "Mermaid diagrams show as their text" is gone."""
+@pytest.mark.invariant("RD-2")
+def test_the_help_the_description_and_the_guide_say_mermaid_diagrams_are_drawn():
+    """Decision 6: Show as Markdown's help, the Inspect block's description and the guide's Inspect paragraph say that
+    Mermaid diagrams are drawn; phase 1's "Mermaid diagrams show as their text" is gone (from the README too)."""
     from taskloom.blocks.logic import Inspect
 
     for where, text in (("help", Inspect.config["markdown"].help), ("description", Inspect.description),
-                        ("README", readme_inspect())):
+                        ("guide", guide_inspect())):
         said = sentences_about_mermaid(text)
         assert said, f"the {where} does not mention Mermaid: {text}"
         assert any(re.search(r"\bdraw", s, re.I) for s in said), f"the {where} does not say they are drawn: {said}"
         flat = " ".join(text.split())
         assert "show as their text" not in flat and "no offline Mermaid engine" not in flat, (where, text)
-    readme = " ".join((REPO / "README.md").read_text(encoding="utf-8").split())
-    assert "no offline Mermaid engine" not in readme and "Mermaid diagrams show as their text" not in readme
+    for path in (REPO / "README.md", REPO / "docs" / "guide.md"):
+        written = " ".join(path.read_text(encoding="utf-8").split())
+        assert "no offline Mermaid engine" not in written and "Mermaid diagrams show as their text" not in written
 
 
 # --- 1, 5: the packaged builds -----------------------------------------------------------------------------------

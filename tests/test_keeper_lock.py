@@ -278,9 +278,10 @@ def test_where_the_keeper_cannot_tell_which_process_holds_the_lock_it_stops_noth
         end(remote, stuck)
 
 
-def test_the_readme_says_the_keeper_replaces_a_hung_scheduler():
-    # Required behaviour 4: README's keeper paragraph says it replaces a hung scheduler.
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    about_keeper = [p for p in readme.split("\n\n") if "keeper" in p and not p.startswith("|")]  # (not the table)
+@pytest.mark.invariant("RD-2")
+def test_the_guide_says_the_keeper_replaces_a_hung_scheduler():
+    # Required behaviour 4: the guide's keeper paragraph says it replaces a hung scheduler.
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    about_keeper = [p for p in guide.split("\n\n") if "keeper" in p and not p.startswith("|")]  # (not the table)
 
     assert [p for p in about_keeper if "hung" in p.lower()], about_keeper

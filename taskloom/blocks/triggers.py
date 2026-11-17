@@ -15,7 +15,7 @@ class KeptRuns(fields.Field):
         return str(value).strip()
 
 
-# Every start block's: how the runs it starts are kept (see Keep runs in the README).
+# Every start block's: how the runs it starts are kept (see Keep runs in docs/guide.md).
 KEEP_RUNS = {
     "keep": KeptRuns(required=False, label="Keep runs",
                      help="As in Settings (keep_runs_for), all of them, the last N, or for a time"),

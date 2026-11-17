@@ -49,7 +49,7 @@ from tests.test_service_off import stays_off_at_login  # noqa: E402
 
 REAL_POPEN = subprocess.Popen
 UTC = dt.timezone.utc
-README = Path(__file__).resolve().parents[1] / "README.md"
+GUIDE = Path(__file__).resolve().parents[1] / "docs" / "guide.md"
 TURN_OFF = "Turn off the scheduler service?"
 CATCH_UP = "Catch up missed runs?"
 ANSWERS = "answers a dialog"  # (the name of answer_when_shown's timers)
@@ -1100,8 +1100,8 @@ def test_runs_waiting_their_turn_start_after_the_service_process_is_killed(env):
 # --- SCH-17: the README --------------------------------------------------------------------------------------------
 
 def schedules_prose() -> list[str]:
-    """The paragraphs of the README's Schedules section, in plain words (its examples left out), lower case."""
-    text = README.read_text(encoding="utf-8")
+    """The paragraphs of the guide's Schedules section, in plain words (its examples left out), lower case."""
+    text = GUIDE.read_text(encoding="utf-8")
     section = text[text.index("## Schedules"):]
     section = re.sub(r"```.*?```", "", section[:section.index("\n## ", 1)], flags=re.DOTALL)
     return [" ".join(p.split()).lower() for p in section.split("\n\n") if p.strip()]
@@ -1115,7 +1115,8 @@ def schedules_prose() -> list[str]:
     ("saved waiting runs", [r"wait", r"saved", r"restart|crash"]),
     ("clock changes", [r"daylight|summer time", r"clock"]),
 ], ids=["missed and 100", "overlaps", "turning off", "saved runs", "clock changes"])
-def test_the_readme_explains_where_the_scheduler_might_surprise_you(case, patterns):
+@pytest.mark.invariant("RD-2")
+def test_the_guide_explains_where_the_scheduler_might_surprise_you(case, patterns):
     explained = [p for p in schedules_prose() if all(re.search(pattern, p) for pattern in patterns)]
 
-    assert explained, f"no paragraph of the README's Schedules section explains {case} (looked for {patterns})"
+    assert explained, f"no paragraph of the guide's Schedules section explains {case} (looked for {patterns})"

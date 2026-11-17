@@ -27,6 +27,7 @@ from ..table import Table
 from .canvas import STATUS_COLORS
 from .panels import MONO
 from .theme import THEMES
+from .zoom import mark
 
 
 def answered(dialog: QDialog) -> int:
@@ -1116,6 +1117,7 @@ class BlockResultsDialog(QDialog):
         layout.addWidget(self.table, 2)
         self.values = QPlainTextEdit(readOnly=True)  # what the selected run's outputs held
         self.values.setFont(MONO)  # e.g. a table's rows, in columns
+        mark(self.values, "results")
         self.values.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self.values, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)

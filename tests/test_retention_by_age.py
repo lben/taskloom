@@ -292,11 +292,13 @@ def test_settings_show_5_years_when_settings_yaml_does_not_say(win):
 
 # --- 5. README ------------------------------------------------------------------------------------------------
 
-def test_the_readme_describes_keep_runs_for_and_no_longer_keep_runs_or_history_days():
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    [row] = [line for line in readme.splitlines() if line.startswith("| `settings.yaml` |")]
+@pytest.mark.invariant("RD-2")
+def test_the_guide_describes_keep_runs_for_and_neither_it_nor_the_readme_tells_of_keep_runs_or_history_days():
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    [row] = [line for line in guide.splitlines() if line.startswith("| `settings.yaml` |")]
 
     assert "keep_runs_for" in row
-    text = readme.replace(row, "")
+    text = guide.replace(row, "")
     assert "keep_runs_for" in text and "5 years" in text
-    assert not re.search(r"\bkeep_runs\b|\bhistory_days\b", readme)
+    for written in (guide, (REPO / "README.md").read_text(encoding="utf-8")):
+        assert not re.search(r"\bkeep_runs\b|\bhistory_days\b", written)

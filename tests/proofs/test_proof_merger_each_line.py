@@ -579,7 +579,7 @@ def test_failed_runs_run_again_from_the_merger_in_the_order_you_choose_and_valid
     p.idea("Validate (F7) refuses, before any run, a connection into a block after the Merger that closes the runs "
            "from one of the runs: that block runs once, after all of them, and what each run has reaches it only "
            "through that Merger. It warns about a file path that a block run once per line writes to without a "
-           "{placeholder}: each line's run would write over the one before.")
+           "{{placeholder}}: each line's run would write over the one before.")
     p.why_simplest("It is the rule a Loop follows for its items, with lines for items: the runs that succeeded keep "
                    "what they gave with the run, and Run from this block on, on the Merger, runs again only the others. "
                    "Nothing to choose by hand.")
@@ -869,8 +869,8 @@ def test_failed_runs_run_again_from_the_merger_in_the_order_you_choose_and_valid
         refused_edge = (f"edge {TAKES_A_RUN}: summary runs once, after gather, which closes the runs merge makes once "
                         "per line, but takes from report, which has one line's run: what each run has reaches it only "
                         "through gather (connect its output instead)")
-        warned = ("save_rows: Path: every line of merge writes to out/rows.csv (it has no {placeholder}, so each line's "
-                  "run writes over what the one before wrote)")
+        warned = ("save_rows: Path: every line of merge writes to out/rows.csv (it has no {{placeholder}}, so each "
+                  "line's run writes over what the one before wrote)")
         p.shot(win, "① rows makes a one-row table of each line, and save_rows (a Write File) writes it to "
                     "out/rows.csv: one path for every line. ② report's output also goes to summary's latest input.",
                highlight=[["rows", "save_rows"], ["report", "summary"]], badges=True, zoom=list(tab.doc.blocks))

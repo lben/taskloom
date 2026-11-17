@@ -444,17 +444,6 @@ def one(items: list, what: str):
     return items[0]
 
 
-def json_of(text: str):
-    """The JSON a body box shows: as written, or with its braces doubled as other settings' are, so that no {name}
-    is read as a placeholder (which of the two is left to the change); None if not JSON."""
-    for written in (text, text.replace("{{", "{").replace("}}", "}")):
-        try:
-            return json.loads(written)
-        except ValueError:
-            pass
-    return None
-
-
 # --- 1. the section: at the top, a code box that colours curl, Fill in ------------------------------------------
 
 def above_it(win, box: QGroupBox, block: str) -> list[str]:
@@ -514,7 +503,7 @@ DOCUMENTATION = """curl -X POST "{base}/orders?status=open&limit=2" \\
 
 def test_a_curl_from_documentation_fills_in_the_request_it_makes_with_the_password_as_a_stored_secret(win, tmp_path):
     """Spec 2 (bash: backslash line continuations, single and double quotes), 3 (-X; the URL and its query into
-    Params; -H into Headers; -d JSON into Body, recognised and pretty-printed; -u into Basic auth), 4 (the password
+    Params; -H into Headers; -d JSON into Body, recognised and kept as written; -u into Basic auth), 4 (the password
     is not written into the flow: Fill in asks for a secret name, suggesting one, stores the password under it, and
     the block uses it) and 6 (it says what it filled): the user's case, on a block just added (nothing to replace:
     no confirmation). Saved and run, the block sends the request the curl command sends."""
@@ -531,10 +520,9 @@ def test_a_curl_from_documentation_fills_in_the_request_it_makes_with_the_passwo
             assert any(w in said.lower() for w in words), f"it does not say it filled {words[0]}: {said!r}"
         rows = table_rows(win)
         assert has_row(rows, "status", "open") and has_row(rows, "limit", "2"), f"the query is not in Params: {rows}"
-        pretty = [t for t in text_boxes(win) if json_of(t) == {"item": "widget", "count": 2}]
-        assert any(len(t.strip().splitlines()) > 1 and all(line.startswith((" ", "\t"))
-                                                           for line in t.strip().splitlines()[1:-1]) for t in pretty), \
-            f"the body is not shown as pretty-printed JSON: {text_boxes(win)}"
+        # BR-7: the body is kept exactly as it was in the cURL command (not pretty-printed).
+        assert '{"item": "widget", "count": 2}' in text_boxes(win), \
+            f"the body is not shown as the cURL command has it: {text_boxes(win)}"
         assert chosen(win, "json"), f"Body is not JSON: {combo_texts(win)}"
         assert chosen(win, "basic"), f"Auth is not Basic: {combo_texts(win)}"
 

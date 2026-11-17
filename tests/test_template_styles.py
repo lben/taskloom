@@ -43,8 +43,8 @@ HEAD_LOOK = ("font-family: Arial, Helvetica, sans-serif; border: 1px solid #d5dc
              "background: #2c5d8f; color: #ffffff; font-weight: bold; text-align: left; white-space: nowrap")
 CELL_LOOK = "font-family: Arial, Helvetica, sans-serif; border: 1px solid #d5dce4; padding: 5px 10px; text-align: {}"
 
-# STY-1's example, as the Template holds it (braces doubled).
-TD_RULE = "<style>td {{padding: 15px; border: 1px solid black; font-size: 15px}}</style>"
+# STY-1's example, as the Template holds it.
+TD_RULE = "<style>td {padding: 15px; border: 1px solid black; font-size: 15px}</style>"
 
 # Text holding HTML, in the shape pandas gives for df.style.apply(colour, axis=1).to_html() where colour paints the
 # first row green: a <style> block with one rule for the painted cells' ids, then the table.
@@ -298,7 +298,7 @@ def background_shown(td: Element) -> str | None:
 
 @pytest.mark.invariant("STY-1")
 def test_a_td_rule_in_the_templates_own_style_gives_every_cell_its_padding_border_and_text_size(env, smtp):
-    html = table_email(env, smtp, TD_RULE + "{my_table}")
+    html = table_email(env, smtp, TD_RULE + "{{my_table}}")
 
     assert len(cells_with_the_td_rule(html)) == 12
 
@@ -306,7 +306,7 @@ def test_a_td_rule_in_the_templates_own_style_gives_every_cell_its_padding_borde
 @pytest.mark.invariant("STY-1")
 @pytest.mark.invariant("STY-2")
 def test_a_th_rule_changes_only_what_it_sets_in_the_header_and_the_cells_keep_the_built_in_look(env, smtp):
-    html = table_email(env, smtp, "<style>th {{background-color: #444444; padding: 12px}}</style>{my_table}")
+    html = table_email(env, smtp, "<style>th {background-color: #444444; padding: 12px}</style>{{my_table}}")
 
     assert "!important" not in html.lower()
     table = my_table(html)
@@ -323,7 +323,7 @@ def test_a_th_rule_changes_only_what_it_sets_in_the_header_and_the_cells_keep_th
 @pytest.mark.invariant("STY-2")
 def test_with_the_td_rule_the_header_stays_dark_with_white_bold_text_rows_striped_numbers_right_and_text_left(env,
                                                                                                              smtp):
-    html = table_email(env, smtp, TD_RULE + "{my_table}")
+    html = table_email(env, smtp, TD_RULE + "{{my_table}}")
 
     cells = cells_with_the_td_rule(html)  # the example: its rule is in effect, so what follows is what it left alone
     table = my_table(html)
@@ -337,7 +337,7 @@ def test_with_the_td_rule_the_header_stays_dark_with_white_bold_text_rows_stripe
 
 @pytest.mark.invariant("STY-3")
 def test_with_no_style_of_your_own_a_table_in_a_template_looks_as_it_did(env, smtp):
-    html = table_email(env, smtp, "Hi team,<br>{my_table}<br>thank you")
+    html = table_email(env, smtp, "Hi team,<br>{{my_table}}<br>thank you")
 
     assert look(my_table(html)) == look_as_it_was()
 
@@ -351,7 +351,7 @@ def test_a_table_connected_straight_to_send_emails_body_looks_as_it_did(env, smt
 
 @pytest.mark.invariant("STY-3")
 def test_a_table_shown_whole_puts_only_its_header_and_cells_between_the_words_around_it(env, smtp):
-    html = table_email(env, smtp, "above{my_table}below")
+    html = table_email(env, smtp, "above{{my_table}}below")
 
     around = html[html.index("above"):html.index("below") + len("below")]
     texts = [unescape(text) for text in re.split(r"<[^>]*>", around) if text]
@@ -362,7 +362,7 @@ def test_a_table_shown_whole_puts_only_its_header_and_cells_between_the_words_ar
 
 @pytest.mark.invariant("STY-4")
 def test_name_html_puts_text_holding_html_in_as_it_is(env, smtp):
-    html = styled_email(env, smtp, "Scores<br>{styled:html}<br>thank you")
+    html = styled_email(env, smtp, "Scores<br>{{styled:html}}<br>thank you")
 
     styled_table(html)
     assert "&lt;" not in html
@@ -370,7 +370,7 @@ def test_name_html_puts_text_holding_html_in_as_it_is(env, smtp):
 
 @pytest.mark.invariant("STY-4")
 def test_name_alone_shows_the_tags_of_text_holding_html_as_text(env, smtp):
-    html = styled_email(env, smtp, "Scores<br>{styled}<br>thank you")
+    html = styled_email(env, smtp, "Scores<br>{{styled}}<br>thank you")
 
     email = document(html)
     assert [e.tag for e in email.all("table", "th", "td")] == ["table", "td"]  # only the email's own layout
@@ -384,7 +384,7 @@ def test_name_alone_shows_the_tags_of_text_holding_html_as_text(env, smtp):
 
 @pytest.mark.invariant("STY-5")
 def test_the_style_block_inside_the_html_colours_its_cells_in_their_style_attributes_and_is_not_left(env, smtp):
-    html = styled_email(env, smtp, "Scores<br>{styled:html}<br>thank you")
+    html = styled_email(env, smtp, "Scores<br>{{styled:html}}<br>thank you")
 
     assert {td.text: td.style.get("background-color") for td in styled_table(html).all("td")} == {
         "EU": "#008000", "10": "#008000", "US": None, "20": None}
@@ -404,7 +404,8 @@ def says(error: str, words: str) -> bool:
 
 @pytest.mark.invariant("STY-6")
 def test_html_on_a_table_a_number_a_list_or_a_picture_stops_the_run_saying_html_applies_only_to_text(env, smtp):
-    placeholders = {"tab": "{my_table:html}", "num": "{count:html}", "lst": "{items:html}", "pic": "{chart:html}"}
+    placeholders = {"tab": "{{my_table:html}}", "num": "{{count:html}}", "lst": "{{items:html}}",
+                    "pic": "{{chart:html}}"}
     result = run(env, {
         "data": python(SALES, ["table"]),
         "chart": CHART,
@@ -429,11 +430,11 @@ def test_html_on_a_table_a_number_a_list_or_a_picture_stops_the_run_saying_html_
 @pytest.mark.invariant("STY-6")
 def test_html_on_a_date_stops_the_run_too_and_does_not_show_the_word_html(env, smtp):
     """A date is not text; as a date's format, `html` would be shown as the word html."""
-    result = run(env, {"body": template("Day: {day:html}"), "mail": MAIL}, ["body.html -> mail.body"],
+    result = run(env, {"body": template("Day: {{day:html}}"), "mail": MAIL}, ["body.html -> mail.body"],
                  params={"day": {"type": "date", "value": "2026-10-02"}})
 
     assert result.returncode == 1, result.stderr
-    assert says(errors(env).get("body", ""), only_to_text("{day:html}")), errors(env)
+    assert says(errors(env).get("body", ""), only_to_text("{{day:html}}")), errors(env)
     assert smtp.messages == []
 
 
@@ -444,8 +445,8 @@ def test_html_from_another_template_with_html_is_passed_as_it_is_with_its_pictur
         "data": python(SALES, ["table"]),
         "chart": CHART,
         "v": python("nothing = None", ["nothing"]),
-        "inner": template("<p><b>Inner</b> part</p>{chart}"),
-        "body": template("[{inner:html}][{nothing:html}]", {"v.nothing": "nothing"}),
+        "inner": template("<p><b>Inner</b> part</p>{{chart}}"),
+        "body": template("[{{inner:html}}][{{nothing:html}}]", {"v.nothing": "nothing"}),
         "mail": MAIL,
     }, ["data.table -> chart.table", "chart.image -> inner.data", "inner.html -> body.data", "v.nothing -> body.data",
         "body.html -> mail.body"])
@@ -462,7 +463,7 @@ def test_html_from_another_template_with_html_is_passed_as_it_is_with_its_pictur
 # --- STY-7: the template's own rules style what the template shows, not the email's own frame -----------------------
 
 OWN_TABLE = '<table id="mine"><tr><td>my own cell</td></tr></table>'  # a table the user wrote in the Template
-TABLE_RULE = "<style>table {{border: 2px solid red; width: 400px}}</style>"
+TABLE_RULE = "<style>table {border: 2px solid red; width: 400px}</style>"
 
 
 def frame(html: str) -> list:
@@ -488,9 +489,9 @@ def own_table(html: str) -> Element:
 def without_and_with(env, smtp, rule: str) -> tuple:
     """The HTML of two emails, each showing a table the user wrote and my_table: one with no <style> of the user's
     own, one with `rule`."""
-    plain = table_email(env, smtp, OWN_TABLE + "{my_table}")
+    plain = table_email(env, smtp, OWN_TABLE + "{{my_table}}")
     smtp.messages.clear()
-    return plain, table_email(env, smtp, rule + OWN_TABLE + "{my_table}")
+    return plain, table_email(env, smtp, rule + OWN_TABLE + "{{my_table}}")
 
 
 @pytest.mark.invariant("STY-7")
@@ -524,7 +525,7 @@ def test_a_table_rule_styles_the_generated_table_and_a_table_you_wrote_and_not_t
 
 def test_a_template_that_is_a_whole_html_document_is_sent_without_the_emails_own_frame_around_it(env, smtp):
     html = table_email(env, smtp, "<!DOCTYPE html><html><head><title>Report</title></head>"
-                                  "<body><p>Hi team,</p>{my_table}</body></html>")
+                                  "<body><p>Hi team,</p>{{my_table}}</body></html>")
 
     assert [[th.text for th in table.all("th")] for table in document(html).all("table")] == [COLUMNS], html
 
@@ -549,7 +550,7 @@ def test_a_stylesheet_the_template_links_to_is_never_fetched_and_the_table_keeps
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         html = table_email(env, smtp, f'<link rel="stylesheet" href="http://127.0.0.1:{server.server_port}/look.css">'
-                                      "{my_table}")
+                                      "{{my_table}}")
     finally:
         server.shutdown()
         server.server_close()

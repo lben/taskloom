@@ -1254,9 +1254,10 @@ def test_validate_of_a_flow_whose_name_the_windows_console_cannot_show_says_it_i
 
 @pytest.mark.parametrize("config, greeting", [("{greeting: Hola}", "Hola, Ana!"), ("{}", "Hello, Ana!")],
                          ids=["its setting", "its default"])
-def test_the_block_from_the_readme_runs_with_its_setting_and_logs(env, config, greeting):
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    code = readme.split("# ~/.taskloom/blocks/greet.py\n", 1)[1].split("```", 1)[0]
+@pytest.mark.invariant("RD-2")
+def test_the_block_from_the_guide_runs_with_its_setting_and_logs(env, config, greeting):
+    guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+    code = guide.split("# ~/.taskloom/blocks/greet.py\n", 1)[1].split("```", 1)[0]
     write(env, code, "home/blocks/greet.py")
     flow = write(env, f"""
         params:

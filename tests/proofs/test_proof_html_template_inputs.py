@@ -18,8 +18,8 @@ from tests.test_paths_editor_editing import (clean, drag_over_and_drop, dragged_
                                              settle)
 from tests.test_paths_reports_email import html_of, inline_images
 
-# The user's sentence, as they wrote it.
-SENTENCE = "Hi {input1}, please see below the chart<br>{chart}<br>and below the table<br>{my_table}<br>thank you"
+# The user's sentence, its placeholders written {{name}}.
+SENTENCE = "Hi {{input1}}, please see below the chart<br>{{chart}}<br>and below the table<br>{{my_table}}<br>thank you"
 SALES_SQL = ("select * from (values ('North', 1250.5), ('South', 980.0), ('East', 1430.25), ('West', 760.75)) "
              "t(region, total)")
 FLOW = {
@@ -62,8 +62,8 @@ OLD_FLOW = {
 }
 DUPLICATE = ("Inputs: chart is the name of more than one input (sales_chart.image, totals.result); give each its own "
              "name")
-UNKNOWN = ("Template: {my_tabel} is not an input or a flow parameter (inputs: input1, chart; write {{ and }} for "
-           "literal braces)")
+UNKNOWN = ("Template: {{my_tabel}} is not an input or a flow parameter (inputs: input1, chart; write {{{{ for a "
+           "literal {{)")
 
 
 def open_flow(win, monkeypatch, path: Path, flow: dict):
@@ -176,23 +176,24 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
               "given input if it needs to render a table, a chart, just text, something else, an image?, etc.")
     p.idea("HTML Template's data input takes as many connections as you like. Properties lists each connected output "
            "in an Inputs box, with a name you can change: at first the name of the block it comes from. The "
-           "Template is your email in HTML, and {name} puts that input where you write it.")
+           "Template is your email in HTML, and {{name}} puts that input where you write it.")
     p.idea("Each value is shown by what it is: a table as a table made for Outlook (a header row, striped rows, "
            "numbers on the right), a chart (or any PNG picture a block gives) as a picture inside the email, and "
            "text as text, where you put it. HTML made by another HTML Template goes in as it is, a list item by "
            "item, and an empty value as nothing. A new HTML Template needs nothing filled in: an empty Template "
            "shows every input in turn.")
     p.idea("Names cannot clash unnoticed. Two blocks of a flow never share a name, but a default name can still be "
-           "taken: by another output of the same block, by a name you typed, or by a flow parameter (since {name} "
+           "taken: by another output of the same block, by a name you typed, or by a flow parameter (since {{name}} "
            "shows those too). It then becomes block_output, such as check_details. A clash you make yourself, or a "
-           "{name} that is neither an input nor a parameter, is shown in red in Properties, and Validate, taskloom "
+           "{{name}} that is neither an input nor a parameter, is shown in red in Properties, and Validate, taskloom "
            "validate and every run refuse the flow, so nothing is sent.")
     p.idea("HTML Table is gone, and so is the old {{ … }} syntax (Jinja2) of HTML Template: one table connected to "
            "an HTML Template with an empty Template gives what HTML Table gave, without its title (a title is now "
            "a line you write).")
-    p.why_simplest("{name} and {name:format} are the placeholders Taskloom's text settings already use, such as "
-                   "Send Email's subject “Daily sales {day:%Y-%m-%d}”, with {{ and }} for a brace. So the Template "
-                   "is written like every other text setting, and the flow's parameters work in it the same way.")
+    p.why_simplest("{{name}} and {{name:format}} are the placeholders Taskloom's text settings already use, such as "
+                   "Send Email's subject “Daily sales {{day:%Y-%m-%d}}”, single braces being plain text. So the "
+                   "Template is written like every other text setting, and the flow's parameters work in it the same "
+                   "way.")
     p.why_simplest("The value already says what it is: a table is a table, Chart gives the path of a picture file, "
                    "anything else is text. So there is nothing to choose per input, and nothing to get wrong.")
     p.why_simplest("The names are one setting of the block, written when you connect an output and kept in step when "
@@ -204,7 +205,7 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
                   "write placeholders, and saying how to show each value. You had to name each hole before "
                   "connecting it, and a second connection into one hole replaced the first.")
     p.alternative("Use the block names as they are, with nothing stored (as Python Code's dictionary does)",
-                  "You asked to choose the names (input1, my_table). And {chart} would stop working the day the "
+                  "You asked to choose the names (input1, my_table). And {{chart}} would stop working the day the "
                   "chart block was renamed; a stored name stays as it is when its block is renamed.")
     p.alternative("A choice per input: show it as a table, a picture or text",
                   "Taskloom already knows from the value, so it would be one more setting that could only be set "
@@ -223,8 +224,8 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
            "output's name.")
     p.fits("A flow that used HTML Table or the {{ … }} syntax must be changed by hand: nothing converts it. By your "
            "rule, Taskloom adds no conversions until you have flows in production. Validate names an HTML Table block and the "
-           "old list of input names; {{ … }} left in a Template is not an error, and the email shows it as written, "
-           "with single braces.")
+           "old list of input names; a {{ … }} left in a Template that is not a name is an error too, which Validate "
+           "names.")
 
     assert win.home.root == env.home, "the editor and the command line use the same Taskloom folder"
     path = env.root / "sales-email.yaml"
@@ -315,7 +316,7 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
     type_into(text_box(win, "chart"), "sales_chart")
     click(tab, "html_template")
     p.shot(win, "① chart is now sales_chart. ② Its row says from sales_chart.image, and its name is still chart, so "
-                "{chart} in the Template still finds it.",
+                "{{chart}} in the Template still finds it.",
            highlight=["sales_chart", row_widgets(win, "sales_chart.image")], badges=True, zoom=[inputs_box(win)])
     p.check("② The row follows the renamed block, and keeps the name chart",
             rows(win)[1] == ("from sales_chart.image", "chart")
@@ -333,11 +334,11 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
 
     # (e) a clash and a misspelt name: shown in red, and the flow is refused --------------------------------------
     p.step("Make two mistakes on purpose: name totals' input chart, like the chart's; and in the Template, misspell "
-           "{my_table} as {my_tabel}.")
+           "{{my_table}} as {{my_tabel}}.")
     type_into(row(win, "totals.result"), "chart")
-    write_template(win, SENTENCE.replace("{my_table}", "{my_tabel}"))
+    write_template(win, SENTENCE.replace("{{my_table}}", "{{my_tabel}}"))
     clash = [*row_widgets(win, "sales_chart.image"), *row_widgets(win, "totals.result")]
-    p.shot(win.properties, "① Two inputs are now named chart. ② The Template says {my_tabel}. ③ In red, at the top "
+    p.shot(win.properties, "① Two inputs are now named chart. ② The Template says {{my_tabel}}. ③ In red, at the top "
                            "of Properties, what is wrong with each, and how to put it right.",
            highlight=[clash, template_box(win), win.properties.error], badges=True)
     shown = error_shown(win).splitlines()
@@ -345,7 +346,7 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
     p.check(f"③ The second says: {UNKNOWN}", shown[1:] == [UNKNOWN])
     p.check("The flow holds what you typed, so you can put right either one",
             names_of(tab, "html_template")["totals.result"] == "chart"
-            and "{my_tabel}" in tab.doc.blocks["html_template"]["config"]["template"])
+            and "{{my_tabel}}" in tab.doc.blocks["html_template"]["config"]["template"])
 
     p.step("Save the flow (File > Save) and check it in a terminal: taskloom validate sales-email.yaml, then taskloom "
            "run sales-email.yaml.")
@@ -434,7 +435,7 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
              html.index(">West<"), html.index("thank you")]
     p.check("In order: “Hi Bob, please see below the chart”, the chart, “and below the table”, the table from North "
             "to West, and “thank you”", order == sorted(order))
-    p.check("Text as text: “Hi Bob,” is written where {input1} was, in no paragraph of its own (so on one line)",
+    p.check("Text as text: “Hi Bob,” is written where {{input1}} was, in no paragraph of its own (so on one line)",
             "Hi Bob, please see below the chart<br>" in html and not re.search(r"<p[^>]*>\s*Hi Bob", html))
     p.check("The chart as a picture inside the email: one PNG picture, sent with it, with its size written out",
             re.search(rf'<img src="cid:{cid}" width="\d+" height="\d+"', html) is not None
@@ -464,8 +465,8 @@ def test_html_template_takes_several_named_inputs_and_shows_each_by_its_type(pro
            (checked.stdout + checked.stderr).strip())
     p.note("Such a flow must be changed by hand: nothing converts it. Connect totals' result into an HTML Template's "
            "data instead of an HTML Table, name that input sales in the Inputs box (at first it is named totals, "
-           "after its block), and write {sales} where {{ table(sales) }} was (or keep the name totals and write "
-           "{totals} there). {{ … }} left in a Template is not an error: it is shown as written, with single braces.")
+           "after its block), and write {{sales}} where {{ table(sales) }} was (or keep the name totals and write "
+           "{{totals}} there). A {{ … }} left in a Template that is not a name is an error too, which Validate names.")
     p.check("It is refused (exit code 2): HTML Table is an unknown block type, and HTML Template no longer has the "
             "old list of input names, one hole per name", checked.returncode == 2
             and "unknown block type 'reports.html_table'" in checked.stderr
