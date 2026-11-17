@@ -1,0 +1,16 @@
+# What must always be true of Validate's status bar and the Documentation column's width, as agreed with the
+# maintainer in chat on 2026-11-17.
+# Each row is checked by the tests marked @pytest.mark.invariant("VAL-<n>") or ("DOC-<n>"); the proof's ledger is
+# built from their results. Changing a row's words needs the maintainer's approval first.
+feature: Validate's status bar and the Documentation column's width
+agreed: 2026-11-17
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_validate_docs_fixes]
+rows:
+  VAL-1: >-
+    When the flow has problems, the box listing them opens with the status bar empty. Any "no problems found" from an
+    earlier Validate is gone. A Validate that finds no problems still says "no problems found" for 5 seconds, as it
+    does today. Run opens the same box, so this also holds when Run finds the problems.
+  DOC-1: >-
+    In Help > Documentation, at the width the column opens with (360 px), no page scrolls sideways. Long lines in code
+    examples continue on the next line instead.

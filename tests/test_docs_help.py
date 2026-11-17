@@ -1373,6 +1373,7 @@ def test_opened_with_no_room_beside_the_docks_and_closed_the_column_leaves_the_l
         clean_all()
 
 
+@pytest.mark.invariant("DOC-1")
 def test_at_the_width_the_column_opens_with_no_page_scrolls_sideways(win):
     """Help > Documentation, the column 360 px wide as it opens: every page fits that width, its long code lines
     wrapped, so no page scrolls sideways."""

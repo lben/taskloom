@@ -1,0 +1,8 @@
+# The design decisions of Validate's status bar and the Documentation column's width, one line each (read by
+# packaging/proof_pdf.py): what was chosen, and when to look at it again.
+- chosen: The status bar's message is emptied in the check that Validate and Run both go through (MainWindow._ready_to_run), just before the box of problems opens, so one line covers Validate, Run now, Run from here and Run only.
+  revisit_if: Validate or Run gets a box of problems of its own, outside that check.
+- chosen: "A code line longer than the Documentation column goes on to the next line (pre { white-space: pre-wrap; } in the column's style), rather than the guide's long lines being shortened; ten or more of the guide's pages scrolled sideways at 360 px, not only Checks, and any new example could bring it back."
+  revisit_if: a code example must keep its columns at any width, e.g. a table drawn in text.
+- chosen: The website (packaging/docs_site.py), made from the same guide, is unchanged, since its pages do not scroll sideways at 1280 px.
+  revisit_if: the website is to be read on narrow screens, such as phones.
