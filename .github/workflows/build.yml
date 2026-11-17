@@ -52,7 +52,7 @@ jobs:
             uv run pytest -q --ignore=tests/proofs
           else  # as arguments, not in PYTEST_ADDOPTS: a pytest run that a test starts would take them too
             files=$(uv run python packaging/test_shards.py --shard ${{ matrix.shard }}/${{ matrix.of }})
-            uv run pytest -q $files
+            uv run pytest -q --durations=0 $files  # (every test's time, for packaging/test_shards.py's table)
           fi
         env:  # which agreed row or charter rule each test checks, and how every test ended: for the proof's ledger
           TASKLOOM_LEDGER: ${{ github.workspace }}/results-${{ runner.os }}-${{ matrix.shard }}.json
