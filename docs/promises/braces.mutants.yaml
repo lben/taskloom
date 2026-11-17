@@ -21,7 +21,7 @@ scope:
         - taskloom/params.py template_names
         - taskloom/params.py single_braced
       tests:
-        - tests/test_braces.py -k "double_braces_give or inside_single_braces or closing_braces_alone or four_opening or never_filled_again or naming_nothing or single_brace_parameter or single_and_double or single_brace_name_of_nothing"
+        - tests/test_braces.py -k "double_braces_give or inside_single_braces or closing_braces_alone or four_opening or never_filled_again or naming_nothing or single_brace_parameter or single_and_double or single_brace_name_of_nothing or capital_letter or loops_at_the_same_time"
         - tests/test_placeholders.py
         - tests/test_html_template_inputs.py -k a_problem_stops_validate
     - mutate:
@@ -120,3 +120,20 @@ kinds:
       the same.
     mutants:
       - taskloom.engine.x__filled__mutmut_24
+  - kind: The stand-in split after the last placeholder
+    why: >-
+      parse splits what is inside each {{ }} into a name and a format. After the last placeholder there is nothing
+      inside (None), and what it splits in its place is never used: that part gets no name, and its format is empty
+      whether the stand-in is "" or "XXXX" (neither holds a colon). Every other part has something inside it (split
+      refuses an empty {{}}), so there the stand-in is never used. The same parts, names and formats come out.
+    mutants:
+      - taskloom.params.x_parse__mutmut_7
+  - kind: The mark put where a placeholder was, before single braces are looked for
+    why: >-
+      single_braced puts a mark where each {{ }} (and each {{{{) was, so that a single-brace {name} is looked for in
+      the plain text only. Whether the mark is \0 or XX\0XX, it holds no brace, no $, no colon and no line break,
+      and its \0 ends any name that runs into it, so no {name} is found or lost because of it: Validate asks did you
+      mean about the same names. (Checked on every text of up to six of the characters { } $ : a X _ space, line
+      break, 0 and backslash, and 200,000 longer random ones.)
+    mutants:
+      - taskloom.params.x_single_braced__mutmut_13

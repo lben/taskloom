@@ -732,6 +732,77 @@ def test_sql_code_fills_the_parameter_even_where_an_input_of_the_block_has_its_n
     assert result.outputs[BLOCK, "result"].scan().collect().to_dicts() == [{"v": 2, "x": 1}]
 
 
+@pytest.mark.invariant("BR-9")
+def test_four_opening_braces_before_a_placeholder_give_two_and_the_placeholder_after_them_is_filled(env):
+    """BR-9 with a placeholder after the literal: DuckDB SQL's '{{{{p}} is {{p}}' gives {{p}} is V7, the text before
+    the placeholder kept whole, its {{ too."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        BLOCK: {"type": "data.duckdb_sql", "config": {"inputs": [], "sql": "select '{{{{p}} is {{p}}' as v"}}},
+        [f"start.start -> {BLOCK}.after"], params=PARAMS)
+
+    result, failed = ran_here(env, flow)
+
+    assert failed == {}, failed
+    assert result.outputs[BLOCK, "result"].scan().collect().to_dicts() == [{"v": "{{p}} is " + V}]
+
+
+@pytest.mark.invariant("BR-1")
+@pytest.mark.invariant("BR-4")
+def test_a_parameter_whose_name_starts_with_a_capital_letter_is_filled_and_warned_about_in_single_braces(env):
+    """BR-1, BR-4 with a flow parameter named Size (a capital letter first, as a parameter's name may start): in DuckDB
+    SQL, Validate finds no problem with {{Size}} and asks about {Size}: did you mean {{Size}}?; the run gives Size's
+    value for {{Size}} and {Size} as typed."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        BLOCK: {"type": "data.duckdb_sql", "config": {"inputs": [], "sql": "select {{Size}} as v, '{Size}' as w"}}},
+        [f"start.start -> {BLOCK}.after"], params={"Size": {"type": "int", "value": 3}})
+
+    errors, warnings = validate(load_flow(flow), discover(None), Home(env.home))
+
+    assert errors == [], errors
+    assert [w for w in warnings if "did you mean" in w] == [
+        f"{BLOCK}: SQL: {{Size}} is plain text: did you mean {{{{Size}}}}?"], warnings
+    result, failed = ran_here(env, flow)
+    assert failed == {}, failed
+    assert result.outputs[BLOCK, "result"].scan().collect().to_dicts() == [{"v": 3, "w": "{Size}"}]
+
+
+@pytest.mark.invariant("BR-3")
+def test_a_loops_at_the_same_time_naming_its_result_input_fails_the_loop_naming_the_setting_and_the_placeholder(env):
+    """BR-3 at the run: a Loop's At the same time {{result}} names its input result, which only its items give back, so
+    it cannot be filled in as the Loop starts: the Loop fails, before any item runs, and its error names the setting
+    and {{result}}."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        "make": {"type": "logic.python", "config": {"inputs": [], "code": "output = [1, 2]"}},
+        BLOCK: {"type": "logic.loop", "config": {"at_the_same_time": "{{result}}"}},
+        "work": {"type": "logic.python", "config": {"inputs": ["item"], "code": "output = item"}, "inside": BLOCK}},
+        ["start.start -> make.after", f"make.output -> {BLOCK}.items", f"{BLOCK}.item -> work.item",
+         f"work.output -> {BLOCK}.result"], params=PARAMS)
+
+    _, failed = ran_here(env, flow)
+
+    assert list(failed) == [BLOCK], failed
+    assert failed[BLOCK].startswith("At the same time: ") and "{{result}}" in failed[BLOCK], failed
+
+
+@pytest.mark.invariant("BR-3")
+def test_an_item_of_a_list_setting_that_cannot_be_filled_fails_its_block_naming_the_setting(env):
+    """BR-3 at the run, in a setting that is a list: Ask User's Options {{value}}, later, with nothing connected to its
+    value input, fails the block before it asks anything, its error naming the setting (Options), the placeholder and
+    why."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        BLOCK: {"type": "logic.ask_user", "config": {"prompt": "Which?", "kind": "choice",
+                                                     "options": ["{{value}}", "later"]}}},
+        [f"start.start -> {BLOCK}.after"], params=PARAMS)
+
+    _, failed = ran_here(env, flow)
+
+    assert failed == {BLOCK: "Options: {{value}}: nothing is connected to the input value"}, failed
+
+
 # --- HTML Template: what Validate and a run on its own say about its inputs' names ----------------------------------
 
 @pytest.mark.invariant("BR-1")
