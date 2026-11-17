@@ -31,12 +31,12 @@ scope:
         - taskloom/editor/panels.py LogPanel._reindent
         - taskloom/editor/panels.py LogPanel._indent
       tests:
-        - tests/test_zoom_panes.py -k "under_a_message or pictures_in_the_log"
+        - tests/test_zoom_panes.py -k "under_a_message or pictures_in_the_log or markdown_in_the_log"
         - tests/test_inspect_log.py -k "charts_picture_shows_under or markdown_entry_draws"
     - mutate:
         - taskloom/editor/panels.py FindBar.eventFilter
       tests:
-        - tests/test_zoom_panes.py -k find_highlights
+        - tests/test_zoom_panes.py -k "find_highlights or an_open_find_bar or data_previews_find_bar"
         - tests/test_find_bar.py -k "data_preview_finds or users_case"
         - tests/test_long_output_mutants.py -k find_in_data_preview
     - mutate:
@@ -94,3 +94,84 @@ not_tested:
   taskloom/editor/dialogs.py BlockResultsDialog.__init__: >-
     Results of this block as it is built, to which this change added one line (the box of a run's values is a pane,
     "results"): test_a_text_box_of_a_modal_dialog_zooms_under_the_pointer zooms it.
+kinds:
+  - kind: A timer's context object or its 0 ms delay
+    why: >-
+      After a text box's font changes (zoomed), its find bar highlights again the matches on the lines now in view, a
+      moment later, from a timer of 0 ms. Started with the find bar as the timer's context, with None or with no
+      context, or after 1 ms instead of 0, it highlights the same matches at the same moment to the eye. The context
+      would only matter if the find bar were deleted before the timer fires: a find bar goes with its code box when
+      Properties is built again, and the old form is deleted later (deleteLater), after a timer already started; or
+      with the window when Taskloom quits, when timers no longer fire.
+    mutants:
+      - taskloom.editor.panels.xǁFindBarǁeventFilter__mutmut_9
+      - taskloom.editor.panels.xǁFindBarǁeventFilter__mutmut_12
+      - taskloom.editor.panels.xǁFindBarǁeventFilter__mutmut_14
+  - kind: The find bar closed on Hide or on HideToParent
+    why: >-
+      A view put away (hidden itself, e.g. Data preview showing text instead of its table) gets Hide and then, in the
+      same hide(), HideToParent, both while it is hidden (checked with Qt). Closing the bar on the first or on the
+      second makes no difference before anything is drawn. A view whose panel is hidden (another bottom tab shown) is
+      not hidden itself, so neither closes the bar; and a bar cannot be opened while its view is hidden (Ctrl+F needs
+      the focus in the view). The test that Data preview's find bar closes when it shows text instead of the table,
+      and the other way, passes with this change.
+    mutants:
+      - taskloom.editor.panels.xǁFindBarǁeventFilter__mutmut_3
+  - kind: When a text box's find highlights are drawn again
+    why: >-
+      The find bar highlights the matches on the lines in view only, so a zoom, which brings other lines into view,
+      makes it highlight again. Doing so after any event of the box, not only a font change, draws the same
+      highlights more often (and never over and over: none while the editor is idle, checked). Doing so after every
+      event but a font change does it at the LayoutRequest and Paint events that Qt sends the box right after each
+      change of its font (recorded for the Log, a code box and Data preview's text, zoomed in and out): the same
+      highlights, one pass of the event loop later; the test of the highlights of lines a zoom brings into view
+      (test_zoom_keeps_the_text_the_selection_the_top_line_and_the_find_highlights) passes with it.
+    mutants:
+      - taskloom.editor.panels.xǁFindBarǁeventFilter__mutmut_5
+      - taskloom.editor.panels.xǁFindBarǁeventFilter__mutmut_6
+  - kind: One editor window in each Taskloom process
+    why: >-
+      Taskloom opens one editor window per process (window.main makes one MainWindow), and the window keeps its Zoom
+      (self.zoom) until Taskloom quits, whether or not it is also the Zoom's Qt parent. So every pane under the pointer
+      is that window's or one of its dialogs'; a pane of another editor window, whose key the Zoom passes on to that
+      window's own Zoom, is only met when tests or proofs open several editor windows in one process.
+    mutants:
+      - taskloom.editor.zoom.xǁZoomǁ__init____mutmut_1
+      - taskloom.editor.zoom.xǁZoomǁeventFilter__mutmut_46
+  - kind: The canvas's kept size, which is never written
+    why: >-
+      A pane shown for the first time gets its kind's kept size; the canvas is left out by its name. With the name
+      misspelt the canvas is looked at too, but its kept step is always 0: Ctrl + over the canvas zooms that flow and
+      writes nothing to editor.ini (zoom/canvas is never set), so nothing is done to it either way.
+    mutants:
+      - taskloom.editor.zoom.xǁZoomǁeventFilter__mutmut_11
+      - taskloom.editor.zoom.xǁZoomǁeventFilter__mutmut_12
+  - kind: A size never kept reads as 0
+    why: >-
+      Reading a kind's kept step from editor.ini as an int gives 0 for a kind never zoomed, with the default 0, with
+      None or with no default (PySide6 makes a missing value int 0: checked, value("zoom/log", None, type=int) and
+      value("zoom/log", type=int) both return 0).
+    mutants:
+      - taskloom.editor.zoom.xǁZoomǁ_step__mutmut_2
+      - taskloom.editor.zoom.xǁZoomǁ_step__mutmut_5
+  - kind: The point of the top left corner a text pane's top line is read at
+    why: >-
+      Before a text pane's font changes, the line at its top is read at a point just inside its top left corner, to
+      put that line at the top again after. x 0 or 1: a line spans the pane's width and only the line's top is used,
+      so it is the same line. y 1 or 2: the same line, unless the line above it still shows by its last pixel row or
+      two at the top edge (the space under its letters, at most the tips of a g or y): then 1 keeps that line at the
+      top, 2 the next one, the first whose text shows. Which of the two counts as the top line then is a matter of one
+      pixel row; either is a line that showed at the top, put whole at the top.
+    mutants:
+      - taskloom.editor.zoom.xǁZoomǁ_show__mutmut_51
+      - taskloom.editor.zoom.xǁZoomǁ_show__mutmut_52
+  - kind: The style's default row height, the same with or without the table's header
+    why: >-
+      A zoomed table's rows are as high as the larger of its header's minimum section size (which follows its font)
+      and the style's default section size (PM_HeaderDefaultSectionSizeVertical). Qt's styles give that default from
+      the screen's resolution, not from the widget: 30 px with the header passed, with None, or with nothing (checked
+      for the macOS, Windows and Fusion styles); and no style sheet in Taskloom sets a header's size. So the rows are
+      as high either way.
+    mutants:
+      - taskloom.editor.zoom.xǁZoomǁ_show__mutmut_61
+      - taskloom.editor.zoom.xǁZoomǁ_show__mutmut_64

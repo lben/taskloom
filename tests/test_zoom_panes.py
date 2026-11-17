@@ -32,8 +32,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import QAction, QColor, QCursor, QFont, QFontMetricsF, QImage, QTextCursor, QWheelEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QLineEdit, QPlainTextEdit, QToolBar,  # noqa: E402
-                               QToolTip, QTreeView)
+from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QGroupBox, QLineEdit, QPlainTextEdit,  # noqa: E402
+                               QToolBar, QToolTip, QTreeView)
 
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor import dialogs  # noqa: E402
@@ -634,23 +634,36 @@ def climb(pane, key) -> tuple:
     raise AssertionError(f"the {pane.kind} still changes after 200 presses of {key}: {sizes[-3:]}")
 
 
+def times(size, normal) -> list[float]:
+    """How many times its normal size a pane's text shows: each measure, rounded to a tenth."""
+    return [round(a / b, 1) for a, b in zip(size, normal)]
+
+
 @pytest.mark.invariant("ZM-4")
 @pytest.mark.parametrize("kind", KINDS)
 def test_there_is_a_smallest_and_a_largest_size_and_at_either_end_nothing_more_happens(win, qtbot, tmp_path, kind):
     """Z6: Ctrl + makes the pane bigger up to a largest size, where Ctrl + (and Ctrl with the wheel turned up, over a
     text pane) does nothing more; Ctrl - smaller down to a smallest size, still showing its text, where Ctrl - (and
-    the wheel turned down) does nothing more; from there Ctrl + makes it bigger again."""
+    the wheel turned down) does nothing more; from there Ctrl + makes it bigger again. The text of a text pane, list or
+    table shows at its largest about three times as big as at its normal size, at its smallest about half (the sizes
+    chosen, zoom.design.yaml; not the canvas, which has its own zoom)."""
     pane = ready(win, tmp_path, kind)
     try:
         normal = pane.size()
         largest = climb(pane, IN)
         assert bigger(largest, normal), f"Ctrl + over the {kind} never made it bigger than {normal}"
+        if kind != "canvas":
+            assert all(2.6 <= t <= 3.4 for t in times(largest, normal)), (
+                f"the {kind} at its largest shows {times(largest, normal)} times its normal size, not three times")
         if kind in TEXT_PANES:
             wheel(3)
             assert pane.size() == largest, f"Ctrl + wheel over the {kind} went past the largest size {largest}"
         smallest = climb(pane, OUT)
         assert bigger(normal, smallest), f"Ctrl - over the {kind} never made it smaller than {normal}"
         assert all(value > 0 for value in smallest), f"the {kind} at its smallest shows nothing: {smallest}"
+        if kind != "canvas":
+            assert all(0.35 <= t <= 0.7 for t in times(smallest, normal)), (
+                f"the {kind} at its smallest shows {times(smallest, normal)} times its normal size, not about half")
         if kind in TEXT_PANES:
             wheel(-3)
             assert pane.size() == smallest, f"Ctrl + wheel over the {kind} went past the smallest size {smallest}"
@@ -778,6 +791,48 @@ def test_a_code_box_built_again_for_another_block_or_another_theme_has_the_remem
         QApplication.setPalette(palette)
         QToolTip.setPalette(tips)
         settle()
+
+
+CURL = "curl https://api.example.com/v1/orders -H 'Accept: application/json'"
+BODY = '{"item": "widget", "count": 3}'
+
+
+@pytest.mark.invariant("ZM-1")
+def test_zooming_one_code_box_leaves_another_at_its_size_also_when_properties_shows_again(win, qtbot, tmp_path):
+    """ZM-1: an API Request's Properties show two code boxes, Import from cURL's (a curl command pasted into it) and
+    the body's. Ctrl + over the first, then over the second: each shows at the size it then has, also after the
+    Inspector's Parameters tab and then Properties again (the same boxes shown again): Ctrl + over the second box did
+    not change the first."""
+    fit(win)
+    tab = win.open_flow(write_flow(tmp_path / "api.yaml", {"call": {"type": "servers.api_request", "config": {
+        "method": "POST", "url": "https://api.example.com/v1/orders", "body": "JSON", "content": BODY}}}))
+    settle()
+    try:
+        select(tab, "call")
+        (section,) = [b for b in win.properties.widget().findChildren(QGroupBox) if b.title() == "Import from cURL"]
+        (curl,) = [e for e in section.findChildren(QPlainTextEdit) if not e.isReadOnly()]
+        (body,) = [e for e in win.properties.widget().findChildren(QPlainTextEdit) if e.toPlainText() == BODY]
+        curl.setPlainText(CURL)  # (pasted: the flow does not change until Fill in)
+        boxes = {"Import from cURL's box": (curl, text_pane("cURL box", curl)),
+                 "body's box": (body, text_pane("body box", body))}
+        normal = {name: pane.size() for name, (_, pane) in boxes.items()}
+        focus_on(win.palette_panel.tree)
+        for name, (box, pane) in boxes.items():
+            win.properties.ensureWidgetVisible(box)  # (scrolled to)
+            settle()
+            pointer_over(box, name)
+            press(IN)
+            assert bigger(pane.size(), normal[name]), f"Ctrl + over the {name} left it at {pane.size()}"
+        zoomed = {name: pane.size() for name, (_, pane) in boxes.items()}
+        win.right_tabs.setCurrentWidget(win.parameters)
+        settle()
+        win.right_tabs.setCurrentWidget(win.properties)
+        settle()
+        assert curl.isVisible() and body.isVisible()
+        shown = {name: pane.size() for name, (_, pane) in boxes.items()}
+        assert shown == zoomed, f"Properties shown again: the boxes show at {shown}, not at {zoomed}"
+    finally:
+        clean(win)
 
 
 # --- ZM-5: zoom changes only the size -----------------------------------------------------------------------------
@@ -933,6 +988,104 @@ def test_zoom_keeps_the_top_line_of_a_wrapped_paragraph_at_the_top(win, qtbot, t
         clean(win)
 
 
+def open_page(win, name: str):
+    """The docs at their page `name`, laid out whole (a page just opened is laid out a part at a time)."""
+    win.docs.open_at(name)
+    win.docs.browser.document().size()  # (the rest of it laid out)
+    settle()
+
+
+def page_lengths(win) -> list[tuple[int, str]]:
+    """How far each page of the docs scrolls in the docs column (0: it shows whole), and its name."""
+    lengths = []
+    for name in sorted(win.docs.browser.pages()):
+        open_page(win, name)
+        lengths.append((win.docs.browser.verticalScrollBar().maximum(), name))
+    return lengths
+
+
+def a_page_that_all_shows(win) -> str:
+    """The longest page of the docs that the docs column shows whole at the normal size (it cannot scroll), at least
+    half as high as the column: its name, the docs showing it."""
+    view = win.docs.browser
+    fitting = []
+    for scrolls, name in page_lengths(win):
+        if scrolls == 0:
+            open_page(win, name)
+            fitting.append((view.document().size().height(), name))
+    height, name = max(fitting, default=(0, ""))
+    assert height > view.viewport().height() / 2, f"no page of the docs fits the docs column: {fitting}"
+    open_page(win, name)
+    return name
+
+
+@pytest.mark.invariant("ZM-5")
+def test_zoom_keeps_the_first_line_at_the_top_of_a_page_that_showed_whole(win, qtbot, tmp_path):
+    """ZM-5: a page of the docs that the column shows whole, its first line at the top: Ctrl + over it until the page
+    is longer than the column, and once more, the first line is still the top line (the page is not scrolled down)."""
+    pane = ready(win, tmp_path, "docs")
+    try:
+        view, bar = win.docs.browser, win.docs.browser.verticalScrollBar()
+        page = a_page_that_all_shows(win)
+        pointer_over(view, "docs")
+        first = top_of(view)
+        while bar.maximum() == 0:
+            size = pane.size()
+            press(IN)
+            assert pane.size() != size, f"{page} still shows whole at the largest size of the docs"
+        for when in ("zoomed in until it can scroll", "zoomed in once more"):
+            assert top_of(view) == first, (
+                f"{page}, {when}: the top line is {line_holding(view, top_of(view))[1]!r}, not its first line "
+                f"{line_holding(view, first)[1]!r}")
+            if when == "zoomed in until it can scroll":
+                press(IN)
+    finally:
+        clean(win)
+
+
+def a_page_one_pixel_too_long(win) -> str:
+    """The shortest page of the docs that is longer than the docs column, the column then made longer, the Output
+    panel under it lower (as when its edge is dragged down) a pixel at a time, until the page is one pixel longer than
+    the column: its name, the docs showing it."""
+    bar = win.docs.browser.verticalScrollBar()
+    _, name = min(length for length in page_lengths(win) if length[0] > 0)
+    open_page(win, name)
+    while bar.maximum() > 1:
+        by = bar.maximum()
+        win.resizeDocks([win.output], [win.output.height() - 1], Qt.Vertical)
+        settle()
+        assert bar.maximum() < by, f"the Output panel cannot be made lower than {win.output.height()} px"
+    assert bar.maximum() == 1, f"{name} is {bar.maximum()} px longer than the docs column, not 1"
+    return name
+
+
+@pytest.mark.invariant("ZM-5")
+@pytest.mark.parametrize("page", ["a long page", "a page one pixel longer than the column"])
+def test_zoom_keeps_the_docs_scrolled_to_the_end_of_a_page_at_its_end(win, qtbot, tmp_path, page):
+    """ZM-5: the docs scrolled to the end of a page, its last line at the bottom: Ctrl + over them, twice, and Ctrl -,
+    they are still at its end (as the Log keeps its last line), also when the page can scroll by one pixel only."""
+    pane = ready(win, tmp_path, "docs")
+    try:
+        view, bar = win.docs.browser, win.docs.browser.verticalScrollBar()
+        if page == "a long page":
+            open_page(win, DOCS_PAGE)
+        else:
+            a_page_one_pixel_too_long(win)
+        pointer_over(view, "docs")
+        bar.setValue(bar.maximum())
+        settle()
+        assert bar.value() == bar.maximum() > 0
+        for name, key in (("Ctrl +", IN), ("Ctrl +", IN), ("Ctrl -", OUT)):
+            size = pane.size()
+            press(key)
+            assert pane.size() != size, f"{name} over the docs left them at {size}"
+            assert bar.value() == bar.maximum(), (
+                f"{name} over the docs at the end of {page}: scrolled to {bar.value()} of {bar.maximum()}, not to "
+                f"its end")
+    finally:
+        clean(win)
+
+
 @pytest.mark.invariant("ZM-5")
 @pytest.mark.parametrize("kind", ["Python code box", "SQL code box"])
 def test_a_zoomed_code_box_shows_each_line_number_whole_on_its_line(win, qtbot, tmp_path, kind):
@@ -1051,6 +1204,49 @@ def test_the_logs_lines_under_a_message_stay_under_its_block_column_when_zoomed(
         settle()
         assert len(columns()) == 2 and all(a == b for a, b in columns()), (
             f"zoomed, a message written after: [report] starts at x, the note at x: {columns()}")
+    finally:
+        clean(win)
+
+
+MARKDOWN = "Totals of the day: **north** 3, south 4"
+
+
+@pytest.mark.invariant("ZM-5")
+def test_markdown_in_the_log_stays_under_its_block_column_when_zoomed(win, qtbot, tmp_path):
+    """The Log draws a Markdown message (as Inspect writes one) under its line, starting where the line's [block]
+    column starts: zoomed in (Ctrl + three times), it still starts there, on the message written before the zoom and
+    on one written after it."""
+    fit(win)
+    markdown = {"block": "report", "level": "INFO", "message": MARKDOWN, "show": "markdown"}
+    win.bottom_tabs.setCurrentWidget(win.log)
+    win.log.set_entries([{"ts": "2026-10-31T09:00:00.000", **markdown}])
+    settle()
+    view = win.log.text
+    pane = text_pane("Log", view)
+
+    def columns() -> list[tuple[int, int]]:
+        """(where [report] starts, where the Markdown under it starts) for each Markdown message in the Log."""
+        text, found = view.document().toPlainText(), []
+        for m in re.finditer(r"\[report\] INFO", text):
+            under = text.index("Totals of the day", m.start())
+            found.append((rect_at(view, m.start()).left(), rect_at(view, under).left()))
+        return found
+
+    def under_its_column() -> bool:
+        return all(abs(a - b) <= 1 for a, b in columns())
+
+    try:
+        assert columns() and under_its_column(), f"before zooming: [report] starts at x, the Markdown at x: {columns()}"
+        normal = pane.size()
+        focus_on(win.palette_panel.tree)
+        pointer_over(view, "Log")
+        press(IN, IN, IN)
+        assert bigger(pane.size(), normal), f"Ctrl + over the Log left it at {pane.size()} ({normal})"
+        assert under_its_column(), f"zoomed: [report] starts at x, the Markdown at x: {columns()}"
+        win.log.append({"ts": "2026-10-31T09:00:01.000", **markdown})
+        settle()
+        assert len(columns()) == 2 and under_its_column(), (
+            f"zoomed, a message written after: [report] starts at x, the Markdown at x: {columns()}")
     finally:
         clean(win)
 
@@ -1249,3 +1445,56 @@ def test_ctrl_plus_over_the_canvas_zooms_that_flow_only_until_it_is_closed(win, 
             assert shown == (100,), f"{path.name} in the editor opened again: {shown}"
     finally:
         closed(again)
+
+
+# --- a pane's find bar, whose events zoom also reads ---------------------------------------------------------------
+
+def test_an_open_find_bar_stays_open_with_its_highlights_when_another_bottom_tab_shows_and_then_its_own(win, qtbot,
+                                                                                                    tmp_path):
+    """The Log's find bar open on "needle" (Ctrl+F), the matches in view highlighted: Run history shown instead of the
+    Log, then the Log again, the bar still shows, counting the same, and the matches in view are highlighted."""
+    view, _ = find_ready(win, tmp_path, "Log")
+    try:
+        bar = open_find(win, qtbot, view)
+        bar.type("needle")
+        count = bar.count()
+        assert count.endswith(f"/{len(NEEDLES)}"), f"the find bar counts {count!r}"
+        assert matches_in_view(view) and unmarked(view) == [], "the matches in view are not highlighted"
+        win.bottom_tabs.setCurrentWidget(win.history_panel)
+        settle()
+        assert not view.isVisible()
+        win.bottom_tabs.setCurrentWidget(win.log)
+        settle()
+        assert bar.shown(), "the Log's find bar closed when Run history was shown instead of the Log"
+        assert bar.count() == count, f"the find bar counts {bar.count()!r}, not {count!r}"
+        assert matches_in_view(view) and unmarked(view) == [], f"matches in view not highlighted: {unmarked(view)}"
+    finally:
+        clean(win)
+
+
+def test_data_previews_find_bar_closes_when_it_shows_text_instead_of_the_table_and_the_other_way(win, qtbot, tmp_path):
+    """Data preview's find bar open on its table: Data preview then showing a block's text instead (the table put
+    away), that bar is closed, not left under the text; the text's find bar, opened, closes when a table shows
+    again."""
+    fit(win)
+    win.bottom_tabs.setCurrentWidget(win.preview)
+    table = {"tables": {"table": str(sales_table(tmp_path))}}
+    win.preview.show_outputs("sales", table)
+    settle()
+    try:
+        bar = open_find(win, qtbot, win.preview.view)
+        bar.type("region")
+        assert bar.shown() and bar.count().endswith("/41"), f"the table's find bar counts {bar.count()!r}"
+        win.preview.show_outputs("report", {"previews": {"text": PREVIEW_TEXT}})
+        settle()
+        assert win.preview.text.isVisible() and not win.preview.view.isVisible()
+        assert not bar.shown(), "the table's find bar is still open under the text that Data preview shows instead"
+        bar = open_find(win, qtbot, win.preview.text)
+        bar.type("region")
+        assert bar.shown() and bar.count().endswith("/60"), f"the text's find bar counts {bar.count()!r}"
+        win.preview.show_outputs("sales", table)
+        settle()
+        assert win.preview.view.isVisible() and not win.preview.text.isVisible()
+        assert not bar.shown(), "the text's find bar is still open under the table that Data preview shows instead"
+    finally:
+        clean(win)

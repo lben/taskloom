@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -42,7 +43,7 @@ import yaml
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QModelIndex, QPoint, Qt, QTimer  # noqa: E402
-from PySide6.QtGui import QAction, QCursor  # noqa: E402
+from PySide6.QtGui import QAction, QContextMenuEvent, QCursor  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFormLayout, QHeaderView, QLabel,  # noqa: E402
                                QLineEdit, QWidget)
@@ -90,6 +91,9 @@ EVERY_LIST = pytest.mark.parametrize("lst", LISTS, ids=[lst.label for lst in LIS
 API_LISTS = pytest.mark.parametrize("lst", [lst for lst in LISTS if lst.block == API],
                                     ids=[lst.label for lst in LISTS if lst.block == API])
 HEADERS = next(lst for lst in LISTS if lst.label == "Headers")
+PARTS = next(lst for lst in LISTS if lst.label == "Parts")  # (the list whose rows can be files)
+CUSTOM = next(lst for lst in LISTS if lst.label == "Custom statistics")
+HINT = "Double-click a cell to change it. Delete removes the selected row."
 
 
 # --- the flow, the window and the list -------------------------------------------------------------------------------
@@ -109,7 +113,12 @@ def activate(qtbot, win):
 def open_list(qtbot, win, tmp_path, lst: List, rows=None):
     """A flow file with one block whose list `lst` has `rows` (its three, by default), opened in the editor with the
     block selected: (its tab, the file)."""
-    config = {**lst.config, lst.key: as_rows(lst.rows if rows is None else rows)}
+    return open_rows(qtbot, win, tmp_path, lst, as_rows(lst.rows if rows is None else rows))
+
+
+def open_rows(qtbot, win, tmp_path, lst: List, rows: list):
+    """As open_list, the list's rows written in the flow file as they are given (dicts, as a hand may write them)."""
+    config = {**lst.config, lst.key: rows}
     path = flow_file(tmp_path / "rows.yaml", {BLOCK: {"type": lst.block, "config": config, "ui": {"x": 0, "y": 0}}})
     tab = win.open_flow(path)
     settle()
@@ -260,15 +269,10 @@ def type_over(view, r: int, title: str, text: str):
     settle()
 
 
-def right_click(qtbot, win, widget: QWidget, at: QPoint, choose: str = DELETE_ROW) -> list[str]:
-    """Right-click `widget` at `at` (in its own coordinates) through the window, as the mouse does, Properties scrolled
-    to it first: the items of the menu that opens ([]: none opened); the one starting with `choose` is clicked if it
-    is there and enabled (otherwise the menu is closed)."""
-    win.properties.ensureWidgetVisible(widget)
-    settle()
-    point = widget.mapTo(win, at)
-    under = win.childAt(point)
-    assert under is widget or widget.isAncestorOf(under), f"the pointer at {point} is over {under}, not {widget}"
+def menu_after(qtbot, win, cause, choose: str | None = DELETE_ROW, wait: float = 3) -> list[str]:
+    """Do `cause` (a right-click, the menu key): the items of the menu that opens within `wait` seconds ([]: none
+    opened); the one starting with `choose` is clicked if it is there and enabled (otherwise, or with choose None, the
+    menu is closed)."""
     seen, done = [], []
 
     def act(deadline):  # (a menu waits for you inside the right-click)
@@ -278,19 +282,48 @@ def right_click(qtbot, win, widget: QWidget, at: QPoint, choose: str = DELETE_RO
             return
         if menu is not None:
             seen.extend(plain(a.text()) for a in menu.actions() if a.text())
-            item = next((a for a in menu.actions() if plain(a.text()).startswith(choose) and a.isEnabled()), None)
+            item = next((a for a in menu.actions() if choose is not None and plain(a.text()).startswith(choose)
+                         and a.isEnabled()), None)
             if item is not None:
                 QTest.mouseClick(menu, Qt.LeftButton, Qt.NoModifier, menu.actionGeometry(item).center())
             if menu.isVisible():
                 menu.close()
         done.append(1)
 
-    QTimer.singleShot(0, win, lambda: act(time.monotonic() + 3))
-    QCursor.setPos(win.mapToGlobal(point))  # (the pointer is there, as with a mouse: Qt's menu goes there)
-    QTest.mouseClick(win.windowHandle(), Qt.RightButton, Qt.NoModifier, point)
+    QTimer.singleShot(0, win, lambda: act(time.monotonic() + wait))
+    cause()
     qtbot.waitUntil(lambda: bool(done), timeout=30_000)
     settle()
     return seen
+
+
+def right_click(qtbot, win, widget: QWidget, at: QPoint, choose: str | None = DELETE_ROW) -> list[str]:
+    """Right-click `widget` at `at` (in its own coordinates) through the window, as the mouse does, Properties scrolled
+    to it first: the items of the menu that opens ([]: none opened); the one starting with `choose` is clicked if it
+    is there and enabled (otherwise the menu is closed)."""
+    win.properties.ensureWidgetVisible(widget)
+    settle()
+    point = widget.mapTo(win, at)
+    under = win.childAt(point)
+    assert under is widget or widget.isAncestorOf(under), f"the pointer at {point} is over {under}, not {widget}"
+
+    def click():
+        QCursor.setPos(win.mapToGlobal(point))  # (the pointer is there, as with a mouse: Qt's menu goes there)
+        QTest.mouseClick(win.windowHandle(), Qt.RightButton, Qt.NoModifier, point)
+
+    return menu_after(qtbot, win, click, choose)
+
+
+def menu_key(qtbot, win, view) -> list[str]:
+    """Press the menu key in the list (on Windows also Shift+F10): the items of the menu that opens, closed unchosen
+    ([]: none opened). The platform turns that key into a context menu event of reason Keyboard for the widget with
+    the keyboard focus, sent here as it sends it (Qt's test keys reach the widget without the platform)."""
+    at = view.viewport().rect().center()
+
+    def key():
+        QApplication.sendEvent(view, QContextMenuEvent(QContextMenuEvent.Keyboard, at, view.viewport().mapToGlobal(at)))
+
+    return menu_after(qtbot, win, key, choose=None, wait=1)
 
 
 def deletes_by_menu(qtbot, win, view, r: int, title: str):
@@ -732,3 +765,204 @@ def test_the_note_under_connection_shows_a_repeated_headers_values_as_they_are_s
         lines = notes[0].splitlines()
         assert "Header X-Tag: zero (replaced by this block's X-Tag: one, two)" in lines, lines
         assert "Header Cookie: theme=dark (replaced by this block's Cookie: a=1; b=2)" in lines, lines
+
+
+# --- the list's parts: ticks, columns, the add line, the hint, the right-click menu, the keys -------------------------
+
+def ticks(view, title: str) -> list[bool]:
+    """Whether each row's tick in the column headed `title` is on."""
+    model, c = view.model(), column(view, title)
+    return [getattr(state, "value", state) == Qt.Checked.value
+            for state in (model.index(r, c).data(Qt.CheckStateRole) for r in range(model.rowCount()))]
+
+
+def top(widget, body) -> int:
+    return widget.mapTo(body, QPoint(0, 0)).y()
+
+
+@contextmanager
+def qt_style(name: str):
+    """The whole application drawn in Qt's style `name` (Fusion: as in every other test), then as it was."""
+    app, before = QApplication.instance(), QApplication.style().name()
+    if before.lower() != name.lower():
+        app.setStyle(name)
+    try:
+        yield
+    finally:
+        if QApplication.style().name().lower() != before.lower():
+            app.setStyle(before)
+
+
+@pytest.mark.parametrize("style", ["Fusion", "Windows"])  # (a frame 1 and 2 pixels wide)
+@pytest.mark.parametrize("lst", [HEADERS, PARTS], ids=["Headers", "Parts"])
+def test_the_list_has_its_columns_is_as_tall_as_its_rows_and_lines_up_with_the_other_settings(qtbot, win, tmp_path,
+                                                                                             lst, style):
+    """In Qt's Fusion and Windows styles: the list's columns are its ticks (no heading), Name, Value, and File for
+    Parts (whose rows can be files); Name and Value share the width the narrow tick columns leave; the list is as tall
+    as its rows (the last one whole, nothing under it); it starts where its name starts and ends where the other
+    settings' fields end; and its name, the list, the line to add a row, the hint and the next setting are as far
+    apart as its name is from the setting above it."""
+    with qt_style(style), editing(win):
+        open_list(qtbot, win, tmp_path, lst)
+        view = table(win, lst)
+        model = view.model()
+        headings = [str(model.headerData(c, Qt.Horizontal) or "") for c in range(model.columnCount())]
+        assert headings == ["", "Name", "Value"] + ["File"] * (lst is PARTS), headings
+        widths = [view.columnWidth(c) for c in range(model.columnCount())]
+        name_width, value_width = widths[1], widths[2]
+        assert abs(name_width - value_width) <= 1, f"Name and Value do not share the width: {widths}"
+        assert all(w < name_width / 2 for w in widths[:1] + widths[3:]), f"the tick columns are not narrow: {widths}"
+        assert sum(widths) == view.viewport().width(), f"the columns {widths} do not fill the list"
+        assert view.viewport().height() == sum(view.rowHeight(r) for r in range(model.rowCount())), \
+            f"the list is {view.viewport().height()} pixels tall inside, its rows {view.rowHeight(0)} each"
+
+        body = win.properties.widget()
+        name = setting(win, lst.label)[0]
+        line, = under_the_list(win, view, QLineEdit)
+        hint, = under_the_list(win, view, QLabel)
+        field = setting(win, "Name")[1]
+        assert view.mapTo(body, QPoint(0, 0)).x() == name.mapTo(body, QPoint(0, 0)).x()
+        assert view.mapTo(body, QPoint(view.width(), 0)).x() == field.mapTo(body, QPoint(field.width(), 0)).x()
+        others = [w for w in body.findChildren(QWidget) if w.parentWidget() is body and w.isVisibleTo(win)]
+        above = max(top(w, body) + w.height() for w in others if top(w, body) + w.height() <= top(name, body))
+        below = min(top(w, body) for w in others if top(w, body) >= top(hint, body) + hint.height())
+        gaps = [top(name, body) - above, top(view, body) - top(name, body) - name.height(),
+                top(line, body) - top(view, body) - view.height(), top(hint, body) - top(line, body) - line.height(),
+                below - top(hint, body) - hint.height()]
+        assert len(set(gaps)) == 1, f"the gaps above the name, under it, the list, the add line and the hint: {gaps}"
+
+
+@pytest.mark.invariant("AP-3")
+def test_an_unticked_row_and_a_file_row_keep_their_ticks_when_another_row_is_changed(qtbot, win, tmp_path):
+    """Parts, whose rows have a tick (sent or not) and a File tick: a row not ticked (on: false) and a row ticked File
+    (file: true) show so; another row's value changed: the list shows the same ticks, and the flow file still holds
+    on: false and file: true on those rows."""
+    with editing(win):
+        rows = [{"key": "note", "value": "nightly upload"}, {"key": "region", "value": "north", "on": False},
+                {"key": "report", "value": "out/report.csv", "file": True}]
+        _, path = open_rows(qtbot, win, tmp_path, PARTS, rows)
+        view = table(win, PARTS)
+        assert (ticks(view, ""), ticks(view, "File")) == ([True, False, True], [False, False, True])
+
+        type_over(view, 0, "Value", "weekly upload")
+        view = table(win, PARTS)
+        assert (ticks(view, ""), ticks(view, "File")) == ([True, False, True], [False, False, True])
+        save(win)
+        assert saved_rows(path, PARTS) == [{"key": "note", "value": "weekly upload"}, *rows[1:]]
+
+
+@pytest.mark.invariant("AP-3")
+def test_a_row_written_without_a_name_or_a_value_shows_it_empty(qtbot, win, tmp_path):
+    """A flow file written by hand whose Headers have a row with no value (allowed: an empty value is sent) and a row
+    with no name (Properties says it is wrong): the list shows the missing name and value empty, no word in their
+    place."""
+    with editing(win):
+        rows = [{"value": "nameless"}, {"key": "X-Empty"}, {"key": "Accept", "value": "application/json"}]
+        open_rows(qtbot, win, tmp_path, HEADERS, rows)
+
+        assert shown(table(win, HEADERS)) == [("", "nameless"), ("X-Empty", ""), ("Accept", "application/json")]
+
+
+@pytest.mark.invariant("AP-1")
+@pytest.mark.invariant("AP-3")
+def test_backspace_deletes_the_selected_row_as_delete_does(qtbot, win, tmp_path):
+    """On a Mac's keyboard the key marked delete is Backspace: click a row, press Backspace: the row is gone, the
+    others stay in their order, and the flow file holds them."""
+    with editing(win):
+        tab, path = open_list(qtbot, win, tmp_path, HEADERS)
+        view = table(win, HEADERS)
+        select_row(view, 1)
+        press(view, Qt.Key_Backspace)
+
+        holds(win, path, HEADERS, [HEADERS.rows[0], HEADERS.rows[2]])
+        assert BLOCK in tab.doc.blocks, "Backspace in the list deleted the block"
+
+
+@pytest.mark.invariant("AP-3")
+def test_a_row_typed_in_the_line_under_the_list_is_added_last_with_its_whole_value(qtbot, win, tmp_path):
+    """The line under Headers says how to add a row; typed there, a name, the separator and a value that holds a colon
+    itself (an address), then Enter: the row is added after the others with the whole address as its value, and the
+    flow file holds the list."""
+    with editing(win):
+        _, path = open_list(qtbot, win, tmp_path, HEADERS, rows=HEADERS.rows[:1])
+        line = add_line(win, HEADERS)
+        assert line.placeholderText() == "add a row: name: value, then Enter"
+        QTest.mouseClick(line, Qt.LeftButton)
+        QTest.keyClicks(line, "X-Link: http://127.0.0.1:9/orders?page=2")
+        QTest.keyClick(line, Qt.Key_Return)
+        settle()
+
+        holds(win, path, HEADERS, [HEADERS.rows[0], ("X-Link", "http://127.0.0.1:9/orders?page=2")])
+
+
+@pytest.mark.invariant("AP-1")
+def test_right_click_deletes_the_first_row_too_and_the_menu_key_offers_no_row(qtbot, win, tmp_path):
+    """The menu key (no row under a pointer) opens no menu, neither at first nor after a row's right-click menu was
+    closed unchosen; right-click the first row and choose Delete row: it is gone like any other, the file holds the
+    rest."""
+    with editing(win):
+        _, path = open_list(qtbot, win, tmp_path, HEADERS)
+        view = table(win, HEADERS)
+        select_row(view, 0)
+        assert menu_key(qtbot, win, view) == [], "the menu key opened a menu"
+        seen = right_click(qtbot, win, view.viewport(), cell(view, 1, "Value"), choose=None)
+        assert any(item.startswith(DELETE_ROW) for item in seen), f"right-clicking a row opened {seen or 'no menu'}"
+        assert shown(table(win, HEADERS)) == list(HEADERS.rows), "closing the menu unchosen changed the list"
+        assert menu_key(qtbot, win, table(win, HEADERS)) == [], "after a row's menu, the menu key opened a menu"
+        deletes_by_menu(qtbot, win, table(win, HEADERS), 0, "Value")
+
+        holds(win, path, HEADERS, HEADERS.rows[1:])
+
+
+@pytest.mark.invariant("AP-2")
+def test_the_hint_under_the_list_says_how_to_change_and_delete_rows_in_these_words(qtbot, win, tmp_path):
+    """The hint under Custom statistics reads: Double-click a cell to change it. Delete removes the selected row."""
+    with editing(win):
+        open_list(qtbot, win, tmp_path, CUSTOM)
+
+        assert [label.text() for label in under_the_list(win, table(win, CUSTOM), QLabel)] == [HINT]
+
+
+# --- the note under Connection, word for word -------------------------------------------------------------------------
+
+def note_under_connection(win) -> str:
+    """The text Properties shows right under the Connection setting."""
+    body = win.properties.widget()
+    field = setting(win, "Connection")[1]
+    bottom = top(field, body) + field.height()
+    return min((w for w in body.findChildren(QLabel) if w.isVisibleTo(win) and top(w, body) >= bottom),
+               key=lambda w: top(w, body)).text()
+
+
+@pytest.mark.invariant("AP-5")
+def test_the_note_under_connection_says_word_for_word_what_the_connection_gives_or_why_it_cannot(qtbot, win, tmp_path):
+    """Three API Requests: with a connection that has no base URL, Basic auth with a user name and a stored secret,
+    two headers (one replaced by the block's own row, which has no value: an empty one is sent) and a CA certificate
+    file; with one that has a base URL, an API key in a header and certificates not verified; and with one that is
+    not in connections.yaml. The note under Connection says each, word for word."""
+    with editing(win):
+        (win.home.root / "connections.yaml").write_text(yaml.safe_dump({
+            "basic": {"kind": "api", "auth": "Basic", "username": "nightly", "secret": "secret:shop_pw",
+                      "headers": as_rows([("X-Client", "taskloom"), ("X-Tag", "zero")]), "ca_file": "certs/ca.pem"},
+            "keyed": {"kind": "api", "base_url": "http://127.0.0.1:9/api", "auth": "API key in a header",
+                      "key_name": "X-Api-Key", "secret": "secret:shop_key", "dont_verify": True}}), encoding="utf-8")
+        own = {"basic": {"headers": [{"key": "X-Tag"}]}, "keyed": {}, "gone": {}}
+        tab = win.open_flow(flow_file(tmp_path / "notes.yaml", {
+            name: {"type": API, "config": {"url": "/orders", "connection": name, **config},
+                   "ui": {"x": 0, "y": 200 * i}} for i, (name, config) in enumerate(own.items())}))
+        settle()
+        notes = {}
+        for name in own:
+            select_only(tab, name)
+            notes[name] = note_under_connection(win)
+
+        assert notes == {
+            "basic": "From the connection basic (change it in Tools > Connections):\nBase URL: (none)\n"
+                     "Auth: Basic, user name nightly, with the stored secret shop_pw\nHeader X-Client: taskloom\n"
+                     "Header X-Tag: zero (replaced by this block's X-Tag: )\nCA certificate file: certs/ca.pem",
+            "keyed": "From the connection keyed (change it in Tools > Connections):\nBase URL: http://127.0.0.1:9/api\n"
+                     "Auth: API key in a header, key name X-Api-Key, with the stored secret shop_key\n"
+                     "Certificates are not verified",
+            "gone": "Connection: no connection named 'gone' in connections.yaml"}
+
+

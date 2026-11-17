@@ -3,9 +3,10 @@
 # -k words or without). The change's other lines are not functions of their own, or changed only a docstring or a
 # comment, so nothing is planted in them: README.md, docs/guide.md, pyproject.toml and packaging/taskloom.spec; the
 # docstrings of docs.py and of _guide, of _documentation_shown (taskloom/editor/window.py), and a comment in
-# triggers.py. tests/test_readme_guide.py is not run here: its tests read README.md, pyproject.toml's wheel settings
-# and packaging/, which mutation testing's copy of the project does not hold (it holds the package, tests/ and
-# docs/guide.md); the guide an installed app reads (taskloom/guide.md, _guide_text's first place) is checked there.
+# triggers.py. Of tests/test_readme_guide.py only its as_installed tests run here: the others read README.md,
+# pyproject.toml's wheel settings and packaging/, which mutation testing's copy of the project does not hold (it holds
+# the package, tests/ and docs/); those two make the package look installed, with taskloom/guide.md beside it (where
+# the wheel puts the guide, _guide_text's first place) or with none, and no docs/ folder above it.
 # The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it explains) or
 # one by one (mutant name: why it changes nothing a user could notice). Only those no user could notice are
 # explained: the others stay without a reason until a test catches them.
@@ -16,3 +17,19 @@ scope:
         - taskloom/editor/docs.py pages
       tests:
         - tests/test_docs_help.py -k "guide or contents_begins or every_link_and_anchor or user_blocks_are_in_contents"
+        - tests/test_readme_guide.py -k as_installed
+kinds:
+  - kind: The name of the guide's encoding in capitals
+    why: >-
+      "UTF-8" and "utf-8" name the same encoding: Python reads the guide the same either way.
+    mutants:
+      - taskloom.editor.docs.x__guide_text__mutmut_15
+  - kind: The guide read in the computer's own encoding, which is UTF-8 where mutation testing runs
+    why: >-
+      With no encoding named, Python reads the guide in the computer's own encoding. On Linux, where mutation testing
+      runs, that is UTF-8, so the guide reads the same and no test there can tell. On Windows it is often another
+      (cp1252 reads Mon–Fri as Monâ€“Fri): there
+      test_help_documentation_as_installed_shows_the_guide_md_beside_the_package_as_written, which the normal test
+      run runs on Windows too, fails, as its guide has a dash and an accent.
+    mutants:
+      - taskloom.editor.docs.x__guide_text__mutmut_13

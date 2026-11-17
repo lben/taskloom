@@ -29,6 +29,7 @@ scope:
         - tests/test_long_output_log.py -k "data_preview_holds or select_all_and_copy_gives or line_of_5000 or inspect_on_a_5_mb"
         - tests/test_long_output_mutants.py -k "copied_from_data_preview or find_in_data_preview"
         - tests/test_preview_long_error.py
+        - tests/test_zoom_panes.py -k "grow_the_pane and preview and text"
     - mutate:
         - taskloom/editor/panels.py FindBar._find
       tests:
@@ -205,11 +206,21 @@ kinds:
       The box keeps its timer itself, so it lives as long with no parent; and a slice a thousandth of a second
       later, 25 slices for 5 MB, is nothing to see. The text kept before any is shown is replaced when one is.
     mutants:
-      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_6
-      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_8
-      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_10
-      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_11
       - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_12
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_14
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_16
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_17
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_18
+  - kind: Data preview text's size kept under another name
+    why: >-
+      The name is only the key under which Data preview text's zoom is written to editor.ini and read back from it.
+      Spelled another way that no other pane has, the box still zooms, keeps its own size apart from the other
+      panes' and has it again when the editor opens again
+      (test_each_kind_of_pane_has_its_size_when_the_editor_is_opened_again_the_canvas_does_not passes either way); no
+      editor.ini holds a size under the name from before, as zoom is new in this release.
+    mutants:
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_8
+      - taskloom.editor.panels.xǁ_TextBoxǁ__init____mutmut_9
   - kind: More of a table's rows fetched than are drawn
     why: >-
       Polars draws at most 10 rows: of more it draws the first 5, a row of …, and the last 5. So a 7th row fetched

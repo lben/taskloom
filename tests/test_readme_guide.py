@@ -313,6 +313,57 @@ def test_the_installed_apps_help_documentation_is_the_guide_of_docs_guide_md(bui
     assert problems == [], "\n".join(problems)
 
 
+def pages_as_installed(tmp_path: Path, monkeypatch, guide: str | None) -> dict[str, str]:
+    """Help > Documentation's pages (docs.pages) of Taskloom as installed in tmp_path/site-packages, with no source
+    checkout around it (no docs/ folder above the package): taskloom/guide.md, where the wheel puts docs/guide.md,
+    holds `guide` (None: it is missing, a broken install). Built in this process: the docs module's __file__ says
+    where it is installed."""
+    from taskloom.editor import docs
+    from taskloom.registry import discover
+    package = tmp_path / "site-packages" / "taskloom"
+    (package / "editor").mkdir(parents=True)
+    if guide is not None:
+        (package / "guide.md").write_text(guide, encoding="utf-8")
+    monkeypatch.setattr(docs, "__file__", str(package / "editor" / "docs.py"))
+    return docs.pages(discover(None))
+
+
+def shown(page: str) -> str:
+    """A page's text as it reads, its words one space apart."""
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", page)).split())
+
+
+# A guide written in UTF-8 with a dash and an accent (two or three bytes each there), as docs/guide.md is.
+INSTALLED_GUIDE = ("Automations made of blocks – this is the installed guide.\n\n## Schedules\n\n"
+                   "A Schedule block starts the flow on weekdays (Mon–Fri) at 07:30, Zürich time.\n")
+
+
+@pytest.mark.invariant("RD-2")
+def test_help_documentation_as_installed_shows_the_guide_md_beside_the_package_as_written(tmp_path, monkeypatch):
+    """RD-2 as installed: the wheel puts docs/guide.md into the package as taskloom/guide.md, and with no source
+    checkout around it Help > Documentation shows that file: Contents begins with its introduction and its "## "
+    section is a page, their dashes and accents as written (the file is UTF-8, whatever the computer's own encoding:
+    on Windows it is often another)."""
+    pages = pages_as_installed(tmp_path, monkeypatch, INSTALLED_GUIDE)
+
+    contents = shown(pages["index.html"])
+    assert contents.startswith("Automations made of blocks – this is the installed guide."), contents[:300]
+    assert "A Schedule block starts the flow on weekdays (Mon–Fri) at 07:30, Zürich time." in shown(
+        pages.get("schedules.html", "")), sorted(pages)
+
+
+@pytest.mark.invariant("RD-2")
+def test_help_documentation_as_installed_without_its_guide_md_says_so_in_these_words(tmp_path, monkeypatch):
+    """The broken install of RD-2: taskloom/guide.md missing, no source checkout around it. Contents begins with the
+    heading Taskloom and says, in these words, that the guide is not included and the reference is; then come its
+    Guide part (empty) and its Reference."""
+    pages = pages_as_installed(tmp_path, monkeypatch, None)
+
+    contents = shown(pages["index.html"])
+    assert contents.startswith("Taskloom The guide is not included in this installation (its guide.md is missing); "
+                               "the reference below is. Guide Reference"), contents[:300]
+
+
 # --- RD-3: every link in the README works --------------------------------------------------------------------------
 
 @pytest.mark.invariant("RD-3")
