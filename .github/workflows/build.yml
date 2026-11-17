@@ -149,7 +149,7 @@ jobs:
       matrix:
         feature: ${{ fromJSON(needs.features.outputs.names) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 330  # (as the scheduler's: the one brace rule's mutation testing, 492 mutants, takes over 90 minutes)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
