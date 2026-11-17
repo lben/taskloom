@@ -8,7 +8,8 @@
 # BR-8 and BR-10 tests read; params._BRACES and LITERAL_BRACES (constants, used by the functions below); the
 # docstrings of written_seconds and _shown and a comment in CheckFile._limit. The tests of tests/test_braces.py that
 # read the shipped example flows and README.md are not run here: mutation testing's copy of the project holds the
-# package, tests/ and docs/guide.md only. The mutants the tests let through are explained here, by kind (kinds: a
+# package, tests/ and docs/ only, with a pyproject.toml of its own (so the test that reads the project's
+# dependencies, test_reports_are_made_without_jinja2_which_is_no_longer_a_dependency, is not run here either). The mutants the tests let through are explained here, by kind (kinds: a
 # kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could notice).
 # Only those no user could notice are explained: the others stay without a reason until a test catches them.
 scope:
@@ -51,7 +52,7 @@ scope:
         - taskloom/blocks/reports.py HtmlTemplate.run
       tests:
         - tests/test_braces.py -k html
-        - tests/test_html_template_inputs.py -k "not the_example_whose_file"
+        - tests/test_html_template_inputs.py -k "not the_example_whose_file and not without_jinja2"
         - tests/test_template_styles.py
         - tests/test_paths_reports_email.py -k html_template_mistakes
     - mutate:

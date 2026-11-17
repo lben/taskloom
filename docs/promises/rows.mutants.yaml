@@ -19,9 +19,15 @@ scope:
         - tests/test_api_request.py -k params_and_the_urls_query_stay_in_step
     - mutate:
         - taskloom/blocks/servers.py _sent_header
-        - taskloom/blocks/servers.py _call
         - taskloom/blocks/servers.py _row_headers
         - taskloom/blocks/servers.py connection_note
       tests:
         - tests/test_rows.py -k "same_name or note_under_connection"
         - tests/test_api_request.py -k "params_are_added or headers_are_sent or auth_kind or secret_that_is_not_stored or connection_gives or connection_chosen_its_values or redirect_to_another_host or copy_as_curl or log_says_what_was_sent"
+not_tested:
+  taskloom/blocks/servers.py _call: >-
+    The API Request's request as it is built, about 60 lines, in which this change replaced the lines that built the
+    headers from the rows by one call of _row_headers (mutated whole above) and kept the names that carry a secret
+    from it. test_two_rows_with_the_same_name_are_both_kept_and_both_sent_in_the_lists_order,
+    test_a_connection_gives_its_base_url_auth_and_default_headers_and_the_blocks_own_headers_win and
+    test_the_log_says_what_was_sent_and_what_came_back_and_never_a_secret check those lines.
