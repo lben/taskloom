@@ -1638,6 +1638,11 @@ uv run pytest
 The JDBC tests start an H2 database server and need Java; they download the H2 jar once.
 GitHub Actions (`.github/workflows/build.yml`) runs the tests on Linux and Windows, builds
 the Windows zip and the Linux runner, and smoke-tests both; tagging `v*` publishes them.
+It runs for a `v*` tag, a pull request, or by hand (Actions > test and build > Run workflow,
+where `tests` can name only some tests); a push to `main` starts nothing. Each system's tests
+are split over several machines at once. The scheduler's model check and its mutation testing
+are taken from the newest earlier run whose files they read were the same, and the proof PDF
+names that run.
 
 The documentation website, <https://lben.github.io/taskloom/>, has the pages of Help > Documentation
 with the built-in blocks; `uv run python packaging/docs_site.py site` builds it into `site`. After
