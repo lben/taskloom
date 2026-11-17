@@ -30,7 +30,7 @@ scope:
         - taskloom/block.py has_placeholders
       tests:
         - tests/test_placeholders.py
-        - tests/test_braces.py -k "double_braces_give or naming_nothing or every_setting_that_is_filled or python_code_is_not_filled"
+        - tests/test_braces.py -k "double_braces_give or naming_nothing or every_setting_that_is_filled or python_code_is_not_filled or cannot_be_filled or header_rows or sql_code_fills"
         - tests/test_loop_container.py -k without_a_placeholder
         - tests/test_merger_each_line.py -k without_a_placeholder
         - tests/test_paths_logic.py -k cannot_work_is_refused_by_validate
@@ -98,3 +98,25 @@ not_tested:
   taskloom/editor/panels.py PropertiesPanel._url_widget: >-
     An API Request's URL in Properties, in which this change touched one line: its hint, with a connection chosen,
     says /orders/{{id}}. test_properties_shows_no_single_brace_placeholder_in_the_help_of_any_block reads that hint.
+kinds:
+  - kind: The f-string's prefix written in capitals
+    why: >-
+      Python reads a string's prefix in either case: RF"""...""" is the same f-string as rf"""...""", so Inspect's
+      message is filled in and shown the same, e.g. Day {{day}}: {{value}}.
+    mutants:
+      - taskloom.blocks.logic.x__message_source__mutmut_43
+  - kind: The moment the expression functions are made for
+    why: >-
+      Validate looks only at the names of the expression functions (today, now, days, len...), to tell a name an
+      expression in Inspect's message may use from a misspelt one; the moment they work from is used only when one
+      of them is called, which Validate never does. The names are the same for any moment.
+    mutants:
+      - taskloom.blocks.logic.xǁInspectǁproblems__mutmut_13
+  - kind: A frame that is not yet a Table
+    why: >-
+      What arrives at a block's input is never a bare Polars, pandas or Arrow frame: each block's output, each input
+      typed for Run this block and each input kept from an earlier run is stored as a Table first (engine._as_tables,
+      run_flow), so asking whether it is such a frame changes no message: a table arriving is told "got a table" all
+      the same.
+    mutants:
+      - taskloom.engine.x__filled__mutmut_24

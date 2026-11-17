@@ -7,8 +7,9 @@ Each case of the stage's table of combinations (B1-B20) runs in each of the seve
 the user types it there: a Run Query's SQL (an H2 database), an API Request's URL and its text body (a web server on
 this computer), Write File's path, Send Email's message and an HTML Template (an SMTP server on this computer), and
 Inspect's message (its line in the run history's Log). Through the real `taskloom validate` and `taskloom run` on flow
-files, the offscreen editor (Validate, F7; Import from cURL; Properties), the block registry walked as the engine walks
-it (BR-5), and the shipped examples, help texts and documentation pages (BR-8).
+files (or, for the quicker cases, the run and Validate they call, in this process), the offscreen editor (Validate,
+F7; Import from cURL; Properties), the block registry walked as the engine walks it (BR-5), and the shipped examples,
+help texts and documentation pages (BR-8).
 
 What the tests take as given (the promises leave it to the change):
 - the warning of BR-4 is a `warning:` line of `taskloom validate`, and a WARNING line of the editor's Log after F7,
@@ -39,8 +40,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTextEdit, QWidget  # noqa: E402
 
 from conftest import REPO  # noqa: E402
+from taskloom import engine  # noqa: E402
 from taskloom.block import fields  # noqa: E402
+from taskloom.config import Home  # noqa: E402
 from taskloom.editor import docs  # noqa: E402
+from taskloom.flow import load_flow, validate  # noqa: E402
 from taskloom.registry import discover  # noqa: E402
 from tests.test_api_request import PROXY_VARIABLES, Api  # noqa: E402
 from tests.test_curl_import import Site, editing, fill_in, new_api, output, run_flow, setting_key  # noqa: E402
@@ -197,6 +201,14 @@ def did_you_mean(result, kind: str, name: str) -> list[str]:
     return [line for line in result.stderr.splitlines()
             if line.startswith("warning: ") and BLOCK in line and LABEL[kind] in line
             and f"did you mean {{{{{name}}}}}" in line.lower()]
+
+
+def ran_here(env, flow: Path, **kw) -> tuple[engine.RunResult, dict]:
+    """`flow` run as taskloom run runs it, in this process (quicker than starting taskloom; `kw`: only, given, as
+    run_flow takes them): (its result, {block: its error} of each block that failed)."""
+    result = engine.run_flow(load_flow(flow), discover(None), Home(env.home), **kw)
+    return result, dict(env.query("SELECT block, error FROM blocks WHERE run_id=? AND status='failed'",
+                                  result.run_id))
 
 
 # --- B1-B20: each case in each kind of setting ----------------------------------------------------------------------
@@ -472,6 +484,26 @@ def test_inspects_help_says_double_braces_hold_an_expression_and_single_braces_a
     assert examples and [e for e in examples if "{{" not in e or single_braced(e)] == [], examples
 
 
+AS_TYPED = {
+    "triple double quotes": ('He said """hi""" to {{p}}', None, 'He said """hi""" to V7'),
+    "triple single quotes": ("It's '''odd''' for {{p}}", None, "It's '''odd''' for V7"),
+    "python's own functions": ("{{sorted(value)}} {{sum(value)}}", [3, 1, 2], "[1, 2, 3] 6"),
+}
+
+
+@pytest.mark.invariant("BR-10")
+@pytest.mark.parametrize("message, arriving, expected", list(AS_TYPED.values()), ids=list(AS_TYPED))
+def test_inspects_message_shows_triple_quotes_as_typed_and_its_expressions_may_use_pythons_own_functions(
+        env, message, arriving, expected):
+    """BR-10: the plain text of Inspect's message is shown as typed, three double quotes or three single quotes in it
+    too, and an expression in {{ }} may use Python's own functions (sorted, sum), not only the expression functions:
+    Validate lets the flow run and the Log shows the message filled in."""
+    _, failed = ran_here(env, inspect_flow(env, message, arriving=arriving))
+
+    assert failed == {}, failed
+    assert expected in logged(env), logged(env)
+
+
 # --- BR-5: every setting that is filled, as the engine walks the registry --------------------------------------------
 
 ECHO = '''
@@ -612,6 +644,128 @@ def test_python_code_is_not_filled(env):
 
     assert result.returncode == 0, said(result)
     assert (env.root / "code.txt").read_text(encoding="utf-8") == "{{p}} {p}"
+
+
+# --- what the run says when a {{name}} cannot be filled in; SQL code; a header's rows ---------------------------------
+
+SINGLE_ONLY = "but only a single value (text, a number, a date or time, yes/no) can be written into a setting"
+# What arrives at Wait's value input (None: nothing is connected there; "": nothing arrived, as Run this block with
+# the value left empty), as typed for Run this block, and why its seconds {{value}} cannot be filled in.
+CANNOT_FILL = {
+    "not connected": (None, "nothing is connected to the input value"),
+    "nothing arrived": ("", "nothing arrived at the input value"),
+    "a table": ("pl.DataFrame({'a': [1]})", f"the input value got a table, {SINGLE_ONLY}"),
+    "None": ("None", f"the input value got None, {SINGLE_ONLY}"),
+    "a dict": ("{'a': 1}", f"the input value got a dict, {SINGLE_ONLY}"),
+}
+
+
+@pytest.mark.invariant("BR-3")
+@pytest.mark.parametrize("typed, why", list(CANNOT_FILL.values()), ids=list(CANNOT_FILL))
+def test_a_placeholder_that_cannot_be_filled_fails_its_block_saying_why(env, typed, why):
+    """BR-3 at the run: Wait's seconds {{value}} with nothing connected to its value input, nothing arriving there, or
+    a table, None or a dict arriving: the block fails, never filled in, and its error names the setting, the
+    placeholder and why, in these words."""
+    blocks = {"start": {"type": "trigger.manual"}, BLOCK: {"type": "logic.wait", "config": {"seconds": "{{value}}"}}}
+    edges = [f"start.start -> {BLOCK}.after"]
+    if typed is not None:
+        blocks["make"] = {"type": "logic.python", "config": {"inputs": [], "code": "output = 1"}}
+        edges += ["start.start -> make.after", f"make.output -> {BLOCK}.value"]
+    flow = flow_file(env.root / "flow.yaml", blocks, edges, params=PARAMS)
+
+    _, failed = ran_here(env, flow) if typed is None else ran_here(env, flow, only=BLOCK, given={"value": typed})
+
+    assert failed == {BLOCK: f"Seconds: {{{{value}}}}: {why}"}, failed
+
+
+@pytest.mark.invariant("BR-1")
+def test_a_header_that_cannot_be_filled_in_its_format_fails_the_block_naming_headers(env):
+    """BR-1: {{name:format}} formats the value; a format the value cannot take ({{p:d}}, p being a text) in a row of
+    an API Request's Headers fails the block before it sends anything, naming the setting and why."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        BLOCK: api_request("http://127.0.0.1:9/t", headers=[{"key": "X-Count", "value": "{{p:d}}"}])},
+        [f"start.start -> {BLOCK}.after"], params=PARAMS)
+
+    _, failed = ran_here(env, flow)
+
+    assert failed == {BLOCK: "Headers: Unknown format code 'd' for object of type 'str'"}, failed
+
+
+@pytest.mark.invariant("BR-5")
+def test_header_rows_are_filled_in_their_key_and_value_and_a_row_not_ticked_is_not_sent(env, monkeypatch):
+    """BR-5: an API Request's Headers are filled in each row's key and value ({{p}} gives V7), and a row that is not
+    ticked (on: false) is not sent, whatever it holds."""
+    for name in [k for k in os.environ if k.lower() in PROXY_VARIABLES]:
+        monkeypatch.delenv(name)  # (a request to this computer's web server goes straight to it)
+    api = Api()
+    try:
+        flow = flow_file(env.root / "flow.yaml", {
+            "start": {"type": "trigger.manual"},
+            BLOCK: api_request(f"{api.base}/t", headers=[{"key": "X-{{p}}", "value": "{{p}}"},
+                                                         {"key": "X-Off", "value": "{{p}}", "on": False}])},
+            [f"start.start -> {BLOCK}.after"], params=PARAMS)
+
+        _, failed = ran_here(env, flow)
+        sent = api.got("/t")
+    finally:
+        api.close()
+
+    assert failed == {} and len(sent) == 1, failed
+    headers = sent[0]["headers"]
+    assert headers.get("x-v7") == V and "x-off" not in headers, headers
+
+
+@pytest.mark.invariant("BR-1")
+def test_sql_code_fills_the_parameter_even_where_an_input_of_the_block_has_its_name(env):
+    """BR-1 in SQL code, which takes flow parameters only: DuckDB SQL's {{n}} is the parameter n (2), though a table
+    arrives at its input n too, which the SQL reads by that name."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        "rows": {"type": "data.duckdb_sql", "config": {"inputs": [], "sql": "select 1 as x"}},
+        BLOCK: {"type": "data.duckdb_sql", "config": {"inputs": ["n"], "sql": "select {{n}} as v, x from n"}}},
+        ["start.start -> rows.after", f"rows.result -> {BLOCK}.n"], params={"n": {"type": "int", "value": 2}})
+
+    result, failed = ran_here(env, flow)
+
+    assert failed == {}, failed
+    assert result.outputs[BLOCK, "result"].scan().collect().to_dicts() == [{"v": 2, "x": 1}]
+
+
+# --- HTML Template: what Validate and a run on its own say about its inputs' names ----------------------------------
+
+@pytest.mark.invariant("BR-1")
+def test_an_html_templates_inputs_named_like_a_parameter_are_each_named_in_validates_error(env):
+    """BR-1: {{day}} names a flow parameter or an input, so two inputs both named day, day being a parameter too, is an
+    error of Validate that names both of them."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        "a": {"type": "logic.python", "config": {"inputs": [], "code": "output = 1"}},
+        "b": {"type": "logic.python", "config": {"inputs": [], "code": "output = 2"}},
+        BLOCK: {"type": "reports.html_template", "config": {"names": {"a.output": "day", "b.output": "day"},
+                                                            "template": "{{day}}"}}},
+        ["start.start -> a.after", "start.start -> b.after", f"a.output -> {BLOCK}.data", f"b.output -> {BLOCK}.data"],
+        params=PARAMS)
+
+    errors, _ = validate(load_flow(flow), discover(None), Home(env.home))
+
+    assert (f"{BLOCK}: Inputs: day (from a.output, b.output) is also a flow parameter; give the input another name"
+            in errors), errors
+
+
+@pytest.mark.invariant("BR-3")
+def test_an_html_template_run_on_its_own_with_an_input_it_has_no_name_for_fails_naming_the_placeholder(env):
+    """BR-3 at the run: an HTML Template whose {{w}} names the block connected to it, run on its own with what arrives
+    at data typed as coming from another block, fails with the words Validate would use: {{w}} is not an input."""
+    flow = flow_file(env.root / "flow.yaml", {
+        "w": {"type": "logic.python", "config": {"inputs": [], "code": "output = 'hi'"}},
+        BLOCK: {"type": "reports.html_template", "config": {"template": "Hi {{w}}"}}},
+        [f"w.output -> {BLOCK}.data"], params=PARAMS)
+
+    _, failed = ran_here(env, flow, only=BLOCK, given={"data": "{'other.output': 'there'}"})
+
+    assert failed == {BLOCK: "ValueError: Template: {{w}} is not an input or a flow parameter (inputs: other; write "
+                             "{{{{ for a literal {{)"}, failed
 
 
 # --- BR-7: Import from cURL keeps the body ---------------------------------------------------------------------------
