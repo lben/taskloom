@@ -2,8 +2,13 @@
 those of an earlier run whose results can still be downloaded, and uses those results instead: the key
 (packaging/ci_reuse.py key) changes when one of those files changes and only then (A4 of the CI speed-up). The
 records taken from the earlier run are marked with the run, its date and its commit (ci_reuse.py mark), so that the
-proof PDF can name them (A5). The script runs as CI runs it, on a copy of the repository's files."""
+proof PDF can name them (A5). Every other feature's mutation testing is reused the same way, its key over the whole
+files it reads (key feature:<f>, B1); an earlier run's stored results are taken only when none is expired, none comes
+from a fork and none is 30 days old or more, and of those runs the newest (ci_reuse.py pick, B4). The script runs as CI
+runs it, on a copy of the repository's files or on a made-up repository."""
 
+import datetime as dt
+import itertools
 import json
 import re
 import shutil
@@ -265,3 +270,283 @@ def test_mark_leaves_a_record_that_already_says_where_it_comes_from(tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
     assert records(file) == [marked, {**plain, "reused_from": {"run": RUN, "url": URL, "commit": OLD_SHA,
                                                                 "date": DATE}}]
+
+
+# --- every feature's mutation testing: a key over the whole files it reads (B1, interface 6) --------------------------
+
+FEATURE = "feature:plans"
+CHECKER = """  - name: Mutation testing
+    kind: mutation
+    command: >-
+      python packaging/mutants.py . --run --explained docs/promises/{stem}.mutants.yaml --out {{out}}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'
+"""
+# The made-up feature `plans`: a group of functions with its tests (a file with -k words, a file by its tests' names),
+# a file mutated whole with the scope's own tests, and the guide its code reads. And another feature, `colours`.
+PLANS_MUTANTS = '''# Mutation testing of the planner.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/planner.py plan
+        - taskloom/planner.py Planner.next
+      tests:
+        - tests/test_planner.py -k "plans or next"
+        - tests/test_dates.py::test_one_day tests/test_dates.py::test_two_days -p no:randomly
+    - taskloom/keeper.py
+  tests:
+    - tests/test_keeper.py
+reads:
+  - docs/guide.md
+not_tested:
+  taskloom/planner.py Planner.next: Drawn on screen only.
+'''
+FEATURE_REPO = {
+    "pyproject.toml": PYPROJECT, "uv.lock": "version = 1\n", "README.md": "# Made up\n",
+    "packaging/mutants.py": "# mutation testing\n", "packaging/checkers.py": "# checkers\n",
+    "docs/guide.md": "# Guide\n\nPlans are made once a day.\n",
+    "docs/promises/plans.yaml": "feature: Plans\nagreed: 2026-11-17\nrows:\n  P-1: A plan is made once a day.\n",
+    "docs/promises/plans.mutants.yaml": PLANS_MUTANTS,
+    "docs/promises/plans.evidence.yaml": "P-1:\n  enforced: The planner.\n  not_green: Tests only.\ncheckers:\n"
+                                         + CHECKER.format(stem="plans"),
+    "docs/promises/colours.yaml": "feature: Colours\nagreed: 2026-11-17\nrows:\n  C-1: Red is red.\n",
+    "docs/promises/colours.mutants.yaml": "scope:\n  mutate:\n    - mutate:\n        - taskloom/colours.py\n"
+                                          "      tests:\n        - tests/test_colours.py\n",
+    "docs/promises/colours.evidence.yaml": "C-1:\n  enforced: The colours.\ncheckers:\n"
+                                           + CHECKER.format(stem="colours"),
+    "taskloom/__init__.py": '__version__ = "0.1.0"\n',
+    "taskloom/planner.py": "def plan():\n    return 1\n\n\nclass Planner:\n    def next(self):\n        return 2\n",
+    "taskloom/keeper.py": "def keep():\n    return 2\n", "taskloom/other.py": "def other():\n    return 3\n",
+    "taskloom/colours.py": "def colour():\n    return 'red'\n",
+    "tests/conftest.py": "from pathlib import Path\n\nREPO = Path(__file__).parents[1]\n",
+    "tests/test_planner.py": "from taskloom.other import other\nfrom taskloom.planner import Planner, plan\n"
+                             "from tests.test_shared import shared\n\n\n"
+                             "def test_plans():\n    assert plan() == shared() == other() - 2\n\n\n"
+                             "def test_next():\n    assert Planner().next() == 2\n",
+    "tests/test_shared.py": "from fakeserver import serve\n\n\ndef shared():\n    return serve()\n",
+    "tests/fakeserver.py": "def serve():\n    return 1\n",
+    "tests/test_dates.py": "def test_one_day():\n    pass\n\n\ndef test_two_days():\n    pass\n",
+    "tests/test_keeper.py": "from conftest import REPO\nfrom taskloom.keeper import keep\n\n\n"
+                            "def test_keeps():\n    assert keep() == 2 and REPO\n",
+    "tests/test_colours.py": "from taskloom.colours import colour\nfrom tests.test_lonely import lonely\n\n\n"
+                             "def test_colour():\n    assert colour() == lonely()\n",
+    "tests/test_lonely.py": "def lonely():\n    return 'red'\n",
+}
+# What the made-up feature's mutation testing reads: each kind of file, one of them.
+PLANS_READS = {
+    "a file mutated by its functions": "taskloom/planner.py",
+    "a file mutated whole": "taskloom/keeper.py",
+    "a test file named with -k words": "tests/test_planner.py",
+    "a test file named by its tests' names": "tests/test_dates.py",
+    "a test file the scope's own tests: name": "tests/test_keeper.py",
+    "a tests/ file a named test imports": "tests/test_shared.py",
+    "a tests/ helper reached through two imports": "tests/fakeserver.py",
+    "tests/conftest.py": "tests/conftest.py",
+    "a file under reads:": "docs/guide.md",
+    "the feature's mutants yaml": "docs/promises/plans.mutants.yaml",
+    "the feature's evidence yaml": "docs/promises/plans.evidence.yaml",
+    "packaging/mutants.py": "packaging/mutants.py",
+    "packaging/checkers.py": "packaging/checkers.py",
+    "pyproject.toml": "pyproject.toml",
+    "uv.lock": "uv.lock",
+}
+# Files whose change leaves the feature's old result its result.
+PLANS_UNRELATED = {
+    "a taskloom module a named test imports, not mutated": "taskloom/other.py",
+    "a module another feature mutates": "taskloom/colours.py",
+    "README.md": "README.md",
+    "another feature's agreed list": "docs/promises/colours.yaml",
+    "another feature's mutants yaml": "docs/promises/colours.mutants.yaml",
+    "another feature's evidence yaml": "docs/promises/colours.evidence.yaml",
+    "another feature's test file": "tests/test_colours.py",
+}
+
+
+@pytest.fixture
+def made_up(tmp_path) -> Path:
+    for name, text in FEATURE_REPO.items():
+        write(tmp_path / name, text)
+    return tmp_path
+
+
+def one_byte(root: Path, name: str):
+    """Add one byte at the end of the file (a comment in each of these files' languages)."""
+    with open(root / name, "ab") as file:
+        file.write(b"#")
+
+
+def test_files_lists_what_a_features_mutation_testing_reads(made_up):
+    """The files its scope mutates, the test files its scope's tests: lines name, every tests/ file they import
+    (followed through) and tests/conftest.py, the files under its reads:, its mutants and evidence yaml, the scripts
+    that run and score it, pyproject.toml and uv.lock. Not another taskloom module, README.md, another feature's files
+    or a test only another feature's test imports."""
+    printed = listed(FEATURE, made_up)
+    assert len(printed) == len(set(printed)), printed
+    assert set(printed) == set(PLANS_READS.values()), sorted(printed)
+
+
+@pytest.mark.parametrize("what", PLANS_READS)
+def test_a_features_key_changes_when_one_byte_of_a_file_it_reads_changes(made_up, what):
+    """A feature's old result is never taken when one of the files its mutation testing reads changed: it runs."""
+    before = key(FEATURE, made_up)
+    one_byte(made_up, PLANS_READS[what])
+    assert key(FEATURE, made_up) != before, f"{what} did not change the key"
+
+
+@pytest.mark.parametrize("what", PLANS_UNRELATED)
+def test_a_features_key_stays_the_same_when_no_file_it_reads_changed(made_up, what):
+    """Otherwise a README edit or another feature's change would rerun every feature's mutation testing."""
+    before = key(FEATURE, made_up)
+    one_byte(made_up, PLANS_UNRELATED[what])
+    assert key(FEATURE, made_up) == before, f"{what} changed the key"
+
+
+def test_a_features_key_changes_with_the_salt(made_up):
+    """CI passes the Java and Python versions as the salt: a new one reruns the feature's mutation testing."""
+    assert key(FEATURE, made_up, "--salt", "java 17 python 3.12") != \
+        key(FEATURE, made_up, "--salt", "java 17 python 3.13")
+
+
+MODEL_CHECKER = """  - name: TLA+ model check
+    kind: model
+    command: java -jar tla2tools.jar -workers auto specs/formal/Planner.tla
+    key: '^Model checking completed'
+"""
+# What the key cannot cover: the feature then gets no key (it always runs, its result is never kept), and the message
+# says why.
+REFUSED = {
+    "no mutants yaml": (lambda root: (root / "docs/promises/plans.mutants.yaml").unlink(), "plans.mutants.yaml"),
+    "a mutants yaml with no scope": (lambda root: write(root / "docs/promises/plans.mutants.yaml",
+                                                        "not_tested: {}\n"), "scope"),
+    "a checker that is not mutation testing": (lambda root: write(
+        root / "docs/promises/plans.evidence.yaml", FEATURE_REPO["docs/promises/plans.evidence.yaml"] + MODEL_CHECKER),
+        "model"),
+    "a mutated file that is not there": (lambda root: (root / "taskloom/keeper.py").unlink(), "keeper.py"),
+    "a named test file that is not there": (lambda root: (root / "tests/test_dates.py").unlink(), "test_dates.py"),
+    "a file under reads: that is not there": (lambda root: (root / "docs/guide.md").unlink(), "guide.md"),
+    "no evidence yaml": (lambda root: (root / "docs/promises/plans.evidence.yaml").unlink(), "plans.evidence.yaml"),
+}
+
+
+@pytest.mark.parametrize("what", REFUSED)
+def test_a_feature_the_key_cannot_cover_gets_no_key_and_a_message(made_up, what):
+    """A key that left out what the feature reads would reuse a result its change made wrong."""
+    key(FEATURE, made_up)  # the same feature, whole, has a key
+    spoil, named = REFUSED[what]
+    spoil(made_up)
+    done = reuse("key", FEATURE, "--root", made_up)
+    assert done.returncode != 0, f"{what}: exited 0 and printed {done.stdout!r}"
+    assert not re.search(r"[0-9a-fA-F]{16,}", done.stdout), done.stdout
+    assert named in done.stderr + done.stdout, f"{what}: the message does not name {named}:\n{done.stderr}"
+
+
+def ci_features() -> list[str]:
+    """The features the features job (build.yml) lists: each docs/promises/<f>.yaml but <f>.<part>.yaml and the
+    scheduler's (whose checks have keys of their own)."""
+    return sorted(path.stem for path in (REPO / "docs" / "promises").glob("*.yaml")
+                  if path.name.count(".") == 1 and path.stem != "scheduler")
+
+
+def test_every_feature_ci_runs_has_a_key_in_this_repository():
+    """A feature that got no key would rerun on every run, and nothing would say why."""
+    features = ci_features()
+    assert features, "no feature found"
+    refused = {}
+    for name in features:
+        done = reuse("key", f"feature:{name}")
+        if done.returncode != 0 or not re.fullmatch(r"[0-9a-fA-F]{16,}", done.stdout.strip()):
+            refused[name] = f"exit {done.returncode}: {done.stdout.strip()} {done.stderr.strip()}"
+    assert not refused, refused
+
+
+def test_the_readme_features_key_reads_the_guide():
+    """Its mutated _guide_text reads docs/guide.md, and its tests check what it reads there: a changed guide reruns
+    its mutation testing."""
+    assert "docs/guide.md" in listed("feature:readme", REPO)
+
+
+# --- pick: the newest earlier run whose stored results may be used (B4, interface 7) ----------------------------------
+
+REPO_ID, FORK_ID = 1083920123, 2210456789
+NOW = dt.datetime(2026, 11, 17, 12, 0, tzinfo=dt.timezone.utc)
+PARTS = [f"reuse-mutation-0a1b2c3d4e5f60718293a4b5c6d7e8f9-part-{k}" for k in (1, 2, 3)]
+OLDER, NEWER, NEWEST = 43594508147, 43676917412, 43712000045
+numbers = itertools.count(4813000000)
+
+
+def stamp(when: dt.datetime) -> str:
+    return when.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def artifact(name: str, run: int, made: dt.datetime, expired: bool = False, repo: int = REPO_ID) -> dict:
+    """An artifact as the GitHub API lists it (repos/<repo>/actions/artifacts)."""
+    number = next(numbers)
+    return {"id": number, "node_id": f"MDg6QXJ0aWZhY3Q{number}", "name": name, "size_in_bytes": 52817,
+            "url": f"https://api.github.com/repos/example/taskloom/actions/artifacts/{number}",
+            "archive_download_url": f"https://api.github.com/repos/example/taskloom/actions/artifacts/{number}/zip",
+            "expired": expired, "digest": "sha256:" + "ab" * 32, "created_at": stamp(made), "updated_at": stamp(made),
+            "expires_at": stamp(made + dt.timedelta(days=1 if expired else 90)),
+            "workflow_run": {"id": run, "repository_id": REPO_ID, "head_repository_id": repo,
+                             "head_branch": "main", "head_sha": SHA}}
+
+
+def uploaded(run: int, names=tuple(PARTS), age=dt.timedelta(days=2), **how) -> list:
+    """The artifacts one run uploaded under these names, `age` before NOW."""
+    return [artifact(name, run, NOW - age, **how) for name in names]
+
+
+def pick(objects: list, *args, now: dt.datetime | None = NOW, names=tuple(PARTS)) -> str:
+    """What `pick` prints for these artifacts (one JSON object per line, as `gh api --jq '.artifacts[]'` gives them)."""
+    assert REUSE.is_file(), "no packaging/ci_reuse.py"
+    more = ["--now", stamp(now)] if now else []
+    done = subprocess.run([sys.executable, str(REUSE), "pick", "--repo-id", str(REPO_ID), *args, *more, *names],
+                          input="".join(json.dumps(o) + "\n" for o in objects), cwd=REPO, capture_output=True,
+                          encoding="utf-8", errors="replace", timeout=120)
+    assert done.returncode == 0, f"pick exited {done.returncode}:\n{done.stdout}\n{done.stderr}"
+    return done.stdout.strip()
+
+
+def test_pick_prints_the_newest_run_that_has_every_name():
+    """Of the runs with all 3 parts, the newest (the highest run id, not the highest as text); a newer run that has
+    only 2 of them is not taken, as all 3 parts must come from one run."""
+    objects = (uploaded(OLDER) + uploaded(NEWEST, PARTS[:2]) + uploaded(9876543210) + uploaded(NEWER)
+               + uploaded(NEWEST + 1, PARTS[1:]))
+    assert pick(objects) == str(NEWER)
+
+
+UNUSABLE = {
+    "expired": {"expired": True},
+    "uploaded by a fork's pull request": {"repo": FORK_ID},
+}
+
+
+@pytest.mark.parametrize("what", UNUSABLE)
+def test_pick_does_not_take_a_run_with_an_artifact_it_may_not_use(what):
+    """An expired artifact cannot be downloaded; a fork's pull request can upload anything under any name."""
+    objects = uploaded(OLDER) + uploaded(NEWER, PARTS[:2]) + uploaded(NEWER, PARTS[2:], **UNUSABLE[what])
+    assert pick(objects) == str(OLDER)
+
+
+@pytest.mark.parametrize("days, age, taken", [
+    ([], dt.timedelta(days=30) - dt.timedelta(seconds=1), True),
+    ([], dt.timedelta(days=30), False),
+    (["--days", "7"], dt.timedelta(days=7) - dt.timedelta(seconds=1), True),
+    (["--days", "7"], dt.timedelta(days=7), False),
+], ids=["29 days 23:59:59", "30 days", "--days 7: 6 days 23:59:59", "--days 7: 7 days"])
+def test_pick_takes_a_result_only_while_it_is_less_than_30_days_old(days, age, taken):
+    """The user: a stored result older than 30 days reruns, so that a check is run again at least once a month."""
+    assert pick(uploaded(NEWER, age=age), *days) == (str(NEWER) if taken else "")
+
+
+def test_pick_counts_the_days_up_to_now_when_not_told_when_now_is():
+    """CI does not say when now is."""
+    now = dt.datetime.now(dt.timezone.utc)
+    young = [artifact(name, NEWER, now - dt.timedelta(days=29)) for name in PARTS]
+    old = [artifact(name, NEWER, now - dt.timedelta(days=31)) for name in PARTS]
+    assert (pick(young, now=None), pick(old, now=None)) == (str(NEWER), "")
+
+
+@pytest.mark.parametrize("objects", [[], uploaded(OLDER, PARTS[:2]) + uploaded(NEWER, PARTS[1:])],
+                         ids=["no artifact", "no run with every name"])
+def test_pick_prints_nothing_when_no_run_has_every_name(objects):
+    """Then the check runs; a lookup that finds nothing is no error."""
+    assert pick(objects) == ""
