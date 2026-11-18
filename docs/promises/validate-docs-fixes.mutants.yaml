@@ -1,0 +1,27 @@
+# Mutation testing of Validate's status bar and the Documentation column's width (read by packaging/mutants.py
+# --explained). scope: what the bugs are planted in: MainWindow._ready_to_run whole (its lines from before as well as
+# the changed one), whose bugs run the tests of Validate, Run, Run only and Run from (each line of tests: is one
+# pytest run, of a file or several, with -k words or without): the box of problems (from the flow, from how its file
+# is written, from connections.yaml; one per line, at most 12, over the window), the Log brought to the front with
+# each problem and warning and its time whichever block it shows, a new flow saved first, and Run only and Run from
+# checking just the blocks they run. The other function the change touched, DocsBrowser.__init__, is under
+# not_tested: its bugs are planted and counted, not run, and its reason names the test that checks the changed line.
+# The change's other line is not in a function of the package, so nothing is planted in it: the README proof's copy
+# of the column's style (tests/proofs/test_proof_readme.py). The mutants the tests let through would be explained
+# here, by kind (kinds: a kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a
+# user could notice); none is.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/window.py MainWindow._ready_to_run
+        - taskloom/editor/window.py DocsBrowser.__init__
+      tests:
+        - tests/test_paths_editor_editing.py tests/test_paths_editor_running.py tests/test_run_scope.py -k "finds_problems or cancelling_that_runs_nothing or editor_run_run_only_and_run_from or editor_validate_lists_every_problem or new_flow_you_have_not_changed or run_from_stop_at"
+not_tested:
+  taskloom/editor/window.py DocsBrowser.__init__: >-
+    The Documentation column as it is built, to which this change added one rule to its style (a code line longer
+    than the column wraps): test_at_the_width_the_column_opens_with_no_page_scrolls_sideways fails without it. Not
+    run, as the maintainer chose on 2026-11-17: of its 12 bugs, 2 only rename the name its zoom is saved under in
+    editor.ini, which no user can notice, and 1 drops the style's older rule for code, which the tests' offscreen
+    platform cannot show (it gives code the same font either way). On macOS that older rule makes code proportional,
+    as the editor's code font is there: a problem of its own, to be fixed apart.

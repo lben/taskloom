@@ -35,7 +35,8 @@ class MarkdownPage(QWidget):
     def __init__(self, path: Path):
         super().__init__()
         self.title, self.view = QLabel(), QTextBrowser(openLinks=False)
-        self.view.document().setDefaultStyleSheet("code, pre { font-family: monospace; }")  # the column's
+        self.view.document().setDefaultStyleSheet(  # the column's
+            "code, pre { font-family: monospace; } pre { white-space: pre-wrap; }")
         self.view.anchorClicked.connect(self.follow)
         self.clicked = []
         layout = QVBoxLayout(self)

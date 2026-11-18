@@ -1373,6 +1373,29 @@ def test_opened_with_no_room_beside_the_docks_and_closed_the_column_leaves_the_l
         clean_all()
 
 
+@pytest.mark.invariant("DOC-1")
+def test_at_the_width_the_column_opens_with_no_page_scrolls_sideways(win):
+    """Help > Documentation, the column 360 px wide as it opens: every page fits that width, its long code lines
+    wrapped, so no page scrolls sideways."""
+    try:
+        browser = open_column(win)
+        dock = docs_dock(win)
+        dock.setFloating(True)  # (the Windows runner's window can be too narrow to dock it 360 px wide)
+        dock.resize(360, 800)
+        settle()
+        assert dock.width() == 360, dock.width()
+        sideways = {}
+        for name in browser.pages():
+            browser.setSource(QUrl(name))
+            settle()
+            if browser.horizontalScrollBar().maximum() > 0:
+                sideways[name] = browser.horizontalScrollBar().maximum()
+        assert sideways == {}, f"pages that scroll sideways at 360 px, by how many px: {sideways}"
+    finally:
+        docs_dock(win).setFloating(False)
+        clean_all()
+
+
 # === User blocks =================================================================================================
 
 LITERAL_HELP = 'Counts rows where this column is < 100 & not "<b>bold</b>"'

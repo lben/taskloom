@@ -243,7 +243,8 @@ class DocsBrowser(QTextBrowser):
         super().__init__()
         self.registry, self._pages = registry, None
         self.setOpenExternalLinks(True)
-        self.document().setDefaultStyleSheet("code, pre { font-family: monospace; }")  # the editor's (MONO)
+        # The editor's monospace (MONO); a code line longer than the column wraps, so no page scrolls sideways.
+        self.document().setDefaultStyleSheet("code, pre { font-family: monospace; } pre { white-space: pre-wrap; }")
         mark(self, "docs")
 
     def pages(self) -> dict:
@@ -1023,6 +1024,7 @@ class MainWindow(QMainWindow):
             for message in errors:
                 self._log(tab, {"ts": now, "level": "ERROR", "message": message, "header": True})
             self.bottom_tabs.setCurrentWidget(self.log)
+            self.statusBar().clearMessage()  # (an earlier Validate's "no problems found" would stay under the box)
             QMessageBox.warning(self, "The flow has problems", "\n".join(errors[:12]))
             return None
         return flow

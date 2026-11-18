@@ -1,0 +1,33 @@
+# How each agreed row of docs/promises/validate-docs-fixes.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A bug fix or small feature has no model to
+# check: its rows are amber, checked by tests only, and not_green says what the tests leave out.
+VAL-1:
+  enforced: >-
+    MainWindow._ready_to_run (taskloom/editor/window.py), the check that Validate, Run now, Run from here and Run only
+    all go through, sets the status bar back to its usual line just before it opens the box that lists the problems:
+    it clears the bar's message (clearMessage), and the bar then shows the flows running now ("No flows running"), as
+    whenever it has no message. MainWindow.validate shows "no problems found" for 5,000 ms only when that check finds
+    none.
+  not_green: >-
+    Tests Validate a flow with no problems, give it one (a time zone that does not exist), then Validate or press Run
+    now at once: as the box opens, the status bar has no message and shows its usual line, "No flows running" (hidden
+    while "no problems found" showed), and Run runs nothing. They read "no problems found" right after the clean
+    Validate, not that it stays 5 seconds and then goes; they make one kind of problem only, with no flow running,
+    and do not use Run from here or Run only, which open the box through the same check.
+DOC-1:
+  enforced: >-
+    DocsBrowser (taskloom/editor/window.py), the Documentation column's view, styles its pages with pre { white-space:
+    pre-wrap; }: a code line longer than the column goes on to the next line, its spaces and line breaks kept.
+    DocsColumn opens 360 px wide (DocsColumn.WIDTH).
+  not_green: >-
+    A test opens each of the column's pages at 360 px and finds none that scrolls sideways: the pages as they are
+    now, in the fonts of the system the test runs on. A page added later is checked when the test runs again; no
+    check tries every font, or the docs zoomed in.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# validate-docs-fixes.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/validate-docs-fixes.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

@@ -108,5 +108,11 @@ class Zoom(QObject):
             rows.setDefaultSectionSize(max(rows.minimumSectionSize(), pane.style().pixelMetric(
                 QStyle.PM_HeaderDefaultSectionSizeVertical, None, rows)))
         if bar is not None and scrolled:
+            # Qt lays the text out again a part at a time and the rest after this: until then its scroll bars only guess
+            # its length, and a line further on now wider than the pane brings the horizontal bar only then (either
+            # would leave the end short). All of it laid out now, its scroll bars set (shown or hidden) at once, as Qt
+            # would set them a moment later.
+            layout = pane.document().documentLayout()
+            layout.documentSizeChanged.emit(layout.documentSize())
             bar.setValue(bar.maximum() if end else bar.value() + pane.cursorRect(top).top())  # (laid out again)
         return step
