@@ -5,6 +5,7 @@ after a crash, Check flows, and the Settings, Connections and Python environment
 with the real `taskloom` command line to show they do what was built."""
 
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -1228,6 +1229,89 @@ def test_when_run_finds_problems_the_status_bar_no_longer_says_no_problems_found
     assert not win.current.runs
     win.message_boxes.clear()
     clean(win)
+
+
+def log_lines(win) -> list[str]:
+    """The lines the Log shows (HH:MM:SS [block] LEVEL message)."""
+    return [line for line in win.log.text.toPlainText().splitlines() if line.strip()]
+
+
+def test_when_validate_finds_problems_the_log_lists_them_with_their_time_whichever_block_it_shows(win, tmp_path,
+                                                                                                  monkeypatch):
+    """One block selected (the Log shows only its lines) and Data preview in front, Validate a flow with a problem
+    (an If with no condition) and a warning (a block connected to nothing, its input not connected): the box opens
+    over the window, the Log comes to the front and shows the problem and the warning, each with its time, though
+    neither is the selected block's."""
+    flow = flow_file(tmp_path / "checked.yaml", {"start": {"type": "trigger.manual"}, "work": PYTHON,
+                                                 "branch": {"type": "logic.if"},
+                                                 "spare": {"type": "data.polars", "config": {"code": "df"}}},
+                     ["start.start -> work.after", "work.output -> branch.value"])
+    tab = win.open_flow(flow)
+    select_only(tab, "work")
+    win.bottom_tabs.setCurrentWidget(win.preview)
+    over = []
+    record = QMessageBox.warning  # the win fixture's
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda parent, *a, **k: over.append(parent) or record(parent, *a, **k)))
+
+    menu(win, "Validate").trigger()
+
+    assert win.message_boxes == [("warning", ("The flow has problems", "branch: Condition is required"))]
+    win.message_boxes.clear()
+    assert over == [win]
+    assert win.bottom_tabs.currentWidget() is win.log and win.log.showing.text() == "Showing <b>work</b>"
+    lines = log_lines(win)
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d ERROR branch: Condition is required", line) for line in lines), lines
+    assert any(re.fullmatch(r"\d\d:\d\d:\d\d WARNING blocks\.spare: required input 'table' is not connected .*", line)
+               for line in lines), lines
+
+
+def test_when_validate_finds_problems_in_how_the_file_is_written_the_box_lists_12_and_the_log_each(win, tmp_path):
+    """A flow file written by hand, each of its 13 blocks with a key this version does not know ("retries" for
+    "retry"): Validate's box lists the first 12 problems, one per line, and the Log each of the 13 on a line of its
+    own, with its time."""
+    flow = flow_file(tmp_path / "by-hand.yaml", {f"step{n:02d}": {**PYTHON, "retries": 2} for n in range(1, 14)})
+    win.open_flow(flow)
+    problems = [f"blocks.step{n:02d}: unknown key 'retries'" for n in range(1, 14)]
+
+    menu(win, "Validate").trigger()
+
+    assert win.message_boxes == [("warning", ("The flow has problems", "\n".join(problems[:12])))]
+    win.message_boxes.clear()
+    lines = log_lines(win)
+    assert len(lines) == 13 and all(re.fullmatch(rf"\d\d:\d\d:\d\d ERROR {re.escape(problem)}", line)
+                                    for line, problem in zip(lines, problems)), lines
+
+
+def test_when_validate_finds_problems_in_connections_yaml_the_box_says_which(win, tmp_path):
+    """A connection written by hand in connections.yaml without its kind: Validate's box says which, and so does the
+    Log, with its time."""
+    (win.home.root / "connections.yaml").write_text("warehouse:\n  url: jdbc:h2:mem:sales\n", encoding="utf-8")
+    flow = flow_file(tmp_path / "sales.yaml", {"start": {"type": "trigger.manual"}, "work": PYTHON},
+                     ["start.start -> work.after"])
+    win.open_flow(flow)
+    problem = "connections.yaml: connection 'warehouse' needs a 'kind'"
+
+    menu(win, "Validate").trigger()
+
+    assert win.message_boxes == [("warning", ("The flow has problems", problem))]
+    win.message_boxes.clear()
+    assert [line for line in log_lines(win) if re.fullmatch(rf"\d\d:\d\d:\d\d ERROR {re.escape(problem)}", line)]
+
+
+def test_validate_on_a_new_flow_you_have_not_changed_asks_where_to_save_it_then_checks_it(win, tmp_path, monkeypatch):
+    """File > New flow, then at once Validate: the flow is saved first, so it asks where; saved there, it is checked
+    ("no problems found")."""
+    tab = win.new_flow()
+    flow = tmp_path / "first flow.yaml"
+    asked = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: asked.append(a) or (str(flow), "")))
+
+    menu(win, "Validate").trigger()
+
+    assert len(asked) == 1 and tab.doc.path == flow.resolve() and saved(flow)["blocks"] == tab.doc.data["blocks"]
+    assert win.statusBar().currentMessage() == "first flow.yaml: no problems found"
 
 
 # --- text on the canvas ---------------------------------------------------------------------

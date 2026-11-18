@@ -13,6 +13,7 @@ import yaml
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from taskloom.config import Home  # noqa: E402
+from taskloom.editor import dialogs  # noqa: E402
 from taskloom.history import History  # noqa: E402
 from taskloom.scheduler import Scheduler  # noqa: E402
 from tests.test_scheduler_promises import on  # noqa: E402
@@ -322,6 +323,25 @@ def test_editor_run_run_only_and_run_from_go_ahead_in_the_users_flow(win, qtbot,
     no_message_boxes(win)
     wait_runs(qtbot, tab, 3)
     assert tab.runs[-1].status == "success"
+
+
+def test_editor_run_only_and_run_from_stop_at_a_problem_in_a_block_they_run(win, tmp_path, monkeypatch):
+    """Spec 1: in the editor, Run only this block on the If the Schedule's line reaches, and Run from this block on
+    from the block before it (with inputs I choose), stop with the box that names the If's problem, before asking
+    for any inputs, and run nothing."""
+    flow = write_flow(tmp_path / "flow.yaml", USER_FLOW)
+    tab = win.open_flow(flow)
+    asked = []
+    monkeypatch.setattr(dialogs.ChooseInputsDialog, "exec", lambda self: asked.append(self) or 0)
+
+    for block, entry in (("branch", "Run only this block, with inputs I choose"),
+                         ("c", "Run from this block on, with inputs I choose")):
+        menu_action(win, tab, block, entry).trigger()
+
+        boxes = list(win.message_boxes)
+        win.message_boxes.clear()
+        assert boxes == [("warning", ("The flow has problems", NO_CONDITION))], (entry, boxes)
+    assert asked == [] and not tab.runs
 
 
 def test_disconnecting_a_block_with_a_required_input_switches_it_off_and_the_flow_runs(win, qtbot, tmp_path):
