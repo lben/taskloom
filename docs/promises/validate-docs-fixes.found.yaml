@@ -1,0 +1,12 @@
+# The bugs proving Validate's status bar and the Documentation column's width found, each fixed and guarded by a test
+# since (the proof PDF counts and lists them before the details; tests/test_promises_found.py checks each test
+# exists), and where it is checked more lightly.
+found:
+  - what: Once code lines wrapped in the Documentation column, Ctrl + at the end of the guide's page on the editor stopped 14 px short of its end on Windows, because Qt finished laying the page out, which can also bring a horizontal scroll bar, after the zoom had taken the end; the zoom now has the whole page laid out and its scroll bars set before it takes the end.
+    found_by: CI on Windows
+    fixed_in: 54b1532
+    guarded_by: tests/test_zoom_panes.py::test_zoom_keeps_the_docs_at_the_end_of_a_page_laid_out_again_after_it
+lighter:
+  - "The status bar is read the moment the box of problems opens; the 5 seconds a \"no problems found\" stays are not timed."
+  - "Pages are measured in the column at 360 px and the editor's normal size; a narrower column or a larger zoom can still scroll sideways for a line with no space to wrap at."
+  - "Fonts are checked offscreen only, where Qt gives code the same font with or without the column's rule for code; on a real Mac that rule makes code proportional, a problem left for a task of its own."
