@@ -18,6 +18,10 @@ scope:
       tests:
         - tests/test_docs_help.py -k "guide or contents_begins or every_link_and_anchor or user_blocks_are_in_contents"
         - tests/test_readme_guide.py -k as_installed
+# reads: the other files the code or its tests read (CI takes this result from an earlier run only when they, too, are
+# as they were there: packaging/ci_reuse.py): the guide, which _guide_text reads and the tests check.
+reads:
+  - docs/guide.md
 kinds:
   - kind: The name of the guide's encoding in capitals
     why: >-
