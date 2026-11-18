@@ -555,7 +555,12 @@ jobs:
         with: {name: taskloom-runner-linux, path: dist/*.tar.gz}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # (A long check taken from an earlier run skips its job; without !cancelled() GitHub would skip this job too,
+    # however far up that one is: so it says itself that each job it needs must have succeeded.)
+    if: >-
+      ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.windows.result == 'success'
+      && needs.linux-runner.result == 'success' && needs.proof.result == 'success'
+      && needs.proof-linux.result == 'success' }}
     needs: [windows, linux-runner, proof, proof-linux]  # nothing is released without its proof
     runs-on: ubuntu-latest
     permissions: {contents: write}
@@ -568,7 +573,7 @@ jobs:
   # The documentation website on GitHub Pages, from each release tag. No job needs it, so it never holds up or fails
   # a release (it fails on its own until Settings > Pages > Source is GitHub Actions; see docs/guide.md, Development).
   pages:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success' }}  # (as release)
     needs: release
     runs-on: ubuntu-latest
     permissions: {pages: write, id-token: write}

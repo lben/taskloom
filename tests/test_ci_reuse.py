@@ -550,3 +550,17 @@ def test_pick_counts_the_days_up_to_now_when_not_told_when_now_is():
 def test_pick_prints_nothing_when_no_run_has_every_name(objects):
     """Then the check runs; a lookup that finds nothing is no error."""
     assert pick(objects) == ""
+
+
+def test_on_a_tag_release_and_pages_run_also_when_a_long_check_was_taken_from_an_earlier_run():
+    """A long check taken from an earlier run skips its job (mutation, model-check, checkers-features). GitHub then
+    skips every job after it whose `if` has no status function, however far down (v0.39.1's tag run skipped release
+    and pages so, though all they need had passed). So each says !cancelled(), the tag, and that every job it needs
+    succeeded."""
+    import yaml
+    jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
+    for name in ("release", "pages"):
+        needs, condition = jobs[name]["needs"], jobs[name]["if"]
+        assert "!cancelled()" in condition and "startsWith(github.ref, 'refs/tags/v')" in condition, (name, condition)
+        for need in [needs] if isinstance(needs, str) else needs:
+            assert f"needs.{need}.result == 'success'" in condition, (name, need, condition)
