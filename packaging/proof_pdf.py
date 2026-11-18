@@ -492,11 +492,12 @@ def same_commit(release: dict, features: list) -> tuple:
     """Whether every checker and test result is of the commit built, but those CI took from an earlier run, whose
     records say so (packaging/ci_reuse.py mark): (what, passed, in words)."""
     commit = str(release["commit"])[:7]
-    checkers = [c for f in features for c in f["checkers"] or []]
-    reused = sorted({f"{c['name']} (CI run {c['reused_from']['run']}, commit {str(c['reused_from']['commit'])[:7]})"
-                     for c in checkers if c.get("reused_from")})
+    checkers = [(f, c) for f in features for c in f["checkers"] or []]
+    # (with its feature's name: every feature's mutation testing is called Mutation testing)
+    reused = sorted({f"{f['name']}: {c['name']} (CI run {c['reused_from']['run']}, commit "
+                     f"{str(c['reused_from']['commit'])[:7]})" for f, c in checkers if c.get("reused_from")})
     why = f"reused from an earlier CI run, as the files they read had not changed since: {'; '.join(reused)}"
-    others = sorted({f"{c['name']} ran on {str(c['commit'])[:7]}" for c in checkers
+    others = sorted({f"{c['name']} ran on {str(c['commit'])[:7]}" for _, c in checkers
                      if not c.get("reused_from") and str(c["commit"])[:7] != commit} |
                     {f"the tests of {f['name']} ran on {str(x)[:7]}" for f in features
                      for x in (f["ledger"] or {}).get("commits", []) if str(x)[:7] != commit})
@@ -755,7 +756,7 @@ def terminal(checker: dict, evidence: Path) -> str:
     # Taken from an earlier CI run (packaging/ci_reuse.py mark): which one, and what was not checked again.
     origin, reused = checker.get("reused_from"), ""
     if origin:
-        mutated = (" Other Taskloom files may have changed since; the scheduler's tests ran on this commit."
+        mutated = (" Other Taskloom files may have changed since; its tests ran on this commit."
                    if checker["kind"] == "mutation" else "")
         reused = (f"<br><span style=\"font-size: 10pt\">Reused from <a href=\"{html.escape(origin['url'])}\" "
                   f"style=\"color: {IDEA_BAR}\">CI run {esc(str(origin['run']))}</a> ({day(origin['date'])}, commit "
