@@ -1086,6 +1086,56 @@ def test_zoom_keeps_the_docs_scrolled_to_the_end_of_a_page_at_its_end(win, qtbot
         clean(win)
 
 
+PARAGRAPH = "<p>" + " ".join(f"word{i}" for i in range(60)) + "</p>"
+
+
+def a_page_with_a_line_that_does_not_wrap(win):
+    """The docs showing a long page whose line two paragraphs before its end does not wrap and fills nine tenths of the
+    column at the normal size: zoomed in, it is wider than the column."""
+    view = win.docs.browser
+    line = "x" * int(0.9 * view.viewport().width() / QFontMetricsF(view.font()).horizontalAdvance("x"))
+    view.setHtml(PARAGRAPH * 60 + f"<p style='white-space: nowrap'>{line}</p>" + PARAGRAPH * 2)
+    view.document().size()  # (laid out whole)
+    settle()
+
+
+@pytest.mark.invariant("ZM-5")
+@pytest.mark.parametrize("page", ["a long page in a narrower column", "a page with a line that does not wrap"])
+def test_zoom_keeps_the_docs_at_the_end_of_a_page_laid_out_again_after_it(win, qtbot, tmp_path, page):
+    """ZM-5: the docs at the end of a page: Ctrl + over them three times, then Ctrl - three times, and after each they
+    are still at its end. Qt lays the page out again at the new size a part at a time and finishes after the key: only
+    then is the page's new length known (a long page in the column made narrower, as when its edge is dragged, at a few
+    widths), or a line further on that does not wrap found wider than the column, a horizontal scroll bar coming under
+    the page (and going)."""
+    pane = ready(win, tmp_path, "docs")
+    try:
+        view, bar = win.docs.browser, win.docs.browser.verticalScrollBar()
+        narrower = page == "a long page in a narrower column"
+        for width in (340, 320, 300, 280) if narrower else (360,):  # (360: as the column opens)
+            win.resizeDocks([win.docs], [width], Qt.Horizontal)
+            settle()
+            if narrower:
+                open_page(win, DOCS_PAGE)
+            else:
+                a_page_with_a_line_that_does_not_wrap(win)
+            pointer_over(view, "docs")
+            bar.setValue(bar.maximum())
+            settle()
+            assert bar.value() == bar.maximum() > 0 and not view.horizontalScrollBar().isVisible()
+            sideways = False
+            for name, key in [("Ctrl +", IN)] * 3 + [("Ctrl -", OUT)] * 3:
+                size = pane.size()
+                press(key)
+                assert pane.size() != size, f"{name} over the docs left them at {size}"
+                sideways = sideways or view.horizontalScrollBar().isVisible()
+                assert bar.value() == bar.maximum(), (
+                    f"{name} over the docs at the end of {page} ({width} px): scrolled to {bar.value()} of "
+                    f"{bar.maximum()}, not to its end")
+            assert narrower or sideways, "zoomed in, the line that does not wrap never became wider than the column"
+    finally:
+        clean(win)
+
+
 @pytest.mark.invariant("ZM-5")
 @pytest.mark.parametrize("kind", ["Python code box", "SQL code box"])
 def test_a_zoomed_code_box_shows_each_line_number_whole_on_its_line(win, qtbot, tmp_path, kind):
