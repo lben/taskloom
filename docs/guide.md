@@ -1642,7 +1642,9 @@ It runs for a `v*` tag, a pull request, or by hand (Actions > test and build > R
 where `tests` can name only some tests); a push to `main` starts nothing. Each system's tests
 are split over several machines at once. The scheduler's model check and its mutation testing
 are taken from the newest earlier run whose files they read were the same, and the proof PDF
-names that run.
+names that run. Every other feature's mutation testing is taken from an earlier run in the same
+way. A result older than 30 days is not taken: the check runs again. A run by hand with `fresh`
+set runs them all again.
 
 The documentation website, <https://lben.github.io/taskloom/>, has the pages of Help > Documentation
 with the built-in blocks; `uv run python packaging/docs_site.py site` builds it into `site`. After
