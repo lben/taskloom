@@ -24,6 +24,11 @@ def new_flow_data(name: str = DEFAULT_NAME) -> dict:
     return {"taskloom": 1, "name": name, "params": {}, "blocks": {}, "edges": []}
 
 
+def flow_text(data: dict) -> str:
+    """The text of the flow file holding `data`, as File → Save writes it."""
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+
+
 def parse_edge(text: str) -> tuple[str, str, str, str] | None:
     match = _EDGE.match(text)
     return match.groups() if match else None
@@ -85,7 +90,7 @@ class FlowDocument(QObject):
         data = self.data
         if path != self.path and data.get("name") == DEFAULT_NAME:  # saved as a file (first time, Save as): its name
             data = {**data, "name": path.stem}
-        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8", newline="\n")
+        path.write_text(flow_text(data), encoding="utf-8", newline="\n")
         self.data, self.path = data, path  # only once written: a file that cannot be written leaves the flow as it was
         self.dirty = False
         self.changed.emit()
