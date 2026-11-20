@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
+from functools import cache
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QShortcut, QTextCursor
@@ -16,9 +17,10 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainT
                                QWidget)
 
 from .canvas import is_dark
-from .panels import CodeEditor, FindBar, FindToggles
+from .panels import CodeEditor, CodeHighlighter, FindBar, FindToggles
 from .zoom import mark
 
+READS = 4.5  # the contrast text needs (WCAG)
 # (light, dark), as in the approved mockup: a changed row, and the line along a change's top and bottom; the changed
 # characters inside a changed row; a filler line's hatching. The text (the theme's) reads on each at 4.5:1 or more.
 FILL = {"added": ("#d9f2dc", "#273d2d"), "removed": ("#fbe1e0", "#45282b"), "changed": ("#dde7fc", "#26344d")}
@@ -101,13 +103,63 @@ def note(old: str, new: str, old_keys: list[str], new_keys: list[str]) -> str:
     return " ".join(said)
 
 
+def _luminance(colour: QColor) -> float:
+    def channel(v: float) -> float:
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * channel(colour.redF()) + 0.7152 * channel(colour.greenF()) + 0.0722 * channel(colour.blueF())
+
+
+def _contrast(a: QColor, b: QColor) -> float:
+    """The WCAG contrast ratio of two colours (1 to 21)."""
+    high, low = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+@cache
+def _on_mark(colour: str, mark: str) -> QColor:
+    """Text in `colour` on `mark`: in it where it reads there (4.5:1), else in a shade of its hue just enough darker
+    (on a mark lighter than it) or lighter (on one darker) to read there."""
+    text, behind = QColor(colour), QColor(mark)
+    hue, saturation, lightness, _ = text.getHslF()
+    step = -0.01 if _luminance(behind) > _luminance(text) else 0.01
+    while _contrast(text, behind) < READS and 0 < lightness < 1:
+        lightness = min(1.0, max(0.0, lightness + step))
+        text = QColor.fromHslF(hue, saturation, lightness)
+    return text
+
+
+class _OnMarks(CodeHighlighter):
+    """A side's YAML in the code boxes' colours; on a change's mark (its row's, or its changed characters') each in a
+    shade that reads there."""
+
+    def __init__(self, document, rows: list[Row], side: int):
+        self.rows, self.side = rows, side  # (first: it colours as it is made)
+        super().__init__(document, "yaml")
+
+    def highlightBlock(self, text):
+        super().highlightBlock(text)
+        n = self.currentBlock().blockNumber()
+        if n >= len(self.rows) or self.rows[n].kind == "equal":
+            return
+        row, dark = self.rows[n], int(is_dark())
+        for i in range(self.currentBlock().length() - 1):
+            look = self.format(i)
+            if look.foreground().style() == Qt.NoBrush:  # (the theme's text colour: it reads on every mark)
+                continue
+            mark = CHARACTERS[dark] if any(a <= i < b for a, b in row.spans[self.side]) else FILL[row.kind][dark]
+            look.setForeground(_on_mark(look.foreground().color().name(), mark))
+            self.setFormat(i, 1, look)
+
+
 class DiffSide(CodeEditor):
     """One side: the app's code box, read-only (no key changes its text), each line one row; changed rows coloured,
-    filler lines hatched and unnumbered. Zoomed, it gives the other side its size too."""
+    filler lines hatched and unnumbered; the YAML in the code boxes' colours. Zoomed, it gives the other side its size
+    too."""
 
     def __init__(self, rows: list[Row], side: int):
-        super().__init__("", "python", wrap=False)
-        self.highlighter.setDocument(None)  # (plain text: no code colours, so the text reads on every mark)
+        super().__init__("", "yaml", wrap=False)
+        self.highlighter.setDocument(None)
+        self.highlighter = _OnMarks(self.document(), rows, side)
         self.setReadOnly(True)
         self.setPlainText("\n".join(row.texts[side] for row in rows))
         self.rows, self.side, self.other = rows, side, None

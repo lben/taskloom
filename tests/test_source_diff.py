@@ -57,8 +57,12 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMenu, QPlainTextEdit  # noqa: E402
 
 from tests.test_code_editor import drawn_texts  # noqa: E402
-from tests.test_commit_history import (dates, git_config, known_identity, local, look_kept,  # noqa: E402,F401
-                                       make_history, open_history, settle, windows_closed)
+import tests.test_commit_history as commit_history  # noqa: E402
+from tests.test_commit_history import dates, known_identity, local, make_history, open_history, settle  # noqa: E402
+
+# Fixtures of Commit History's tests, used here by name (bound, not imported, so that pyflakes passes).
+git_config, look_kept = commit_history.git_config, commit_history.look_kept
+windows_closed = commit_history.windows_closed
 from tests.test_find_bar import contrast, differs, open_find  # noqa: E402
 from tests.test_paths_editor_editing import clean, menu, save_as  # noqa: E402
 from tests.test_save_and_commit import GIT, git, needs_git, shown  # noqa: E402
@@ -864,6 +868,91 @@ def test_d15_added_removed_and_changed_colours_read_well_in_light_and_dark_and_f
                     assert differs(inner, row.colour, 6), f"{name}: the changed characters are not marked"
                     assert strongest(side, span, inner) >= TEXT, (
                         f"{name}: the changed characters do not read on {inner.name()}")
+
+
+# The approved mockup's code colours (light, dark) of a YAML key and of a quoted string.
+SYNTAX = {"key": ("#871094", "#cf8e6d"), "string": ("#067d17", "#6aab73")}
+SYNTAX_OLD = flow_lines([*code(4), "kept: str = 'East'", *code(3, "sum"), "area: str = 'North'", *code(3, "avg"),
+                         "region_id: int = 1", *code(3, "max"), "gone: str = 'West'", *code(3, "min")])
+SYNTAX_NEW = flow_lines([*code(4), "kept: str = 'East'", *code(3, "sum"), "area: str = 'South'", *code(3, "avg"),
+                         "branch_id: int = 1", *code(3, "max"), *code(3, "min"), "added: str = 'West'"])
+
+
+def inks(side, line: str, token: str) -> dict[str, QColor]:
+    """The characters of `token` in the side's row showing `line`, by the colour painted behind them (its name): the
+    colour most unlike it painted in their cells (their text's colour)."""
+    block = side.document().begin()
+    while block.isValid() and block.text() != f"        {line}":  # (as flow_lines indents the code)
+        block = block.next()
+    assert block.isValid(), f"{side.objectName()} shows no line {line!r}"
+    side.verticalScrollBar().setValue(block.firstLineNumber())
+    settle()
+    assert wholly_in_view(side, block.blockNumber()), f"{side.objectName()}: {line!r} is not in view"
+    image = side.viewport().grab().toImage()
+    ratio = image.devicePixelRatio()
+    found = {}
+    start = block.text().index(token)
+    for i in range(start, start + len(token)):
+        first, last = QTextCursor(block), QTextCursor(block)
+        first.setPosition(block.position() + i)
+        last.setPosition(block.position() + i + 1)
+        a, b = side.cursorRect(first), side.cursorRect(last)
+        cell = QRect(a.left() + 1, a.top() + 1, b.left() - a.left() - 2, a.height() - 3)  # (not a change's edge)
+        behind = painted(image, cell, 1, 1)
+        r = QRect(int(cell.left() * ratio), int(cell.top() * ratio), int(cell.width() * ratio),
+                  int(cell.height() * ratio))
+        ink = max((image.pixelColor(x, y) for y in range(r.top(), r.bottom() + 1)
+                   for x in range(r.left(), r.right() + 1)), key=lambda c: contrast(c, behind))
+        if behind.name() not in found or contrast(ink, behind) > contrast(found[behind.name()], behind):
+            found[behind.name()] = ink
+    return found
+
+
+@pytest.mark.invariant("CD-2")
+def test_d15_yaml_keys_and_strings_in_the_mockups_colours_reading_well_on_every_mark_and_following_the_theme(
+        look_kept, win, qtbot, tmp_path):
+    """D15: the flow's YAML in the approved mockup's code colours: a key and a quoted string on an unchanged line in
+    them; on an added, a removed and a changed line, and on the changed characters inside it, in a colour of the same
+    hue that reads well there (4.5:1). Light chosen in Settings; then Dark, while the window is open."""
+    _, _, history, _ = flow_history(win, qtbot, tmp_path / "flows", [("One", as_bytes(SYNTAX_OLD)),
+                                                                     ("Two", as_bytes(SYNTAX_NEW))])
+    choose(win, "Light")
+    settle()
+
+    diff = open_diff(history, qtbot, 0, PREVIOUS)
+
+    # (side, line, its token looked at, the token's kind, how many marks are behind it: 0, the row's, or the row's
+    # and the changed characters')
+    looked = [(diff.left, "kept: str = 'East'", "kept", "key", 0),
+              (diff.right, "kept: str = 'East'", "'East'", "string", 0),
+              (diff.left, "gone: str = 'West'", "gone", "key", 1),
+              (diff.left, "gone: str = 'West'", "'West'", "string", 1),
+              (diff.right, "added: str = 'West'", "added", "key", 1),
+              (diff.right, "added: str = 'West'", "'West'", "string", 1),
+              (diff.left, "area: str = 'North'", "area", "key", 1),
+              (diff.left, "area: str = 'North'", "'North'", "string", 2),
+              (diff.right, "area: str = 'South'", "'South'", "string", 2),
+              (diff.left, "region_id: int = 1", "region_id", "key", 2),
+              (diff.right, "branch_id: int = 1", "branch_id", "key", 2)]
+    for name in ("Light", "Dark"):
+        if name == "Dark":
+            choose(win, name)
+            settle()
+        dark = name == "Dark"
+        for side, line, token, syntax, behind in looked:
+            seen = inks(side, line, token)
+            base = side.palette().color(QPalette.Base).name()
+            where = f"{name}: {token} in {line!r} ({side.objectName()})"
+            if behind == 0:
+                assert list(seen) == [base], f"{where} is painted on {list(seen)}, not on the side's {base}"
+            else:
+                assert len(seen) == behind and base not in seen, f"{where} is painted on {list(seen)}"
+            hue = QColor(SYNTAX[syntax][dark]).hslHue()
+            for colour, ink in seen.items():
+                assert ink.hslHue() >= 0 and abs((ink.hslHue() - hue + 180) % 360 - 180) <= 15, (
+                    f"{where}: {ink.name()} on {colour}, not the hue of the {syntax} colour {SYNTAX[syntax][dark]}")
+                assert contrast(ink, QColor(colour)) >= TEXT, (
+                    f"{where}: {ink.name()} on {colour} reads at {contrast(ink, QColor(colour)):.2f}:1")
 
 
 # --- CD-5: looking changes nothing -----------------------------------------------------------------------------------

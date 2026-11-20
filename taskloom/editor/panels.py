@@ -435,19 +435,23 @@ SQL_TOKENS = _tokens("--.*", r"/\*", "'(?:[^']|'')*'?", """select from where and
 CURL_TOKENS = re.compile("|".join([r"""(?P<string>'[^']*'|\$'(?:\\.|[^\\'])*'|"(?:\\.|[^"\\])*")""",
                                    r"""(?P<long>\$?'|")""", r"(?P<keyword>(?<!\S)--?[A-Za-z0-9][\w.-]*)",
                                    r"""(?P<url>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s'"^]+)""", r"(?P<word>\S)"]))
+# A YAML file (a flow's source, in Commit History's source diffs): its comments, quoted strings, keys and numbers.
+YAML_TOKENS = re.compile(r"""(?P<comment>(?<!\S)#.*)|(?P<string>"[^"]*"?|'[^']*'?)|(?P<key>[\w.]+(?=:(?:\s|$)))"""
+                         r"|(?P<number>\b\d[\d_]*(?:\.\d*)?\b)|(?P<word>\w+)")
 # Each language's tokens, and what its `long` starts (a string or a comment).
-LANGUAGES = {"python": (PYTHON_TOKENS, "string"), "sql": (SQL_TOKENS, "comment"), "curl": (CURL_TOKENS, "string")}
+LANGUAGES = {"python": (PYTHON_TOKENS, "string"), "sql": (SQL_TOKENS, "comment"), "curl": (CURL_TOKENS, "string"),
+             "yaml": (YAML_TOKENS, "string")}
 # How a string or comment over several lines ends (its index + 1: the line's state).
 LONG_ENDS = ["'''", '"""', "*/", "'", '"']
-# Keyword, string, comment, number and URL colours (as in JetBrains' light and dark themes), on a light and a dark
-# background.
+# Keyword, string, comment, number, URL and YAML key colours (as in JetBrains' light and dark themes), on a light and a
+# dark background.
 CODE_COLORS = {"keyword": ("#0033b3", "#cf8e6d"), "string": ("#067d17", "#6aab73"), "comment": ("#808080", "#7a7e85"),
-               "number": ("#1750eb", "#2aacb8"), "url": ("#871094", "#c77dbb")}
+               "number": ("#1750eb", "#2aacb8"), "url": ("#871094", "#c77dbb"), "key": ("#871094", "#cf8e6d")}
 
 
 class CodeHighlighter(QSyntaxHighlighter):
-    """Colours a Python or SQL code box's keywords, strings, comments and numbers, and a curl command's options,
-    strings and URLs: only on the screen."""
+    """Colours a Python or SQL code box's keywords, strings, comments and numbers, a curl command's options, strings
+    and URLs, and a YAML file's keys, strings, numbers and comments: only on the screen."""
 
     def __init__(self, document, language: str):
         super().__init__(document)
