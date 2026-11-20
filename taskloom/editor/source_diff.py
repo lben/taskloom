@@ -20,7 +20,9 @@ from .canvas import is_dark
 from .panels import CodeEditor, CodeHighlighter, FindBar, FindToggles
 from .zoom import mark
 
-READS = 4.5  # the contrast text needs (WCAG)
+# The contrast text on a mark is shaded to: the 4.5:1 text needs (WCAG), with room for the paler pixels along a
+# letter's smoothed edges, so that what the screen shows reads at 4.5:1 too.
+AIM = 4.7
 # (light, dark), as in the approved mockup: a changed row, and the line along a change's top and bottom; the changed
 # characters inside a changed row; a filler line's hatching. The text (the theme's) reads on each at 4.5:1 or more.
 FILL = {"added": ("#d9f2dc", "#273d2d"), "removed": ("#fbe1e0", "#45282b"), "changed": ("#dde7fc", "#26344d")}
@@ -117,12 +119,12 @@ def _contrast(a: QColor, b: QColor) -> float:
 
 @cache
 def _on_mark(colour: str, mark: str) -> QColor:
-    """Text in `colour` on `mark`: in it where it reads there (4.5:1), else in a shade of its hue just enough darker
+    """Text in `colour` on `mark`: in it where it reads there (AIM), else in a shade of its hue just enough darker
     (on a mark lighter than it) or lighter (on one darker) to read there."""
     text, behind = QColor(colour), QColor(mark)
     hue, saturation, lightness, _ = text.getHslF()
     step = -0.01 if _luminance(behind) > _luminance(text) else 0.01
-    while _contrast(text, behind) < READS and 0 < lightness < 1:
+    while _contrast(text, behind) < AIM and 0 < lightness < 1:
         lightness = min(1.0, max(0.0, lightness + step))
         text = QColor.fromHslF(hue, saturation, lightness)
     return text
