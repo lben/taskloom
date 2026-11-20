@@ -1186,7 +1186,7 @@ class _Runner:
         """Save what the block produced and how it ended (or, with KEPT_INPUTS, what it got, which of
         those you typed and the connections the others came by), so it can later feed a re-run of a single
         block. Values holding a password are never written to disk."""
-        kept, withheld = {}, []
+        kept, withheld, passwords = {}, [], []
         for port, value in produced.items():
             value = _tables_to_marks(value)
             try:
@@ -1197,9 +1197,10 @@ class _Runner:
             # A password, or text built from one (e.g. "user:" + password), stays off the disk.
             if _holds_secret(value) or any(len(s) >= 4 and s.encode() in data for s in REVEALED):
                 withheld.append(port)
+                passwords.append(port)
             else:
                 kept[port] = value
-        kept[WITHHELD] = withheld
+        kept[WITHHELD], kept[PASSWORDS] = withheld, passwords
         if status is not None:
             kept[STATUS] = status
         if typed:
@@ -1417,6 +1418,7 @@ TYPED = "__typed__"  # inputs you typed, as you typed them
 CAME = "__came__"  # the connections the other inputs came by (see _came)
 STALE = "__stale__"  # not current: a block before it ran again on its own since, or a re-run of it ended before it did
 WITHHELD = "__withheld__"  # outputs that were produced but not saved (passwords, things that cannot be saved)
+PASSWORDS = "__passwords__"  # of those, the ones not saved because they held a password
 
 
 # What a placeholder can write into a setting: a single value (a bool is an int; a datetime is a date).
@@ -1531,6 +1533,17 @@ def _saved(run_dir: Path, block: str) -> dict:
     return pickle.loads(path.read_bytes()) if path.exists() else {}
 
 
+def not_kept(run_dir: Path, block: str) -> dict[str, str]:
+    """The outputs of `block` that a run's folder `run_dir` does not hold although the block produced them, each with
+    why: {output: why}. None that can be read (e.g. its value's type is unknown here): {}."""
+    try:
+        saved = _saved(run_dir, block)
+    except Exception:
+        return {}
+    return {port: "it held a password, which is never written to disk" if port in saved.get(PASSWORDS, ())
+            else "it cannot be saved (e.g. an open connection)" for port in saved.get(WITHHELD, ())}
+
+
 def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[dict, dict, dict]:
     """What `only` gets when run on its own from run `run_id`: ({input: value}, {input: why it gets none},
     {input: the text you typed for it}). If it ran on its own then: exactly what it got. Otherwise what
@@ -1558,7 +1571,7 @@ def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[d
         kept = pickle.loads((run_dir / only / KEPT_INPUTS).read_bytes())
         missing = {port: f"{only}.{port} held a password (or something that cannot be saved), so it was not kept"
                    for port in kept.pop(WITHHELD, [])}
-        typed, came = kept.pop(TYPED, {}), kept.pop(CAME, {})
+        typed, came, _ = kept.pop(TYPED, {}), kept.pop(CAME, {}), kept.pop(PASSWORDS, None)
         return {port: _map_marks(value, table) for port, value in kept.items()}, missing, typed, came
     verdict, ports = _Now(flow, registry, run_dir, run_id).inputs(only)
     if verdict in ("blocked", "unknown"):

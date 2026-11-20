@@ -1020,6 +1020,8 @@ class FlowScene(QGraphicsScene):
             run_of = "line" if items["last"].startswith("[line ") else "item"  # (its tag: [line load], [item 2/5])
             tip = (f"<p><b>{html.escape(items['ended'])}</b> · the last {run_of} to end: "
                    f"{html.escape(items['last'])}, {html.escape(status)}</p>{tip}")
+        for port, why in (info.get("not_kept") or {}).items():  # (a loaded run's: what a re-run cannot have)
+            tip += f"<p><b>{html.escape(port)}</b>: value not kept: {html.escape(why)}</p>"
         if info.get("finished"):  # (not known if the run process died mid-block)
             tip += ('<p align="right" style="color:gray; font-size:small">results from '
                     f'{info["finished"].replace("T", " ")[:19]}</p>')

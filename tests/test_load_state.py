@@ -65,7 +65,10 @@ from tests.test_rerun_carries_on import (RUN_ON, RUN_ONLY, chain_flow, full_run,
                                          write_flow)
 from tests.test_rerun_old_and_kept import lines_flow  # noqa: E402
 from tests.test_rerun_refusal_seen import point_of, right_click_and_choose  # noqa: E402
-from tests.test_save_and_commit import commit, git_config, needs_git, new_repo  # noqa: E402, F401 (git_config: autouse)
+import tests.test_save_and_commit as save_and_commit  # noqa: E402
+from tests.test_save_and_commit import commit, needs_git, new_repo  # noqa: E402
+
+git_config = save_and_commit.git_config  # its autouse fixture, bound (not imported) so that pyflakes passes
 
 LOAD = "Load run state"
 BAR = "loaded-state-bar"

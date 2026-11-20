@@ -198,6 +198,16 @@ class History:
                           "ORDER BY r.id DESC", (run_id,))
         return [row[0] for row in rows]
 
+    def version(self, run_id: int) -> str | None:
+        """The version of the flow file run `run_id` ran (see start_run); None: not known (or no such run)."""
+        row = self._exec("SELECT version FROM runs WHERE id=?", (run_id,)).fetchone()
+        return row[0] if row else None
+
+    def carried_on_from(self, run_id: int) -> int | None:
+        """The run a re-run carried on from (see start_run); None: run `run_id` is not a re-run."""
+        row = self._exec("SELECT carried_on_from FROM carried_on WHERE run_id=?", (run_id,)).fetchone()
+        return row[0] if row else None
+
     def version_runs(self, flow_path: str) -> dict[str, dict]:
         """The latest finished run of each version of a flow file (see start_run) it was run with:
         {version: {id, started, finished}}. A run from before runs kept their version is none's."""
