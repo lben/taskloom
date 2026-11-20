@@ -2,7 +2,7 @@
 a flow's overlap setting, max_concurrent_runs, scheduled.yaml and the flow files it lists, notifications (desktop
 and email), a run whose process dies, the keeper, starting at login, one scheduler per Taskloom folder, its
 heartbeat / scheduler.pid / scheduler.version files, and the editor's side (the Scheduler service button, starting
-by itself, the restart offer when an older scheduler runs)."""
+by itself, this version's service taking over from an older one)."""
 
 import datetime as dt
 import json
@@ -1248,40 +1248,60 @@ def test_turning_the_service_on_starts_it_and_it_starts_by_itself_again(win, qtb
         wait_for(lambda: not win.scheduler_running(), timeout=15)
 
 
-@pytest.mark.parametrize("answer", ["Yes", "No"])
-def test_an_older_scheduler_service_is_offered_a_restart_once_and_restarted_on_yes(win, qtbot, monkeypatch, answer):
-    # README: "the editor then offers to restart it with the newer version".
+@pytest.mark.invariant("UP-8")
+@pytest.mark.invariant("SCH-1")
+def test_an_older_scheduler_service_is_taken_over_by_this_versions_without_a_question(win, qtbot, monkeypatch):
+    # UP-8 (agreed 2026-11-20, on every system): "Restart the scheduler service?" is gone; the newer version takes
+    # the service over by itself at a quiet moment. The older service (0.1.0) runs nothing: the moment is quiet.
     asked, started = [], []
-    monkeypatch.setattr(QMessageBox, "question",
-                        staticmethod(lambda *a, **k: asked.append(a[1:3]) or getattr(QMessageBox, answer)))
-    monkeypatch.setattr(win, "start_scheduler", lambda by_you=False: started.append(by_you))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: asked.append(a[1:3]) or QMessageBox.No))
     old = stand_in_service(win.home.root, "0.1.0")
+
+    class Recorded(subprocess.Popen):  # the service the editor starts outlives it: stopped at the end
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            started.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", Recorded)
+    monkeypatch.setattr(win, "start_scheduler", types.MethodType(REAL_START_SCHEDULER, win))  # the real one
     try:
-        qtbot.waitUntil(lambda: bool(asked), timeout=10_000)
-        (title, text), = asked
-        assert title == "Restart the scheduler service?" and "0.1.0" in text and __version__ in text, text
-        assert "0.1.0" in win.scheduler_action.toolTip()
-        if answer == "Yes":  # the old one stops, then this version's starts
-            old.wait(timeout=15)
-            qtbot.waitUntil(lambda: started == [False], timeout=20_000)
-        else:
-            qtbot.wait(4500)  # the next checks (every 2 s) ask no more
-            assert old.poll() is None and started == [] and len(asked) == 1
+        win.start_scheduler()  # (as when the editor opens with flows scheduled, or a schedule is saved)
+        qtbot.waitUntil(lambda: old.poll() is not None, timeout=30_000)  # the old one is stopped
+        qtbot.waitUntil(lambda: running_scheduler_version(win.home) == __version__, timeout=30_000)
+        qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler service on"
+                        and "older" not in win.scheduler_action.toolTip(), timeout=10_000)
+        qtbot.wait(2500)  # another check of the editor
+        assert asked == []
     finally:
         end(old, win.home.root)
+        for proc in started:
+            end(proc, win.home.root)
 
 
-def test_a_newer_scheduler_service_is_not_offered_a_restart(win, qtbot, monkeypatch):
-    # README: the restart is offered when a newer Taskloom opens than the one the service runs.
-    asked = []
+@pytest.mark.invariant("SCH-1")
+def test_a_newer_scheduler_service_is_left_alone(win, qtbot, monkeypatch):
+    # SCH-1: a newer Taskloom's service running, this (older) editor asks nothing and starts no service beside it.
+    asked, started = [], []
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: asked.append(a[1:3]) or QMessageBox.No))
     newer = stand_in_service(win.home.root, "999.0.0")
+
+    class Recorded(subprocess.Popen):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            started.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", Recorded)
+    monkeypatch.setattr(win, "start_scheduler", types.MethodType(REAL_START_SCHEDULER, win))  # the real one
     try:
         qtbot.waitUntil(lambda: win.scheduler_action.text() == "Scheduler service on", timeout=10_000)
+        win.start_scheduler()
         qtbot.wait(2500)  # another check
-        assert asked == [] and "older" not in win.scheduler_action.toolTip()
+        assert asked == [] and started == [] and newer.poll() is None
+        assert "older" not in win.scheduler_action.toolTip()
     finally:
         end(newer, win.home.root)
+        for proc in started:
+            end(proc, win.home.root)
 
 
 def test_the_settings_dialog_writes_the_scheduler_settings_the_service_reads(win, monkeypatch, tmp_path):

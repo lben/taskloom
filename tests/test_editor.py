@@ -1120,48 +1120,96 @@ def test_saving_while_typing_in_properties_keeps_what_you_typed(win, qtbot, tmp_
     assert "load_sales:" in flow.read_text() and not tab.doc.dirty
 
 
-def test_an_older_scheduler_running_is_offered_a_restart(win, monkeypatch):
-    import os
-
+@pytest.mark.invariant("UP-8")
+@pytest.mark.invariant("SCH-1")
+def test_an_older_scheduler_running_is_taken_over_without_a_question(win, qtbot, tmp_path, monkeypatch):
+    """UP-8 (agreed 2026-11-20, on every system): an older Taskloom's scheduler service runs (from before 0.14.1: it
+    says no version) and a flow is scheduled. The editor opening asks nothing ("Restart the scheduler service?" is
+    gone), also at its later checks; it starts this version's service, which takes over at a quiet moment
+    (tests/test_updates.py)."""
+    from taskloom.config import Home
     from taskloom.scheduler import acquire_lock
 
-    lock = acquire_lock(win.home)  # a scheduler from an older Taskloom: it writes no version
+    home = Home(tmp_path / "other-home")
+    home.set_scheduled(write_flow(tmp_path / "nightly.yaml", """
+        blocks:
+          nightly:
+            type: trigger.schedule
+            config: {cron: "0 2 1 1 *"}
+          work:
+            type: logic.python
+            config: {inputs: [], outputs: [], code: "pass"}
+        edges:
+          - nightly.start -> work.after
+    """).resolve(), True)
+    started = []
+    monkeypatch.setattr(MainWindow, "start_scheduler", lambda self, by_you=False: started.append(by_you))
+    lock = acquire_lock(home)  # a scheduler from an older Taskloom: it writes no version
     try:
-        (win.home.root / "scheduler.version").unlink()  # (this Taskloom's lock writes one: an older one does not)
-        (win.home.root / "scheduler.pid").write_text(str(os.getpid()))
-        win._show_scheduler_state(True)
-        win._show_scheduler_state(True)  # once per session, not every few seconds
+        (home.root / "scheduler.version").unlink()  # (this Taskloom's lock writes one: an older one does not)
+        (home.root / "scheduler.pid").write_text(str(os.getpid()))
+        opened = MainWindow(home)
+        qtbot.addWidget(opened)
+        opened.show()
+        qtbot.wait(4500)  # the editor's next checks of the service (every 2 s)
     finally:
         lock.close()
 
-    assert [box[1][0] for box in win.message_boxes] == ["Restart the scheduler service?"]
-    assert "older Taskloom" in win.scheduler_action.toolTip()
-    win.message_boxes.clear()
+    assert win.message_boxes == []
+    assert started == [False]
 
 
-def test_restarting_the_scheduler_stops_the_old_one_first(win, qtbot, monkeypatch):
+@pytest.mark.invariant("UP-8")
+@pytest.mark.invariant("SCH-1")
+def test_this_versions_service_started_beside_an_older_one_takes_over_the_old_one_stopping_first(win, qtbot):
+    """UP-8: an older Taskloom's scheduler service runs (nothing is scheduled: a quiet moment at once). The editor
+    starts this version's service (as when it opens or a schedule is saved): the old one stops, and only once it has
+    ended does this version's hold the Taskloom folder."""
     import subprocess
     import time
+    import types
+
+    from taskloom import __version__
+    from taskloom.launch import pid_alive
+
+    def holder():
+        try:
+            return int((win.home.root / "scheduler.pid").read_text())
+        except (OSError, ValueError):
+            return None
 
     env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}
     old = subprocess.Popen([sys.executable, "-m", "taskloom.cli", "scheduler", "--headless"], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + 30
-        while not win.scheduler_running() and time.monotonic() < deadline:
+        while not (win.scheduler_running() and (win.home.root / "scheduler.version").exists()) \
+                and time.monotonic() < deadline:
             time.sleep(0.2)
         assert win.scheduler_running()
-        started = []
-        monkeypatch.setattr(win, "start_scheduler", lambda: started.append(win.scheduler_running()))
+        old_pid = holder()
+        (win.home.root / "scheduler.version").write_text(f"0.1.0 {old_pid}")  # it is an older Taskloom's
 
-        win.restart_scheduler()
+        types.MethodType(REAL_START_SCHEDULER, win)()
 
-        qtbot.waitUntil(lambda: bool(started), timeout=20_000)
-        assert started == [False]  # this version's starts only once the old one has stopped
+        both, new_pid, deadline = [], None, time.monotonic() + 30
+        while new_pid is None and time.monotonic() < deadline:
+            pid = holder()
+            if pid not in (None, old_pid) and pid_alive(pid):
+                if pid_alive(old_pid) and old.poll() is None:
+                    both.append(pid)
+                new_pid = pid
+            time.sleep(0.02)
+        assert new_pid is not None, "this version's service did not take over"
+        assert both == [], "this version's held the folder while the old one still ran"
+        assert (win.home.root / "scheduler.version").read_text().split() == [__version__, str(new_pid)]
         assert old.wait(timeout=10) is not None
     finally:
         if old.poll() is None:
             old.kill()
+        pid = holder()
+        if pid and pid != os.getpid() and pid_alive(pid):
+            os.kill(pid, signal.SIGTERM)
 
 
 def test_a_scheduled_run_shows_its_result_and_the_countdown(win, tmp_path):

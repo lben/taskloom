@@ -7,7 +7,7 @@ run just before the service checks (SCH-13); when a run started from a terminal 
 Each test uses the real service (`taskloom scheduler --headless`), real run processes and the real editor window where
 the behaviour crosses processes. Only what cannot happen in a test is arranged: a schedule's next time a few seconds
 away (a service before this one first saw it a minute earlier: next_time_in); the service being killed or stopped, as
-by a crash, the editor's Restart the scheduler service? or a PC shutting down (signals to its process); the PC
+by a crash, a newer version taking the service over (UP-8) or a PC shutting down (signals to its process); the PC
 sleeping, as the service's process suspended (SIGSTOP) and resumed (SIGCONT); a run's program slow to load, as a
 block file in the Taskloom folder slow to import; a service that is back more than 2 minutes after
 a time, as the service's checks (Scheduler.tick) at that clock time, its runs replaced by stand-ins (FakeRuns); the
@@ -74,7 +74,7 @@ def service_here(env):
 
 def end_service(env, service: subprocess.Popen, killed: bool):
     """The service ends without being turned off: killed (SIGKILL), as by a crash, or asked to stop (SIGTERM), as the
-    editor's Restart the scheduler service? and a PC shutting down ask it. (On Windows either ends it at once.)"""
+    newer version taking the service over and a PC shutting down ask it. (On Windows either ends it at once.)"""
     os.kill(service_pid(env), getattr(signal, "SIGKILL", signal.SIGTERM) if killed else signal.SIGTERM)
     service.wait(timeout=15)
 
@@ -106,11 +106,11 @@ def ran(home: Path, flow: str | None = None) -> list[tuple[str, dt.datetime | No
                          [("run_once", "killed"), ("skip", "asked to stop"), ("run_once", "restarted")],
                          ids=["killed, Run once, back 3 s after its time",
                               "asked to stop (as a PC shutting down), Skip, back 3 s after its time",
-                              "restarted by the editor, back before its time"])
+                              "restarted (taken over), back before its time"])
 def test_a_time_that_came_as_the_service_stopped_just_before_it_runs_once_when_it_is_back(env, misfire, stop):
     """nightly runs every minute, its next time T a few seconds away. Before T the service stops, not turned off by
     you: it is killed 3 s before T (as by a crash), or asked to stop 3 s before T (as a PC shutting down asks it), and
-    is back 3 s after T; or the editor restarts it (it asks it to stop, then starts a new one once it has ended) 6 s
+    is back 3 s after T; or it is restarted (asked to stop, a new one started once it has ended, as a take-over) 6 s
     before T, and it is back before T. No run's process is started for T before T (SCH-5). Back 3 s after T: no service
     was on at T, so T is a missed time, 3 s late, so on time: Run once runs it, and so does Skip. Back before T: T
     runs. Either way T runs exactly once."""
@@ -124,7 +124,7 @@ def test_a_time_that_came_as_the_service_stopped_just_before_it_runs_once_when_i
         if stop == "restarted":
             end_service(env, services[0], killed=False)
             restarted = dt.datetime.now()
-            services.append(start_service(env, tray=False))  # (as the editor's restart_scheduler starts it)
+            services.append(start_service(env, tray=False))  # (as a newer version's service takes over)
             assert checked_after(env, restarted, until=due), \
                 f"restarted at {restarted:%H:%M:%S.%f}, the service did not check before {due:%H:%M:%S}: too late"
         else:
