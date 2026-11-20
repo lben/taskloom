@@ -460,13 +460,20 @@ class FlowDocument(QObject):
             self.data[key] = value
         self._done()
 
-    def restore(self, data: dict):
+    def restore(self, data: dict) -> dict:
         """Put back recovered unsaved changes, or a version from the Git history (unsaved until you save), in one
-        step."""
+        step. Returns that step's undo (see in_effect)."""
         self._change()
+        undo = self._undo[-1]
         self.data = data
         self._fill_in_lists()
         self._done()
+        return undo
+
+    def in_effect(self, undo: dict) -> bool:
+        """Whether the step that restore returned `undo` for is in the flow (as far back as Undo reaches): not undone,
+        or redone since."""
+        return any(step is undo for step in self._undo)
 
     def set_params(self, params: dict):
         if params == self.data["params"]:

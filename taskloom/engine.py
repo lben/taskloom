@@ -1540,8 +1540,13 @@ def not_kept(run_dir: Path, block: str) -> dict[str, str]:
         saved = _saved(run_dir, block)
     except Exception:
         return {}
-    return {port: "it held a password, which is never written to disk" if port in saved.get(PASSWORDS, ())
-            else "it cannot be saved (e.g. an open connection)" for port in saved.get(WITHHELD, ())}
+    return {port: f"it {_why_not_kept(saved, port)}" for port in saved.get(WITHHELD, ())}
+
+
+def _why_not_kept(saved: dict, port: str) -> str:
+    """Why the value of `port` is not kept, `saved` being what a block produced (or got) as kept, without it."""
+    return ("held a password, which is never written to disk" if port in saved.get(PASSWORDS, ())
+            else "cannot be saved (e.g. an open connection)")
 
 
 def block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[dict, dict, dict]:
@@ -1569,7 +1574,7 @@ def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[d
     ran = _saved(run_dir, only).get(STATUS) in ("success", "failed", "cancelled")  # it got its inputs
     if ran and (run_dir / only / KEPT_INPUTS).exists():
         kept = pickle.loads((run_dir / only / KEPT_INPUTS).read_bytes())
-        missing = {port: f"{only}.{port} held a password (or something that cannot be saved), so it was not kept"
+        missing = {port: f"{only}.{port} {_why_not_kept(kept, port)}, so it was not kept"
                    for port in kept.pop(WITHHELD, [])}
         typed, came, _ = kept.pop(TYPED, {}), kept.pop(CAME, {}), kept.pop(PASSWORDS, None)
         return {port: _map_marks(value, table) for port, value in kept.items()}, missing, typed, came
@@ -1585,8 +1590,7 @@ def _block_inputs(flow: Flow, registry, home, only: str, run_id: int) -> tuple[d
         for edge, saved in got:
             withheld = edge.src_port in saved.get(WITHHELD, [])
             if withheld and port != AFTER:  # into run after it arrived all the same: its value is not used
-                missing[port] = (f"{edge.src}.{edge.src_port} held a password (or something that cannot be saved), "
-                                 "so it was not kept")
+                missing[port] = f"{edge.src}.{edge.src_port} {_why_not_kept(saved, edge.src_port)}, so it was not kept"
                 break
             delivered.append((edge, None if withheld else _map_marks(saved[edge.src_port], table)))
         else:  # as the runner hands them over
@@ -1779,8 +1783,8 @@ def _from_before(flow: Flow, registry, home, part: set, run_id: int | None, star
         if kind in ("ran", "failed"):
             if edge.src_port in saved.get(WITHHELD, []):
                 if edge.dst_port != AFTER:
-                    raise ValueError(f"{edge.src}.{edge.src_port} held a password (or something that cannot be "
-                                     "saved), so it was not kept: run the whole flow instead")
+                    raise ValueError(f"{edge.src}.{edge.src_port} {_why_not_kept(saved, edge.src_port)}, so it was "
+                                     "not kept: run the whole flow instead")
                 outputs[(edge.src, edge.src_port)] = None  # it arrived all the same: run after does not use its value
             if edge.src_port in saved:
                 outputs[(edge.src, edge.src_port)] = _map_marks(saved[edge.src_port], table)

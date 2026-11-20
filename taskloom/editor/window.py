@@ -377,6 +377,7 @@ class FlowTab(QWidget):
         # (run #12 · when it started), and what else the bar says of it (e.g. shown on today's flow).
         self.state_run: int | None = None
         self.state_label, self.state_note = "", ""
+        self.state_undo = None  # the note is of the flow brought back by this step: once undone, today's flow is shown
         self.brought_back = ""  # the run whose flow, as it was then, the tab holds, not saved yet ("": none)
         self.runs: list[RunProcess] = []
         self.queued: list[dict] = []
@@ -935,6 +936,8 @@ class MainWindow(QMainWindow):
 
     def _on_doc_changed(self, tab: FlowTab):
         self.tabs.setTabText(self.tabs.indexOf(tab), tab.doc.title + (" *" if tab.doc.dirty else ""))
+        if tab.state_undo is not None:  # (Undo, Redo: the bar says which flow the tab holds)
+            self._show_bar(tab)
         self._refresh_schedule(tab)
         self.flow_status.update_tab(tab)
         if tab is self.current:
@@ -2037,7 +2040,7 @@ class MainWindow(QMainWindow):
             label, version = history.label(run_id), history.version(run_id)
         finally:
             history.close()
-        note = ""
+        note, undo = "", None
         if self._changed_since(tab, version):
             then = self._flow_as_it_was(tab.doc.path, version)
             box = QMessageBox(QMessageBox.Question, "Load run state",
@@ -2054,13 +2057,13 @@ class MainWindow(QMainWindow):
             box.exec()
             if box.clickedButton() is back:
                 self._finish_editing(tab)
-                tab.doc.restore(then)
+                undo = tab.doc.restore(then)
                 tab.brought_back, note = label, "the flow as it was then (not saved)"
             elif box.clickedButton() is today:
                 note = "shown on today's flow"
             else:
                 return
-        self._set_state(tab, run_id, note)
+        self._set_state(tab, run_id, note, undo)
         self._show_state(tab, run_id)
         self._show_log(tab, run_id)
 
@@ -2106,10 +2109,10 @@ class MainWindow(QMainWindow):
                                      "(Keep runs, keep_runs_for): it is gone.")
         self._mark_old(tab)
 
-    def _set_state(self, tab: FlowTab, run_id: int | None, note: str = ""):
-        """The run whose state the tab has loaded (None: none), with what else its bar says; remembered for when
-        Taskloom starts again (LS-9)."""
-        tab.state_run, tab.state_note = run_id, note
+    def _set_state(self, tab: FlowTab, run_id: int | None, note: str = "", undo: dict | None = None):
+        """The run whose state the tab has loaded (None: none), with what else its bar says (of the flow brought back by
+        the step `undo` takes back, if given); remembered for when Taskloom starts again (LS-9)."""
+        tab.state_run, tab.state_note, tab.state_undo = run_id, note, undo
         if run_id is not None:
             history = self._history()
             try:
@@ -2128,8 +2131,11 @@ class MainWindow(QMainWindow):
         """The tab's loaded-state bar: what it says of the loaded run (`text`: that instead); none loaded: hidden."""
         if text is None and tab.state_run is not None:
             if (self.home.runs_dir / str(tab.state_run)).is_dir():
+                note = tab.state_note
+                if tab.state_undo is not None and not tab.doc.in_effect(tab.state_undo):
+                    note = "shown on today's flow"  # (Undo took the flow as it was back out of the tab)
                 text = (f"Loaded state of {tab.state_label}: every block shows its result from it, and re-runs take "
-                        "their inputs from it" + (f" · {tab.state_note}" if tab.state_note else ""))
+                        "their inputs from it" + (f" · {note}" if note else ""))
             else:
                 text = (f"Loaded state of {tab.state_label}: its files were cleaned up (Keep runs, keep_runs_for), so "
                         "nothing can be re-run from it; the blocks still show its results")

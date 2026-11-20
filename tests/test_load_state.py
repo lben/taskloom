@@ -490,7 +490,8 @@ def test_l9_a_password_and_an_open_connection_are_named_not_kept_and_reruns_need
         win, qtbot, tmp_path):
     """L9: a run from a terminal: ask gave a password (the stored secret), connect an open connection, make 5. Load
     it: ask and connect each name their value as not kept, with the reason. use_pw and query, re-run alone, are
-    refused with that reason before anything runs (no new run, they do not run); show, re-run alone, runs."""
+    refused with that reason (not the other one) before anything runs (no new run, they do not run); show, re-run
+    alone, runs."""
     win.home.root.mkdir(parents=True, exist_ok=True)
     secrets = win.home.root / "secrets.yaml"
     secrets.write_text("pw: hunter2SECRET\n", encoding="utf-8")
@@ -510,6 +511,7 @@ def test_l9_a_password_and_an_open_connection_are_named_not_kept_and_reruns_need
     query = rerun(win, qtbot, tab, "query", RUN_ONLY)
     assert "password" in use.said and use.status != "success", use.log
     assert "cannot be saved" in query.said and query.status != "success", query.log
+    assert "cannot be saved" not in use.said and "password" not in query.said, (use.log, query.log)
     assert run_ids(win) == before
     assert received(tmp_path, "use_pw") == ["got it"] and received(tmp_path, "query") == ["1"]
 
@@ -930,6 +932,31 @@ def test_l14_bring_back_puts_the_old_flow_in_the_tab_as_unsaved_edits_and_ctrl_z
     menu(win, "Undo").trigger()  # Ctrl+Z
 
     assert tab.doc.data == held and tab.doc.dirty and path.read_bytes() == v2
+
+
+@needs_git
+@pytest.mark.invariant("LS-8")
+def test_l14_after_bring_back_ctrl_z_the_bar_says_todays_flow_and_ctrl_y_as_it_was_again(
+        win, qtbot, tmp_path, monkeypatch):
+    """L14: the flow brought back as it was at run #1. Ctrl Z (Edit → Undo): the tab holds today's flow, its blocks
+    showing run #1's results, and the bar keeps naming run #1 and says today's flow, not as it was. Ctrl Y (Edit →
+    Redo): the flow as it was again, and the bar says so."""
+    tab, path, v1, v2, first = changed_since_run(win, tmp_path / "flows")
+    the_question(load_state(win, qtbot, first, AS_IT_WAS, monkeypatch))
+    assert "as it was" in bar(tab), bar(tab)
+
+    menu(win, "Undo").trigger()  # Ctrl+Z
+
+    assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v2))
+    assert "10 rows" in under(tab, "load_orders") and under(tab, "extra") == "", canvas(tab)
+    said = bar(tab)
+    assert names(said, first) and "today's flow" in said and "as it was" not in said, said
+
+    menu(win, "Redo").trigger()  # Ctrl+Y
+
+    assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1))
+    said = bar(tab)
+    assert names(said, first) and "as it was" in said and "today's flow" not in said, said
 
 
 @needs_git
