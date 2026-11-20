@@ -189,6 +189,17 @@ def run_ids(win) -> set[int]:
         return {run for (run,) in db.execute("SELECT id FROM runs")}
 
 
+def runs_so_far(win) -> set[int]:
+    """Every run in the history, while a run process that has just started may still be making it: none until its
+    database and its table of runs exist (the database file comes first, empty, then its tables)."""
+    if not win.home.history_db.exists():
+        return set()
+    try:
+        return run_ids(win)
+    except sqlite3.OperationalError:  # "no such table: runs" (or the run process holding it while making it)
+        return set()
+
+
 # --- questions, menus, re-runs ---------------------------------------------------------------------------------------
 
 @contextlib.contextmanager
@@ -477,7 +488,11 @@ def not_kept_flow(folder: Path) -> Path:
     return write_flow(folder, {
         "ask": {"type": "logic.ask_user", "config": {"prompt": "Password?", "kind": "password", "secret": "pw"}},
         "use_pw": python(noting("use_pw", "'got it'"), ("pw",), ()),
-        "connect": python("import sqlite3\nconn = sqlite3.connect(':memory:')", (), ("conn",)),
+        # Each block runs in a thread of its own (engine _attempt), and sqlite3 refuses a connection used in a thread
+        # other than its maker's unless told not to check (macOS and Linux often give the next thread the ended one's
+        # id, so there it passes by chance; Windows does not).
+        "connect": python("import sqlite3\nconn = sqlite3.connect(':memory:', check_same_thread=False)", (),
+                          ("conn",)),
         "query": python(noting("query", "conn.execute('select 1').fetchone()[0]"), ("conn",), ()),
         "make": python("n = 5", (), ("n",)),
         "show": python(noting("show", "n"), ("n",), ()),
@@ -690,7 +705,7 @@ def test_l7_a_run_still_going_cannot_be_loaded_until_it_ends(win, qtbot, tmp_pat
                             env={**os.environ, "TASKLOOM_HOME": str(win.home.root)}, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        qtbot.waitUntil(lambda: win.home.history_db.exists() and bool(run_ids(win)), timeout=30_000)
+        qtbot.waitUntil(lambda: bool(runs_so_far(win)), timeout=30_000)
         (run,) = run_ids(win)
         item = load_item(win, qtbot, run)
         assert proc.poll() is None, "the run ended before it was looked at"
@@ -978,6 +993,41 @@ def test_l14_a_rerun_of_a_brought_back_flow_asks_before_saving_it_over_the_file_
     assert path.read_bytes() == v2
     assert run_ids(win) == before and received(folder, "clean") == had
     assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1)) and tab.doc.dirty
+
+
+@needs_git
+@pytest.mark.invariant("LS-8")
+def test_l14_after_ctrl_z_of_a_brought_back_flow_a_rerun_asks_nothing_and_after_ctrl_y_it_asks_again(
+        win, qtbot, tmp_path, monkeypatch):
+    """L14: the flow brought back as it was at run #1, then Ctrl Z (Edit → Undo): the tab holds today's flow, so clean,
+    Run from this block on, asks nothing: it runs with run #1's input (10 rows), and the file holds today's flow.
+    Ctrl Y (Edit → Redo): the tab holds the flow as it was again, unsaved; the same re-run asks once; No: the file is
+    not written, no run is made, clean does not run."""
+    folder = tmp_path / "flows"
+    tab, path, v1, v2, first = changed_since_run(win, folder)
+    the_question(load_state(win, qtbot, first, AS_IT_WAS, monkeypatch))
+    menu(win, "Undo").trigger()  # Ctrl+Z
+    before, had = run_ids(win), received(folder, "clean")
+
+    with answering("No", monkeypatch) as asked:
+        today = right_click_and_choose(win, qtbot, tab, "clean", RUN_ON)
+
+    assert asked == [], f"a re-run of today's flow (the flow as it was undone) asked: {asked}"
+    assert today.status == "success" and received(folder, "clean") == had + ["10"], today.log
+    assert run_ids(win) - before == {today.run}
+    assert flow_of(yaml.safe_load(path.read_bytes())) == flow_of(yaml.safe_load(v2))
+    saved = path.read_bytes()
+
+    menu(win, "Redo").trigger()  # Ctrl+Y
+    assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1)) and tab.doc.dirty
+    before, had = run_ids(win), received(folder, "clean")
+
+    with answering("No", monkeypatch) as asked:
+        right_click_and_choose(win, qtbot, tab, "clean", RUN_ON)
+
+    assert len(asked) == 1, f"a re-run of the flow brought back again (Redo) asked {len(asked)} questions: {asked}"
+    assert path.read_bytes() == saved
+    assert run_ids(win) == before and received(folder, "clean") == had
 
 
 @pytest.mark.invariant("LS-8")
