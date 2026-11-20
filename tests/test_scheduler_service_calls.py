@@ -17,8 +17,7 @@ from taskloom.config import Home
 from taskloom.flow import load_flow, real_path
 from taskloom.history import History
 from taskloom.scheduler import (Scheduler, counted_from, forget_schedules, paused, request_turn_off,
-                                running_scheduler_version, runs_going, service_running, set_start_at_login,
-                                tell_crashed)
+                                running_scheduler_version, runs_going, service_running, tell_crashed)
 from tests.test_scheduler_at_its_time import clock
 from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, FakeRuns, begins, check_after,
                                                clock_shows, drain, end_runs, flow_yaml, going, history, hhmm,
@@ -666,14 +665,16 @@ def test_stop_now_stops_the_scheduled_run_of_a_flow_taken_off_the_scheduled_flow
     assert stopped and statuses(env.home, "nightly") == ["cancelled"], history(env.home)
 
 
-def test_starting_at_login_anywhere_but_windows_says_it_is_for_windows_only(env, monkeypatch):
+def test_starting_at_login_anywhere_but_windows_says_it_is_for_windows_only(env):
     """`taskloom scheduler --at-login on` (and Tools → Settings) away from Windows: refused, saying so in plain
-    words."""
-    monkeypatch.delenv("APPDATA", raising=False)
-    with pytest.raises(RuntimeError) as refused:
-        set_start_at_login(Home(env.home), True)
+    words. (Called as `taskloom` calls it: the Startup entry is no longer written by the scheduler's code.)"""
+    env.env.pop("APPDATA", None)
 
-    assert str(refused.value) == "starting the scheduler at login is supported on Windows only"
+    refused = env.taskloom("scheduler", "--at-login", "on", timeout=60)
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "error: starting the scheduler at login is supported on Windows only" in refused.stderr.splitlines(), \
+        refused.stderr
 
 
 @pytest.mark.invariant("SCH-10")

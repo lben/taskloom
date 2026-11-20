@@ -11,7 +11,6 @@ import sqlite3
 import stat
 import subprocess
 import sys
-import sysconfig
 import textwrap
 import time
 from pathlib import Path
@@ -19,7 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from conftest import REPO, events
+from conftest import events
 from tests.test_scheduler_promises import on
 
 T0 = dt.datetime(2026, 1, 5, 6, 30)  # a Monday
@@ -269,19 +268,25 @@ def test_check_without_names_checks_the_scheduled_flows(env):
 
 
 @pytest.mark.invariant("SCH-3")
-def test_scheduler_at_login_on_and_off_from_the_command_line(env):
-    env.env["APPDATA"] = str(env.root / "AppData")  # where Windows keeps the Startup folder (never the real one)
+def test_scheduler_at_login_on_and_off_from_the_command_line(env, tmp_path, monkeypatch):
+    # The Startup entry is a shortcut (UP-2): the packaged Windows Taskloom's windowed program, for this Taskloom
+    # folder (tests/test_updates.py: Windows' folders are the test's own, never the real ones).
+    from taskloom import __version__
+    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
-    on = env.taskloom("scheduler", "--at-login", "on")
+    folders = windows_folders(tmp_path, monkeypatch)
+    taskloom = Packaged(env, folders, unpacked(tmp_path / "Downloads" / "taskloom", __version__))
+
+    on = taskloom.run("scheduler", "--at-login", "on")
     assert on.returncode == 0 and on.stdout.startswith("start at login enabled: "), on.stderr
-    [script] = (env.root / "AppData").rglob("*.cmd")
-    assert script.parent.name == "Startup" and str(script) in on.stdout
-    assert f"TASKLOOM_HOME={env.home.resolve()}" in script.read_text(encoding="utf-8")
+    assert [p for p in folders.appdata.rglob("*") if p.is_file()] == [folders.startup] and \
+        str(folders.startup) in on.stdout, on.stdout
+    assert read_entry(folders.startup) == entry_for(taskloom.folder, login_args(env.home.resolve()))
 
-    off = env.taskloom("scheduler", "--at-login", "off")
+    off = taskloom.run("scheduler", "--at-login", "off")
 
     assert off.returncode == 0 and off.stdout.startswith("start at login disabled: "), off.stderr
-    assert not script.exists()
+    assert not folders.startup.exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows always has a Startup folder")
@@ -294,61 +299,36 @@ def test_scheduler_at_login_where_there_is_no_startup_folder_says_so_without_a_c
     assert "Traceback" not in result.stderr, result.stderr
 
 
-STAND_IN_CLI = """
-import json, os, sys
-
-# Stands in for Taskloom in the program the Startup script starts: it writes down what it was started with.
-with open(os.environ["STARTED_WITH"] + ".part", "w", encoding="utf-8") as f:
-    json.dump({"TASKLOOM_HOME": os.environ.get("TASKLOOM_HOME"), "args": sys.argv[1:]}, f)
-os.replace(os.environ["STARTED_WITH"] + ".part", os.environ["STARTED_WITH"])
-"""
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="the Startup folder, and cmd.exe that runs its scripts, are Windows'")
+@pytest.mark.skipif(sys.platform != "win32", reason="the Startup folder and its shortcuts are Windows'")
 @pytest.mark.parametrize("accented", ["Taskloom folder", "install folder"])
 @pytest.mark.invariant("SCH-3")
-def test_start_at_login_starts_the_scheduler_also_when_a_folder_name_has_an_accent(env, accented):
+def test_start_at_login_starts_the_scheduler_also_when_a_folder_name_has_an_accent(env, tmp_path, monkeypatch,
+                                                                                 accented):
     # README: `taskloom scheduler --at-login on` adds the scheduler to your Startup folder; unzip Taskloom anywhere
-    # you can write. E.g. for a user José: C:\Users\José\.taskloom, or Taskloom unzipped in his Downloads.
+    # you can write. E.g. for a user José: C:\Users\José\.taskloom, or Taskloom unzipped in his Downloads. The entry
+    # is a shortcut (UP-2), written here by the packaged Taskloom unzipped there (tests/test_updates.py).
+    from taskloom import __version__
+    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
+
+    folders = windows_folders(tmp_path, monkeypatch)
     user = env.root / "Users" / "José"
-    home, python = env.home, Path(sys.executable)
+    home, install = env.home, env.root / "Downloads" / "Taskloom"
     if accented == "Taskloom folder":
         home = user / ".taskloom"
     else:
         install = user / "Downloads" / "Taskloom"
-        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(install)], check=True, capture_output=True,
-                       timeout=120)
-        python = install / "Scripts" / "python.exe"
-    paths = sysconfig.get_paths()
-    env.env.update(APPDATA=str(env.root / "AppData"), TASKLOOM_HOME=str(home),
-                   PYTHONPATH=os.pathsep.join([str(REPO), paths["purelib"], paths["platlib"]]))
-    on = subprocess.run([str(python), "-m", "taskloom.cli", "scheduler", "--at-login", "on"], env=env.env,
-                        cwd=env.root, capture_output=True, text=True, timeout=120)
+    env.env["TASKLOOM_HOME"] = str(home)
+    on = Packaged(env, folders, unpacked(install, __version__)).run("scheduler", "--at-login", "on")
     assert on.returncode == 0, on.stderr
-    [script] = (env.root / "AppData").rglob("*.cmd")
-    # At login Windows runs the script with cmd.exe, in a console of its own. What it starts here is a stand-in that
-    # writes down how it was started: nothing real starts.
-    stand_in = env.root / "stand-in" / "taskloom"
-    stand_in.mkdir(parents=True)
-    (stand_in / "__init__.py").write_text("", encoding="utf-8")
-    (stand_in / "cli.py").write_text(STAND_IN_CLI, encoding="utf-8")
-    started_with = env.root / "started-with.json"
-    at_login = {k: v for k, v in env.env.items() if k != "TASKLOOM_HOME"}
-    at_login.update(PYTHONPATH=str(stand_in.parent), STARTED_WITH=str(started_with))
-    hidden = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=subprocess.SW_HIDE)
+    # At login Windows reads the shortcut (read here by Windows' own WScript.Shell) and starts its program with its
+    # arguments. The program started here is a stand-in that says the arguments it got: nothing real starts.
+    entry = read_entry(folders.startup)
+    assert entry == entry_for(install, login_args(home.resolve())), entry
+    started = subprocess.run(f'"{sys.executable}" -c "import json, sys; print(json.dumps(sys.argv[1:]))" '
+                             f'{entry.arguments}', cwd=install, capture_output=True, text=True, timeout=60)
 
-    try:
-        subprocess.run(["cmd.exe", "/c", str(script)], env=at_login, cwd=env.root, capture_output=True, timeout=30,
-                       creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=hidden)
-    except subprocess.TimeoutExpired:  # e.g. "Windows cannot find ...", waiting for someone to click OK
-        pytest.fail(f"the Startup script could not start Taskloom: {script.read_bytes()!r}")
-    deadline = time.monotonic() + 30
-    while not started_with.exists() and time.monotonic() < deadline:  # started detached
-        time.sleep(0.1)
-
-    assert started_with.exists(), f"the Startup script started nothing: {script.read_bytes()!r}"
-    assert json.loads(started_with.read_text(encoding="utf-8")) == {
-        "TASKLOOM_HOME": str(home.resolve()), "args": ["scheduler", "--unless-paused"]}, script.read_bytes()
+    assert json.loads(started.stdout) == ["--home", str(home.resolve()), "scheduler", "--unless-paused"], \
+        started.stdout + started.stderr
 
 
 # --- the Taskloom folder ---------------------------------------------------------------------------------------

@@ -79,6 +79,13 @@ to rename a folder holding an open file). Every other test runs on Windows, macO
 # - Tools > Settings: a QCheckBox "Add Taskloom to the Start menu" with the same parent widget as "Start the scheduler
 #   service when I log in"; each ticked when its entry exists; Save writes or removes its .lnk for this program folder
 #   (taskloom.editor.dialogs' `sys`: platform and executable).
+# - `taskloom scheduler --at-login on|off` in the packaged Windows Taskloom (taskloom.cli's `frozen` and `sys`, as for
+#   the start hook) writes or removes the Startup entry above, for its program folder and the Taskloom folder in use,
+#   and prints "start at login enabled: <the .lnk>" / "start at login disabled: <the .lnk>"; with no APPDATA (not
+#   Windows) it ends, exit code not 0, with the stderr line "error: starting the scheduler at login is supported on
+#   Windows only". The start hook counts an entry whose program folder has no VERSION as older, and re-points an
+#   entry whatever Taskloom folder it is for (its arguments kept). (The login tests of tests/test_scheduler.py,
+#   test_paths_cli_config.py, test_paths_scheduler.py and test_scheduler_service_calls.py.)
 # - The scheduler service (`taskloom scheduler`) finding the folder's lock held by an older Taskloom (scheduler.version
 #   older, or missing) waits and takes over at a quiet moment (no run going, none waiting, no scheduled time due within
 #   2 minutes; after an hour without one, the first check after a run ends): it stops the old service (it ends before
@@ -87,6 +94,7 @@ to rename a folder holding an open file). Every other test runs on Windows, macO
 #   meanwhile, it gives up (ends). Same or newer holding the lock: exits as today. The question "Restart the scheduler
 #   service?" is gone, also on macOS and Linux; the editor's start of the service also starts it while an older one runs.
 # - docs/guide.md: a sentence with "taskbar", "pin" and "not" (taskbar pins are Windows' own copies, not changed).
+import base64
 import contextlib
 import dataclasses
 import datetime as dt
@@ -180,12 +188,17 @@ class Folders:
         return {"APPDATA": str(self.appdata), "LOCALAPPDATA": str(self.local)}
 
 
-@pytest.fixture
-def folders(tmp_path, monkeypatch) -> Folders:
+def windows_folders(tmp_path, monkeypatch) -> Folders:
+    """The test's Windows folders, made this process's APPDATA and LOCALAPPDATA (and so those of what it starts)."""
     made = Folders(tmp_path / "windows")
     for name, value in made.environ().items():
         monkeypatch.setenv(name, value)
     return made
+
+
+@pytest.fixture
+def folders(tmp_path, monkeypatch) -> Folders:
+    return windows_folders(tmp_path, monkeypatch)
 
 
 def unpacked(folder: Path, version: str, marker_from: Path | None = None, extra: dict | None = None) -> Path:
@@ -248,10 +261,12 @@ def read_entry(path: Path) -> Entry | None:
     """What the entry starts, as Windows reads it (on Windows: WScript.Shell); None: there is no such entry."""
     if not path.exists():
         return None
-    if WINDOWS:
-        target, arguments, workdir = (_powershell(
-            f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_quoted(path)}); "
-            "$s.TargetPath; $s.Arguments; $s.WorkingDirectory").splitlines() + ["", "", ""])[:3]
+    if WINDOWS:  # (each as base64 of its UTF-8: PowerShell's output code page cannot hold every name, e.g. José)
+        said = _powershell(f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_quoted(path)}); "
+                           "foreach ($v in @($s.TargetPath, $s.Arguments, $s.WorkingDirectory)) { ':' + "
+                           "[System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$v)) }")
+        target, arguments, workdir = [base64.b64decode(line[1:]).decode("utf-8") for line in said.splitlines()
+                                      if line.startswith(":")]
     else:
         data = json.loads(path.read_text(encoding="utf-8"))
         target, arguments, workdir = data["target"], data["arguments"], data["workdir"]
@@ -280,6 +295,10 @@ def _json_read_link(path):
 
 @pytest.fixture(autouse=True)
 def links(monkeypatch):
+    json_links(monkeypatch)
+
+
+def json_links(monkeypatch):
     """Away from Windows a JSON file stands in for a .lnk, in this process (the real-process starts: PACKAGED)."""
     if WINDOWS:
         return

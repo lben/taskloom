@@ -12,7 +12,6 @@ import signal
 import socket
 import subprocess
 import sys
-import sysconfig
 import textwrap
 import threading
 import time
@@ -27,7 +26,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtWidgets import QDialogButtonBox, QMessageBox, QPushButton  # noqa: E402
 
-from conftest import REPO  # noqa: E402
 from sshserver import free_port  # noqa: E402
 from taskloom import __version__  # noqa: E402
 from taskloom.config import Home  # noqa: E402
@@ -1015,63 +1013,50 @@ def test_a_mistake_in_settings_does_not_stop_the_keeper_for_good(env):
 
 # --- start at login ----------------------------------------------------------------------------------------------------
 
-class _OnWindows:
-    """What window.py sees as `sys` while the editor opens as the packaged Windows Taskloom."""
-    platform = "win32"
-
-    def __getattr__(self, name):
-        return getattr(sys, name)
-
-
-@pytest.mark.parametrize("script, switched", [
+@pytest.mark.parametrize("entry, switched", [
     ("an older Taskloom's, for this folder", True),
     ("a newer Taskloom's", False),
-    ("another folder's", False),
+    ("another folder's, an older Taskloom's", True),
 ], ids=["older", "newer", "another folder"])
-def test_opening_the_editor_switches_starting_at_login_to_this_version(win, qtbot, tmp_path, monkeypatch, script,
-                                                                       switched):
+def test_opening_the_editor_switches_starting_at_login_to_this_version(env, tmp_path, monkeypatch, entry, switched):
     # README: "starting at login switches to the newest version you opened". Only the packaged Taskloom on Windows
-    # does it, so the editor is opened as that one.
-    from taskloom.editor import window as window_module
-    from taskloom.scheduler import startup_file, startup_script
+    # does it, so the editor is started as that one, a real process (tests/test_updates.py). The Startup entry is a
+    # shortcut (UP-2): one starting an older Taskloom starts this one, for the Taskloom folder it was for (another
+    # folder's stays that folder's: its arguments are kept, UP-4); one a newer Taskloom set is left as it is.
+    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders, write_entry
 
-    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    home = Home(tmp_path / "other-home")
-    path = startup_file()
-    path.parent.mkdir(parents=True)
-    text = startup_script(home)
-    if script == "a newer Taskloom's":
-        text = text.replace(f"rem Taskloom {__version__}", "rem Taskloom 999.0.0")
-    else:
-        text = text.replace(f"rem Taskloom {__version__}", "rem Taskloom 0.1.0")
-    if script == "another folder's":
-        text = text.replace(str(home.root), str(tmp_path / "elsewhere"))
-    path.write_text(text, encoding="utf-8", newline="\r\n")
+    folders = windows_folders(tmp_path, monkeypatch)
+    this = unpacked(folders.programs / __version__, __version__)
+    version = "999.0.0" if entry == "a newer Taskloom's" else "0.1.0"
+    other = unpacked(folders.programs / version, version)
+    home = env.root / "elsewhere" if entry.startswith("another folder's") else env.home
+    write_entry(folders.startup, other / "taskloomw.exe", login_args(home), other)
+    before = read_entry(folders.startup)
+    taskloom = Packaged(env, folders, this)
 
-    with monkeypatch.context() as m:
-        m.setattr(window_module, "frozen", lambda: True)
-        m.setattr(window_module, "sys", _OnWindows())
-        opened = window_module.MainWindow(home)
-    qtbot.addWidget(opened)
+    proc = taskloom.popen("editor", program="taskloomw.exe", status=True)
+    try:  # (the entries are seen to before any command: once the editor is open, it is done)
+        opened = wait_for(lambda: any((env.home / "recovery").glob("editor-*.running")), timeout=45)
+        after = read_entry(folders.startup)
+    finally:
+        output = taskloom.end(proc)
 
-    after = path.read_text(encoding="utf-8")
-    if switched:
-        assert after == startup_script(home) and f"rem Taskloom {__version__}" in after
-        assert __version__ in opened.statusBar().currentMessage()
-    else:
-        assert after == text
+    assert opened, f"the editor did not open: {output}"
+    assert after == (entry_for(this, login_args(home)) if switched else before), output
 
 
 @pytest.mark.invariant("SCH-3")
-def test_the_settings_box_start_at_login_adds_and_removes_this_folders_startup_script(win, monkeypatch, tmp_path):
+def test_the_settings_box_start_at_login_adds_and_removes_this_folders_startup_entry(win, monkeypatch, tmp_path):
     # README: "On Windows, Tools -> Settings -> Start the scheduler service when I log in (or `taskloom scheduler
     # --at-login on`) adds it to your Startup folder". Elsewhere the box is disabled ("Windows only"), so the
-    # dialog is opened as on Windows.
+    # dialog is opened as the packaged Windows Taskloom's (tests/test_updates.py). The entry is a shortcut (UP-2).
     from taskloom.editor import dialogs
-    from taskloom.scheduler import startup_file, startup_script
+    from tests.test_updates import PackagedSys, entry_for, json_links, login_args, read_entry, unpacked, windows_folders
 
-    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(dialogs, "sys", _OnWindows())
+    folders = windows_folders(tmp_path, monkeypatch)
+    json_links(monkeypatch)
+    this = unpacked(tmp_path / "Downloads" / "taskloom", __version__)
+    monkeypatch.setattr(dialogs, "sys", PackagedSys(this / "taskloomw.exe"))
 
     def saved_with(ticked: bool) -> bool:  # opened again: whether the box shows ticked
         dialog = dialogs.SettingsDialog(win.home, win)
@@ -1082,57 +1067,28 @@ def test_the_settings_box_start_at_login_adds_and_removes_this_folders_startup_s
 
     assert not dialogs.SettingsDialog(win.home, win).at_login.isChecked()
     assert saved_with(True)
-    assert startup_file().read_text(encoding="utf-8") == startup_script(win.home)  # starts this folder's
+    assert read_entry(folders.startup) == entry_for(this, login_args(win.home.root))  # starts this folder's
     assert not saved_with(False)
-    assert not startup_file().exists()
+    assert not folders.startup.exists()
 
 
-STAND_IN_CLI = """
-import json, os, sys
-
-# Stands in for Taskloom in the program the Startup script starts: it writes down what it was started with.
-with open(os.environ["STARTED_WITH"] + ".part", "w", encoding="utf-8") as f:
-    json.dump({"TASKLOOM_HOME": os.environ.get("TASKLOOM_HOME"), "args": sys.argv[1:]}, f)
-os.replace(os.environ["STARTED_WITH"] + ".part", os.environ["STARTED_WITH"])
-"""
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="the Startup folder, and cmd.exe that runs its scripts, are Windows'")
+@pytest.mark.skipif(sys.platform != "win32", reason="the Startup folder and its shortcuts are Windows'")
 @pytest.mark.invariant("SCH-3")
-def test_start_at_login_starts_the_scheduler_from_a_folder_whose_name_has_an_ampersand(env):
+def test_start_at_login_starts_the_scheduler_from_a_folder_whose_name_has_an_ampersand(env, tmp_path, monkeypatch):
     # README: unzip Taskloom "anywhere you can write"; `taskloom scheduler --at-login on` adds the scheduler to your
-    # Startup folder. A folder such as C:\Tools\R&D\Taskloom: cmd.exe reads an unquoted & as "then run".
-    install = env.root / "Tools" / "R&D" / "Taskloom"
-    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(install)], check=True, capture_output=True,
-                   timeout=120)
-    python = install / "Scripts" / "python.exe"
-    paths = sysconfig.get_paths()
-    env.env.update(APPDATA=str(env.root / "AppData"),
-                   PYTHONPATH=os.pathsep.join([str(REPO), paths["purelib"], paths["platlib"]]))
-    on = subprocess.run([str(python), "-m", "taskloom.cli", "scheduler", "--at-login", "on"], env=env.env,
-                        cwd=env.root, capture_output=True, text=True, timeout=120)
-    assert on.returncode == 0, on.stderr
-    [script] = (env.root / "AppData").rglob("*.cmd")
-    # At login Windows runs the script with cmd.exe; what it starts here only writes down how it was started.
-    stand_in = env.root / "stand-in" / "taskloom"
-    stand_in.mkdir(parents=True)
-    (stand_in / "__init__.py").write_text("", encoding="utf-8")
-    (stand_in / "cli.py").write_text(STAND_IN_CLI, encoding="utf-8")
-    started_with = env.root / "started-with.json"
-    at_login = {k: v for k, v in env.env.items() if k != "TASKLOOM_HOME"}
-    at_login.update(PYTHONPATH=str(stand_in.parent), STARTED_WITH=str(started_with))
-    hidden = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=subprocess.SW_HIDE)
+    # Startup folder. A folder such as C:\Tools\R&D\Taskloom: the entry, a shortcut (UP-2), starts the program there
+    # whole (written here by the packaged Taskloom unzipped there, tests/test_updates.py).
+    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
-    try:
-        subprocess.run(["cmd.exe", "/c", str(script)], env=at_login, cwd=env.root, capture_output=True, timeout=30,
-                       creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=hidden)
-    except subprocess.TimeoutExpired:  # e.g. "Windows cannot find ...", waiting for someone to click OK
-        pytest.fail(f"the Startup script could not start Taskloom: {script.read_bytes()!r}")
-    wait_for(started_with.exists)  # started detached
+    folders = windows_folders(tmp_path, monkeypatch)
+    install = unpacked(env.root / "Tools" / "R&D" / "Taskloom", __version__)
 
-    assert started_with.exists(), f"the Startup script started nothing: {script.read_bytes()!r}"
-    assert json.loads(started_with.read_text(encoding="utf-8")) == {
-        "TASKLOOM_HOME": str(env.home.resolve()), "args": ["scheduler", "--unless-paused"]}, script.read_bytes()
+    on = Packaged(env, folders, install).run("scheduler", "--at-login", "on")
+
+    assert on.returncode == 0, on.stdout + on.stderr
+    # At login Windows reads the shortcut (read here by Windows' own WScript.Shell) and starts the program it names,
+    # with its arguments, in its folder.
+    assert read_entry(folders.startup) == entry_for(install, login_args(env.home.resolve()))
 
 
 # --- the editor's side -----------------------------------------------------------------------------------------------
