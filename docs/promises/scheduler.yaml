@@ -25,13 +25,18 @@ asked:
   - date: 2026-11-08
     # Asked whether SCH-4 or SCH-8 wins for a Let it finish flow's waiting run still loading at Proceed (SCH-8).
     words: "Let it finish wins"
+  - date: 2026-11-20
+    # SCH-1 gets the exception for a newer version taking over (UP-8), on every system: the question
+    # "Restart the scheduler service?" goes on Mac and Linux too.
+    words: "Approve both"
 # The proofs on screen of this feature: the modules in tests/proofs whose names start so.
 proofs: [test_proof_scheduler, test_proof_interval_schedules]
 rows:
   SCH-1: >-
     Only one scheduler service runs at a time. If one is already running, starting another (clicking On, logging in,
     opening the editor) does nothing, so no scheduled run ever starts twice. Strictly, it is one per Taskloom folder,
-    the folder that holds your settings and run history; normally a PC has one.
+    the folder that holds your settings and run history; normally a PC has one. The one exception is a newer Taskloom
+    version: it waits and takes over at a quiet moment (UP-8).
   SCH-2: >-
     If you turn it off, it stays off. Logging in, opening the editor or scheduling a flow doesn't start it again; only
     you turning it on does.
