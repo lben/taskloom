@@ -665,8 +665,11 @@ def test_the_documentation_website(proof, win, qtbot, tmp_path, monkeypatch):
     runs = [step.get("run", "") for step in job["steps"]]
     upload = next(step for step in job["steps"]
                   if str(step.get("uses", "")).startswith("actions/upload-pages-artifact"))
-    p.check("It runs only for a tag that starts with v, a release: if: startsWith(github.ref, 'refs/tags/v')",
-            job.get("if", "").replace(" ", "") == "startsWith(github.ref,'refs/tags/v')")
+    rule = "${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success' }}"
+    p.check("It runs only for a tag that starts with v (a release), and only once the release job succeeded. "
+            "!cancelled() keeps it running when a long check was taken from an earlier run: that skips the check's "
+            "job, and without it GitHub would skip this job too. The rule, word for word: if: " + rule,
+            " ".join(str(job.get("if", "")).split()) == rule)
     waiting = [name for name, other in jobs.items() if "pages" in as_list(other.get("needs"))]
     p.check("It runs after the release job (needs: release), and no job waits for it",
             job.get("needs") == "release" and waiting == [])
