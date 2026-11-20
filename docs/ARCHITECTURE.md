@@ -12,7 +12,7 @@ The rules every change to Taskloom keeps. Approved on 2026-11-07.
 
 | Layer | Modules |
 | --- | --- |
-| 1. Entry points | the command line, the editor, the scheduler service, the connection check |
+| 1. Entry points | the command line, the editor, the scheduler service, the connection check, the Start menu and Startup entries, updates |
 | 2. Blocks | `taskloom/blocks/` |
 | 3. Core | reading, checking and upgrading flows; running them; the block registry; the Python environment |
 | 4. Outside world | settings files, run history, databases, servers, mail |

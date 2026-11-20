@@ -38,10 +38,9 @@ from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, bl
                    schedules_of, validate, version_id)
 from ..schedule import Trigger
 from ..history import History, run_label
-from ..launch import frozen, run_alive, runner_command
+from ..launch import run_alive, runner_command
 from ..scheduler import (counted_from, forget_schedules, paused, request_turn_off, running_scheduler_version,
-                         runs_going, service_running, set_paused, set_start_at_login, startup_file,
-                         startup_script_outdated, tell_crashed, version_tuple)
+                         runs_going, service_running, set_paused, tell_crashed, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
@@ -514,8 +513,6 @@ class MainWindow(QMainWindow):
                                       "open it")
         self.statusBar().addWidget(self.running_flows)
         self._offered_restart = False  # asked once per session to restart an older scheduler
-        if frozen() and sys.platform == "win32":
-            self._update_start_at_login()
         self._told_later: queue.Queue = queue.Queue()  # (title, message) from the emails being sent: shown at the check
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
@@ -1901,17 +1898,6 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(300, self, when_stopped)
 
-    def _update_start_at_login(self):
-        """If you start the scheduler at login, it starts this version from now on (not an older one)."""
-        try:
-            path = startup_file()
-            if path.exists() and startup_script_outdated(path.read_text(encoding="utf-8"), self.home):
-                set_start_at_login(self.home, True)
-                self.statusBar().showMessage(f"The scheduler service now starts at login with Taskloom {__version__}",
-                                             10000)
-        except (OSError, RuntimeError) as e:
-            self.statusBar().showMessage(f"Could not update starting the scheduler service at login: {e}", 10000)
-
     def toggle_scheduler(self):
         if not self.scheduler_on():
             self.start_scheduler(by_you=True)
@@ -2260,7 +2246,8 @@ class NoOpenAnimation(QObject):
         return False
 
 
-def main(paths=()) -> int:
+def main(paths=(), told=()) -> int:
+    """The editor; `told`: what Taskloom's start has to tell (taskloom.cli), shown in its status bar."""
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Taskloom")
     app.setOrganizationName("Taskloom")
@@ -2272,6 +2259,8 @@ def main(paths=()) -> int:
     window.restore_session(paths)
     if not window.tabs_list():
         window.new_flow()
+    if told:
+        window.statusBar().showMessage("  ".join(told), 30000)
     if os.environ.get("TASKLOOM_EDITOR_SMOKE") and paths:  # used by packaging/smoke.py
         _smoke_test(app, window, window.open_flow(Path(paths[0])), Path(os.environ["TASKLOOM_EDITOR_SMOKE"]))
     return app.exec()

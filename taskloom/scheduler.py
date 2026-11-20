@@ -1273,13 +1273,14 @@ def _stop_runs_going(home: Home, flows: set[str]):
         history.close()
 
 
-def serve(home: Home, headless: bool) -> int:
+def serve(home: Home, headless: bool, told=()) -> int:
     """The scheduler service, until you turn it off (from its first check on, also if you did while it started) or it
-    is stopped."""
+    is stopped. `told`: what Taskloom's start has to tell (taskloom.cli), shown by its tray icon (headless: printed
+    before)."""
     with acquire_lock(home):  # held until the scheduler stops (it says its process and Taskloom: scheduler.pid)
         stop = threading.Event()
         if not headless and _tray_available():
-            return _serve_tray(home, stop)
+            return _serve_tray(home, stop, told)
 
         def notify(title, message):
             print(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S} {title}: {message}", flush=True)
@@ -1326,7 +1327,7 @@ def _tray_available() -> bool:
     return QSystemTrayIcon.isSystemTrayAvailable()
 
 
-def _serve_tray(home: Home, stop: threading.Event) -> int:
+def _serve_tray(home: Home, stop: threading.Event, told=()) -> int:
     from PySide6.QtCore import QTimer, Qt
     from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -1375,6 +1376,8 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     tray.setContextMenu(menu)
     tray.messageClicked.connect(open_editor.trigger)
     tray.show()
+    if told:
+        tray.showMessage("Taskloom", "\n".join(told))
     threading.Thread(target=_keeper_loop, args=(scheduler, stop), daemon=True).start()
     timer = QTimer(singleShot=True, timerType=Qt.PreciseTimer)
     failed = None
@@ -1393,46 +1396,4 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
         return app.exec()
     finally:
         stop.set()
-
-
-def startup_file() -> Path:
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
-        raise RuntimeError("starting the scheduler at login is supported on Windows only")
-    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Taskloom Scheduler.cmd"
-
-
-def startup_script(home: Home) -> str:
-    """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
-    # The program is quoted, so a folder named e.g. R&D is not read as two commands.
-    program = " ".join(f'"{_in_script(a)}"' for a in windowed_command())
-    # cmd.exe reads a script in the console's code page (e.g. 437): the lines after chcp are read as the UTF-8
-    # they are written in, so a folder such as C:\Users\José is not garbled.
-    return (f'@echo off\nchcp 65001 >nul\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={_in_script(home.root)}"\n'
-            f'start "" {program} scheduler --unless-paused\n')  # unless you turned it off: then it stays off
-
-
-def _in_script(text) -> str:
-    """Text as a cmd.exe script writes it: also inside quotes, cmd.exe reads %NAME% as a variable."""
-    return str(text).replace("%", "%%")
-
-
-def startup_script_outdated(text: str, home: Home) -> bool:
-    """A start-at-login script for this Taskloom folder that starts an older Taskloom than this one."""
-    if f'TASKLOOM_HOME={_in_script(home.root)}"' not in text:
-        return False  # another Taskloom folder's: not ours to change
-    import re
-
-    found = re.search(r"^rem Taskloom (\S+)", text, re.MULTILINE)
-    return version_tuple(found.group(1) if found else None) < version_tuple(__version__)
-
-
-def set_start_at_login(home: Home, enabled: bool) -> Path:
-    path = startup_file()
-    if enabled:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(startup_script(home), encoding="utf-8", newline="\r\n")  # Windows line ends
-    elif path.exists():
-        path.unlink()
-    return path
 
