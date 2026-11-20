@@ -20,9 +20,15 @@ from .canvas import is_dark
 from .panels import CodeEditor, CodeHighlighter, FindBar, FindToggles
 from .zoom import mark
 
-# The contrast text on a mark is shaded to: the 4.5:1 text needs (WCAG), with room for the paler pixels along a
-# letter's smoothed edges, so that what the screen shows reads at 4.5:1 too.
-AIM = 4.7
+# The contrast text needs (WCAG), and how much of the text's colour a word's darkest pixel is sure to get. Letters are
+# drawn smoothed (their edges blended with the mark behind), and on Linux (FreeType, letters at fractional positions)
+# no pixel of a word may get all of it: Ubuntu CI drew #83108f on #a9c0f3 at its darkest as #851895, 94% of it
+# (4.50:1 for 4.74:1), and Qt's offscreen platform in Debian drew that word in DejaVu Sans Mono at 10 to 20 px at 95.6%
+# or more. A ratio aimed above 4.5:1 is no margin for that: what a blend costs in contrast differs from one pair of
+# colours to another. So text on a mark is shaded to read at 4.5:1 with only INK of its colour painted, under the
+# worst seen.
+READS = 4.5
+INK = 0.9
 # (light, dark), as in the approved mockup: a changed row, and the line along a change's top and bottom; the changed
 # characters inside a changed row; a filler line's hatching. The text (the theme's) reads on each at 4.5:1 or more.
 FILL = {"added": ("#d9f2dc", "#273d2d"), "removed": ("#fbe1e0", "#45282b"), "changed": ("#dde7fc", "#26344d")}
@@ -117,14 +123,19 @@ def _contrast(a: QColor, b: QColor) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
+def _darkest_pixel(text: QColor, behind: QColor) -> QColor:
+    """What a word in `text` on `behind` is sure to show at its darkest: INK of its colour over `behind`'s."""
+    return QColor.fromRgbF(*(INK * t + (1 - INK) * b for t, b in zip(text.getRgbF()[:3], behind.getRgbF()[:3])))
+
+
 @cache
 def _on_mark(colour: str, mark: str) -> QColor:
-    """Text in `colour` on `mark`: in it where it reads there (AIM), else in a shade of its hue just enough darker
-    (on a mark lighter than it) or lighter (on one darker) to read there."""
+    """Text in `colour` on `mark`: in it where it reads there (READS, smoothed: INK), else in a shade of its hue just
+    enough darker (on a mark lighter than it) or lighter (on one darker) to read there."""
     text, behind = QColor(colour), QColor(mark)
     hue, saturation, lightness, _ = text.getHslF()
     step = -0.01 if _luminance(behind) > _luminance(text) else 0.01
-    while _contrast(text, behind) < AIM and 0 < lightness < 1:
+    while _contrast(_darkest_pixel(text, behind), behind) < READS and 0 < lightness < 1:
         lightness = min(1.0, max(0.0, lightness + step))
         text = QColor.fromHslF(hue, saturation, lightness)
     return text
