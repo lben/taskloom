@@ -1,0 +1,40 @@
+# What must always be true of the source diffs in Commit History, as agreed with the maintainer in chat on 2026-11-20.
+# Each row is checked by the tests marked @pytest.mark.invariant("CD-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: Source diffs in Commit History
+agreed: 2026-11-20
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-13
+    words: "Add right click to commit on list and allow: 'Show source diff against previous version' and 'Show source diff against current version' which should show up a diff window on top that behaves like the jetbrains with a side by side view of the underlying source file of the flow"
+  - date: 2026-11-20
+    # "Current version" is what the tab holds now, unsaved edits included (CD-3).
+    words: "what the tab holds now, your recommendation"
+  - date: 2026-11-20
+    # After seeing the mockup made from the app's own code boxes.
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_source_diff]
+rows:
+  CD-1: >-
+    Right-click a commit in Commit History: "Show source diff against previous version" and "Show source diff against
+    current version" open a window on top with the flow file's text side by side, the older version on the left.
+  CD-2: >-
+    Added, removed and changed lines are marked by colour, and the changed characters inside a changed line too.
+    Unchanged lines stay level (filler lines on the other side), both sides scroll together, each side numbers its own
+    lines (filler lines have no number), and Next and Previous buttons (and F7, Shift+F7) jump between changes.
+    Nothing can be typed. Light and dark themes.
+  CD-3: >-
+    The title names both versions: each commit's message and time, or "current", or "current (not saved)" when the tab
+    holds edits that are not saved.
+  CD-4: >-
+    "Against previous version" is greyed out on the first commit (after Save as, the first commit of the history it
+    carried over). When the current version equals the commit, the window says "No differences".
+  CD-5: >-
+    Looking changes nothing: no file, no commit, no Git setting of the user's.
+  CD-6: >-
+    Find (Ctrl F) searches the side clicked in. Zoom (Ctrl + / Ctrl - / Ctrl 0) changes both sides together, so the
+    lines stay level.
+  CD-7: >-
+    Every difference in the files is shown and nothing else. When the versions differ in line ends (Windows or Unix)
+    or in the newline at the end, a line above the sides says so. A flow of 2,000 lines opens within 2 seconds.

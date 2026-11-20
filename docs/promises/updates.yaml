@@ -1,0 +1,61 @@
+# What must always be true of updating Taskloom on Windows, as agreed with the maintainer in chat on 2026-11-20.
+# Each row is checked by the tests marked @pytest.mark.invariant("UP-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: Updates on Windows
+agreed: 2026-11-20
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-13
+    words: "In order to add it to the startup folder there should be a way to update new versions while keeping the shortcut towards the latest version"
+  - date: 2026-11-20
+    words: "It would be c which fetches the latest version, doesn't require admin rights. So the version opened from the start menu and the version that auto loads from the startup folder always points to the latest fetched version"
+  - date: 2026-11-20
+    # Any start of a newer version re-points the entries, not only its editor (UP-2).
+    words: "Yes"
+  - date: 2026-11-20
+    # Checking for updates (UP-1).
+    words: "Only when I click as you recommend."
+  - date: 2026-11-20
+    # On the scheduler service after an update (UP-8).
+    words: "only if there were changes on the new version regarding the scheduler, otherwise keep the same one running until closed. Otherwise flows that only need to happen at specific times may get re-run at update time"
+  - date: 2026-11-20
+    words: "Approve UP-8"
+  - date: 2026-11-20
+    # Asked whether reopening the editor in the new version starts flows (UP-6: it starts none).
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_updates]
+rows:
+  UP-1: >-
+    On Windows, Help > Check for updates asks Taskloom's GitHub releases for the newest version. If it is newer, it
+    shows the version and asks "Install?". Yes downloads the Windows zip, with a progress bar and Cancel while the
+    editor stays usable, and unpacks it into its own folder under %LOCALAPPDATA%\Programs\Taskloom\<version>. No admin
+    rights are needed. Nothing is downloaded unless the user clicks; Taskloom never checks by itself.
+  UP-2: >-
+    Settings has "Add Taskloom to the Start menu" next to "Start the scheduler service when I log in". Both always
+    start the newest version: an update points them at it straight away, and a newer version unpacked by hand points
+    them at itself the first time it starts, in any way (the editor, taskloom scheduler, any command).
+  UP-3: >-
+    A failed update changes nothing (no internet, a partial or broken download, a full disk): a message says what went
+    wrong and the current version keeps working. The zip comes only from Taskloom's GitHub releases over HTTPS and is
+    checked whole before it is used.
+  UP-4: >-
+    If one of these entries points at a folder that is gone, the next Taskloom start points it at itself and says so.
+    An older version never takes an entry away from a newer version that still exists. Taskbar pins are Windows' own
+    copies and are not changed; the docs say so.
+  UP-5: >-
+    Settings, Run history, credentials and schedules are the same after an update: they live in the Taskloom folder
+    (~/.taskloom), not in the program folder. Flows stay where they were saved.
+  UP-6: >-
+    After installing, Taskloom offers "Restart Taskloom now with version X?". Yes reopens the editor in the new
+    version with its tabs and loaded states back; reopening starts no flow. If a flow started from the editor is still
+    running, Taskloom says so and restarts only after it ends (the restart can be cancelled). No keeps the old editor
+    open until it is closed.
+  UP-7: >-
+    Taskloom keeps the version it updated from and removes older versions it installed itself, once nothing runs from
+    them. It never removes a folder the user unpacked, nor one holding a flow a schedule runs; it says so instead.
+  UP-8: >-
+    The new version takes over the scheduler service by itself at a quiet moment: no flow running and no scheduled
+    time due in the next 2 minutes; if none comes within an hour, right after a run ends. There are never two services
+    for one Taskloom folder, and no scheduled time is run twice or skipped because of the update. A run the old
+    service started finishes and the new service takes it over. From then on scheduled flows run on the new version.
