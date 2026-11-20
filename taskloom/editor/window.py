@@ -378,7 +378,9 @@ class FlowTab(QWidget):
         self.state_run: int | None = None
         self.state_label, self.state_note = "", ""
         self.state_undo = None  # the note is of the flow brought back by this step: once undone, today's flow is shown
-        self.brought_back = ""  # the run whose flow, as it was then, the tab holds, not saved yet ("": none)
+        # The run whose flow, as it was then, the step (FlowDocument.restore's undo) brought into the tab, not saved
+        # since (None: none): a re-run asks before saving it over the file while that step is in effect (Undo, Redo).
+        self.brought_back: tuple[str, dict] | None = None
         self.runs: list[RunProcess] = []
         self.queued: list[dict] = []
         self.tab_id = uuid.uuid4().hex[:12]  # names this tab's autosaved copy
@@ -766,7 +768,8 @@ class MainWindow(QMainWindow):
         except OSError as e:  # e.g. a read-only file, or a folder you may not write to
             QMessageBox.warning(self, "Cannot save flow", f"{e}\n\nThe changes are not saved.")
             return False
-        tab.brought_back = ""
+        if tab.brought_back and tab.doc.in_effect(tab.brought_back[1]):
+            tab.brought_back = None  # (saved; while undone, Redo still brings it back unsaved)
         if tab.doc.path != before:
             tab.seen_up_to = None  # another file: which of its runs you saw is read again
             self._close_history(tab)  # (its window showed the other file's history)
@@ -1032,9 +1035,10 @@ class MainWindow(QMainWindow):
         whole (None, as Validate does); not `check`: only save and load it. A flow brought back as it was at a run
         (Load run state) is saved over its file only once you say so. Returns the loaded flow or None."""
         self._finish_editing(tab)
-        if tab.brought_back and tab.doc.dirty and QMessageBox.question(
+        back = tab.brought_back
+        if back and tab.doc.in_effect(back[1]) and tab.doc.dirty and QMessageBox.question(
                 self, "Save the flow as it was?",
-                f"This tab holds the flow as it was at {tab.brought_back}, brought back from its Git history and not "
+                f"This tab holds the flow as it was at {back[0]}, brought back from its Git history and not "
                 f"saved. It is saved before it runs: over {tab.doc.path.name}, in place of the flow that file holds "
                 "now. Save it?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return None
@@ -2058,7 +2062,7 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is back:
                 self._finish_editing(tab)
                 undo = tab.doc.restore(then)
-                tab.brought_back, note = label, "the flow as it was then (not saved)"
+                tab.brought_back, note = (label, undo), "the flow as it was then (not saved)"
             elif box.clickedButton() is today:
                 note = "shown on today's flow"
             else:
