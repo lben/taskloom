@@ -12,19 +12,23 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import uuid
 from copy import deepcopy
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QEvent, QMargins, QObject, QPoint, QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import (QEvent, QMargins, QObject, QPoint, QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl,
+                            Signal)
 from PySide6.QtGui import (QAction, QColor, QFontMetricsF, QImageReader, QKeySequence, QPainter, QPalette,
                            QTextDocument)
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
-                               QMessageBox, QPushButton, QSizePolicy, QStyle, QStyleOptionToolButton, QStylePainter,
-                               QTabBar, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkProxyFactory, QNetworkReply, QNetworkRequest
+from PySide6.QtWidgets import (QApplication, QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QLabel,
+                               QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QStyle,
+                               QStyleOptionToolButton, QStylePainter, QTabBar, QTabWidget, QTextBrowser, QToolButton,
+                               QVBoxLayout, QWidget)
 
-from .. import __version__, upgrade
+from .. import __version__, update, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
@@ -36,7 +40,7 @@ from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, bl
                    schedules_of, validate, version_id)
 from ..schedule import Trigger
 from ..history import History, run_label
-from ..launch import run_alive, runner_command
+from ..launch import frozen, run_alive, runner_command
 from ..scheduler import (counted_from, forget_schedules, paused, request_turn_off, running_scheduler_version,
                          runs_going, service_running, set_paused, tell_crashed, version_tuple)
 from ..registry import discover
@@ -624,6 +628,8 @@ class MainWindow(QMainWindow):
         documentation.setText("Documentation")
         documentation.setShortcut(QKeySequence("F1"))
         m.addAction(documentation)
+        if frozen() and sys.platform == "win32":  # (the packaged Windows Taskloom installs its newer versions: UP-1)
+            act(m, "Check for updates…", self.check_for_updates)
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
@@ -2175,6 +2181,94 @@ class MainWindow(QMainWindow):
             self.bottom_tabs.setCurrentWidget(self.log)
             self.statusBar().showMessage(f"Showing {run_label(run_id, run['started'] if run else None)}", 5000)
 
+    # --- updates (the packaged Windows Taskloom) --------------------------------------------------------------
+
+    def check_for_updates(self):
+        """Help > Check for updates (UP-1): asks Taskloom's GitHub releases for the newest version; only on this click,
+        never by itself."""
+        reply = _ask(self._web(), update.RELEASE_URL, "application/vnd.github+json")
+        reply.finished.connect(lambda: self._release_told(reply))
+
+    def _web(self) -> QNetworkAccessManager:
+        """The editor's way to GitHub, through Windows' proxy settings (as the browser's)."""
+        if getattr(self, "_network", None) is None:
+            QNetworkProxyFactory.setUseSystemConfiguration(True)
+            self._network = QNetworkAccessManager(self)
+        return self._network
+
+    def _release_told(self, reply: QNetworkReply):
+        reply.deleteLater()
+        try:
+            failure = _failure(reply, f"Could not reach Taskloom's releases: {reply.errorString()}")
+            if failure:
+                raise update.Failed(failure)
+            release = update.newer_release(bytes(reply.readAll()))
+        except update.Failed as e:
+            QMessageBox.warning(self, "Check for updates", str(e))
+            return
+        if release is None:
+            QMessageBox.information(self, "Check for updates", f"You have the newest version, Taskloom {__version__}.")
+        elif QMessageBox.question(self, "Check for updates", f"Taskloom {release.version} is out; this is "
+                                  f"{__version__}. Install?") == QMessageBox.Yes:
+            self._install(release)
+
+    def _install(self, release: update.Release):
+        """Downloads and installs `release` (a window shows how far, with Cancel), unless that version is installed."""
+        try:
+            folder = update.installed(release.version)
+            download = None if folder else UpdateDownload(self._web(), release, Path(sys.executable).parent, self)
+        except (update.Failed, OSError) as e:
+            QMessageBox.warning(self, "Taskloom was not updated", str(e))
+            return
+        if download is None:
+            self._installed(folder, release.version)
+            return
+        download.installed.connect(lambda folder: self._installed(folder, release.version))
+        download.failed.connect(lambda said: QMessageBox.warning(self, "Taskloom was not updated", said))
+
+    def _installed(self, folder: Path, version: str):
+        """The entries start the new version and its scheduler service takes over a running one (UP-2, UP-8); then the
+        restart is offered (UP-6)."""
+        told = [f"Taskloom {version} is installed in {folder}."]
+        try:
+            told += update.put_in_use(folder, self.home)
+        except (OSError, RuntimeError, ValueError) as e:  # (its first start sees to the entries again)
+            told.append(f"Could not put it in use yet: {e}")
+        self.statusBar().showMessage("  ".join(told), 30000)
+        if QMessageBox.question(self, "Taskloom updated",
+                                f"Restart Taskloom now with version {version}?") == QMessageBox.Yes:
+            self._restart_in(folder, version)
+
+    def _restart_in(self, folder: Path, version: str):
+        """Once no flow started from this editor runs (meanwhile a window says which, with Cancel), closes it as usual
+        (its tabs and loaded states kept; Cancel of a question there cancels the restart) and starts the editor of the
+        Taskloom in `folder` on the same Taskloom folder (UP-6)."""
+        waits = QDialog(self, objectName="restart-waits", windowTitle=f"Restart Taskloom with version {version}")
+        said, cancel = QLabel(waits), QPushButton("Cancel", waits)
+        layout = QVBoxLayout(waits)
+        layout.addWidget(said)
+        layout.addWidget(cancel, 0, Qt.AlignRight)
+        check = QTimer(waits, interval=1000)
+        cancel.clicked.connect(waits.reject)
+        waits.rejected.connect(check.stop)
+        waits.rejected.connect(waits.deleteLater)
+
+        def restart():
+            running = sorted({t.doc.path.stem if t.doc.path else t.doc.title
+                              for t in self.tabs_list() if any(r.running for r in t.runs)})
+            if running:
+                said.setText(f"Taskloom restarts with version {version} when {', '.join(running)} ends.")
+                waits.show()
+                return
+            check.stop()
+            waits.deleteLater()
+            if self.close():
+                update.start(folder, self.home, "editor")
+
+        check.timeout.connect(restart)
+        check.start()
+        restart()
+
     def closeEvent(self, event):
         running = [r for t in self.tabs_list() for r in t.runs if r.running]
         if running:
@@ -2198,6 +2292,121 @@ class MainWindow(QMainWindow):
             self._remove_tab(tab)
         self.safety.stop()
         event.accept()
+
+
+def _ask(web: QNetworkAccessManager, url: str, accept: str) -> QNetworkReply:
+    """GET `url` of Taskloom's GitHub releases. A redirect is followed only where update.refused allows (UP-3), else
+    the reply is aborted (its target never asked), why in its property "refused"."""
+    request = QNetworkRequest(QUrl(url))
+    request.setRawHeader(b"Accept", accept.encode())
+    request.setRawHeader(b"User-Agent", f"taskloom/{__version__}".encode())
+    request.setAttribute(QNetworkRequest.RedirectPolicyAttribute, QNetworkRequest.UserVerifiedRedirectPolicy)
+    reply = web.get(request)
+
+    def redirected(to: QUrl):
+        why = update.refused(to.toString())
+        if why is None:
+            reply.redirectAllowed.emit()
+        else:
+            reply.setProperty("refused", why)
+            reply.abort()
+
+    reply.redirected.connect(redirected)
+    return reply
+
+
+def _failure(reply: QNetworkReply, broken: str) -> str | None:
+    """What went wrong with a finished reply of _ask: a refused redirect, an HTTP error, else `broken` if it did not
+    arrive whole; None if nothing did."""
+    if reply.property("refused"):
+        return reply.property("refused")
+    status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+    if status is not None and int(status) >= 400:
+        return f"Taskloom's releases answered HTTP {status} for {reply.url().toString()}"
+    return broken if reply.error() != QNetworkReply.NoError else None
+
+
+class UpdateDownload(QDialog):
+    """Help > Check for updates' download (UP-1, UP-3): `release`'s zip into a new .partial-* folder beside the
+    versions' folders, then checked and unpacked in a thread (update.unpack), with a progress bar and Cancel; it blocks
+    nothing. Ends with `installed` (the version's folder) or `failed` (what went wrong), or nothing after Cancel; the
+    .partial-* folder is gone in each case."""
+
+    installed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, web: QNetworkAccessManager, release: update.Release, source: Path, parent: QWidget):
+        super().__init__(parent, objectName="update-progress", windowTitle=f"Taskloom {release.version}")
+        self.release, self.source = release, source
+        self.stop, self.unpacked = threading.Event(), (0, 1)
+        self.said = QLabel(f"Downloading Taskloom {release.version}…")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, max(release.size, 1))
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.said)
+        layout.addWidget(self.bar)
+        layout.addWidget(cancel, 0, Qt.AlignRight)
+        self.partial = update.partial()
+        self.file = open(self.partial / "download.zip", "wb")
+        self.reply = _ask(web, release.url, "application/octet-stream")
+        self.reply.readyRead.connect(self._received)
+        self.reply.finished.connect(self._downloaded)
+        self.watch = QTimer(self, interval=100)
+        self.watch.timeout.connect(self._unpacking)
+        self.show()
+
+    def _received(self):  # (the bar follows the bytes: Qt's downloadProgress says nothing while a download stalls)
+        self.file.write(bytes(self.reply.readAll()))
+        self.bar.setValue(self.file.tell())
+
+    def reject(self):  # Cancel, Esc or the window's close button
+        self.stop.set()
+        super().reject()
+        if self.reply.isRunning():
+            self.reply.abort()
+
+    def _downloaded(self):
+        got = self.file.tell()
+        self.file.close()
+        if self.stop.is_set():
+            return self._end(None)
+        failure = _failure(self.reply, f"The download is incomplete ({got} of {self.release.size} bytes): "
+                                       f"{self.reply.errorString()}")
+        if failure:
+            return self._end(failure)
+        self.said.setText(f"Checking and unpacking Taskloom {self.release.version}…")
+        self.result = f"Taskloom {self.release.version} could not be installed"  # (what update.unpack did not say)
+        self.unpacking = threading.Thread(target=self._unpack, daemon=True)
+        self.unpacking.start()
+        self.watch.start()
+
+    def _unpack(self):  # (in a thread of its own: the editor goes on meanwhile)
+        try:
+            self.result = update.unpack(self.partial / "download.zip", self.release, self.source, self.stop,
+                                        lambda done, of: setattr(self, "unpacked", (done, of)))
+        except update.Failed as e:
+            self.result = str(e)
+
+    def _unpacking(self):
+        done, of = self.unpacked
+        self.bar.setRange(0, max(of, 1))
+        self.bar.setValue(done)
+        if not self.unpacking.is_alive():
+            self.watch.stop()
+            self._end(self.result)
+
+    def _end(self, result):
+        """`result`: the version's folder, what went wrong, or None (cancelled)."""
+        shutil.rmtree(self.partial, ignore_errors=True)
+        self.hide()
+        self.reply.deleteLater()
+        self.deleteLater()
+        if isinstance(result, Path):
+            self.installed.emit(result)
+        elif result:
+            self.failed.emit(result)
 
 
 class NoOpenAnimation(QObject):
