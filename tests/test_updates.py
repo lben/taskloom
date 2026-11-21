@@ -1381,17 +1381,20 @@ class Owners:
 
     def _watch(self):
         while not self._stop.is_set():
-            try:
-                pid = int((self.home / "scheduler.pid").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pid = None
-            if pid is not None and pid not in self.named:
-                self.named.append(pid)
-                self.taken.append((dt.datetime.now(), pid))
-            alive = [p for p in self.named if p != pid and pid_alive(p) and not ended(p)]
-            if pid is not None and alive:
-                self.both.append((dt.datetime.now().strftime("%H:%M:%S.%f"), pid, alive))
+            self._look()
             time.sleep(0.02)
+
+    def _look(self):
+        try:
+            pid = int((self.home / "scheduler.pid").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pid = None
+        if pid is not None and pid not in self.named:
+            self.named.append(pid)
+            self.taken.append((dt.datetime.now(), pid))
+        alive = [p for p in self.named if p != pid and pid_alive(p) and not ended(p)]
+        if pid is not None and alive:
+            self.both.append((dt.datetime.now().strftime("%H:%M:%S.%f"), pid, alive))
 
     def __enter__(self):
         self._thread.start()
@@ -1400,6 +1403,7 @@ class Owners:
     def __exit__(self, *exc):
         self._stop.set()
         self._thread.join(timeout=10)
+        self._look()  # a last look: the watch may have stopped before seeing what the test's own wait just saw
 
 
 @contextlib.contextmanager
