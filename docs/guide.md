@@ -14,7 +14,8 @@ reports and email, and packaged builds. See [docs/DESIGN.md](https://github.com/
 **Windows (no Python needed):** download `taskloom-windows-amd64.zip` from the
 [releases](https://github.com/lben/taskloom/releases) (or the latest build's artifacts),
 unzip it anywhere you can write (no admin needed) and run `taskloomw.exe` for the
-editor. `taskloom.exe` is the command line (`taskloom.exe run flow.yaml`).
+editor. `taskloom.exe` is the command line (`taskloom.exe run flow.yaml`). Newer versions
+install from the editor: **Help → Check for updates…** (see Updates on Windows).
 
 **Linux server (no root, no system Python needed):** the runner is
 `taskloom-runner-linux-x86_64.tar.gz`. It runs on Linux with glibc 2.28 or newer
@@ -260,7 +261,8 @@ taskloom editor examples/daily-sales-report.yaml
     it, or in the newest re-run that carries on from that run (the menu names the run). So
     it gets what a block before it made when that block was run again on its own, and what
     a run that ended before reaching it (stopped, or its process died) made up to there.
-    While the canvas shows a run you opened from Run history, that run is used as it is.
+    While the canvas shows a run you opened from Run history, or a run whose state you
+    loaded (see Load a run's state below), that run is used as it is.
     The other blocks keep their results (`taskloom run FLOW --only BLOCK --inputs-from RUN`);
   - **Run from this block on, with the same inputs** (or **with inputs I choose…**): that
     block and every block after it
@@ -283,6 +285,34 @@ taskloom editor examples/daily-sales-report.yaml
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
   what you typed and works it out again, so after editing `data.csv` just press Run.
   (`--input NAME=VALUE` with `--only` from a terminal.)
+- **Load a run's state:** to carry on from where a run was, like a saved game, right-click
+  it in Run history → **Load run state**. Every block shows its result from that run; for a
+  re-run, the blocks it did not run show theirs from the run it carried on from. A bar above
+  the canvas names the run and when it started (e.g. `run #12 · 2026-11-20 10:28:20`), with
+  a **Leave** button. **Run only this block** and **Run from this block on** then take their
+  inputs from that run. Each such re-run is a new run and becomes the loaded state (the bar
+  names it); blocks after it that it did not reach keep their result, marked old. Runs that
+  finish meanwhile (on schedule, from a terminal, in another tab) do not change what the tab
+  shows; they still come into Run history. A full run (**Run now**) or **Leave** ends the
+  loaded state: the tab shows the newest results again. Loading never changes the run it
+  loads. Double-clicking a run still only shows that run, as above.
+  - A value that was not kept is named when you hover its block, with why: it held a
+    password, which is never written to disk, or it cannot be saved (e.g. an open
+    connection). A re-run that needs it is refused before anything runs, saying why.
+  - A run still going, or one whose files are gone (cleaned up by Keep runs, or deleted),
+    cannot be loaded: the menu item is greyed out and says why. If the loaded run's files
+    are cleaned up while it is loaded, the bar says so, and a re-run from it is refused:
+    leave it and run the whole flow.
+  - If the flow has changed since that run, Taskloom asks first. **Show on today's flow**:
+    blocks deleted since are left out, and blocks added since show nothing. **Bring back the
+    flow as it was**: that version, from the flow's Git history (see Versions with Git), goes
+    into the tab as unsaved edits, which Edit → Undo takes back; it is greyed out when that
+    version is not in the history. Or **Cancel**. The bar says which you chose. A re-run
+    saves the flow before it runs: while the flow brought back is in the tab, Taskloom first
+    asks **Save the flow as it was?**, since it replaces the flow its file holds now.
+  - A tab with a state loaded when Taskloom closes opens with it loaded the next time (on
+    today's flow if the flow has changed since; nothing is asked). If that run was cleaned
+    up meanwhile, the bar says so and the tab shows the newest results.
 - **When a block fails**, the Log says which block, what came into each input (from which
   block and with what value) and, for Python Code, the code around the failing line and
   the values of your variables (each input and variable on one line; one too long for it
@@ -457,6 +487,23 @@ is no version's run. **Restore this version** puts that version into the flow's 
 change (Undo takes it back); nothing is written until you save it, and Save & Commit then
 commits it as the newest version, the older ones kept. A Save & Commit adds its commit to the
 open window; closing the flow's tab closes it.
+
+**Compare two versions:** in Commit History, right-click a commit → **Show source diff against
+previous version** (the commit before it in the flow's history; greyed out on the oldest one,
+which after Save as is the oldest of the history it carried over) or **Show source diff against
+current version** (what the flow's tab holds now, changes not saved included). A window opens
+on top with the flow file's text side by side, the older version on the left. Its title names
+both versions: each commit's message and time, or `current`, or `current (not saved)` while the
+tab holds changes not saved. Added lines are marked green, removed lines red and changed lines
+blue, and the changed characters inside a changed line too, in the light and the dark theme.
+Unchanged lines stay level (filler lines on the other side, which have no number), both sides
+scroll together, and each side numbers its own lines. **Next change** (F7) and **Previous
+change** (Shift+F7) jump between the changes; when the two versions are the same, it says **No
+differences**. Nothing can be typed in it. Ctrl+F finds in the side you clicked in, and Ctrl +,
+Ctrl - and Ctrl 0 zoom both sides together, so the lines stay level. When the versions differ in
+their line ends (Windows CRLF or Unix LF) or in the newline at the end, which the lines cannot
+show, a line above the sides says so. Looking changes nothing: no file, no commit, no Git
+setting.
 
 Taskloom carries its own Git (dulwich): no Git program is needed. Its commits run no hooks
 and are never signed, no `.gitattributes`, filter, LFS or line-end conversion is applied (the
@@ -1116,15 +1163,19 @@ off the scheduler service** on its tray icon; see **Turning the service off** be
 nothing new starts, and it does not start by itself (also not at login), until you turn it on
 again. While it is off, a Schedule block says **scheduler service off** instead of its
 countdown. On Windows, **Tools → Settings → Start the scheduler service when I log in** (or
-`taskloom scheduler --at-login on`) adds it to your Startup folder; no admin needed. From
-a terminal or on a server: `taskloom scheduler`.
+`taskloom scheduler --at-login on`) puts a **Taskloom Scheduler** shortcut in your Startup
+folder, which starts the service when you log in; no admin needed. It always starts the newest
+Taskloom you have (see Updates on Windows). From a terminal or on a server: `taskloom
+scheduler`.
 
 When a newer Taskloom starts its scheduler service (the editor opening with flows scheduled, a
-schedule saved, logging in, `taskloom scheduler`) while an older one's runs, the newer one waits
-and takes the service over by itself at a quiet moment: no flow running and no scheduled time
-due in the next 2 minutes; if none comes within an hour, right after a run ends. A run the old
-service started finishes, and no scheduled time runs twice or is skipped. Starting at login
-switches to the newest version you opened.
+schedule saved, logging in, `taskloom scheduler`, or Help → Check for updates installing it)
+while an older one's runs, the newer one waits and takes the service over by itself at a quiet
+moment: no flow running or waiting its turn, and no scheduled time due in the next 2 minutes;
+if none comes within an hour, right after a run ends. A run the old service started finishes,
+and no scheduled time runs twice or is skipped; from then on, scheduled flows run on the newer
+version. If you turn the service off while it waits, it does not take over. An older Taskloom
+never takes the service over from a newer one.
 
 One scheduler service runs every scheduled flow. Each run begins at its time, never before
 it: when the time comes, the service starts the run's program, and the run begins as soon as
@@ -1535,6 +1586,59 @@ edges:
 - A Session shares cookies only: the base URL and the authentication belong to an API
   connection.
 
+## Updates on Windows
+
+In the Windows Taskloom (the zip's `taskloomw.exe`), **Help → Check for updates…** asks
+Taskloom's GitHub releases for the newest version. Taskloom never checks by itself: nothing is
+asked or downloaded until you click it. With the newest version already, it says so. If a newer
+one is out, it names it and asks **Install?**, and **Yes** downloads `taskloom-windows-amd64.zip`,
+with a progress bar and **Cancel**, while you go on working in the editor, and unpacks it into
+a folder of its own, `%LOCALAPPDATA%\Programs\Taskloom\<version>` (a version already there is
+used as it is). No admin rights are needed.
+
+The download comes only from Taskloom's GitHub releases, over HTTPS, and is checked whole
+before it is used: its size, its checksum (when GitHub gives one), that it unpacks as it was
+packed, that it holds `taskloomw.exe` and a `VERSION` naming that version, and that the disk has
+room for it. An update that fails (no internet, a download cut off or damaged, a full disk)
+changes nothing: a message says what went wrong, and the version you have keeps working.
+
+Once it is installed, Taskloom asks **Restart Taskloom now with version …?** (the version it
+installed). **Yes** closes the editor as usual (Cancel on a question it asks then, e.g. about
+a flow not saved, cancels the restart) and opens the new version's editor, with your flows and
+loaded run states back; reopening starts no flow. While a flow you started from the editor is
+still running, a window says Taskloom restarts when it ends, with **Cancel**. **No** keeps this
+editor open until you close it.
+
+Your settings, connections, schedules and Run history are in your Taskloom folder
+(`~/.taskloom`, see Your files) and your passwords in Windows Credential Manager, not in the
+program folder, so the new version has them all. Flows stay where you saved them.
+
+**Start menu and Startup.** Tools → Settings has, on its **Windows** row, **Add Taskloom to the
+Start menu** (a **Taskloom** entry that opens the editor) and **Start the scheduler service when
+I log in** (a **Taskloom Scheduler** entry in your Startup folder; see Schedules). Both are
+shortcuts in your own Start menu folder: no admin needed. Each is there only while you have it
+ticked, and keeps the Taskloom folder it was made for. Both always start the newest Taskloom:
+an update points them at the new version at once, and a newer version you unzip by hand points
+them at itself the first time it starts, whatever starts it (the editor, `taskloom scheduler`,
+any command). An older version never takes them back. If one points at a folder that is gone,
+the next Taskloom start points it at itself and says so. The Startup script earlier versions
+made (`Taskloom Scheduler.cmd`) is replaced by the shortcut the first time this version starts.
+
+A Taskloom pinned to the taskbar is not changed by an update: the pin is Windows' own copy of
+the shortcut, so it goes on starting the version it was pinned from (and nothing, once that
+version is removed). Start Taskloom from its Start menu entry instead, or pin it again from
+there after an update.
+
+**Older versions.** Each start of the Windows Taskloom removes the older versions Taskloom
+installed itself, once nothing runs from them (one in use is tried again at the next start). It
+keeps the version it was updated from and one an entry still starts. It never removes a folder
+you unzipped yourself, and keeps one that holds a flow a schedule runs or a file of yours,
+saying so.
+
+**The scheduler service.** If the scheduler service is running and you have not turned it off,
+an update starts the new version's service at once, and it takes over at a quiet moment (see
+Schedules); from then on, scheduled flows run on the new version.
+
 ## Checking flows after an update
 
 Each version can check your flows for what it can fix and what needs you: **Tools → Check
@@ -1549,7 +1653,8 @@ fix; a problem of an off block is listed as a warning, which runs do not stop fo
 
 ## Your files
 
-Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`):
+Everything per-user lives in `~/.taskloom` (or `$TASKLOOM_HOME`, or the folder that
+`taskloom --home FOLDER` names), the Taskloom folder:
 
 | File | Purpose |
 |---|---|
