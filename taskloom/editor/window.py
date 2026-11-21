@@ -9,11 +9,9 @@ import heapq
 import os
 import queue
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
-import time
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -512,7 +510,6 @@ class MainWindow(QMainWindow):
         self.running_flows.setToolTip("The flows running now, also on schedule or from a terminal: choose one to "
                                       "open it")
         self.statusBar().addWidget(self.running_flows)
-        self._offered_restart = False  # asked once per session to restart an older scheduler
         self._told_later: queue.Queue = queue.Queue()  # (title, message) from the emails being sent: shown at the check
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
@@ -1796,7 +1793,7 @@ class MainWindow(QMainWindow):
                                 "you turned off or changed does not start afresh while the scheduler service is off."
                                 "\n\nSave the flow again to try again.")
         self._refresh_schedule(tab)
-        if scheduled and not self.scheduler_running():
+        if scheduled and self._scheduler_to_start():
             if paused(self.home):
                 self.statusBar().showMessage("This flow is scheduled, but the scheduler service is off (you turned "
                                              "it off): turn it on (top right) to run it.", 10000)
@@ -1809,12 +1806,18 @@ class MainWindow(QMainWindow):
             scheduled = bool(self.home.scheduled_flows())
         except ValueError:
             scheduled = False
-        if scheduled and not paused(self.home) and not self.scheduler_running():
+        if scheduled and not paused(self.home) and self._scheduler_to_start():
             self.start_scheduler()
 
     def scheduler_running(self) -> bool:
         """The scheduler holds its lock file while it runs."""
         return service_running(self.home)
+
+    def _scheduler_to_start(self) -> bool:
+        """No scheduler service runs, or an older Taskloom's does: this version's is to start (it takes that one over
+        at a quiet moment, UP-8)."""
+        return (not self.scheduler_running()
+                or version_tuple(running_scheduler_version(self.home)) < version_tuple(__version__))
 
     def scheduler_on(self) -> bool:
         """The scheduler service runs, and you have not turned it off (turned off, it runs on until the runs you let
@@ -1867,36 +1870,6 @@ class MainWindow(QMainWindow):
              "tray), and starts your scheduled flows at their times. It starts by itself when a flow is "
              "scheduled. Click to turn it off: no scheduled flow runs until you turn it on again.") if running else
             "The scheduler service is off: scheduled flows do not run. Click to turn it on.")
-        if older and not self._offered_restart:
-            self._offered_restart = True
-            answer = QMessageBox.question(
-                self, "Restart the scheduler service?",
-                f"The scheduler service running is from an older Taskloom ({version or 'before 0.14.1'}); this is "
-                f"Taskloom {__version__}. It may not read flows saved by this version (it says they cannot be "
-                "read). Restart it with this version?")
-            if answer == QMessageBox.Yes:
-                self.restart_scheduler()
-
-    def restart_scheduler(self):
-        """Stop the running scheduler, then start this version's once it has stopped."""
-        try:
-            os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
-        except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Cannot stop the scheduler service", f"{e}\n\nTurn it off from its tray "
-                                "icon, then turn it on here (top right).")
-            return
-        deadline = time.monotonic() + 15
-
-        def when_stopped():
-            if not self.scheduler_running():
-                self.start_scheduler()
-            elif time.monotonic() < deadline:
-                QTimer.singleShot(300, self, when_stopped)
-            else:
-                QMessageBox.warning(self, "Cannot restart the scheduler service", "It did not stop. Turn it off "
-                                    "from its tray icon, then turn it on here (top right).")
-
-        QTimer.singleShot(300, self, when_stopped)
 
     def toggle_scheduler(self):
         if not self.scheduler_on():
@@ -1926,12 +1899,12 @@ class MainWindow(QMainWindow):
     def start_scheduler(self, by_you: bool = False):
         if by_you:
             set_paused(self.home, False)  # you turned it on: it starts by itself again when needed
-        if self.scheduler_running():  # (one turning off is on again: its runs go on, and new times start)
+        if not self._scheduler_to_start():  # (one turning off is on again: its runs go on, and new times start)
             self.statusBar().showMessage("The scheduler service is on", 5000)
             self._show_scheduler_state(self.scheduler_on())
             return
-        self._offered_restart = True  # this version's: nothing to offer
-        # (turned on by you, it is on by now; started by itself, it stays off if you turn it off before it is up)
+        # (turned on by you, it is on by now; started by itself, it stays off if you turn it off before it is up; an
+        # older Taskloom's running, this version's waits beside it and takes it over at a quiet moment)
         subprocess.Popen(
             runner_command() + ["scheduler", "--unless-paused"],
             env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},

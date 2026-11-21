@@ -1209,7 +1209,10 @@ def test_this_versions_service_started_beside_an_older_one_takes_over_the_old_on
             old.kill()
         pid = holder()
         if pid and pid != os.getpid() and pid_alive(pid):
-            os.kill(pid, signal.SIGTERM)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:  # (it ended meanwhile: on Windows, access is denied then)
+                pass
 
 
 def test_a_scheduled_run_shows_its_result_and_the_countdown(win, tmp_path):

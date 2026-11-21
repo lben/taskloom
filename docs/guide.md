@@ -1119,9 +1119,12 @@ countdown. On Windows, **Tools → Settings → Start the scheduler service when
 `taskloom scheduler --at-login on`) adds it to your Startup folder; no admin needed. From
 a terminal or on a server: `taskloom scheduler`.
 
-The scheduler service keeps running when you open a newer Taskloom: the editor then offers to
-restart it with the newer version (a scheduler from an older version may not read flows
-the newer one saved), and starting at login switches to the newest version you opened.
+When a newer Taskloom starts its scheduler service (the editor opening with flows scheduled, a
+schedule saved, logging in, `taskloom scheduler`) while an older one's runs, the newer one waits
+and takes the service over by itself at a quiet moment: no flow running and no scheduled time
+due in the next 2 minutes; if none comes within an hour, right after a run ends. A run the old
+service started finishes, and no scheduled time runs twice or is skipped. Starting at login
+switches to the newest version you opened.
 
 One scheduler service runs every scheduled flow. Each run begins at its time, never before
 it: when the time comes, the service starts the run's program, and the run begins as soon as
@@ -1258,7 +1261,8 @@ leaves going; a run it started that has not begun yet is not one of them.
 **One service per Taskloom folder.** Only one scheduler service runs for a Taskloom folder
 (the folder that holds your settings and run history; normally a PC has one). Starting
 another while one runs (clicking On, logging in, opening the editor, `taskloom scheduler`)
-does nothing, so no scheduled run ever starts twice.
+does nothing, so no scheduled run ever starts twice. The one exception is a newer Taskloom
+version: it waits and takes over at a quiet moment (see above).
 
 **Mistakes in the list of scheduled flows.** An entry in `scheduled.yaml` that is not a flow
 file's path (an empty item or a number, e.g. after a hand edit) is left out, and you are told
