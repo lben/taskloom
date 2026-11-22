@@ -1328,7 +1328,7 @@ def _take_over(home: Home):
     if successor is None:
         raise RuntimeError(f"a scheduler is already running for {home.root}, and a newer one waits to take it over")
     waiting = home.root / "scheduler.waiting"
-    began = dt.datetime.now().replace(microsecond=0)
+    began = dt.datetime.now().astimezone().replace(microsecond=0)  # (with its UTC offset: an hour is an hour, C11)
     waiting.write_text(f"{__version__} {os.getpid()} {began.isoformat()}")
     print(f"{began:%Y-%m-%d %H:%M:%S} The scheduler service running is an older Taskloom's: Taskloom {__version__} "
           "takes it over at a quiet moment", flush=True)
@@ -1345,11 +1345,11 @@ def _take_over(home: Home):
             if version_tuple(running_scheduler_version(home)) >= version_tuple(__version__):
                 raise RuntimeError(f"a scheduler is already running for {home.root}")
             try:
-                since = dt.datetime.fromisoformat(waiting.read_text().split()[2])
+                since = dt.datetime.fromisoformat(waiting.read_text().split()[2]).astimezone()  # (no offset: local)
             except (OSError, ValueError, IndexError):
                 since = began
             run_ended = was is not None and going is not None and bool(was - going)
-            if quiet or (run_ended and dt.datetime.now() - since >= TAKE_OVER_AFTER):
+            if quiet or (run_ended and dt.datetime.now(UTC) - since >= TAKE_OVER_AFTER):
                 if (lock := _stop_old(home)) is not None:
                     return lock
             time.sleep(TICK_SECONDS)
