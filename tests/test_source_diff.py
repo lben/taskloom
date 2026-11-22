@@ -20,8 +20,10 @@ paints its lines and characters in."""
 #   names both versions (each commit's message and time as the cards show it, or "current" / "current (not saved)").
 # - Its sides: QPlainTextEdit "source-diff-left" (the older version) and "source-diff-right". Each line of a side's
 #   document is one row and the two sides' rows are level row by row; a filler line is an empty row. The numbered rows
-#   are the file's lines as str.splitlines() gives them (no empty line after the last newline), numbered from 1 by a
-#   number painted inside the side, left of its text (as CodeEditor paints them); a filler line has no number.
+#   are the file's lines as git counts them: ended by "\n" only (a Windows line end's "\r" not shown, no empty line
+#   after the last newline; a lone "\r", "\x0b", "\x0c", "\x1c"-"\x1e", "\x85", U+2028 or U+2029 inside a line shown
+#   on its row as some character), numbered from 1 by a number painted inside the side, left of its text (as
+#   CodeEditor paints them); a filler line has no number.
 # - Marks are the colours painted behind the text: an unchanged row in the side's Base colour, an added row green, a
 #   removed row red, a changed row blue (by hue, as in the approved mockup); inside a changed row the changed
 #   characters, and only they, in a colour of their own.
@@ -30,8 +32,9 @@ paints its lines and characters in."""
 #   one, in view.
 # - QLabel "change-count": "<n> of <m> changes". When the versions are the same, a label (e.g. it) says
 #   "No differences".
-# - QLabel "diff-note" above the sides, shown only when the versions differ in line ends (it says "line ends",
-#   "Windows" and "Unix") or in the newline at the end (it says "newline at the end").
+# - QLabel "diff-note" above the sides, shown only when the versions differ in line ends, also when both mix them but
+#   on other lines (it says "line ends", "Windows" and "Unix"), or in the newline at the end (it says "newline at the
+#   end").
 # - Ctrl+F in a side opens a find bar (as the code boxes' FindBar: count "1/3") searching that side only; Ctrl + / - / 0
 #   with the pointer over either side zooms both alike (zoom panes of the editor window, as zoom.py has them).
 
@@ -1169,6 +1172,87 @@ def test_d10_ten_real_commit_pairs_mark_exactly_the_lines_git_diff_changes(win, 
                          f"{sorted(added - shown_added)} fewer")
         diff.close()
     assert not wrong, "\n".join(wrong)
+
+
+@pytest.mark.invariant("CD-7")
+def test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so(win, qtbot, tmp_path):
+    """D8 (review P2): both versions mix Windows and Unix line ends, on other lines: on the left the first line ends
+    in Windows' and the rest in Unix', on the right the last line in Windows' and the rest in Unix'; the text is the
+    same. `git diff` gives those two lines as changed: against the previous version and as the oldest against the
+    current one, the window does not say "No differences" and the note line says the line ends differ (Windows and
+    Unix)."""
+    lines = flow_lines(code(6))
+    left = (lines[0] + "\r\n" + "\n".join(lines[1:]) + "\n").encode("utf-8")
+    right = ("\n".join(lines[:-1]) + "\n" + lines[-1] + "\r\n").encode("utf-8")
+    folder = tmp_path / "flows"
+    ids, _, history, _ = flow_history(win, qtbot, folder, [("One", left), ("Two", right)])
+    assert git_changed(folder, ids[0], ids[1]) == ({1, len(lines)}, {1, len(lines)})
+
+    for place, item in ((0, PREVIOUS), (1, CURRENT)):
+        diff = open_diff(history, qtbot, place, item)
+        assert not any("No differences" in said for said in diff.says()), f"{item}: {diff.says()}"
+        note = diff.note()
+        assert re.search(r"line ends", note, re.IGNORECASE) and "Windows" in note and "Unix" in note, (
+            f"{item}: the versions differ in line ends (window: {diff.count()!r}), the note line: {note!r}")
+        diff.close()
+
+
+# What str.splitlines() ends a line at besides "\n" and "\r\n"; git ends a line at "\n" only.
+BREAKS = "\r\x0b\x0c\x1c\x1d\x1e\x85  "
+
+
+def broken_line(i: int, inside: str) -> str:
+    """A comment line holding `inside` (e.g. one of BREAKS) in its middle."""
+    return f"# {i}: one line to git{inside}# {i}: still that line"
+
+
+def shows_line(text: str, line: str) -> bool:
+    """A row's `text` shows the whole `line`: its parts around the BREAKS in it, in order, each of those shown as at
+    least one character."""
+    parts = re.split(f"[{BREAKS}]", line)
+    return re.fullmatch(".+?".join(map(re.escape, parts)), text, re.DOTALL) is not None
+
+
+@pytest.mark.invariant("CD-7")
+def test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does(win, qtbot,
+                                                                                                    tmp_path):
+    """D10 (review C5): above the flow, lines holding inside them a lone carriage return, a vertical tab, a form feed,
+    \\x1c, \\x1d, \\x1e, NEL, U+2028 or U+2029 (str.splitlines() breaks a line at each, git at none), each followed by
+    a plain line. The next version (the current one: only characters YAML reads) splits the carriage return's line in
+    two at a "\\n", puts another of these characters in four of the others, removes one, keeps three and changes a
+    line of code. Against the previous version and as the oldest against the current one, each side shows its
+    version's lines as git counts them, numbered 1 to the last, each whole on its row, and marks on the left exactly
+    the lines `git diff` gives as removed, on the right exactly those it gives as added."""
+    def above(broken: list[list[str]]) -> list[str]:
+        return [line for i, lines in enumerate(broken) for line in [*lines, f"# kept {i}"]]
+
+    old_broken = [[broken_line(i, c)] for i, c in enumerate(BREAKS)]
+    new_broken = [broken_line(0, "\n").split("\n"), [broken_line(1, "\r")], [broken_line(2, "\x85")],
+                  [broken_line(3, " ")], [broken_line(4, " ")], [], *old_broken[6:]]
+    c = code(8)
+    old = flow_lines(c, before=above(old_broken))
+    new = flow_lines([*c[:4], "changed = read('west', day=4)", *c[5:]], before=above(new_broken))
+    folder = tmp_path / "flows"
+    ids, _, history, _ = flow_history(win, qtbot, folder, [("One", as_bytes(old)), ("Two", as_bytes(new))])
+    removed, added = git_changed(folder, ids[0], ids[1])
+    assert len(removed) == 7 and len(added) == 7, (removed, added)
+
+    for place, item in ((0, PREVIOUS), (1, CURRENT)):
+        diff = open_diff(history, qtbot, place, item)
+        for side, lines, changed, which in ((diff.left, old, removed, "left"), (diff.right, new, added, "right")):
+            side_rows = rows(side)
+            numbers = [r.number for r in side_rows if r.number is not None]
+            assert numbers == list(range(1, len(lines) + 1)), (
+                f"{item}: the {which} side numbers {len(numbers)} lines, git counts {len(lines)} (it ends a line at "
+                f'"\\n" only)')
+            whole = [(r.number, r.text) for r in side_rows
+                     if r.number is not None and not shows_line(r.text, lines[r.number - 1])]
+            assert not whole, f"{item}: these rows of the {which} side do not show their line whole: {whole}"
+            assert all(r.text == "" for r in side_rows if r.number is None), f"a {which} filler line has text"
+            shown = set(marks(side, side_rows))
+            assert shown == changed, (f"{item}: on the {which} side {sorted(shown - changed)} marked more, "
+                                      f"{sorted(changed - shown)} fewer than `git diff` gives")
+        diff.close()
 
 
 def two_thousand_lines(case: str) -> tuple[list[str], list[str]]:
