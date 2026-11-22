@@ -4,14 +4,25 @@
 # (listed under checkers:); if one fails, the row is red. not_green says which of its words only tests check.
 SCH-1:
   enforced: >-
-    The service takes the Taskloom folder's lock (acquire_lock) before it does anything, and a second one that cannot
-    take it ends at once; the service_on record names the one holding the lock, and a run begins only for that one
-    (claim_time).
+    The service takes the Taskloom folder's lock (acquire_lock) before it does anything, and holds it until its
+    process ends (serve keeps a copy of it open: os.dup). A second one that cannot take it ends at once, unless the one
+    holding it is an older Taskloom's (running_scheduler_version): then it waits beside it without the lock, running
+    nothing (_take_over; one such successor per folder, scheduler.successor: another ends at once), and at a quiet
+    moment (_quiet), or at a run's end after an hour without one, stops it (_stop_old: SIGTERM) and takes the lock
+    once its process has let go of it; turned off meanwhile, it gives up (SCH-2). The service_on record names the one
+    holding the lock, and a run begins only for that one (claim_time).
   green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
-    The model checks, in every state of its bounds, that one service is on at a time, but it assumes the folder lock
-    lets only one process hold it (the operating system's file lock); that each way of starting another (On, login,
-    the editor) does nothing is checked by tests.
+    The model checks, in every state of its bounds (two service lives: one take-over), that one service is on at a
+    time, but it assumes the folder lock lets only one process hold it (the operating system's file lock). A take-over
+    is, in the model, the older service ending (ServiceCrash: its lock let go, the service_on record still naming it,
+    its runs going on for the next to adopt), then the newer one starting (ServiceStart: the lock taken and the
+    service_on record naming it in one step, only while not turned off); as the model lets a service end in any
+    state, one service is on at a time whatever the moment of the take-over. Which moment that is (a quiet one, or a
+    run's end after an hour), that the newer one does nothing while it waits, takes over once and gives up if turned
+    off, and that each way of starting another (On, login, the editor) does nothing, are checked by tests
+    (test_updates.py's U6 and U7, test_service_off.py, test_editor.py, test_paths_scheduler.py); the traces run the
+    lock the take-over takes (acquire_lock), not its own code (_take_over, _quiet, _stop_old).
 SCH-2:
   enforced: >-
     Turning the service off writes the paused file (request_turn_off, set_paused); the editor, scheduling a flow and
