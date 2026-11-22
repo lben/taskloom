@@ -787,6 +787,8 @@ def test_u1_u9_check_for_updates_installs_the_newer_release_while_the_editor_sta
     flow = a_taskloom_folder(home, tmp_path / "flows")
     flow_bytes, flow_time = flow.read_bytes(), flow.stat().st_mtime_ns
     both_entries(folders, this, home)
+    editor.scheduler_running()  # the editor looks whether a service runs as it opens and every 2 s, so before anyone
+    #                             can click Check for updates (the look makes the folder's empty lock files)
     before = taskloom_folder(home)
     releases.hold = threading.Event()
     boxes.answers = [(INSTALL, QMessageBox.Yes), (RESTART, QMessageBox.No)]

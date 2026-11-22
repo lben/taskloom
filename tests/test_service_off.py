@@ -221,6 +221,7 @@ def test_an_older_service_that_cannot_be_stopped_is_called_on_and_not_taken_over
     scheduler.pid is gone, so it cannot be stopped. A scheduled flow is saved: the editor starts this version's service,
     which waits beside it to take it over (UP-8), tries to stop it and cannot. All along the editor asks and warns
     nothing, and calls the service on and the older Taskloom's: never paused or off, never this version's."""
+    from taskloom import __version__
     from taskloom.scheduler import STOP_OLD_SECONDS, acquire_lock
 
     started, said, seen = [], [], []
@@ -237,11 +238,13 @@ def test_an_older_service_that_cannot_be_stopped_is_called_on_and_not_taken_over
         said.extend([win.scheduler_action.text(), win.scheduler_action.toolTip(), win.statusBar().currentMessage()])
         return win.scheduler_action.text(), win.scheduler_action.toolTip()
 
-    def waits_beside_it() -> bool:  # (scheduler.waiting: "<version> <process> <when>")
+    def waits_beside_it() -> bool:  # (scheduler.waiting: "<version> <process> <when>"; that process is the service's
+        # own, not always one the editor started: on Windows a venv's python.exe is a launcher, the service its child)
         try:
-            return any(str(proc.pid) in (win.home.root / "scheduler.waiting").read_text().split() for proc in started)
-        except OSError:
+            version = (win.home.root / "scheduler.waiting").read_text().split()[0]
+        except (OSError, IndexError):
             return False
+        return version == __version__ and any(proc.poll() is None for proc in started)
 
     lock = acquire_lock(win.home)  # a scheduler service from an older Taskloom
     try:
