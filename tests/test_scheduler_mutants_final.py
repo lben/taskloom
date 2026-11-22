@@ -45,7 +45,8 @@ from tests.test_scheduler_mutants_times import began
 from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, NO_TZ_ON_WINDOWS, REAL_POPEN, FakeRuns,
                                                check_after, clock_shows, flow_yaml, one_at_a_time, schedule, statuses,
                                                write)
-from tests.test_scheduler_new_promises import berlin  # noqa: F401  (a fixture: the local time zone is Europe/Berlin)
+import tests.test_scheduler_new_promises as new_promises
+berlin = new_promises.berlin  # a fixture: the local time zone is Europe/Berlin
 
 ASKED = check_after(150)  # 2026-01-06 01:05: the service is back after 150 times of EVERY_TEN were missed
 
