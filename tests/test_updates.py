@@ -26,6 +26,8 @@ cannot be real in a test is stood in for, and only that:
   connection and sends nothing. An hour without a quiet moment: the waiting service's
   scheduler.waiting says it began waiting 61 minutes ago. An older service: a real service whose scheduler.version is
   rewritten to an older version (or removed, as before 0.14.1).
+- A Cancel pressed while the zip unpacks (that takes a moment only): zipfile's ZipFile.extract, once it has written a
+  chosen file of the zip, waits until the test has pressed Cancel.
 
 Windows-only (skipped elsewhere): test_u10_a_folder_in_use_is_kept_and_removed_at_a_later_start (only Windows refuses
 to rename a folder holding an open file). Every other test runs on Windows, macOS and Linux; on Windows with real
@@ -321,10 +323,10 @@ def json_links(monkeypatch):
 # --- the release: a local HTTPS server standing for Taskloom's GitHub releases ----------------------------------------
 
 def release_zip(version: str = NEW, *, leave_out: tuple = (), version_text: str | None = None,
-                damaged: bool = False) -> bytes:
+                damaged: bool = False, extra: dict | None = None) -> bytes:
     """The Windows zip as packaging/build.py makes it: a top folder taskloom/ (with its folders' entries) holding the
     programs, VERSION, the libraries (a 1.5 MB file), examples. `damaged`: a byte of the libraries changed after the zip
-    was made (its CRC no longer fits)."""
+    was made (its CRC no longer fits). `extra`: more entries {name as written in the zip: bytes}, after the others."""
     files = {
         "taskloom/taskloomw.exe": f"stand-in windowed program {version}".encode(),
         "taskloom/taskloom.exe": f"stand-in program {version}".encode(),
@@ -337,7 +339,7 @@ def release_zip(version: str = NEW, *, leave_out: tuple = (), version_text: str 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
         for folder in ("taskloom/", "taskloom/_internal/", "taskloom/examples/"):
             z.writestr(zipfile.ZipInfo(folder), b"")
-        for name, data in files.items():
+        for name, data in {**files, **(extra or {})}.items():
             if name not in leave_out:
                 z.writestr(name, data)
     data = bytearray(out.getvalue())
@@ -863,6 +865,85 @@ def test_u1_cancel_during_the_download_leaves_nothing_behind(editor, qtbot, fold
     assert starts == []
 
 
+@pytest.mark.parametrize("after", ["the first file", "the last file"])
+@pytest.mark.invariant("UP-1")
+@pytest.mark.invariant("UP-3")
+def test_u1_cancel_while_unpacking_leaves_nothing_behind(editor, qtbot, monkeypatch, folders, this, releases, boxes,
+                                                         starts, after):
+    """U1: Install? Yes; the zip is downloaded and is being unpacked (the first of its files, or the last, is written
+    in the part of the download) when Cancel is pressed in the download window: nothing is left in
+    <LOCALAPPDATA>/Programs/Taskloom (no version folder, no part of the download), the entries still start this
+    version, no message (you cancelled), no restart offered."""
+    both_entries(folders, this, editor.home.root)
+    entries = entries_now(folders)
+    files = [m.filename for m in zipfile.ZipFile(io.BytesIO(releases.zip)).infolist() if not m.is_dir()]
+    chosen = files[0] if after == "the first file" else files[-1]
+    reached, go, extract = threading.Event(), threading.Event(), zipfile.ZipFile.extract
+
+    def extracting(self, member, *args, **kwargs):
+        done = extract(self, member, *args, **kwargs)
+        if getattr(member, "filename", member) == chosen:
+            reached.set()
+            go.wait(60)
+        return done
+
+    monkeypatch.setattr(zipfile.ZipFile, "extract", extracting)
+    boxes.answers = [(INSTALL, QMessageBox.Yes)]
+
+    check_for_updates(editor)
+    try:
+        qtbot.waitUntil(reached.is_set, timeout=60_000)
+        progress = shown_widget(editor, "update-progress")
+        assert progress is not None, "the download window closed while the zip was unpacked"
+        partly = [p for p in folders.programs.iterdir() if p.name.startswith(".partial-")]
+        assert [p for p in partly if (p / chosen).is_file()], f"{chosen} is not unpacked yet: {leftovers(folders)}"
+        QTest.mouseClick(button(progress, "Cancel"), Qt.LeftButton)
+    finally:
+        go.set()
+    eventually(qtbot, lambda: leftovers(folders) == [], timeout=10_000)
+    qtbot.wait(1500)
+
+    asked = boxes.take("question")
+    assert len(asked) == 1 and INSTALL in asked[0], f"asked after Cancel: {asked}"
+    assert boxes.take() == [], "a message after Cancel"
+    assert shown_widget(editor, "update-progress") is None, "the download window stays open"
+    assert leftovers(folders) == [], f"left in {folders.programs}: {leftovers(folders)}"
+    assert entries_now(folders) == entries
+    assert starts == []
+
+
+def files_in(folder: Path) -> dict:
+    """{relative path: bytes} of every file in `folder`."""
+    return {p.relative_to(folder).as_posix(): p.read_bytes() for p in sorted(folder.rglob("*")) if p.is_file()}
+
+
+@pytest.mark.parametrize("how", ["installed by Taskloom", "unpacked by hand"])
+@pytest.mark.invariant("UP-1")
+@pytest.mark.invariant("UP-2")
+@pytest.mark.invariant("UP-7")
+def test_u1_a_version_already_there_is_used_as_it_is_and_nothing_is_downloaded(editor, qtbot, folders, this,
+                                                                               releases, boxes, starts, how):
+    """U1: <LOCALAPPDATA>/Programs/Taskloom/0.40.0 is there already, whole (installed by Taskloom before, or unpacked
+    there by hand: no marker). Check for updates; Install? Yes: nothing is downloaded; that folder is used as it is (not
+    a byte of it changed; one unpacked by hand gets no marker, so it is never removed as Taskloom's); the entries now
+    start it; the restart is offered; nothing else is left in <LOCALAPPDATA>/Programs/Taskloom."""
+    home = editor.home.root
+    both_entries(folders, this, home)
+    there = unpacked(folders.programs / NEW, NEW, marker_from=this if how == "installed by Taskloom" else None)
+    before = files_in(there)
+
+    install(editor, qtbot, boxes)
+
+    asked = boxes.take("question")
+    assert len(asked) == 2 and INSTALL in asked[0] and RESTART in asked[1], asked
+    assert releases.downloads() == [], f"downloaded: {releases.downloads()}"
+    assert files_in(there) == before, f"{there} was changed"
+    assert leftovers(folders) == [NEW], f"left in {folders.programs}: {leftovers(folders)}"
+    assert entries_now(folders) == {"Start menu": entry_for(there, editor_args(home)),
+                                    "Startup": entry_for(there, login_args(home))}
+    assert starts == []
+
+
 # --- U2: nothing newer; never by itself; only on Windows ---------------------------------------------------------------
 
 @pytest.mark.parametrize("tag", [f"v{__version__}", "v0.38.0"], ids=["the same version", "an older version"])
@@ -1174,6 +1255,99 @@ def test_u3_a_download_that_stalls_ends_within_the_time_limit_and_leaves_nothing
     assert starts == []
     editor.new_flow()
     assert len(editor.tabs_list()) == tabs + 1
+
+
+ESCAPING = {  # an entry of the zip whose name leaves its folder (None: the absolute path of a file outside, from the test)
+    "up out of its folder": "../../../escaped.txt",
+    "up out from inside its taskloom folder": "taskloom/../../../../escaped.txt",
+    "up out with backslashes": "taskloom/..\\..\\..\\..\\escaped.txt",
+    "an absolute path": None,
+    "a drive letter": "C:/escaped.txt",
+}
+
+
+@pytest.mark.parametrize("entry", list(ESCAPING))
+@pytest.mark.invariant("UP-3")
+def test_u3_a_zip_with_an_entry_that_leaves_its_folder_is_refused_and_nothing_is_written(
+        editor, qtbot, tmp_path, folders, this, releases, boxes, starts, entry):
+    """U3: the release's zip (its size and checksum the release's own) holds, after its files, an entry whose name
+    leaves its folder: up out of it (../), from inside its taskloom folder, with Windows' backslashes, an absolute path
+    (on Windows with its drive letter) or a drive letter. Install? Yes: one message says what went wrong, naming that
+    entry; no file of it is written anywhere; nothing is installed or left in <LOCALAPPDATA>/Programs/Taskloom; the
+    entries still start this version; the editor goes on working."""
+    name = ESCAPING[entry] or (tmp_path / "outside" / "escaped.txt").as_posix()
+    releases.zip = release_zip(extra={name: b"not a file of Taskloom\n"})
+    both_entries(folders, this, editor.home.root)
+    entries = entries_now(folders)
+    boxes.answers = [(INSTALL, QMessageBox.Yes)]
+    tabs = len(editor.tabs_list())
+
+    check_for_updates(editor)
+    qtbot.waitUntil(lambda: any(kind == "warning" or RESTART in said for kind, said in boxes.seen), timeout=60_000)
+    qtbot.wait(1000)
+
+    told = boxes.take("warning")
+    asked = boxes.take("question")
+    assert len(asked) == 1 and INSTALL in asked[0], asked
+    assert len(told) == 1 and "escaped.txt" in told[0], f"the message does not name the entry {name!r}: {told}"
+    assert boxes.take() == []
+    assert sorted(tmp_path.rglob("escaped.txt")) == [], "the entry was written"
+    assert leftovers(folders) == [], f"left in {folders.programs}: {leftovers(folders)}"
+    assert entries_now(folders) == entries
+    assert starts == []
+    editor.new_flow()
+    assert len(editor.tabs_list()) == tabs + 1 and shown_widget(editor, "update-progress") is None
+
+
+@pytest.mark.parametrize("there", ["another version's folder", "a folder without taskloomw.exe",
+                                   "one made while the zip downloads"])
+@pytest.mark.invariant("UP-3")
+@pytest.mark.invariant("UP-7")
+def test_u3_a_folder_in_the_new_versions_place_is_left_as_it_is_and_the_update_says_so(
+        editor, qtbot, folders, this, releases, boxes, starts, there):
+    """U3: where 0.40.0 goes (<LOCALAPPDATA>/Programs/Taskloom/0.40.0) there is a folder that is not that version whole:
+    another version's (its VERSION says 0.39.9), or 0.40.0 without its taskloomw.exe; or, while the zip downloads,
+    0.40.0's folder is made there whole (as by another install of it). Install? Yes: one message says what went wrong
+    (before downloading, it names the folder); that folder is left byte-equal, nothing else is left in
+    <LOCALAPPDATA>/Programs/Taskloom; the entries still start this version; nothing is started; the editor goes on
+    working."""
+    place = folders.programs / NEW
+    both_entries(folders, this, editor.home.root)
+    entries = entries_now(folders)
+    if there == "another version's folder":
+        unpacked(place, "0.39.9")
+    elif there == "a folder without taskloomw.exe":
+        (unpacked(place, NEW) / "taskloomw.exe").unlink()
+    else:
+        releases.hold = threading.Event()
+    before = files_in(place) if place.exists() else None
+    boxes.answers = [(INSTALL, QMessageBox.Yes)]
+    tabs = len(editor.tabs_list())
+
+    check_for_updates(editor)
+    if there == "one made while the zip downloads":
+        qtbot.waitUntil(lambda: shown_widget(editor, "update-progress") is not None, timeout=30_000)
+        (progress_bar,) = shown_widget(editor, "update-progress").findChildren(QProgressBar)
+        qtbot.waitUntil(lambda: progress_bar.value() > 0, timeout=30_000)
+        before = files_in(unpacked(place, NEW, marker_from=this))
+        releases.hold.set()
+    qtbot.waitUntil(lambda: any(kind == "warning" or RESTART in said for kind, said in boxes.seen), timeout=60_000)
+    qtbot.wait(1000)
+
+    told = boxes.take("warning")
+    asked = boxes.take("question")
+    assert len(asked) == 1 and INSTALL in asked[0], asked
+    assert len(told) == 1 and told[0].strip(), told
+    if there != "one made while the zip downloads":
+        assert str(place) in told[0], f"the message does not name the folder {place}: {told[0]!r}"
+        assert releases.downloads() == [], f"downloaded: {releases.downloads()}"
+    assert boxes.take() == []
+    assert files_in(place) == before, f"{place} was changed"
+    assert leftovers(folders) == [NEW], f"left in {folders.programs}: {leftovers(folders)}"
+    assert entries_now(folders) == entries
+    assert starts == []
+    editor.new_flow()
+    assert len(editor.tabs_list()) == tabs + 1 and shown_widget(editor, "update-progress") is None
 
 
 # --- U4, U5, U6: the entries follow the newest version -----------------------------------------------------------------
@@ -1993,6 +2167,43 @@ def test_u8_yes_while_a_flow_started_here_runs_waits_for_it_and_cancel_stops_the
     else:
         qtbot.wait(4000)
         assert editor.isVisible() and editors_started(starts) == [], "it restarted after Cancel"
+
+
+@pytest.mark.invariant("UP-6")
+def test_u8_cancel_at_the_unsaved_changes_question_of_the_restart_keeps_the_editor_and_your_edits(
+        editor, qtbot, tmp_path, folders, releases, boxes, starts):
+    """U8: two flows open, the second with a change not saved. Installed 0.40.0; "Restart Taskloom now with version
+    0.40.0?" Yes; closing asks "Save changes to changed.yaml?"; Cancel: this editor stays open with both flows, the
+    change still there and still not saved (the file as it was); 0.40.0's editor is not started, not even later."""
+    folder = tmp_path / "flows"
+    folder.mkdir()
+    for name in ("saved.yaml", "changed.yaml"):
+        (folder / name).write_text(HELLO, encoding="utf-8")
+    saved, changed = editor.open_flow(folder / "saved.yaml"), editor.open_flow(folder / "changed.yaml")
+    changed.doc.move_blocks({"work": (55, 77)})
+    assert changed.doc.dirty
+    open_before = editor.tabs_list()
+    boxes.answers = [(INSTALL, QMessageBox.Yes), (RESTART, QMessageBox.Yes), ("Save changes to", QMessageBox.Cancel)]
+
+    check_for_updates(editor)
+    qtbot.waitUntil(lambda: any("Save changes to" in said for _, said in boxes.seen)
+                    or any(kind == "warning" for kind, _ in boxes.seen), timeout=60_000)
+    qtbot.wait(2500)
+
+    asked = boxes.take("question")
+    try:
+        assert [said for said in asked if "Save changes to" in said] == [
+            "Unsaved changes\nSave changes to changed.yaml?"], asked
+        assert len(asked) == 3 and INSTALL in asked[0] and RESTART in asked[1], asked
+        assert boxes.take() == []
+        assert editor.isVisible() and editors_started(starts) == [], "it restarted though closing was cancelled"
+        assert editor.tabs_list() == open_before and saved in open_before, "closing was cancelled, yet flows closed"
+        assert changed.doc.dirty and changed.doc.blocks["work"]["ui"] == {"x": 55, "y": 77}, changed.doc.blocks["work"]
+        assert (folder / "changed.yaml").read_text(encoding="utf-8") == HELLO, "the change was saved"
+        assert shown_widget(editor, "restart-waits") is None
+        assert leftovers(folders) == [NEW]
+    finally:
+        changed.doc.dirty = False  # (the test's end closes the editor: it asks nothing then)
 
 
 # --- U10: old versions --------------------------------------------------------------------------------------------------
