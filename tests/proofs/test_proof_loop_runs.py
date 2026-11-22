@@ -36,16 +36,18 @@ BLOCKS_WIDTH, INSPECTOR_WIDTH, LOG_HEIGHT = 180, 420, 330  # a wider canvas, and
 LOOP = "each_region"  # the Loop of the flow that runs
 INSIDE = ["load", "total"]
 REGIONS = ["north", "south", "east", "west", "central"]  # items 1 to 5
-SECONDS = {"north": 5.5, "south": 0.5, "east": 0.5, "west": 3.5, "central": 0.5}  # how long load takes for each
+SECONDS = {"north": 9.5, "south": 1.5, "east": 1.5, "west": 3.5, "central": 1.5}  # how long load takes for each
 SALES = {"north": [120, 80], "south": [45, 30], "east": [60], "west": [25, 25, 50], "central": [90]}
 TOTALS = {region: sum(sales) for region, sales in SALES.items()}
 MONTH = "2026-10"
 REPORTED = ", ".join(f"{region} {TOTALS[region]}" for region in REGIONS)
 # The moment shot while it runs: 2 items done of 5 (south and east), 2 running (north and west); with SECONDS, from
-# about 1 second into the Loop to 4.5.
+# about 3 seconds into the Loop to 6.5.
 MIDWAY = (2, 5, 2)
 TICK = dt.timedelta(seconds=0.016)  # a clock tick on Windows: two times taken in a row may differ by this much
-SOON = dt.timedelta(seconds=0.3)  # "at once": well under the half second the quickest item takes
+SOON = dt.timedelta(seconds=0.9)  # "at once": well under the 1.5 seconds the quickest item takes, and well over the
+# pause of up to half a second a busy Windows CI machine sometimes makes between one item's end and the next's start
+# (usually 0.03 s)
 MOVE = QPointF(-150, 80)  # how far the box is dragged, in the flow's points
 
 
@@ -459,8 +461,8 @@ def test_the_blocks_inside_a_loop_run_once_per_item_several_at_the_same_time(
                "outside the box), and total adds up the region's sales into the Loop's result. report, after the Loop, "
                "writes one line from the results.")
         p.note(f"load waits as if it were loading the region's sales: {SECONDS['north']:g} seconds for north, "
-               f"{SECONDS['west']:g} for west, half a second for the others. So the items end in another order than "
-               "the list's.")
+               f"{SECONDS['west']:g} for west, {SECONDS['south']:g} for the others. So the items end in another order "
+               "than the list's.")
         tab = open_flow(win, monkeypatch, regions_flow(tmp_path))
         settle()
         p.check("The flow opens", tab is not None and LOOP in tab.scene.nodes)
