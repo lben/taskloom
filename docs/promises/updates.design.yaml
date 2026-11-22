@@ -1,0 +1,48 @@
+# The design decisions of updating Taskloom on Windows, one line each (read by packaging/proof_pdf.py): what was
+# chosen, and when to look at it again.
+- chosen: Help > Check for updates asks GitHub's API once for Taskloom's latest release, only when you click it, and takes its Windows zip, taskloom-windows-amd64.zip, the one the release job uploads.
+  revisit_if: the repository moves, or releases are published somewhere else.
+- chosen: Only a version newer than the one running is offered; GitHub's latest release is never a draft or a prerelease, so a fix of an older line never takes you back.
+  revisit_if: you want prereleases offered.
+- chosen: The editor downloads with Qt's own network access (the window stays usable, Cancel stops it), through Windows' proxy settings as the browser uses them.
+  revisit_if: a proxy needs a password that Qt cannot take from Windows.
+- chosen: Every address, and every redirect before it is followed, must be https on one of GitHub's hosts (api.github.com, github.com and its two hosts for release files); any other stops the update with a message naming it.
+  revisit_if: GitHub serves release files from a host not in the list (the update then stops safely, naming that host).
+- chosen: The zip is downloaded into a new .partial-<random> folder beside the versions' folders, on the same disk, so the unpacked version is moved into place by one rename.
+  revisit_if: versions must be installed on another disk than %LOCALAPPDATA%'s.
+- chosen: The progress bar counts the bytes written to the download file, as Qt's progress signal says nothing while a download stalls; then the bytes unpacked.
+  revisit_if: a broken download must resume where it stopped instead of starting again.
+- chosen: The zip is checked whole before anything is used, for its size and SHA-256 as GitHub gives them, each file's CRC, every name inside its taskloom folder, taskloomw.exe and VERSION in it, VERSION the release's, and enough free disk space.
+  revisit_if: GitHub stops giving a checksum (size and CRC remain), or releases are signed (then the signature is checked too).
+- chosen: The zip is unpacked in a thread of its own, with the marker installed-by-taskloom.json (the folder it updated from and its files), then renamed into %LOCALAPPDATA%\Programs\Taskloom\<version> in one step, so that folder is there whole or not at all; what a Cancel or a crash leaves is removed at the next start.
+  revisit_if: a version must be patched in place rather than unpacked whole.
+- chosen: A folder already there for that version is used as it is if it holds that version; any other folder in the way stops the install with a message, so Taskloom never overwrites or deletes a folder it did not just make.
+  revisit_if: people meet that message.
+- chosen: An install writes nothing in the Taskloom folder (~/.taskloom), where settings, run history, credentials and schedules live, so they are the same after an update.
+  revisit_if: a new version stores them differently (there is no conversion code yet).
+- chosen: Both entries are shortcuts (.lnk) to a version's taskloomw.exe with --home "<Taskloom folder>", so logging in no longer flashes a console window, and the shortcut, which cannot set TASKLOOM_HOME, still names the folder.
+  revisit_if: a company policy blocks shortcuts in the Startup folder where a script is allowed.
+- chosen: Shortcuts are read and written through Windows' own shell-link interface (ctypes, no new library, no admin), as Qt writes a shortcut's program only and re-pointing must keep its arguments.
+  revisit_if: Qt can write and read a shortcut's arguments.
+- chosen: One rule at every start of the packaged Windows Taskloom (any command) and right after an install; an entry whose program is gone, or whose folder's VERSION is older or missing, is pointed at the starting version with its arguments kept, and one that starts the same or a newer version is left alone, so an older version never takes an entry from a newer one.
+  revisit_if: several Taskloom installs on one Windows account must keep entries of their own.
+- chosen: Only the two Settings boxes and taskloom scheduler --at-login make or remove an entry; a start or an install only re-points the ones there are.
+  revisit_if: an install should add the Start menu entry without being asked.
+- chosen: The Startup script earlier versions wrote (Taskloom Scheduler.cmd) is replaced at the first start of this version by the shortcut for its Taskloom folder, then deleted.
+  revisit_if: people go on using an older Taskloom's Settings box, which writes the script again (the next start replaces it again).
+- chosen: Entries are changed under one lock, <LOCALAPPDATA>\Taskloom\entries.lock (outside the versions' folder, which holds only versions), each written to <name>.new and moved over the shortcut, so two quick starts write it once and no shortcut is ever half written.
+  revisit_if: entries must be shared between Windows accounts.
+- chosen: What a start has to tell (an entry whose folder was gone, an older version kept and why) shows in the editor's status bar, on stderr for a command, and in a tray message for the scheduler service.
+  revisit_if: people miss these messages.
+- chosen: At each start, the older versions Taskloom installed (with the marker, not the one it updated from, not one an entry starts) are renamed to .removing-<name> and deleted; Windows refuses the rename while something in it runs, and it is tried again at the next start; one holding a scheduled flow or a file of yours is kept and said, and a folder you unpacked is never touched.
+  revisit_if: people want to keep more than one older version.
+- chosen: After an install the restart is offered; Yes waits while a flow started from this editor runs (a window says which, with Cancel), then closes the editor as usual (tabs and loaded states kept, its unsaved-changes question can cancel it) and starts the new version's editor on the same Taskloom folder, which starts no flow.
+  revisit_if: runs started from a terminal or by the scheduler should hold the restart too.
+- chosen: A newer version's scheduler service that finds an older one holding the Taskloom folder waits beside it (one such per folder) and takes over at a quiet moment, when no run goes, none waits and no scheduled time is due within 2 minutes; after an hour without one, at the first check after a run ends; turned off meanwhile, it gives up.
+  revisit_if: a release changes how history or schedules are stored, which the old service would read while the new one waits; that release then takes over at once.
+- chosen: The old service is stopped the way a service of any version can be (the system ends its process), only after the new one has read the settings and schedules; the runs it started are adopted and the waiting ones restored, as after any stop.
+  revisit_if: a service ever keeps something only in memory that a stop loses.
+- chosen: An install starts the new version's service at once only when a service runs and you have not turned it off, and the editor starts its own when the one running is older; the question "Restart the scheduler service?" is gone on every system.
+  revisit_if: the question is wanted back outside Windows.
+- chosen: In tests GitHub is a local HTTPS server on 127.0.0.1 with a certificate made for the test and trusted only by the test's Qt; Taskloom's release address and hosts are pointed at it in the test, so no setting or variable can send a real download elsewhere and nothing reaches the internet.
+  revisit_if: Qt's Windows TLS ignores the added certificate on Windows CI.

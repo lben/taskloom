@@ -1,0 +1,159 @@
+# Mutation testing of updating Taskloom on Windows (read by packaging/mutants.py --explained). scope: what the bugs are
+# planted in, the functions the change touched, in groups: each group's bugs run the tests that can see them (each
+# line of tests: is one pytest run, a file with -k words or without). The functions that are new are tested whole. A
+# function in which the change touched a line or a few, among much that was there before, is under not_tested: its
+# bugs are planted and counted, not run, and its reason names the tests that check the changed lines. So are the
+# shortcut functions that call Windows' own shell-link interface: mutation testing runs on Linux (CI's
+# checkers-features job), where they cannot run, and the tests replace them there by a JSON file standing in for a
+# shortcut. Nothing is planted in the change's other lines: entries._locked is a context manager (mutmut plants
+# nothing in a decorated function), and test_u6_two_quick_starts_of_the_new_version_write_each_entry_once_and_whole
+# checks it; mutmut finds nothing it can change in UpdateDownload.reject (Cancel: it sets the stop and aborts the
+# download), which test_u1_cancel_during_the_download_leaves_nothing_behind checks; the constants
+# (update.RELEASE_URL, ASSET, HOSTS, MARKER; entries.WINDOWED, EDITOR, SCHEDULER and the shell-link interfaces'
+# ids), the classes update.Failed and update.Release, UpdateDownload's two signals and the imports are not
+# functions; the lines removed (the question "Restart the scheduler service?" in
+# MainWindow._show_scheduler_state, restart_scheduler and _update_start_at_login in window.py, three lines of
+# MainWindow.__init__, and scheduler.py's startup_file, startup_script, _in_script, startup_script_outdated and
+# set_start_at_login, which entries.py replaces) leave nothing to plant a bug in. The take-over itself
+# (scheduler.py: serve, _take_over, _quiet, _stop_old) is mutated with the rest of scheduler.py by the scheduler's
+# mutation testing (scheduler.mutants.yaml).
+# The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it explains) or
+# one by one (mutant name: why it changes nothing a user could notice). Only those no user could notice are
+# explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    # Help > Check for updates: the release asked of GitHub, the download, its checks and the unpacking.
+    - mutate:
+        - taskloom/update.py programs
+        - taskloom/update.py refused
+        - taskloom/update.py newer_release
+        - taskloom/update.py installed
+        - taskloom/update.py partial
+        - taskloom/update.py unpack
+        - taskloom/update.py _sha256
+        - taskloom/editor/window.py MainWindow._make_actions
+        - taskloom/editor/window.py MainWindow.check_for_updates
+        - taskloom/editor/window.py MainWindow._web
+        - taskloom/editor/window.py MainWindow._release_told
+        - taskloom/editor/window.py MainWindow._install
+        - taskloom/editor/window.py _ask
+        - taskloom/editor/window.py _failure
+        - taskloom/editor/window.py UpdateDownload.__init__
+        - taskloom/editor/window.py UpdateDownload._received
+        - taskloom/editor/window.py UpdateDownload._downloaded
+        - taskloom/editor/window.py UpdateDownload._unpack
+        - taskloom/editor/window.py UpdateDownload._unpacking
+        - taskloom/editor/window.py UpdateDownload._end
+      tests:
+        - tests/test_updates.py -k "u1_ or u2_no_newer or u3_"
+    # After the install: the entries and the service put in use, and the restart offered.
+    - mutate:
+        - taskloom/update.py put_in_use
+        - taskloom/update.py start
+        - taskloom/editor/window.py MainWindow._installed
+        - taskloom/editor/window.py MainWindow._restart_in
+        - taskloom/editor/window.py main
+      tests:
+        - tests/test_updates.py -k "u1_u9 or u4_an_install or u7_an_install or u8_"
+    # The Start menu and Startup entries, and what each start of the packaged Windows Taskloom does: the entries
+    # follow the newest version, and older versions Taskloom installed are removed.
+    - mutate:
+        - taskloom/entries.py startup
+        - taskloom/entries.py start_menu
+        - taskloom/entries.py set_entry
+        - taskloom/entries.py follow
+        - taskloom/entries.py _older
+        - taskloom/entries.py version_of
+        - taskloom/entries.py _script_home
+        - taskloom/entries.py _write
+        - taskloom/entries.py read_link
+        - taskloom/entries.py write_link
+        - taskloom/entries.py _shell_link
+        - taskloom/entries.py _guid
+        - taskloom/entries.py _call
+        - taskloom/cli.py _at_start
+        - taskloom/cli.py main
+        - taskloom/cli.py cmd_scheduler
+        - taskloom/cli.py cmd_editor
+        - taskloom/update.py clean_up
+        - taskloom/update.py _yours
+        - taskloom/update.py _remove
+        - taskloom/update.py _marker
+        - taskloom/update.py _key
+        - taskloom/editor/dialogs.py SettingsDialog.__init__
+        - taskloom/editor/dialogs.py SettingsDialog._save
+      tests:
+        - tests/test_updates.py -k "u4_ or u5_ or u6_two_quick_starts or u10_"
+        - tests/test_scheduler.py -k at_login
+        - tests/test_paths_cli_config.py -k at_login
+        - tests/test_paths_scheduler.py -k "starting_at_login or start_at_login"
+        - tests/test_scheduler_service_calls.py -k at_login
+    # The editor starts this version's scheduler service also when an older one runs, which it then takes over.
+    - mutate:
+        - taskloom/editor/window.py MainWindow._scheduler_to_start
+        - taskloom/editor/window.py MainWindow._sync_schedule
+        - taskloom/editor/window.py MainWindow._start_scheduler_if_needed
+        - taskloom/editor/window.py MainWindow.start_scheduler
+      tests:
+        - tests/test_editor.py -k "older_scheduler_running_is_taken_over or started_beside_an_older_one"
+        - tests/test_paths_scheduler.py -k older_scheduler_service_is_taken_over
+        - tests/test_service_off.py -k older_service_that_cannot_be_stopped
+not_tested:
+  taskloom/editor/window.py MainWindow._make_actions: >-
+    The editor's menus and toolbar as they are built, about 66 lines, to which this change added two (Help > Check
+    for updates…, only in the packaged Windows Taskloom):
+    test_u2_help_has_check_for_updates_only_in_the_windows_taskloom checks them, and each test of the download clicks
+    the item.
+  taskloom/editor/window.py main: >-
+    The editor's start, to which this change added two lines (what Taskloom's start has to tell shows in the status
+    bar): test_u4_the_first_start_of_a_newer_version_unpacked_by_hand_points_the_entries_at_itself, with a folder
+    that is gone and the editor, reads it there. The rest, the application and its window made and shown, is as it
+    was.
+  taskloom/editor/window.py MainWindow._sync_schedule: >-
+    A flow's schedule applied when it is saved, about 30 lines, in which this change made one condition start this
+    version's service also when an older one runs (_scheduler_to_start, mutated whole above):
+    test_an_older_service_that_cannot_be_stopped_is_called_on_and_not_taken_over saves a scheduled flow while an older
+    service runs.
+  taskloom/editor/window.py MainWindow._start_scheduler_if_needed: >-
+    The service started when flows are scheduled, in which this change made the same condition call
+    _scheduler_to_start: test_an_older_scheduler_running_is_taken_over_without_a_question opens the editor while an
+    older service runs and sees it start this version's.
+  taskloom/editor/window.py MainWindow.start_scheduler: >-
+    The service started, about 18 lines, in which this change made the same condition call _scheduler_to_start and
+    removed a line: test_an_older_scheduler_service_is_taken_over_by_this_versions_without_a_question and
+    test_this_versions_service_started_beside_an_older_one_takes_over_the_old_one_stopping_first start the real one
+    beside an older service.
+  taskloom/editor/dialogs.py SettingsDialog.__init__: >-
+    Settings as it is built, about 100 lines, in which this change put "Add Taskloom to the Start menu" next to "Start
+    the scheduler service when I log in", each ticked when its shortcut exists and greyed out outside the packaged
+    Windows Taskloom: test_u4_settings_adds_and_removes_the_start_menu_entry_next_to_starting_at_login and
+    test_the_settings_box_start_at_login_adds_and_removes_this_folders_startup_entry check them.
+  taskloom/editor/dialogs.py SettingsDialog._save: >-
+    Settings saved, about 23 lines, in which this change made the two boxes write or remove their shortcuts
+    (entries.set_entry, mutated whole above): the same two tests tick, untick and save them and read the shortcuts.
+  taskloom/cli.py main: >-
+    The command line read, about 100 lines, to which this change added --home, the start hook (_at_start, mutated whole
+    above) and printing what it has to tell on stderr:
+    test_u4_home_given_on_the_command_line_is_the_taskloom_folder_used and
+    test_u4_the_first_start_of_a_newer_version_unpacked_by_hand_points_the_entries_at_itself check them.
+  taskloom/cli.py cmd_scheduler: >-
+    taskloom scheduler, in which this change made --at-login write the Startup shortcut (entries.set_entry, mutated
+    whole above) and passes what the start has to tell to the service: the --at-login tests of test_scheduler.py,
+    test_paths_cli_config.py and test_scheduler_service_calls.py check the first; the service's tray message is not
+    checked by a test.
+  taskloom/cli.py cmd_editor: >-
+    taskloom editor, to which this change added what the start has to tell, passed on to the editor:
+    test_u4_the_first_start_of_a_newer_version_unpacked_by_hand_points_the_entries_at_itself reads it in the editor's
+    status bar.
+  taskloom/entries.py read_link: >-
+    Reads a shortcut through Windows' shell-link interface, which Linux, where mutation testing runs, does not have;
+    on Windows every entries test reads what it wrote through Windows' own WScript.Shell, not through this code.
+  taskloom/entries.py write_link: >-
+    Writes a shortcut through Windows' shell-link interface (Windows only, as read_link); on Windows the entries tests
+    read each shortcut it wrote through WScript.Shell.
+  taskloom/entries.py _shell_link: >-
+    Makes the shell-link object read_link and write_link use (Windows only); the same tests run it on Windows.
+  taskloom/entries.py _guid: >-
+    An interface's id for _shell_link (Windows only); the same tests run it on Windows.
+  taskloom/entries.py _call: >-
+    Calls a method of the shell-link object (Windows only); the same tests run it on Windows.

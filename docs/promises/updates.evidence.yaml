@@ -1,0 +1,110 @@
+# How each agreed row of docs/promises/updates.yaml is kept, and why a row is not green (read by packaging/ledger.py;
+# the reviewer checks these words against the code). No model checks these rows: they are amber, checked by tests
+# only, and not_green says what the tests leave out. What no test reaches: Taskloom's real GitHub releases (the API,
+# github.com and its hosts for release files, and their redirects), a proxy, TLS in the packaged build (the tests run
+# Taskloom from its source, with Qt trusting a certificate made for them), and the built Windows zip (a zip made by
+# the tests stands for it, holding stand-in programs that cannot run).
+UP-1:
+  enforced: >-
+    MainWindow._make_actions adds Help > Check for updates only where frozen() and sys.platform is win32, and nothing
+    else calls check_for_updates. It asks update.RELEASE_URL once (_ask: Accept application/vnd.github+json, a
+    taskloom/<version> User-Agent); update.newer_release offers only a tag newer than __version__ ("Install?", else
+    "You have the newest version"). Yes opens UpdateDownload, a window that is not modal, whose bar follows the bytes
+    written and whose Cancel aborts the download; update.unpack runs in a thread of its own and puts the version in
+    update.programs()/<version>, under %LOCALAPPDATA%.
+  not_green: >-
+    Tests click the menu item in the editor offscreen against a local HTTPS server standing for GitHub and watch that
+    no request is made while a flow is opened, saved and closed; no test asks the real GitHub, goes through a proxy or
+    runs as a Windows user without admin rights (CI's Windows user is an administrator).
+UP-2:
+  enforced: >-
+    entries.set_entry (the Settings boxes "Add Taskloom to the Start menu" and "Start the scheduler service when I log
+    in", side by side, and taskloom scheduler --at-login) writes each shortcut to the program folder's taskloomw.exe
+    with --home "<Taskloom folder>", which taskloom.cli's main makes TASKLOOM_HOME. entries.follow points each entry
+    there is at a newer program folder, keeping its arguments: at every start of the packaged Windows Taskloom
+    (cli._at_start, before any command) and right after an install (update.put_in_use). It writes under one lock
+    (entries._locked) to <name>.new, then os.replace.
+  not_green: >-
+    Tests read the shortcuts through Windows' own WScript.Shell on Windows (elsewhere a JSON file stands in for one),
+    starting the program as a Python process made to look packaged; no test logs in to Windows or opens the Start
+    menu to see a shortcut start the built taskloomw.exe.
+UP-3:
+  enforced: >-
+    update.refused lets only https on a host in update.HOSTS be asked, for the release's file and for each redirect
+    before it is followed (_ask, UserVerifiedRedirectPolicy); update.unpack checks the size, the SHA-256 GitHub gives,
+    each file's CRC, that every name is inside taskloom/, that taskloomw.exe and VERSION are there and VERSION is the
+    release's, and the free disk space, before it unpacks into a .partial-* folder, then moves the version into place
+    with one os.rename. A failure is update.Failed, shown as a warning; UpdateDownload._end removes the .partial-*
+    folder whatever happened, and update.clean_up what a crash left, at the next start.
+  not_green: >-
+    Tests try eleven failures (no connection, HTTP 404 and 500, a download cut short, a wrong checksum, a damaged zip,
+    no taskloomw.exe, another VERSION, a full disk before unpacking, plain http, a redirect to another host) against
+    the local server, with the disk's free space faked; review found two failures with no test yet, a disk filling up
+    during the download (UpdateDownload._received writes with nothing to catch the error) and a download or release
+    check that stalls, which has no time limit (charter C8: _ask sets none); not tried either are a name leaving the
+    zip's folder, an answer Taskloom cannot read, a release with no Windows zip, a folder in the way, a disk filling up
+    while unpacking, a crash halfway, and the real GitHub hosts, proxies, TLS in the packaged build and the built zip.
+UP-4:
+  enforced: >-
+    entries.follow points an entry whose program is gone at the starting Taskloom and returns what to say: the editor
+    shows it in its status bar (window.main), a command prints it on stderr (cli.main), the service gives it to its
+    tray (scheduler.serve). An entry that starts the same or a newer version that is still there is left alone
+    (entries._older), so an older Taskloom never takes it. docs/guide.md says taskbar pins are Windows' own copies,
+    which an update does not change.
+  not_green: >-
+    Tests start real processes with an entry pointing at a deleted folder and at a newer version still there, read
+    the status bar and stderr, and read the guide's sentence; the tray's message is not checked, and no test pins
+    Taskloom to a real taskbar.
+UP-5:
+  enforced: >-
+    Settings, run history, credentials and schedules are in the Taskloom folder (Home: --home, TASKLOOM_HOME or
+    ~/.taskloom), never in a program folder; an install writes only under update.programs(), put_in_use reads the
+    Taskloom folder without writing to it, and the restart passes the same folder with --home. A flow is where you
+    saved it; update.clean_up keeps a version's folder that holds a flow of yours.
+  not_green: >-
+    Tests compare the Taskloom folder and a flow byte for byte before and after one install, and reopen the editor on
+    the same folder after a restart; credentials kept in Windows' own credential store are not looked at (tests never
+    touch the real store), and no update yet changes how the folder is written.
+UP-6:
+  enforced: >-
+    MainWindow._installed asks "Restart Taskloom now with version X?"; No does nothing more. MainWindow._restart_in
+    checks each second: while a flow started from this editor runs, a window that is not modal names it, with Cancel;
+    then the editor closes as usual (closeEvent: the session and loaded states kept; a Cancel there cancels the
+    restart), and update.start starts the new version's taskloomw.exe --home <folder> editor, which reopens the tabs
+    (restore_session) and starts no flow.
+  not_green: >-
+    Tests answer Yes with no flow running, with one running until it ends and with Cancel, then open a second editor
+    of this version on the same folder in place of the new one (the started program is a stand-in that cannot run),
+    and compare its tabs, loaded run and run count.
+UP-7:
+  enforced: >-
+    update.clean_up, at every start of the packaged Windows Taskloom (cli._at_start), removes each folder in
+    update.programs() with the marker installed-by-taskloom.json that is older than the starting version, other than
+    it, the one its marker says it updated from and one an entry starts; it renames it to .removing-<name> first, which
+    Windows refuses while something in it is in use (kept, tried at the next start). It keeps, and says so, one holding
+    a scheduled flow or a file not in its marker or changed after it (_yours); a folder without the marker is never
+    touched.
+  not_green: >-
+    Tests lay out eight folders and two leftovers and start Taskloom once; "once nothing runs from them" is checked on
+    Windows only, with a file held open in the folder rather than a program running from it.
+UP-8:
+  enforced: >-
+    scheduler.serve, finding the lock held by an older Taskloom's service, waits as the folder's one successor
+    (_take_over) and takes over at a quiet moment (_quiet: no run going, none waiting, no time due within 2 minutes),
+    or after an hour without one when a run ends; it stops the old one (_stop_old) and takes the lock only once that
+    process has let go of it, and gives up if the service is turned off. update.put_in_use starts the new version's
+    service only when one runs and is not turned off, and the editor starts its own when the running one is older
+    (MainWindow._scheduler_to_start). That one service is on at a time across a take-over is model-checked under SCH-1.
+  not_green: >-
+    Tests run real headless services, the older one being this version with its scheduler.version rewritten and an
+    hour stood in for by rewriting scheduler.waiting, plus one random order of starts, stops and runs per test run;
+    the quiet moment, the times run once and the adopted runs are checked by tests only, and no real older release or
+    PC going to sleep during a take-over is tried.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# updates.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/updates.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'
