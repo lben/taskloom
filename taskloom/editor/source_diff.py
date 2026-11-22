@@ -37,9 +37,10 @@ EDGE = {"added": ("#62b56f", "#4f8f5f"), "removed": ("#de6b68", "#b0565b"), "cha
 CHARACTERS = ("#a9c0f3", "#3a5583")
 HATCH = ("#d4d4d4", "#3a3c41")
 # Characters inside a line (git ends a line at "\n" only) that a side would break it at, or show as a break: each shown
-# as a character of its own.
-SHOWN = str.maketrans({"\r": "␍", "\x0b": "␋", "\x0c": "␌", "\x1c": "␜", "\x1d": "␝", "\x1e": "␞", "\x85": "␤",
-                       "\u2028": "↵", "\u2029": "¶"})
+# as a character of its own. Qt's text document starts a new row at U+FDD0 and U+FDD1 (noncharacters, with no symbol
+# of their own: shown as the replacement character).
+SHOWN = str.maketrans({"\r": "␍", "\x0b": "␋", "\x0c": "␌", "\x1c": "␜", "\x1d": "␝", "\x1e": "␞",
+                       "\x85": "␤", "\u2028": "↵", "\u2029": "¶", "\ufdd0": "\ufffd", "\ufdd1": "\ufffd"})
 
 
 @dataclass
