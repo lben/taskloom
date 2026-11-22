@@ -8,6 +8,7 @@ versions differ in line ends or in the newline at the end, which the lines shown
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass
 from functools import cache
 
@@ -35,6 +36,10 @@ FILL = {"added": ("#d9f2dc", "#273d2d"), "removed": ("#fbe1e0", "#45282b"), "cha
 EDGE = {"added": ("#62b56f", "#4f8f5f"), "removed": ("#de6b68", "#b0565b"), "changed": ("#6d93e4", "#5779b8")}
 CHARACTERS = ("#a9c0f3", "#3a5583")
 HATCH = ("#d4d4d4", "#3a3c41")
+# Characters inside a line (git ends a line at "\n" only) that a side would break it at, or show as a break: each shown
+# as a character of its own.
+SHOWN = str.maketrans({"\r": "␍", "\x0b": "␋", "\x0c": "␌", "\x1c": "␜", "\x1d": "␝", "\x1e": "␞", "\x85": "␤",
+                       "\u2028": "↵", "\u2029": "¶"})
 
 
 @dataclass
@@ -47,13 +52,14 @@ class Row:
     spans: tuple = ((), ())
 
 
-def _lines(data: bytes) -> tuple[str, list[str], list[str]]:
-    """A version's text, its lines (as str.splitlines gives them) and what is compared of each: the line with its line
-    break, Windows' taken as Unix' (the note line says when they differ), so that a last line without one differs
-    from the same line with one, as in `git diff`."""
-    text = data.decode("utf-8", "backslashreplace")
-    keys = [line[:-2] + "\n" if line.endswith("\r\n") else line for line in text.splitlines(True)]
-    return text, text.splitlines(), keys
+def _lines(data: bytes) -> tuple[list[str], list[str], list[str]]:
+    """A version's lines as git counts them (each ended by "\\n" only) with their line breaks, each as shown (without
+    its line break, the other characters a side would break it at shown as SHOWN gives them) and what is compared of
+    each: the line with its line break, Windows' taken as Unix' (the note line says when they differ), so that a last
+    line without one differs from the same line with one, as in `git diff`."""
+    lines = re.findall(r"[^\n]*\n|[^\n]+", data.decode("utf-8", "backslashreplace"))
+    keys = [line[:-2] + "\n" if line.endswith("\r\n") else line for line in lines]
+    return lines, [key.removesuffix("\n").translate(SHOWN) for key in keys], keys
 
 
 def _qt(text: str, i: int) -> int:
@@ -91,22 +97,26 @@ def align(old: list[str], new: list[str], old_keys: list[str], new_keys: list[st
     return rows, changes
 
 
-def _line_ends(text: str) -> str | None:
-    windows = text.count("\r\n")
-    unix = text.count("\n") - windows
+def _line_ends(lines: list[str]) -> str | None:
+    windows = sum(line.endswith("\r\n") for line in lines)
+    unix = sum(line.endswith("\n") for line in lines) - windows
     if windows and unix:
         return "Windows (CRLF) and Unix (LF) mixed"
     return "Windows (CRLF)" if windows else "Unix (LF)" if unix else None
 
 
-def note(old: str, new: str, old_keys: list[str], new_keys: list[str]) -> str:
-    """What the lines shown cannot show: line ends that differ, or a newline at the end in one version only."""
+def note(old: list[str], new: list[str], rows: list[Row]) -> str:
+    """What the lines shown cannot show: line ends that differ (also when both versions mix them, on other lines: an
+    unchanged row's two lines then differ in their line ends only), or a newline at the end in one version only. `old`
+    and `new`: each version's lines with their line breaks."""
     said = []
     ends = _line_ends(old), _line_ends(new)
     if None not in ends and ends[0] != ends[1]:
         said.append(f"The line ends differ: {ends[0]} on the left, {ends[1]} on the right.")
-    if old_keys and new_keys and old_keys[-1].endswith("\n") != new_keys[-1].endswith("\n"):
-        said.append("The newline at the end differs: the " + ("left" if old_keys[-1].endswith("\n") else "right")
+    elif any(row.kind == "equal" and old[row.numbers[0] - 1] != new[row.numbers[1] - 1] for row in rows):
+        said.append("The line ends differ: both versions mix Windows (CRLF) and Unix (LF), on other lines.")
+    if old and new and old[-1].endswith("\n") != new[-1].endswith("\n"):
+        said.append("The newline at the end differs: the " + ("left" if old[-1].endswith("\n") else "right")
                     + " version ends with one, the other does not.")
     return " ".join(said)
 
@@ -297,7 +307,7 @@ class SourceDiff(QWidget):
         bar.addSpacing(10)
         bar.addWidget(self.count)
         bar.addStretch()
-        said = note(old, new, old_keys, new_keys)
+        said = note(old, new, rows)
         self.note = QLabel(said, objectName="diff-note", wordWrap=True, textFormat=Qt.PlainText)
         self.left, self.right = DiffSide(rows, 0), DiffSide(rows, 1)
         self.left.other, self.right.other = self.right, self.left
