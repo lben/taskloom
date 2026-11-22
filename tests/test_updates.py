@@ -20,7 +20,10 @@ cannot be real in a test is stood in for, and only that:
   for one, so everything above them runs for real; on Windows the real .lnk files are written by Taskloom and read and
   written by the test through Windows' own WScript.Shell (PowerShell), not through Taskloom's code.
 - A program started from the new version's folder (its stand-in exe cannot run): subprocess.Popen records it.
-- A full disk: shutil.disk_usage says 1 kB is free. An hour without a quiet moment: the waiting service's
+- A full disk: shutil.disk_usage says 1 kB is free; or, while the zip downloads, Python's open (builtins.open and
+  io.open) of a file in a .partial-* folder gives one whose writes fail once a third of the zip is written (OSError
+  ENOSPC, as a real full disk). A server, proxy or firewall that never answers: a local socket that takes each
+  connection and sends nothing. An hour without a quiet moment: the waiting service's
   scheduler.waiting says it began waiting 61 minutes ago. An older service: a real service whose scheduler.version is
   rewritten to an older version (or removed, as before 0.14.1).
 
@@ -43,8 +46,10 @@ to rename a folder holding an open file). Every other test runs on Windows, macO
 #   status ("404", "500"); "incomplete" (fewer bytes than the release says); "checksum" (sha256 differs);
 #   "damaged" (a member's CRC); "taskloomw.exe" (missing from the zip); "VERSION" (not the release's version);
 #   "disk space" (shutil.disk_usage, called as shutil.disk_usage, says less is free than the zip unpacks to);
-#   "refused" and the URL or host (plain http, or a host not in HOSTS, also on a redirect). Cancel of the download
-#   shows no message.
+#   "refused" and the URL or host (plain http, or a host not in HOSTS, also on a redirect); the error's own words
+#   ("No space left on device", os.strerror(ENOSPC)) when a write of the download fails (the download is written
+#   through Python's open); "timed out" when the check or the download gets no byte for taskloom.update.TIMEOUT_SECONDS
+#   (seconds, read at each request; Charter C8). Cancel of the download shows no message.
 # - The download window: a non-modal widget, objectName "update-progress", with a QProgressBar (value/maximum follow
 #   the bytes) and a button "Cancel"; the editor stays usable meanwhile.
 # - Install: <LOCALAPPDATA>/Programs/Taskloom/<version> holds the zip's taskloom/ folder's files, byte-equal, plus the
@@ -95,9 +100,11 @@ to rename a folder holding an open file). Every other test runs on Windows, macO
 #   service?" is gone, also on macOS and Linux; the editor's start of the service also starts it while an older one runs.
 # - docs/guide.md: a sentence with "taskbar", "pin" and "not" (taskbar pins are Windows' own copies, not changed).
 import base64
+import builtins
 import contextlib
 import dataclasses
 import datetime as dt
+import errno
 import hashlib
 import http.server
 import io
@@ -108,6 +115,7 @@ import random
 import re
 import shutil
 import signal
+import socket
 import sqlite3
 import ssl
 import subprocess
@@ -969,6 +977,203 @@ def test_u3_a_failed_update_says_what_went_wrong_and_changes_nothing(editor, qtb
         assert ASSET_PATH not in releases.downloads(), "the redirect to another host was followed"
     editor.new_flow()
     assert len(editor.tabs_list()) == tabs + 1 and shown_widget(editor, "update-progress") is None
+
+
+class FullDisk:
+    """A disk with `free` bytes left for what is written in <LOCALAPPDATA>/Programs/Taskloom/.partial-*: a file opened
+    there by Python's open (builtins.open, io.open: Path.open too) takes writes until they are used up; that write and
+    every later one fail as on a full disk (OSError ENOSPC). Every other file opens as usual. `refused`: the writes
+    that failed."""
+
+    def __init__(self, folders: Folders, free: int):
+        self.inside, self.free, self.refused, self.real = norm(folders.programs) + os.sep, free, [], io.open
+
+    def open(self, file, mode="r", *args, **kwargs):
+        opened = self.real(file, mode, *args, **kwargs)
+        where = norm(file) if isinstance(file, (str, os.PathLike)) else ""
+        if (where.startswith(self.inside) and where[len(self.inside):].startswith(".partial-")
+                and set(mode) & set("wax+")):
+            return _Filling(opened, self)
+        return opened
+
+
+class _Filling:
+    """A file on a FullDisk."""
+
+    def __init__(self, file, disk: FullDisk):
+        self._file, self._disk = file, disk
+
+    def write(self, data):
+        if len(data) > self._disk.free:
+            self._disk.free = 0
+            self._disk.refused.append(len(data))
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        self._disk.free -= len(data)
+        return self._file.write(data)
+
+    def __getattr__(self, name):
+        return getattr(self._file, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._file.close()
+        return False
+
+
+@pytest.mark.invariant("UP-3")
+def test_u3_a_disk_that_fills_up_during_the_download_says_so_and_leaves_nothing_behind(
+        editor, qtbot, monkeypatch, tmp_path, folders, this, releases, boxes, starts):
+    """U3: Install? Yes; the disk fills up while the zip downloads (a third of it is written, then each write fails: no
+    space left on device): one message says so; the download window closes; nothing is left in
+    <LOCALAPPDATA>/Programs/Taskloom (no part of the download); the entries still start this version; the Taskloom
+    folder is byte-equal to before; the editor goes on working."""
+    home = editor.home.root
+    a_taskloom_folder(home, tmp_path / "flows")
+    both_entries(folders, this, home)
+    entries = entries_now(folders)
+    editor.scheduler_running()  # (as in U1: the look makes the folder's empty lock files before the test looks at it)
+    before = taskloom_folder(home)
+    disk = FullDisk(folders, free=len(releases.zip) // 3)
+    monkeypatch.setattr(builtins, "open", disk.open)
+    monkeypatch.setattr(io, "open", disk.open)
+    boxes.answers = [(INSTALL, QMessageBox.Yes)]
+    tabs = len(editor.tabs_list())
+
+    check_for_updates(editor)
+    qtbot.waitUntil(lambda: any(kind == "warning" or RESTART in said for kind, said in boxes.seen), timeout=60_000)
+    qtbot.wait(1000)
+
+    assert disk.refused, "no write of the download failed: it was not written through Python's open (the contract)"
+    told = boxes.take("warning")
+    asked = boxes.take("question")
+    assert len(asked) == 1 and INSTALL in asked[0], asked
+    assert len(told) == 1, told
+    assert os.strerror(errno.ENOSPC) in told[0], f"the message does not say the disk is full: {told[0]!r}"
+    assert boxes.take() == []
+    assert shown_widget(editor, "update-progress") is None, "the download window stays open"
+    assert leftovers(folders) == [], f"left in {folders.programs}: {leftovers(folders)}"
+    assert entries_now(folders) == entries
+    assert taskloom_folder(home) == before, "a failed update changed the Taskloom folder"
+    assert starts == []
+    editor.new_flow()
+    assert len(editor.tabs_list()) == tabs + 1
+
+
+LIMIT, MARGIN = 2, 3  # seconds: taskloom.update.TIMEOUT_SECONDS in the time-limit tests; what more a message may take
+
+
+class Silent:
+    """A server on 127.0.0.1 (or a proxy or firewall on the way) that takes each connection and never answers."""
+
+    def __init__(self):
+        self.socket = socket.create_server(("127.0.0.1", 0))
+        self.socket.settimeout(0.2)
+        self.port, self.held, self.stopped = self.socket.getsockname()[1], [], threading.Event()
+        threading.Thread(target=self._take, daemon=True).start()
+
+    def _take(self):
+        while not self.stopped.is_set():
+            with contextlib.suppress(TimeoutError, OSError):
+                self.held.append(self.socket.accept()[0])
+
+    def stop(self):
+        self.stopped.set()
+        for connection in [self.socket, *self.held]:
+            connection.close()
+
+
+@pytest.fixture
+def silent():
+    server = Silent()
+    yield server
+    server.stop()
+
+
+@pytest.fixture
+def calls_dropped(editor):
+    """As the test ends (before the editor, its message boxes and the servers go), a web call of the editor still
+    going is dropped unanswered: a test whose call never ended leaves nothing to answer it in a later test."""
+    yield
+    from PySide6.QtNetwork import QNetworkReply
+    for reply in editor.findChildren(QNetworkReply):
+        reply.blockSignals(True)
+        reply.abort()
+
+
+def short_time_limit(monkeypatch):
+    """Check for updates' web calls give up after LIMIT seconds without a byte (the contract's TIMEOUT_SECONDS)."""
+    from taskloom import update
+    monkeypatch.setattr(update, "TIMEOUT_SECONDS", LIMIT, raising=False)
+
+
+def message_within(qtbot, boxes, seconds: float) -> bool:
+    """Whether a message box is shown within `seconds` (the editor's event loop runs meanwhile)."""
+    end = time.monotonic() + seconds
+    while not boxes.seen and time.monotonic() < end:
+        qtbot.wait(50)
+    return bool(boxes.seen)
+
+
+@pytest.mark.invariant("UP-3")
+@pytest.mark.charter("C8")
+def test_u3_a_check_that_gets_no_answer_says_so_within_the_time_limit(editor, qtbot, monkeypatch, folders, releases,
+                                                                     boxes, silent, calls_dropped):
+    """U3, C8: the releases' server (or a proxy or firewall on the way) takes the connection and never answers: within
+    the time limit (taskloom.update.TIMEOUT_SECONDS, 2 s here) one message says the check timed out; nothing is
+    downloaded or installed; the editor goes on working."""
+    short_time_limit(monkeypatch)
+    point_updates_at(monkeypatch, f"https://127.0.0.1:{silent.port}{API_PATH}")
+    tabs = len(editor.tabs_list())
+
+    check_for_updates(editor)
+    told_in_time = message_within(qtbot, boxes, LIMIT + MARGIN)
+    qtbot.wait(1000)
+
+    assert silent.held, "the check never reached the silent server"
+    assert told_in_time, f"no message {LIMIT + MARGIN} s after a check the server never answers (time limit {LIMIT} s)"
+    told = boxes.take("warning")
+    assert len(told) == 1 and "timed out" in told[0], told
+    assert boxes.take() == []
+    assert releases.requests == [] and leftovers(folders) == []
+    editor.new_flow()
+    assert len(editor.tabs_list()) == tabs + 1
+
+
+@pytest.mark.invariant("UP-3")
+@pytest.mark.charter("C8")
+def test_u3_a_download_that_stalls_ends_within_the_time_limit_and_leaves_nothing_behind(
+        editor, qtbot, monkeypatch, folders, this, releases, boxes, starts, calls_dropped):
+    """U3, C8: Install? Yes; the zip's download stops halfway, the connection open, nothing more coming: within the time
+    limit (2 s here) of its last byte, one message says the download timed out; the download window closes; nothing is
+    left in <LOCALAPPDATA>/Programs/Taskloom; the entries still start this version; the editor goes on working."""
+    short_time_limit(monkeypatch)
+    both_entries(folders, this, editor.home.root)
+    entries = entries_now(folders)
+    releases.hold = threading.Event()  # (set only as the test ends)
+    boxes.answers = [(INSTALL, QMessageBox.Yes)]
+    tabs = len(editor.tabs_list())
+
+    check_for_updates(editor)
+    qtbot.waitUntil(lambda: shown_widget(editor, "update-progress") is not None, timeout=30_000)
+    (progress_bar,) = shown_widget(editor, "update-progress").findChildren(QProgressBar)
+    qtbot.waitUntil(lambda: progress_bar.value() >= len(releases.zip) // 2, timeout=30_000)
+    asked = boxes.take("question")
+    told_in_time = message_within(qtbot, boxes, LIMIT + MARGIN)
+    qtbot.wait(1000)
+
+    assert len(asked) == 1 and INSTALL in asked[0], asked
+    assert told_in_time, f"no message {LIMIT + MARGIN} s after the download stalled (time limit {LIMIT} s)"
+    told = boxes.take("warning")
+    assert len(told) == 1 and "timed out" in told[0], told
+    assert boxes.take() == []
+    assert shown_widget(editor, "update-progress") is None, "the download window stays open"
+    assert leftovers(folders) == [], f"left in {folders.programs}: {leftovers(folders)}"
+    assert entries_now(folders) == entries
+    assert starts == []
+    editor.new_flow()
+    assert len(editor.tabs_list()) == tabs + 1
 
 
 # --- U4, U5, U6: the entries follow the newest version -----------------------------------------------------------------
