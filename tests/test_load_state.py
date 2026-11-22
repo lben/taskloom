@@ -40,6 +40,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -451,6 +452,117 @@ def test_l4_loading_a_second_state_replaces_the_first_in_the_bar_on_the_canvas_a
     assert clean.status == "success" and received(tmp_path, "clean")[-1] == "12", clean.log
 
 
+# Loaded by the run processes started while its folder is on PYTHONPATH (as the scheduler tests' probes): a run's
+# process, once it has told the editor that it started (its run_started line on stdout), makes the file TEST_HOLD_HELD
+# and waits until the file TEST_HOLD_RELEASE exists (60 s at most) before it goes on; so the editor takes in the run's
+# start before the run has made anything of its own (such as its folder in runs/), however fast the computer is.
+HOLD = """
+import builtins, json, os, sys, time
+
+_print = builtins.print
+
+
+def _holding(*args, **kw):
+    _print(*args, **kw)
+    release = os.environ.get("TEST_HOLD_RELEASE")
+    if not (release and args and isinstance(args[0], str) and '"run_started"' in args[0]
+            and kw.get("file") is sys.stdout):
+        return
+    try:
+        started = json.loads(args[0]).get("event") == "run_started"
+    except ValueError:
+        return
+    if started:
+        open(os.environ["TEST_HOLD_HELD"], "w").close()
+        ends = time.monotonic() + 60
+        while not os.path.exists(release) and time.monotonic() < ends:
+            time.sleep(0.02)
+
+
+builtins.print = _holding
+"""
+
+
+@contextlib.contextmanager
+def holding_runs(win, tab, folder: Path, monkeypatch, hold_ms: int = 3500):
+    """Meanwhile, each run the editor starts waits (HOLD) right after telling it that it started, for `hold_ms` after
+    the editor took that in: longer than the editor's look at its runs every 2 s. What the tab's bar says is noted
+    after the editor takes in each event of the tab's runs and every 10 ms: yields the notes, each {"run": the
+    number of the newest run the tab started meanwhile (None: none yet), "going": it has not ended, "held": it was
+    still waiting, "bar": what the bar said}, and the file made when a run started to wait."""
+    probe, release, held = folder / "probe", folder / "hold.release", folder / "hold.held"
+    probe.mkdir()
+    (probe / "sitecustomize.py").write_text(HOLD, encoding="utf-8")
+    path = os.environ.get("PYTHONPATH")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, [str(probe), path])))
+    monkeypatch.setenv("TEST_HOLD_RELEASE", str(release))
+    monkeypatch.setenv("TEST_HOLD_HELD", str(held))
+    before, notes, seen_start = len(tab.runs), [], []
+
+    def note():
+        run = tab.runs[-1] if len(tab.runs) > before else None
+        if run is not None and run.run_id is not None and not release.exists():
+            seen_start.append(seen_start[0] if seen_start else time.monotonic())
+            if time.monotonic() - seen_start[0] >= hold_ms / 1000:
+                release.touch()
+        notes.append({"run": run.run_id if run else None, "going": run is not None and run.status is None,
+                      "held": held.exists() and not release.exists(), "at": time.monotonic(), "bar": bar(tab)})
+
+    handle = win._on_event
+
+    def on_event(t, r, e):
+        handle(t, r, e)
+        if t is tab:
+            note()  # at once, before anything else the editor does
+
+    monkeypatch.setattr(win, "_on_event", on_event)
+    timer = QTimer(interval=10)
+    timer.timeout.connect(note)
+    timer.start()
+    try:
+        yield notes, held
+    finally:
+        timer.stop()
+        release.touch()  # (a run still waiting goes on)
+        monkeypatch.setattr(win, "_on_event", handle)
+        if path is None:
+            monkeypatch.delenv("PYTHONPATH")
+        else:
+            monkeypatch.setenv("PYTHONPATH", path)
+        monkeypatch.delenv("TEST_HOLD_RELEASE")
+        monkeypatch.delenv("TEST_HOLD_HELD")
+
+
+@pytest.mark.invariant("LS-2")
+@pytest.mark.invariant("LS-7")
+def test_l2_while_a_rerun_from_a_loaded_state_goes_the_bar_never_says_its_files_were_cleaned_up(
+        win, qtbot, tmp_path, monkeypatch):
+    """L2: runs #1 (10 orders) and #2 (12); load run #1; clean, Run only this block. The re-run's process waits right
+    after it started (before it has made its folder in runs/) for 3.5 s, longer than the editor's look every 2 s. From
+    the moment the editor sees it start until after it ended, the bar never says the run's files were cleaned up: a
+    run the tab is running is not cleaned up. After it, the bar names the re-run, and clean got run #1's 10 rows."""
+    tab, first = full_run(win, qtbot, tmp_path, rows=10)
+    (tmp_path / "orders.txt").write_text("12")
+    second = run_now(win, qtbot, tab)
+    assert (first.status, second.status) == ("success", "success"), second.log
+    load_state(win, qtbot, first.run)
+    assert names(bar(tab), first.run) and "cleaned up" not in bar(tab), bar(tab)
+
+    with holding_runs(win, tab, tmp_path, monkeypatch) as (notes, held):
+        clean = rerun(win, qtbot, tab, "clean", RUN_ONLY)
+
+    assert clean.status == "success" and received(tmp_path, "clean")[-1] == "10", clean.log
+    assert held.exists(), "the re-run's process did not wait after it started (the test's hold did not take)"
+    while_held = [n["at"] for n in notes if n["run"] == clean.run and n["held"]]
+    assert while_held and max(while_held) - min(while_held) >= 3.0, \
+        f"the bar was looked at {len(while_held)} times while the re-run waited, not across the editor's 2-s look"
+    said = [n for n in notes if n["run"] is not None and "cleaned up" in (n["bar"] or "")]
+    assert said == [], (f"while run #{clean.run} went (re-run from the loaded run #{first.run}), the bar said "
+                        f"{len(said)} times: {said[0]['bar']!r} (first: going={said[0]['going']}, "
+                        f"held={said[0]['held']})")
+    assert names(bar(tab), clean.run) and "cleaned up" not in bar(tab), bar(tab)
+
+
 # --- LS-3: a full run or Leave ends the loaded state -----------------------------------------------------------------
 
 @pytest.mark.invariant("LS-3")
@@ -478,6 +590,26 @@ def test_l13_leave_and_a_full_run_each_end_the_loaded_state_and_the_newest_resul
     assert bar(tab) is None
     assert "15 rows" in under(tab, "load_orders") and "15 rows" in under(tab, "clean")
     assert not [block for block, text in canvas(tab).items() if text.startswith("old")], canvas(tab)
+
+
+@pytest.mark.invariant("LS-3")
+def test_l13_right_after_leave_the_status_bar_no_longer_says_it_shows_the_loaded_run(win, qtbot, tmp_path):
+    """L13: runs #1 (10 orders) and #2 (12). Load run #1, then Leave at once: the bar is gone, the canvas shows run #2
+    again, and the status bar under the window says nothing of showing a run (loading may have said "Showing run #1 ·
+    …"): the tab no longer shows run #1."""
+    tab, first = full_run(win, qtbot, tmp_path, rows=10)
+    (tmp_path / "orders.txt").write_text("12")
+    second = run_now(win, qtbot, tab)
+    newest = canvas(tab)
+    assert (first.status, second.status) == ("success", "success"), second.log
+    load_state(win, qtbot, first.run)
+    assert names(bar(tab), first.run), bar(tab)
+
+    leave(tab)
+
+    assert bar(tab) is None and canvas(tab) == newest
+    said = win.statusBar().currentMessage()
+    assert "Showing run #" not in said, f"after Leave the status bar says {said!r}"
 
 
 # --- LS-4: values not kept -------------------------------------------------------------------------------------------
