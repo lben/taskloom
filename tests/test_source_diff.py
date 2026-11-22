@@ -21,9 +21,9 @@ paints its lines and characters in."""
 # - Its sides: QPlainTextEdit "source-diff-left" (the older version) and "source-diff-right". Each line of a side's
 #   document is one row and the two sides' rows are level row by row; a filler line is an empty row. The numbered rows
 #   are the file's lines as git counts them: ended by "\n" only (a Windows line end's "\r" not shown, no empty line
-#   after the last newline; a lone "\r", "\x0b", "\x0c", "\x1c"-"\x1e", "\x85", U+2028 or U+2029 inside a line shown
-#   on its row as some character), numbered from 1 by a number painted inside the side, left of its text (as
-#   CodeEditor paints them); a filler line has no number.
+#   after the last newline; a lone "\r", "\x0b", "\x0c", "\x1c"-"\x1e", "\x85", U+2028, U+2029, U+FDD0 or U+FDD1
+#   inside a line shown on its row as some character), numbered from 1 by a number painted inside the side, left of
+#   its text (as CodeEditor paints them); a filler line has no number.
 # - Marks are the colours painted behind the text: an unchanged row in the side's Base colour, an added row green, a
 #   removed row red, a changed row blue (by hue, as in the approved mockup); inside a changed row the changed
 #   characters, and only they, in a colour of their own.
@@ -1197,8 +1197,9 @@ def test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so(win
         diff.close()
 
 
-# What str.splitlines() ends a line at besides "\n" and "\r\n"; git ends a line at "\n" only.
-BREAKS = "\r\x0b\x0c\x1c\x1d\x1e\x85  "
+# What str.splitlines() ends a line at besides "\n" and "\r\n", and the two characters Qt's text document also starts
+# a new row at (U+FDD0, U+FDD1); git ends a line at "\n" only.
+BREAKS = "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029\ufdd0\ufdd1"
 
 
 def broken_line(i: int, inside: str) -> str:
@@ -1217,30 +1218,35 @@ def shows_line(text: str, line: str) -> bool:
 def test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does(win, qtbot,
                                                                                                     tmp_path):
     """D10 (review C5): above the flow, lines holding inside them a lone carriage return, a vertical tab, a form feed,
-    \\x1c, \\x1d, \\x1e, NEL, U+2028 or U+2029 (str.splitlines() breaks a line at each, git at none), each followed by
-    a plain line. The next version (the current one: only characters YAML reads) splits the carriage return's line in
-    two at a "\\n", puts another of these characters in four of the others, removes one, keeps three and changes a
-    line of code. Against the previous version and as the oldest against the current one, each side shows its
-    version's lines as git counts them, numbered 1 to the last, each whole on its row, and marks on the left exactly
-    the lines `git diff` gives as removed, on the right exactly those it gives as added."""
+    \\x1c, \\x1d, \\x1e, NEL, U+2028 or U+2029 (str.splitlines() breaks a line at each, git at none) or U+FDD0 or
+    U+FDD1 (Qt's text document starts a new row at each), each followed by a plain line. The next version (the current
+    one: only characters YAML reads) splits the carriage return's line in two at a "\\n", puts another of these
+    characters in four of the others, removes the \\x1e and U+FDD0 ones, keeps four, adds one holding U+FDD0 after the
+    U+FDD1 one and changes a line of code. Against the previous version and as the oldest against the current one,
+    each side shows its version's lines as git counts them, numbered 1 to the last, each whole on its row; the two
+    sides have as many rows and the plain lines both versions keep are level; and it marks on the left exactly the
+    lines `git diff` gives as removed, on the right exactly those it gives as added."""
     def above(broken: list[list[str]]) -> list[str]:
         return [line for i, lines in enumerate(broken) for line in [*lines, f"# kept {i}"]]
 
     old_broken = [[broken_line(i, c)] for i, c in enumerate(BREAKS)]
     new_broken = [broken_line(0, "\n").split("\n"), [broken_line(1, "\r")], [broken_line(2, "\x85")],
-                  [broken_line(3, " ")], [broken_line(4, " ")], [], *old_broken[6:]]
+                  [broken_line(3, "\u2028")], [broken_line(4, "\u2029")], [], *old_broken[6:9], [],
+                  [*old_broken[10], broken_line(11, "\ufdd0")]]
     c = code(8)
     old = flow_lines(c, before=above(old_broken))
     new = flow_lines([*c[:4], "changed = read('west', day=4)", *c[5:]], before=above(new_broken))
     folder = tmp_path / "flows"
     ids, _, history, _ = flow_history(win, qtbot, folder, [("One", as_bytes(old)), ("Two", as_bytes(new))])
     removed, added = git_changed(folder, ids[0], ids[1])
-    assert len(removed) == 7 and len(added) == 7, (removed, added)
+    assert len(removed) == 8 and len(added) == 8, (removed, added)
 
     for place, item in ((0, PREVIOUS), (1, CURRENT)):
         diff = open_diff(history, qtbot, place, item)
+        both = []
         for side, lines, changed, which in ((diff.left, old, removed, "left"), (diff.right, new, added, "right")):
             side_rows = rows(side)
+            both.append(side_rows)
             numbers = [r.number for r in side_rows if r.number is not None]
             assert numbers == list(range(1, len(lines) + 1)), (
                 f"{item}: the {which} side numbers {len(numbers)} lines, git counts {len(lines)} (it ends a line at "
@@ -1252,6 +1258,10 @@ def test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marke
             shown = set(marks(side, side_rows))
             assert shown == changed, (f"{item}: on the {which} side {sorted(shown - changed)} marked more, "
                                       f"{sorted(changed - shown)} fewer than `git diff` gives")
+        kept = [{r.text: n for n, r in enumerate(side_rows) if r.text.startswith("# kept ")} for side_rows in both]
+        assert len(both[0]) == len(both[1]) and kept[0] == kept[1], (
+            f"{item}: the left side has {len(both[0])} rows, the right {len(both[1])}; the lines both versions keep "
+            f"are on these rows (from 0): on the left {kept[0]}, on the right {kept[1]}")
         diff.close()
 
 
