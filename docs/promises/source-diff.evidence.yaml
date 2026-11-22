@@ -1,0 +1,95 @@
+# How each agreed row of docs/promises/source-diff.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A small feature has no model to check: its
+# rows are amber, checked by tests only, and not_green says what the tests leave out.
+CD-1:
+  enforced: >-
+    CommitHistory._card_menu (taskloom/editor/commits.py), which the list's right-click calls, opens a menu on the card
+    right-clicked with "Show source diff against previous version" (against the commit before it in the flow's
+    history, self.versions, not the card under it) and "Show source diff against current version". _show_diff makes a
+    SourceDiff (taskloom/editor/source_diff.py), a window of its own (Qt.Window, not modal), shows it, raises it and
+    makes it the active window; it is always given the older version first, which DiffSide puts on the left.
+  not_green: >-
+    Tests right-click the newest, a middle and the oldest of three commits, also after Save as and while a search
+    filters the cards, click each item and read both sides' lines as shown (D1, D16); a real mouse and screen are not
+    used, and no check tries every history.
+CD-2:
+  enforced: >-
+    align (taskloom/editor/source_diff.py) turns difflib's comparison of the lines into the rows both sides show:
+    equal lines side by side, and each block of lines replaced, removed or added one change, the shorter side given
+    empty filler rows with no number. _changed_characters compares the two forms of each changed line character by
+    character (at Qt's positions, _qt: an emoji counts twice). DiffSide paints each row's colour and edge, a filler
+    row's hatching, the changed characters' colour and the numbers of its own lines; it is read-only and takes keys as
+    a plain text box does, so nothing typed changes it. The left side's scroll bar is hidden and the two are tied.
+    SourceDiff.step and go jump to the next or previous change (the buttons, F7 and Shift+F7), stopping at either end.
+    The colours are read from the theme (is_dark) each time they are painted; _OnMarks colours the YAML as the code
+    boxes do and, on a mark, in a shade that reads there (_on_mark).
+  not_green: >-
+    Tests read what the sides paint, pixel by pixel, in light and dark: one character changed, lines added at the end
+    and removed at the start, an empty file against a full one, other languages' letters and an emoji, every kind of
+    key typed in either side, and three changes far apart with F7, Shift+F7, the buttons and the wheel (D5, D6, D9,
+    D12, D13, D15). The contrast tests measure each word's darkest pixel: thin glyphs such as ', which never reach
+    4.5:1 pixel by pixel, are not measured; no check tries every file, font or screen.
+CD-3:
+  enforced: >-
+    _show_diff (taskloom/editor/commits.py) names each commit by _named: its message's first line (its first 59
+    characters and … when longer than 60) and its time as its card shows it, and over its side its short id too. The
+    current version is called "current", or "current (not saved)" when the flow's tab holds changes not saved, and its
+    text is then flow_text of what the tab holds (taskloom/editor/document.py), the text FlowDocument.save writes.
+    The title is the file's name, then the older and the newer version.
+  not_green: >-
+    Tests open "against current version" with nothing unsaved and with a change not saved, compare the right side
+    with the file Save then writes, and read the title with a long message and while a search filters the cards (D3,
+    D16); no check tries every message or every change.
+CD-4:
+  enforced: >-
+    _card_menu greys out "against previous version" when the commit is the last of the flow's history (after Save
+    as, the oldest commit carried over, as the copy's history goes on into the original's). SourceDiff says "No
+    differences" when the two versions' bytes are the same, with nothing marked.
+  not_green: >-
+    Tests right-click the oldest commit before and after Save as, and compare a hand-written flow file with its last
+    commit (D1, D2); no check tries every history.
+CD-5:
+  enforced: >-
+    The diff reads only bytes Taskloom already has: each commit's, which load_versions read for Commit History's
+    cards, and the flow file (Path.read_bytes) or the tab's text (flow_text). Nothing in _card_menu, _show_diff or
+    source_diff.py writes a file or calls Git, and both sides are read-only.
+  not_green: >-
+    Tests open both diffs, with nothing unsaved and with a change not saved, and compare every file of the repository
+    (its bytes and the time it was written), git status, the last commit and the Git config before and after, and
+    find the change still not saved (D11); that no other path writes is read in the code, not tried.
+CD-6:
+  enforced: >-
+    Each side has a find bar of its own just under it (FindBar, the two sharing the window's .* and Aa toggles), so
+    Ctrl+F searches the side it is pressed in. Both sides are zoom panes of one kind, "source_diff" (mark,
+    taskloom/editor/zoom.py), and DiffSide.changeEvent gives the other side the same font and normal size whenever one
+    is zoomed, so the rows stay level.
+  not_green: >-
+    Tests press Ctrl+F in each side and count its matches, then press Ctrl +, Ctrl - and Ctrl 0 with the pointer over
+    one side and the focus in the other, and compare the two sides' line heights, widths and rows (D14); Ctrl with the
+    mouse wheel over a side is not tested, only the keys.
+CD-7:
+  enforced: >-
+    _lines (taskloom/editor/source_diff.py) splits each version into lines as git counts them, at "\n" only, and
+    shows any other character a text box would break a line at (a lone carriage return, a form feed, U+2028...) as a
+    sign of its own (SHOWN); each line is compared with its line break, a Windows one read as a Unix one, so a last
+    line without a newline differs from the same line with one, as in git diff. align marks every difference difflib
+    finds and leaves the equal lines unmarked. note says, in the line above the sides, when the line ends differ (also
+    when both versions mix them on other lines) or a newline at the end is in one version only, and that line shows
+    only then. difflib compares 2,000 lines in about a tenth of a second.
+  not_green: >-
+    Tests compare the lines marked with those git diff gives as changed on ten real pairs of commits
+    (test_d10_ten_real_commit_pairs_mark_exactly_the_lines_git_diff_changes) and on lines holding a lone carriage
+    return or another character Python ends a line at and git does not
+    (test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does); take a newline
+    missing at the end (D7), Windows line ends in one version (D8) and both versions mixing line ends on other lines
+    (test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so); and time two flows of 2,000 lines on
+    the test machines (D4). The ten pairs repeat and move no line, where two right answers can differ from git's; no
+    check tries every pair of files.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# source-diff.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/source-diff.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

@@ -1,0 +1,42 @@
+# The bugs proving the source diffs in Commit History found, each fixed and guarded by a test since (the proof PDF
+# counts and lists them before the details; tests/test_promises_found.py checks each test exists), and where it is
+# checked more lightly.
+found:
+  - what: >-
+      On Ubuntu, a string of the flow's YAML on a removed line read at 4.44:1 against its red mark ('West', #0b7a22 on
+      #fbe1e0), under the 4.5:1 text needs, because its colour was shaded to read at exactly 4.5:1 and the screen's
+      smoothed letters drew it a little paler.
+    found_by: CI on Linux
+    fixed_in: 0969593
+    guarded_by: tests/test_source_diff.py::test_d15_yaml_keys_and_strings_in_the_mockups_colours_reading_well_on_every_mark_and_following_the_theme
+  - what: >-
+      On Ubuntu, after that fix, a YAML key on the changed characters' mark still read at 4.497:1 (region_id, #851895 on
+      #a9c0f3), because Linux smooths letters so that no pixel of a word gets all of its colour (94 % there), and a
+      ratio aimed above 4.5:1 left no sure margin, a blend costing more contrast on some pairs of colours than on
+      others; colours are now shaded until the text blended at 90 % over the mark reads 4.5:1.
+    found_by: CI on Linux
+    fixed_in: bf4231a
+    guarded_by: tests/test_source_diff.py::test_d15_yaml_keys_and_strings_in_the_mockups_colours_reading_well_on_every_mark_and_following_the_theme
+  - what: Both sides showed the flow file in plain text only, without the keys, strings, numbers and comments in the code colours of the approved mockup, which the first version had left out because some of those colours read badly on the change marks.
+    found_by: the implementer's own report
+    fixed_in: d085d38
+    guarded_by: tests/test_source_diff.py::test_d15_yaml_keys_and_strings_in_the_mockups_colours_reading_well_on_every_mark_and_following_the_theme
+  - what: >-
+      With both versions mixing Windows and Unix line ends, on other lines, the window said "No changed lines" with no
+      note line, though git diff gives those lines as changed: the note compared each version's kind of line ends as
+      a whole, and both were "mixed".
+    found_by: the reviewer
+    fixed_in: 5bffbc8
+    guarded_by: tests/test_source_diff.py::test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so
+  - what: >-
+      A line holding a lone carriage return, a form feed, U+2028 or another character Python ends a line at, and git
+      does not, was split into several numbered rows, so the numbers and the marks differed from git diff's; lines now
+      end at "\n" only, those characters shown as a sign of their own.
+    found_by: the reviewer
+    fixed_in: 5bffbc8
+    guarded_by: tests/test_source_diff.py::test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does
+lighter:
+  - "Thin glyphs such as ' never reach 4.5:1 pixel by pixel (their darkest pixel reads at about 2:1): the colour tests measure each word's darkest pixel, not each character's."
+  - "Ctrl with the mouse wheel over a side is not tested; Ctrl +, Ctrl - and Ctrl 0 are."
+  - "The 2,000-line flow's 2 seconds are measured on the test machines, offscreen, not on a slow PC."
+  - "Keys, clicks and wheel turns are sent offscreen as the system sends them; a real keyboard, mouse and screen were not used."

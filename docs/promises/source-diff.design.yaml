@@ -1,0 +1,32 @@
+# The design decisions of the source diffs in Commit History, one line each (read by packaging/proof_pdf.py): what was
+# chosen, and when to look at it again.
+- chosen: Python's own difflib compares the two versions line by line (autojunk off), and the two forms of a changed line character by character; no new package and no Git program.
+  revisit_if: a flow file grows so large that the window takes more than 2 seconds to open (2,000 lines take about 0.1 to 0.25 s), or its marks differ from git diff's on real commits in a way people notice.
+- chosen: Each line is compared with its line break, a Windows one (CRLF) read as a Unix one (LF), as git diff compares them, so a last line without a newline differs from the same line with one.
+  revisit_if: people find a last line marked changed only for its missing newline confusing.
+- chosen: A line ends at "\n" only, as git counts lines; any other character a text box would break a line at (a lone carriage return, a form feed, U+2028...) stays inside its line, shown as a sign of its own such as ␍ or ␌.
+  revisit_if: people need such characters shown otherwise, e.g. as escapes like \r.
+- chosen: What the lines shown cannot show, line ends that differ or a newline at the end in one version only, is said in one line above the sides, not marked on every line.
+  revisit_if: people need to see which lines of a file with mixed line ends have which.
+- chosen: In a block of lines replaced, the first old line is paired with the first new one, the second with the second, and so on; only such pairs get their changed characters marked, and the longer side's other lines face filler lines.
+  revisit_if: replaced blocks whose lines were reordered show character marks that make no sense, and lines must be paired by how alike they are, as JetBrains does.
+- chosen: The current version is what the flow's tab holds now, its file, or with changes not saved what File > Save would write, then titled "current (not saved)" (agreed 2026-11-20).
+  revisit_if: people want to compare a commit with the file on disk while the tab holds changes not saved.
+- chosen: The previous version is the commit before in the flow's history, not the card under it, which a search filters and reorders; on the oldest commit, after Save as the oldest one carried over, the item is greyed out.
+  revisit_if: Commit History shows branches or merges, where a commit has more than one version before it.
+- chosen: A window of its own, not modal, opened on top; each diff opens a new one, so several can be compared at once.
+  revisit_if: windows pile up and people want one diff window that each new diff reuses.
+- chosen: Each side is the editor's code box made read-only, with a plain text box's keys; its line numbers, find bar, zoom and YAML colours come with it, a filler line is an empty line of it, and one scroll bar (the right side's) moves both.
+  revisit_if: long lines must wrap, as a wrapped line takes more height on one side and the rows would no longer be level.
+- chosen: The approved mockup's colours, light and dark (a fill and an edge line for added, removed and changed lines, a darker colour for the changed characters, hatching for filler lines); the theme's text reads at 4.5:1 or more on each.
+  revisit_if: a theme is added or the mockup's colours change.
+- chosen: The code's colours are kept on unchanged lines and, on a mark only, shaded in their own hue (1 % of lightness at a time) until the text blended at 90 % ink over the mark reads 4.5:1, as Linux smooths letters so that no pixel of a word gets all of its colour.
+  revisit_if: a platform draws a word's darkest pixel with less than 90 % of its colour, or thin glyphs such as ' must read at 4.5:1 pixel by pixel too, which they never do.
+- chosen: Both sides zoom as one; Ctrl +, Ctrl - or Ctrl 0 over either gives the other the same font and normal size, so the rows stay level.
+  revisit_if: people want to zoom one side alone.
+- chosen: Ctrl+F opens the find bar under the side it is pressed in, searching that side only; the two bars share the .* and Aa toggles.
+  revisit_if: people want one search over both sides, or a search that jumps from change to change.
+- chosen: Next and Previous do not wrap round, and the window opens at the first change; each change is put a third of the way down the sides.
+  revisit_if: people expect F7 at the last change to start again at the first, as JetBrains offers.
+- chosen: Nothing is asked of Git and nothing is written; a commit's text is the bytes Commit History already loaded for its card.
+  revisit_if: Commit History stops keeping every version's bytes (a very long history), and the diff must read a commit from Git itself.

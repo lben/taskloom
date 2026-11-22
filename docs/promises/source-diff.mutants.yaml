@@ -1,0 +1,72 @@
+# Mutation testing of the source diffs in Commit History (read by packaging/mutants.py --explained). scope: what the
+# bugs are planted in, the functions the change added or changed, in groups: each group's bugs run the tests that can
+# see them (each line of tests: is one pytest run, a file with -k words or without). source_diff.py is new: every
+# function in it is tested whole, but _on_mark, in which mutmut plants nothing (it leaves out a function with a
+# decorator, here @cache), so it is under not_tested. So are the functions in which the change touched a line or two
+# among much that was there before: their bugs are planted and counted, not run, and the reason names the tests that
+# check the changed lines. The source diff tests run on each bug but the one that times a 2,000-line flow (D4): before
+# any bug, each worker runs the tests at the same time with none on, and a run over its 2 seconds on a busy CI machine
+# would stop every verdict. The change's other lines are not functions of their own, so nothing is planted in them:
+# source_diff.py's constants (READS, INK, FILL, EDGE, CHARACTERS, HATCH, SHOWN) and its Row class, panels.py's
+# YAML_TOKENS, its "yaml" entry of LANGUAGES and the YAML key colour of CODE_COLORS (the D15 tests read them on screen),
+# the docstring of CodeHighlighter, and commits.py's imports. The mutants the tests let through are explained here, by
+# kind (kinds: a kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could
+# notice). Only those no user could notice are explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/source_diff.py _lines
+        - taskloom/editor/source_diff.py _qt
+        - taskloom/editor/source_diff.py _changed_characters
+        - taskloom/editor/source_diff.py align
+        - taskloom/editor/source_diff.py _line_ends
+        - taskloom/editor/source_diff.py note
+        - taskloom/editor/source_diff.py _luminance
+        - taskloom/editor/source_diff.py _contrast
+        - taskloom/editor/source_diff.py _darkest_pixel
+        - taskloom/editor/source_diff.py _OnMarks.__init__
+        - taskloom/editor/source_diff.py _OnMarks.highlightBlock
+        - taskloom/editor/source_diff.py DiffSide.__init__
+        - taskloom/editor/source_diff.py DiffSide.keyPressEvent
+        - taskloom/editor/source_diff.py DiffSide.changeEvent
+        - taskloom/editor/source_diff.py DiffSide.in_view
+        - taskloom/editor/source_diff.py DiffSide.paint_rows
+        - taskloom/editor/source_diff.py DiffSide.paintEvent
+        - taskloom/editor/source_diff.py DiffSide.paint_line_numbers
+        - taskloom/editor/source_diff.py Strip.__init__
+        - taskloom/editor/source_diff.py Strip.paintEvent
+        - taskloom/editor/source_diff.py SourceDiff.__init__
+        - taskloom/editor/source_diff.py SourceDiff.showEvent
+        - taskloom/editor/source_diff.py SourceDiff.step
+        - taskloom/editor/source_diff.py SourceDiff.go
+        - taskloom/editor/source_diff.py SourceDiff._show_count
+        - taskloom/editor/commits.py CommitHistory.__init__
+        - taskloom/editor/commits.py CommitHistory._card_menu
+        - taskloom/editor/commits.py CommitHistory._show_diff
+        - taskloom/editor/commits.py _named
+      tests:
+        - tests/test_source_diff.py -k "not 2000_lines"
+    - mutate:
+        - taskloom/editor/document.py flow_text
+        - taskloom/editor/document.py FlowDocument.save
+      tests:
+        - tests/test_source_diff.py -k "d3_ or d11_"
+        - tests/test_paths_editor_editing.py -k keeps_backslashes_accents
+not_tested:
+  taskloom/editor/source_diff.py _on_mark: >-
+    The colour a token of the YAML takes on a change's mark, shaded in its own hue until it reads there. mutmut plants
+    no bug in a function with a decorator (@cache here), so it has no mutants to count. Both D15 tests check what it
+    gives on screen, in light and dark, on every kind of mark:
+    test_d15_yaml_keys_and_strings_in_the_mockups_colours_reading_well_on_every_mark_and_following_the_theme (each
+    key's and string's darkest pixel reads at 4.5:1 or more, in the hue of its code colour) and
+    test_d15_added_removed_and_changed_colours_read_well_in_light_and_dark_and_follow_the_theme.
+  taskloom/editor/commits.py CommitHistory.__init__: >-
+    Commit History's window as it is built, 50 lines, to which this change added two (the list's right-click
+    asks for the card's menu, _card_menu): every source diff test right-clicks a card through them, first
+    test_d1_both_items_on_a_commit_previous_greyed_on_the_first_also_after_save_as_and_the_window_opens_on_top. The
+    rest is as it was.
+  taskloom/editor/document.py FlowDocument.save: >-
+    File > Save, in which this change replaced the YAML dump by a call of flow_text (mutated whole above), which
+    writes the same text: test_a_text_field_keeps_backslashes_accents_and_brackets_exactly and
+    test_d3_against_current_the_right_side_is_what_the_tab_holds_titled_current_or_current_not_saved save through
+    it and read what was written.
