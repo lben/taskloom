@@ -1,0 +1,20 @@
+# The design decisions of Load run state, one line each (read by packaging/proof_pdf.py): what was chosen, and when to
+# look at it again.
+- chosen: "The loaded run belongs to the tab (its number, how the bar names it, and what else the bar says), and the one rule that picks the run a block run again takes its inputs from returns it while it is loaded; so both “with the same inputs” entries, the run their menu names and “with inputs I choose” follow the loaded run with no rule of their own."
+  revisit_if: some blocks of one tab must take their inputs from the loaded run and others from newer runs at the same time.
+- chosen: "A re-run from a loaded state becomes the loaded state as soon as it starts (it carries the loaded run's folder over, so it holds every result the bar promises); a full run, Leave, a run opened from Run history (double-click) or closing its tab ends it."
+  revisit_if: people want to try several re-runs side by side from the same loaded run without the first one replacing it.
+- chosen: "A block the loaded run carried over from an earlier run shows its result from the run it ran in, found by following each re-run's link to the run it carried on from in the run history, so it reads as it read when it ran (its words, its time, its Loop items); if that run has been cleaned up, the block says its result is gone and names the run."
+  revisit_if: carried results must still be shown after the run they ran in is cleaned up, e.g. read from the re-run's own folder.
+- chosen: "A run can be loaded only when it has ended and its folder holds the saved results of every block that ended in it (a block inside a Loop: the Loop's); otherwise the item is greyed and its text says why, so a re-run from a loaded state never meets a missing file."
+  revisit_if: people want to look at what is left of a partly cleaned-up run, even if nothing can be re-run from it.
+- chosen: "Whether the flow changed since the run is found by comparing the version of the file the run read (kept with each run) with the file's bytes now; unsaved edits in the tab do not count, and a run from before runs kept their version is taken as unchanged."
+  revisit_if: unsaved edits in the tab must also count as a change.
+- chosen: "“Bring back the flow as it was” takes that version from the flow file's Git history and puts it in the tab as one step of unsaved edits, which Undo takes back; while that step is in the tab and not saved, a re-run asks once before saving it over the file, and the bar says “today's flow” again after Undo."
+  revisit_if: a run's flow must be brought back when it was never committed, e.g. by keeping a copy of each version a run read.
+- chosen: "Why a value was not kept is told from the run's folder, which already listed the outputs not saved: those not saved because they held a password are now listed apart, so the block and a refused re-run name the right reason."
+  revisit_if: a third kind of value not kept appears, e.g. one too large to save, which needs a reason of its own.
+- chosen: "While a state is loaded the tab does not follow the runs that finish, as for a run opened by double-click; Run history still lists them, and the bar is looked at again each 2 seconds to say when the loaded run's files are cleaned up."
+  revisit_if: people want the bar to say that newer runs have finished meanwhile, or the 2-second look is too slow for them.
+- chosen: "The loaded run is remembered for the next start in the editor's own settings (editor.ini), one entry per flow file, not in the flow file nor in the run history, and is loaded again with no question: on today's flow if the flow changed, and if its run was cleaned up the bar says so and the newest results are shown."
+  revisit_if: a loaded state must follow its flow to another computer, or people want to be asked again at the start.

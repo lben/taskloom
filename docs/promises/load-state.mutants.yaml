@@ -1,0 +1,115 @@
+# Mutation testing of Load run state (read by packaging/mutants.py --explained). scope: what the bugs are planted in,
+# the functions the change touched (git diff 09027b3 597b75e, the lines of Load run state only: not the updates' nor
+# the source diffs'), in groups: each group's bugs run the tests that can see them (each line of tests: is one pytest
+# run, a file or several, with -k words or without). The functions that are new or mostly rewritten are tested whole;
+# so is MainWindow._ready_to_run, whose lines from before are run by the tests of Validate and Run (as in
+# validate-docs-fixes.mutants.yaml), and Run history's menu, whose Copy executed query lines are run by its own tests.
+# A function in which the change touched a line or a few, among much that was there before, is under not_tested: its
+# bugs are planted and counted, not run, and its reason names the tests that check the changed lines, or says that
+# none does. The change's other lines are not functions of their own, so nothing is planted in them: engine.py's
+# PASSWORDS and window.py's imports. The mutants the tests let through are explained here, by kind (kinds: a kind,
+# its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could notice). Only
+# those no user could notice are explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/window.py MainWindow._not_loadable
+        - taskloom/editor/window.py MainWindow._run_menu
+      tests:
+        - tests/test_load_state.py -k "l7_ or l1_a_loaded"
+        - tests/test_copy_executed_query.py
+    - mutate:
+        - taskloom/editor/window.py MainWindow.load_state
+        - taskloom/editor/window.py MainWindow._flow_as_it_was
+        - taskloom/editor/window.py MainWindow._changed_since
+        - taskloom/history.py History.version
+      tests:
+        - tests/test_load_state.py -k "l14 or l1_a_loaded or l4_ or l16"
+    - mutate:
+        - taskloom/editor/document.py FlowDocument.restore
+        - taskloom/editor/document.py FlowDocument.in_effect
+      tests:
+        - tests/test_load_state.py -k "l14_bring_back or l14_after"
+        - tests/test_commit_history.py -k restore_puts_the_version
+        - tests/test_paths_editor_editing.py -k "abruptly or cannot_be_read_is_skipped"
+        - tests/test_editor.py -k "unsaved_work_comes_back or check_flows_backs_up"
+    - mutate:
+        - taskloom/editor/window.py MainWindow._show_state
+        - taskloom/history.py History.carried_on_from
+        - taskloom/engine.py not_kept
+        - taskloom/engine.py _why_not_kept
+      tests:
+        - tests/test_load_state.py -k "l1_ or l5_ or l8_ or l9_ or l10_ or l11_ or l14_show or l16"
+        - tests/test_done_where_needed.py -k not_kept
+    - mutate:
+        - taskloom/editor/window.py MainWindow._set_state
+        - taskloom/editor/window.py MainWindow._show_bar
+        - taskloom/editor/window.py MainWindow.leave_state
+        - taskloom/editor/window.py MainWindow._restore_state
+      tests:
+        - tests/test_load_state.py -k "l1_a_loaded or l2_ or l3_ or l6_ or l12 or l13 or l14_show or l14_bring_back or l14_after_bring_back or l15 or l17"
+    - mutate:
+        - taskloom/editor/window.py MainWindow._ready_to_run
+      tests:
+        - tests/test_load_state.py -k "l14_a_rerun or l14_after_ctrl_z"
+        - tests/test_paths_editor_editing.py tests/test_paths_editor_running.py tests/test_run_scope.py -k "finds_problems or cancelling_that_runs_nothing or editor_run_run_only_and_run_from or editor_validate_lists_every_problem or new_flow_you_have_not_changed or run_from_stop_at"
+not_tested:
+  taskloom/editor/window.py FlowTab.__init__: >-
+    A flow's tab as it is built, to which this change added the loaded-state bar (its words and its Leave button,
+    hidden) and the tab's loaded run, empty: every test of tests/test_load_state.py reads the bar (found by its name,
+    loaded-state-bar), its words and its Leave button, and the proof shows how it looks.
+  taskloom/editor/window.py MainWindow.add_tab: >-
+    A tab as it is added, to which this change added two lines (Leave is connected; a state remembered for the flow
+    is loaded again): test_l13_leave_and_a_full_run_each_end_the_loaded_state_and_the_newest_results_show clicks
+    Leave, and test_l15_states_loaded_in_two_tabs_come_back_after_closing_taskloom_a_cleaned_up_one_says_so opens
+    flows whose states were remembered.
+  taskloom/editor/window.py MainWindow.save: >-
+    Saving a flow, to which this change added two lines (a brought-back flow, once saved, is no longer asked about).
+    No test reaches them: the tests answer No to "Save the flow as it was?", so nothing is saved there.
+  taskloom/editor/window.py MainWindow._remove_tab: >-
+    Closing a tab, to which this change added two lines (its loaded state ends, unless Taskloom is quitting):
+    test_l15_states_loaded_in_two_tabs_come_back_after_closing_taskloom_a_cleaned_up_one_says_so checks that quitting
+    keeps it. No test closes a tab that has a state loaded.
+  taskloom/editor/window.py MainWindow._on_doc_changed: >-
+    What a change of the flow updates, to which this change added two lines (the bar is said again after Undo and
+    Redo): test_l14_after_bring_back_ctrl_z_the_bar_says_todays_flow_and_ctrl_y_as_it_was_again checks them.
+  taskloom/editor/window.py MainWindow.start_run: >-
+    The start of a run, in which this change touched two conditions (a full run ends a loaded state; a re-run from
+    it leaves the canvas as it is): test_l13_leave_and_a_full_run_each_end_the_loaded_state_and_the_newest_results_show
+    and test_l3_two_reruns_in_a_row_from_a_loaded_state_the_second_takes_its_inputs_from_the_first check them.
+  taskloom/editor/window.py MainWindow.inputs_run: >-
+    The run a block run again takes its inputs from, to which this change added two lines (while a state is loaded,
+    that run): test_l4_loading_a_second_state_replaces_the_first_in_the_bar_on_the_canvas_and_for_reruns reads the
+    entry naming it and what the block received, and test_l2 and test_l3 what the re-runs received.
+  taskloom/editor/window.py MainWindow.rerun_block: >-
+    A block run again, to which this change added the refusal when the loaded run's files were cleaned up:
+    test_l6_the_loaded_runs_files_cleaned_up_by_keep_runs_the_bar_says_so_and_a_rerun_is_refused checks it (the Log's
+    words, no run, the block not run).
+  taskloom/editor/window.py MainWindow._on_event: >-
+    What the editor does with a run's events, in which this change touched one place (a re-run from a loaded state
+    becomes it when it starts): test_l2_a_fixed_block_of_a_loaded_failed_run_run_from_on_takes_its_inputs_and_becomes_the_loaded_state
+    and test_l3 check that the bar names the re-run.
+  taskloom/editor/window.py MainWindow._refresh_statuses: >-
+    The editor's look every 2 seconds, to which this change added two lines (the bar is said again, so it says when
+    the loaded run's files are cleaned up):
+    test_l6_the_loaded_runs_files_cleaned_up_by_keep_runs_the_bar_says_so_and_a_rerun_is_refused checks them.
+  taskloom/editor/window.py MainWindow.show_history_run: >-
+    A run shown from Run history (a double-click), to which this change added one line (it ends a loaded state). No
+    test double-clicks a run while a state is loaded;
+    test_l17_double_clicking_a_run_still_shows_it_once_and_loads_no_state checks that a double-click loads none.
+  taskloom/engine.py _Runner._keep_outputs: >-
+    The saving of what a block produced, to which this change added the list of the outputs not saved because they
+    held a password: test_l9_a_password_and_an_open_connection_are_named_not_kept_and_reruns_needing_them_are_refused
+    reads both reasons.
+  taskloom/engine.py _block_inputs: >-
+    What a block run alone gets, in which this change touched two lines (a refusal names the block's own reason a
+    value was not kept, from _why_not_kept, tested above): test_l9 checks the refusals' words, and
+    test_a_rerun_still_refuses_an_output_that_was_not_kept_when_it_also_feeds_a_data_input the reason "cannot be
+    saved".
+  taskloom/engine.py _from_before: >-
+    What a block run from on gets from the blocks before it, in which this change touched one message (the same
+    reason, from _why_not_kept):
+    test_a_rerun_still_refuses_an_output_that_was_not_kept_when_it_also_feeds_a_data_input reads it.
+  taskloom/editor/canvas.py FlowScene.show_result: >-
+    A block's result on the canvas, to which this change added two lines (each value not kept, named with its reason,
+    in the hover): test_l9 reads the hover of both blocks.
