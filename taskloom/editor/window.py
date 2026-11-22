@@ -2099,7 +2099,8 @@ class MainWindow(QMainWindow):
     def _show_bar(self, tab: FlowTab, text: str | None = None):
         """The tab's loaded-state bar: what it says of the loaded run (`text`: that instead); none loaded: hidden."""
         if text is None and tab.state_run is not None:
-            if (self.home.runs_dir / str(tab.state_run)).is_dir():
+            going = any(r.running and r.run_id == tab.state_run for r in tab.runs)  # (its folder may be still to come)
+            if going or (self.home.runs_dir / str(tab.state_run)).is_dir():
                 note = tab.state_note
                 if tab.state_undo is not None and not tab.doc.in_effect(tab.state_undo):
                     note = "shown on today's flow"  # (Undo took the flow as it was back out of the tab)
@@ -2114,10 +2115,12 @@ class MainWindow(QMainWindow):
 
     def leave_state(self, tab: FlowTab):
         """The bar's Leave: the loaded state ends, and the tab shows the newest results again (LS-3)."""
-        loaded = tab.state_run is not None
+        loaded, showing = tab.state_run is not None, f"Showing {tab.state_label}"
         self._set_state(tab, None)
         if loaded:
             self._show_results(tab)
+            if self.statusBar().currentMessage() == showing:  # (as loading it said: no longer so)
+                self.statusBar().clearMessage()
 
     def _restore_state(self, tab: FlowTab, run_id: int):
         """The state the tab had loaded when Taskloom closed, loaded again (LS-9); on today's flow if the flow has
@@ -2301,6 +2304,7 @@ def _ask(web: QNetworkAccessManager, url: str, accept: str) -> QNetworkReply:
     request.setRawHeader(b"Accept", accept.encode())
     request.setRawHeader(b"User-Agent", f"taskloom/{__version__}".encode())
     request.setAttribute(QNetworkRequest.RedirectPolicyAttribute, QNetworkRequest.UserVerifiedRedirectPolicy)
+    request.setTransferTimeout(round(update.TIMEOUT_SECONDS * 1000))  # (no byte for that long: TimeoutError)
     reply = web.get(request)
 
     def redirected(to: QUrl):
@@ -2316,13 +2320,16 @@ def _ask(web: QNetworkAccessManager, url: str, accept: str) -> QNetworkReply:
 
 
 def _failure(reply: QNetworkReply, broken: str) -> str | None:
-    """What went wrong with a finished reply of _ask: a refused redirect, an HTTP error, else `broken` if it did not
-    arrive whole; None if nothing did."""
+    """What went wrong with a finished reply of _ask: a refused redirect, an HTTP error, a time-out, else `broken` if it
+    did not arrive whole; None if nothing did."""
     if reply.property("refused"):
         return reply.property("refused")
     status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
     if status is not None and int(status) >= 400:
         return f"Taskloom's releases answered HTTP {status} for {reply.url().toString()}"
+    if reply.error() == QNetworkReply.TimeoutError:
+        return (f"Taskloom's releases timed out: nothing came from {reply.url().toString()} for "
+                f"{reply.request().transferTimeout() / 1000:g} seconds")
     return broken if reply.error() != QNetworkReply.NoError else None
 
 
@@ -2338,7 +2345,7 @@ class UpdateDownload(QDialog):
     def __init__(self, web: QNetworkAccessManager, release: update.Release, source: Path, parent: QWidget):
         super().__init__(parent, objectName="update-progress", windowTitle=f"Taskloom {release.version}")
         self.release, self.source = release, source
-        self.stop, self.unpacked = threading.Event(), (0, 1)
+        self.stop, self.unpacked, self.unwritten = threading.Event(), (0, 1), None  # unwritten: a write's OSError
         self.said = QLabel(f"Downloading Taskloom {release.version}…")
         self.bar = QProgressBar()
         self.bar.setRange(0, max(release.size, 1))
@@ -2358,7 +2365,12 @@ class UpdateDownload(QDialog):
         self.show()
 
     def _received(self):  # (the bar follows the bytes: Qt's downloadProgress says nothing while a download stalls)
-        self.file.write(bytes(self.reply.readAll()))
+        try:
+            self.file.write(bytes(self.reply.readAll()))
+        except OSError as e:  # e.g. the disk is full (UP-3): the download ends there (finished: _downloaded says so)
+            self.unwritten = e
+            self.reply.abort()
+            return
         self.bar.setValue(self.file.tell())
 
     def reject(self):  # Cancel, Esc or the window's close button
@@ -2369,11 +2381,15 @@ class UpdateDownload(QDialog):
 
     def _downloaded(self):
         got = self.file.tell()
-        self.file.close()
+        try:
+            self.file.close()  # (writes what it still holds)
+        except OSError as e:
+            self.unwritten = self.unwritten or e
         if self.stop.is_set():
             return self._end(None)
-        failure = _failure(self.reply, f"The download is incomplete ({got} of {self.release.size} bytes): "
-                                       f"{self.reply.errorString()}")
+        failure = (f"Could not save the download in {self.partial.parent}: {self.unwritten}" if self.unwritten else
+                   _failure(self.reply, f"The download is incomplete ({got} of {self.release.size} bytes): "
+                                        f"{self.reply.errorString()}"))
         if failure:
             return self._end(failure)
         self.said.setText(f"Checking and unpacking Taskloom {self.release.version}…")

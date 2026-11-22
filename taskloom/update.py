@@ -25,6 +25,7 @@ RELEASE_URL = "https://api.github.com/repos/lben/taskloom/releases/latest"
 ASSET = "taskloom-windows-amd64.zip"
 HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 MARKER = "installed-by-taskloom.json"  # {"from": the program folder it was installed from, "files": [its files]}
+TIMEOUT_SECONDS = 30  # a web call that gets no byte for this long ends, saying so (Charter C8)
 
 
 class Failed(Exception):
