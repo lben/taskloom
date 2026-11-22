@@ -22,22 +22,27 @@ LS-2:
     shows a result, so rerun_block, run_block_with_inputs and the menu's words (_block_menu_for) all take it.
     start_run, for a re-run, leaves the state loaded and the canvas as it is; MainWindow._on_event, at the
     re-run's run_started, makes the re-run the loaded run (_set_state), so the bar names it and the next re-run
-    takes its inputs from it. The engine's re-run carries the loaded run's folder over (_carry_over), and
-    MainWindow._mark_old greys as old the blocks after it that it did not reach.
+    takes its inputs from it; while the tab still runs it, _show_bar counts it as there, as its folder is made after
+    it starts. The engine's re-run carries the loaded run's folder over (_carry_over), and MainWindow._mark_old greys
+    as old the blocks after it that it did not reach.
   not_green: >-
     Tests (L2, L3, L4, L8) fix a failed block and run from it on, run two blocks alone one after the other, load a
-    second state and re-run a request in a Session, and read what each block received; they read that the bar
-    names the re-run, not the rest of its words. The proof found that the bar says the re-run's files were cleaned
-    up until the editor's next look, 2 seconds later (the re-run's folder is made after it starts). No check tries
-    every flow or every order of re-runs.
+    second state and re-run a request in a Session, and read what each block received and that the bar names the
+    re-run; test_l2_while_a_rerun_from_a_loaded_state_goes_the_bar_never_says_its_files_were_cleaned_up holds a
+    re-run's process right after it starts, before it makes its folder, for 3.5 seconds (past the editor's look every
+    2 seconds) and reads the bar all along: it never says the files were cleaned up. No check tries every flow or
+    every order of re-runs.
 LS-3:
   enforced: >-
     MainWindow.start_run ends a loaded state for a full run (_set_state(tab, None)) and, as the canvas no longer
     follows the newest runs, shows each block's newest result (_show_results) before the run's own results come.
-    The bar's Leave button calls MainWindow.leave_state, which ends the state and shows the newest results.
+    The bar's Leave button calls MainWindow.leave_state, which ends the state, shows the newest results and clears
+    the status bar's "Showing run #N" that loading the state put there.
   not_green: >-
-    Tests (L13) press Leave, then Run now from a loaded state, and read the bar and every block; no check tries a
-    full run started by its Schedule block from the editor, or a run of one start block of several.
+    Tests (L13) press Leave, then Run now from a loaded state, and read the bar and every block, and right after
+    Leave the status bar under the window
+    (test_l13_right_after_leave_the_status_bar_no_longer_says_it_shows_the_loaded_run); no check tries a full run
+    started by its Schedule block from the editor, or a run of one start block of several.
 LS-4:
   enforced: >-
     _Runner._keep_outputs (taskloom/engine.py) lists in a block's saved outputs those it did not save
@@ -77,13 +82,14 @@ LS-7:
     run whose status is running, "its files are gone: cleaned up or deleted" when the run's folder is gone or lacks
     the saved results of a block that ended in it (a block inside a Loop: the Loop's). While a run is loaded,
     MainWindow._refresh_statuses looks at its folder every 2 seconds: _show_bar then says its files were cleaned up
-    (Keep runs, keep_runs_for) and that nothing can be re-run from it, and MainWindow.rerun_block refuses a re-run
-    with that reason in the Log before anything runs.
+    (Keep runs, keep_runs_for) and that nothing can be re-run from it, unless the tab still runs it (a re-run whose
+    folder is still to come), and MainWindow.rerun_block refuses a re-run with that reason in the Log before anything
+    runs.
   not_green: >-
     Tests (L6, L7, L10) clean a loaded run up with Keep runs, delete a block's folder, delete a run's folder by hand,
-    stop a run at once, look at a run still going, and clean up the run a carried block ran in; no check tries a
-    folder only partly deleted by Windows (a file still open), and the bar's words are wrong for up to 2 seconds
-    after a re-run starts (see LS-2).
+    stop a run at once, look at a run still going, and clean up the run a carried block ran in, and (L2) read the bar
+    while a re-run from the state goes before its folder is made; no check tries a folder only partly deleted by
+    Windows (a file still open).
 LS-8:
   enforced: >-
     MainWindow.load_state asks first when _changed_since finds that the flow file's bytes now are of another version

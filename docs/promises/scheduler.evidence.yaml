@@ -8,9 +8,10 @@ SCH-1:
     process ends (serve keeps a copy of it open: os.dup). A second one that cannot take it ends at once, unless the one
     holding it is an older Taskloom's (running_scheduler_version): then it waits beside it without the lock, running
     nothing (_take_over; one such successor per folder, scheduler.successor: another ends at once), and at a quiet
-    moment (_quiet), or at a run's end after an hour without one, stops it (_stop_old: SIGTERM) and takes the lock
-    once its process has let go of it; turned off meanwhile, it gives up (SCH-2). The service_on record names the one
-    holding the lock, and a run begins only for that one (claim_time).
+    moment (_quiet), or at a run's end after an hour without one (counted in UTC from the moment scheduler.waiting
+    keeps with its UTC offset, so an hour also on a night the clocks change), stops it (_stop_old: SIGTERM) and takes
+    the lock once its process has let go of it; turned off meanwhile, it gives up (SCH-2). The service_on record names
+    the one holding the lock, and a run begins only for that one (claim_time).
   green_by: [TLA+ trace validation, TLA+ model check]
   not_green: >-
     The model checks, in every state of its bounds (two service lives: one take-over), that one service is on at a
@@ -21,7 +22,12 @@ SCH-1:
     state, one service is on at a time whatever the moment of the take-over. Which moment that is (a quiet one, or a
     run's end after an hour), that the newer one does nothing while it waits, takes over once and gives up if turned
     off, and that each way of starting another (On, login, the editor) does nothing, are checked by tests
-    (test_updates.py's U6 and U7, test_service_off.py, test_editor.py, test_paths_scheduler.py); the traces run the
+    (test_updates.py's U6 and U7, test_service_off.py, test_editor.py, test_paths_scheduler.py, and in
+    test_scheduler_mutants_final.py, the older service and the clock stood in for:
+    test_a_newer_service_takes_over_from_an_older_one_only_at_a_quiet_moment in 12 cases, a time due in exactly 2
+    minutes included; test_the_hour_a_newer_service_waits_beside_an_older_one_is_an_hour_on_a_night_the_clocks_change
+    on the nights the clocks go back and on; and
+    test_a_newer_service_waiting_beside_an_older_one_waits_on_while_a_yaml_file_is_broken_by_hand); the traces run the
     lock the take-over takes (acquire_lock), not its own code (_take_over, _quiet, _stop_old).
 SCH-2:
   enforced: >-

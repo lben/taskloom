@@ -13,6 +13,14 @@ found:
     found_by: the main session
     fixed_in: 0bfbd56
     guarded_by: tests/test_load_state.py::test_l14_after_ctrl_z_of_a_brought_back_flow_a_rerun_asks_nothing_and_after_ctrl_y_it_asks_again
+  - what: "While a block ran again from a loaded state, the bar said the re-run's files were cleaned up and nothing could be re-run from it, until the editor's next look 2 seconds later: the re-run's folder is made after it starts, and the bar took a run with no folder yet for one cleaned up."
+    found_by: the proof's pictures
+    fixed_in: 2203ce7
+    guarded_by: tests/test_load_state.py::test_l2_while_a_rerun_from_a_loaded_state_goes_the_bar_never_says_its_files_were_cleaned_up
+  - what: "Right after Leave, the status bar under the window still said “Showing run #N · …”, as loading the state had said it, though the tab no longer showed that run."
+    found_by: the proof's pictures
+    fixed_in: 2203ce7
+    guarded_by: tests/test_load_state.py::test_l13_right_after_leave_the_status_bar_no_longer_says_it_shows_the_loaded_run
 lighter:
   - "A state comes back after Taskloom is closed in a new window of the same process, not in a new process started again."
   - "The flow brought back as it was is tried with one change (a block deleted, one added) in a Git repository of the test's own; a flow renamed or moved in Git is not tried."

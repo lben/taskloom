@@ -9,9 +9,12 @@
 # nothing in a decorated function), and test_u6_two_quick_starts_of_the_new_version_write_each_entry_once_and_whole
 # checks it; mutmut finds nothing it can change in UpdateDownload.reject (Cancel: it sets the stop and aborts the
 # download), which test_u1_cancel_during_the_download_leaves_nothing_behind checks; the constants
-# (update.RELEASE_URL, ASSET, HOSTS, MARKER; entries.WINDOWED, EDITOR, SCHEDULER and the shell-link interfaces'
-# ids), the classes update.Failed and update.Release, UpdateDownload's two signals and the imports are not
-# functions; the lines removed (the question "Restart the scheduler service?" in
+# (update.RELEASE_URL, ASSET, HOSTS, MARKER, TIMEOUT_SECONDS; entries.WINDOWED, EDITOR, SCHEDULER and the shell-link
+# interfaces' ids), the classes update.Failed and update.Release, UpdateDownload's two signals and the imports are not
+# functions (update.TIMEOUT_SECONDS is read only by _ask, mutated whole below, and the time-limit tests
+# test_u3_a_check_that_gets_no_answer_says_so_within_the_time_limit and
+# test_u3_a_download_that_stalls_ends_within_the_time_limit_and_leaves_nothing_behind set it to 2 s); the lines
+# removed (the question "Restart the scheduler service?" in
 # MainWindow._show_scheduler_state, restart_scheduler and _update_start_at_login in window.py, three lines of
 # MainWindow.__init__, and scheduler.py's startup_file, startup_script, _in_script, startup_script_outdated and
 # set_start_at_login, which entries.py replaces) leave nothing to plant a bug in. The take-over itself

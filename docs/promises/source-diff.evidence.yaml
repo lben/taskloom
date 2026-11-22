@@ -71,16 +71,18 @@ CD-7:
   enforced: >-
     _lines (taskloom/editor/source_diff.py) splits each version into lines as git counts them, at "\n" only, and
     shows any other character a text box would break a line at (a lone carriage return, a form feed, U+2028...) as a
-    sign of its own (SHOWN); each line is compared with its line break, a Windows one read as a Unix one, so a last
-    line without a newline differs from the same line with one, as in git diff. align marks every difference difflib
-    finds and leaves the equal lines unmarked. note says, in the line above the sides, when the line ends differ (also
+    sign of its own, and U+FDD0 and U+FDD1, at which Qt's text document starts a new row, as the replacement symbol
+    (SHOWN), so each line is one row and both sides stay level; each line is compared with its line break, a Windows
+    one read as a Unix one, so a last line without a newline differs from the same line with one, as in git diff.
+    align marks every difference difflib finds and leaves the equal lines unmarked. note says, in the line above the sides, when the line ends differ (also
     when both versions mix them on other lines) or a newline at the end is in one version only, and that line shows
     only then. difflib compares 2,000 lines in about a tenth of a second.
   not_green: >-
     Tests compare the lines marked with those git diff gives as changed on ten real pairs of commits
     (test_d10_ten_real_commit_pairs_mark_exactly_the_lines_git_diff_changes) and on lines holding a lone carriage
-    return or another character Python ends a line at and git does not
-    (test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does); take a newline
+    return or another character Python ends a line at and git does not, or U+FDD0 or U+FDD1, at which Qt starts a new
+    row (test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does: each line
+    whole on its row, both sides with as many rows, the lines both versions keep level); take a newline
     missing at the end (D7), Windows line ends in one version (D8) and both versions mixing line ends on other lines
     (test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so); and time two flows of 2,000 lines on
     the test machines (D4). The ten pairs repeat and move no line, where two right answers can differ from git's; no

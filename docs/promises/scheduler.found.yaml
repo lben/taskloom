@@ -57,6 +57,10 @@ found:
     found_by: CI
     fixed_in: 58cc42e
     guarded_by: tests/test_scheduler_ci_findings.py::test_an_on_time_run_beside_a_catch_up_whose_runs_wait_for_one_another_is_not_held_for_a_free_slot
+  - what: A newer service waiting beside an older one measured its hour on this PC's local clock, without the UTC offset, so on a night the clocks change the hour before it takes over at a run's end could last two hours or none (charter C11).
+    found_by: review
+    fixed_in: f4737f6
+    guarded_by: tests/test_scheduler_mutants_final.py::test_the_hour_a_newer_service_waits_beside_an_older_one_is_an_hour_on_a_night_the_clocks_change
 lighter:
   - "Real-world events the tests only simulate: a PC going to sleep, a real daylight-saving change and a real crash run on a fake clock or stand-ins."
   - "The outer shell: the tray icon, the service's main loop and the server checks over SSH are covered by tests but not mutation-tested (see Not mutation-tested)."

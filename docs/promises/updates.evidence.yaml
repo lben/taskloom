@@ -13,9 +13,11 @@ UP-1:
     written and whose Cancel aborts the download; update.unpack runs in a thread of its own and puts the version in
     update.programs()/<version>, under %LOCALAPPDATA%.
   not_green: >-
-    Tests click the menu item in the editor offscreen against a local HTTPS server standing for GitHub and watch that
-    no request is made while a flow is opened, saved and closed; no test asks the real GitHub, goes through a proxy or
-    runs as a Windows user without admin rights (CI's Windows user is an administrator).
+    Tests click the menu item in the editor offscreen against a local HTTPS server standing for GitHub, watch that no
+    request is made while a flow is opened, saved and closed, press Cancel during the download and while the zip
+    unpacks (after its first file and after its last: nothing is left), and find the version already there, installed
+    by Taskloom or unpacked by hand (it is used as it is, nothing downloaded); no test asks the real GitHub, goes
+    through a proxy or runs as a Windows user without admin rights (CI's Windows user is an administrator).
 UP-2:
   enforced: >-
     entries.set_entry (the Settings boxes "Add Taskloom to the Start menu" and "Start the scheduler service when I log
@@ -31,19 +33,26 @@ UP-2:
 UP-3:
   enforced: >-
     update.refused lets only https on a host in update.HOSTS be asked, for the release's file and for each redirect
-    before it is followed (_ask, UserVerifiedRedirectPolicy); update.unpack checks the size, the SHA-256 GitHub gives,
-    each file's CRC, that every name is inside taskloom/, that taskloomw.exe and VERSION are there and VERSION is the
-    release's, and the free disk space, before it unpacks into a .partial-* folder, then moves the version into place
-    with one os.rename. A failure is update.Failed, shown as a warning; UpdateDownload._end removes the .partial-*
-    folder whatever happened, and update.clean_up what a crash left, at the next start.
+    before it is followed (_ask, UserVerifiedRedirectPolicy); _ask gives each web call a time limit,
+    update.TIMEOUT_SECONDS (30 s without a byte, charter C8), and _failure says when it timed out. update.installed uses
+    a folder already there for the version only if its VERSION is the release's and taskloomw.exe is in it, else
+    stops ("A folder is in the way"). A write of the download that fails, e.g. on a full disk, aborts it
+    (UpdateDownload._received), and _downloaded says the download could not be saved. update.unpack checks the size,
+    the SHA-256 GitHub gives, each file's CRC, that every name is inside taskloom/ (no "..", drive letter or
+    backslash), that taskloomw.exe and VERSION are there and VERSION is the release's, and the free disk space, before
+    it unpacks into a .partial-* folder, then moves the version into place with one os.rename, which a folder made
+    there meanwhile refuses. A failure is update.Failed or such a message, shown as a warning; UpdateDownload._end
+    removes the .partial-* folder whatever happened, and update.clean_up what a crash left, at the next start.
   not_green: >-
-    Tests try eleven failures (no connection, HTTP 404 and 500, a download cut short, a wrong checksum, a damaged zip,
-    no taskloomw.exe, another VERSION, a full disk before unpacking, plain http, a redirect to another host) against
-    the local server, with the disk's free space faked; review found two failures with no test yet, a disk filling up
-    during the download (UpdateDownload._received writes with nothing to catch the error) and a download or release
-    check that stalls, which has no time limit (charter C8: _ask sets none); not tried either are a name leaving the
-    zip's folder, an answer Taskloom cannot read, a release with no Windows zip, a folder in the way, a disk filling up
-    while unpacking, a crash halfway, and the real GitHub hosts, proxies, TLS in the packaged build and the built zip.
+    Tests try these failures against the local server: no connection, HTTP 404 and 500, a download cut short, a wrong
+    checksum, a damaged zip, no taskloomw.exe, another VERSION, a full disk before unpacking (its free space faked)
+    and during the download (the download file's writes fail once a third of the zip is written), plain http, a
+    redirect to another host, a check that gets no answer and a download that stalls (each ending within the time
+    limit, 2 s in the tests), a zip entry leaving its folder in five ways (../, from inside taskloom/, backslashes, an
+    absolute path, a drive letter), a folder in the new version's place (another version's, one without
+    taskloomw.exe, one made while the zip downloads) and Cancel while the zip unpacks; not tried are an answer
+    Taskloom cannot read, a release with no Windows zip, a disk filling up while unpacking, a crash halfway, and the
+    real GitHub hosts, proxies, TLS in the packaged build and the built zip.
 UP-4:
   enforced: >-
     entries.follow points an entry whose program is gone at the starting Taskloom and returns what to say: the editor
@@ -73,9 +82,10 @@ UP-6:
     restart), and update.start starts the new version's taskloomw.exe --home <folder> editor, which reopens the tabs
     (restore_session) and starts no flow.
   not_green: >-
-    Tests answer Yes with no flow running, with one running until it ends and with Cancel, then open a second editor
-    of this version on the same folder in place of the new one (the started program is a stand-in that cannot run),
-    and compare its tabs, loaded run and run count.
+    Tests answer Yes with no flow running, with one running until it ends and with Cancel, and Cancel at the
+    unsaved-changes question as the editor closes (it stays open with your edits, and nothing is started), then open
+    a second editor of this version on the same folder in place of the new one (the started program is a stand-in
+    that cannot run), and compare its tabs, loaded run and run count.
 UP-7:
   enforced: >-
     update.clean_up, at every start of the packaged Windows Taskloom (cli._at_start), removes each folder in
@@ -85,8 +95,10 @@ UP-7:
     a scheduled flow or a file not in its marker or changed after it (_yours); a folder without the marker is never
     touched.
   not_green: >-
-    Tests lay out eight folders and two leftovers and start Taskloom once; "once nothing runs from them" is checked on
-    Windows only, with a file held open in the folder rather than a program running from it.
+    Tests lay out eight folders and two leftovers and start Taskloom once, and install over a version already there
+    (used as it is; one unpacked by hand gets no marker) and over a folder in its place (left byte for byte);
+    "once nothing runs from them" is checked on Windows only, with a file held open in the folder rather than a
+    program running from it.
 UP-8:
   enforced: >-
     scheduler.serve, finding the lock held by an older Taskloom's service, waits as the folder's one successor

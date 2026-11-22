@@ -35,6 +35,13 @@ found:
     found_by: the reviewer
     fixed_in: 5bffbc8
     guarded_by: tests/test_source_diff.py::test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does
+  - what: >-
+      A line holding U+FDD0 or U+FDD1 was split into two rows on its side, as Qt's text document starts a new row at
+      each, though git counts one line: that side had a row more than the other, and the rows after it were no longer
+      level with the other side's; those two characters now show as the replacement symbol on their row.
+    found_by: the implementer
+    fixed_in: 2e4cb94
+    guarded_by: tests/test_source_diff.py::test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does
 lighter:
   - "Thin glyphs such as ' never reach 4.5:1 pixel by pixel (their darkest pixel reads at about 2:1): the colour tests measure each word's darkest pixel, not each character's."
   - "Ctrl with the mouse wheel over a side is not tested; Ctrl +, Ctrl - and Ctrl 0 are."
