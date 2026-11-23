@@ -195,7 +195,7 @@ def clean_up(folder: Path, home: Home) -> list[str]:
     if (_marker(folder) or {}).get("from"):
         keep.add(_key(_marker(folder)["from"]))
     script = entries.startup().with_suffix(".cmd")
-    started = os.path.normcase(script.read_text(encoding="utf-8")) if script.exists() else ""
+    started = os.path.normcase(script.read_text(encoding="utf-8", errors="replace")) if script.exists() else ""
     said = []
     for child in sorted(programs().iterdir()):
         marker = _marker(child)

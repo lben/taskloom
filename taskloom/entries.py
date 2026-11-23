@@ -58,12 +58,15 @@ def follow(folder: Path) -> list[str]:
         if script.exists():
             if paths[1].exists():
                 script.unlink()
-            elif (home := _script_home(script)) is None:  # (it still starts the scheduler at login)
-                kept.append(f"Kept the Startup script {script}: it has no TASKLOOM_HOME line, so which Taskloom folder "
-                            "it is for cannot be told")
             else:
-                _write(paths[1], folder, f'--home "{home}" {SCHEDULER}')
-                script.unlink()
+                try:
+                    home = _script_home(script)
+                except ValueError as why:  # (it still starts the scheduler at login)
+                    kept.append(f"Kept the Startup script {script}: {why}, so which Taskloom folder it is for cannot "
+                                "be told")
+                else:
+                    _write(paths[1], folder, f'--home "{home}" {SCHEDULER}')
+                    script.unlink()
         for path in paths:
             if path.exists() and _older(path, folder):
                 target, arguments, _ = read_link(path)
@@ -89,12 +92,17 @@ def version_of(folder: Path) -> str | None:
         return None
 
 
-def _script_home(script: Path) -> str | None:
-    """The Taskloom folder of the Startup script earlier versions wrote (its `set "TASKLOOM_HOME=..."` line); None if
-    it has no such line (changed by hand, empty, cut off)."""
-    found = re.search(r'^set "TASKLOOM_HOME=(.*)"$', script.read_text(encoding="utf-8"), re.MULTILINE)
+def _script_home(script: Path) -> str:
+    """The Taskloom folder of the Startup script earlier versions wrote (its `set "TASKLOOM_HOME=..."` line); raises
+    ValueError saying why it cannot be told: the script is not in UTF-8 (saved by hand in another encoding), or has no
+    such line (changed by hand, empty, cut off)."""
+    try:
+        text = script.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("it is not in UTF-8") from None
+    found = re.search(r'^set "TASKLOOM_HOME=(.*)"$', text, re.MULTILINE)
     if found is None:
-        return None
+        raise ValueError("it has no TASKLOOM_HOME line")
     return found.group(1).replace("%%", "%")  # (cmd.exe's way of writing a % in a script)
 
 
