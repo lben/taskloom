@@ -1766,32 +1766,38 @@ def test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_fol
 
 
 def a_script_naming_no_taskloom_folder(folders: Folders, how: str, program: Path) -> Path:
-    """The Startup folder's "Taskloom Scheduler.cmd" with no `set "TASKLOOM_HOME=..."` line: changed by hand (it starts
-    `program`), empty, or cut off before that line's end."""
+    """The Startup folder's "Taskloom Scheduler.cmd" from which no Taskloom folder can be told: with no
+    `set "TASKLOOM_HOME=..."` line (changed by hand: it starts `program`; empty; or cut off before that line's end), or
+    not in UTF-8: today's script for the Taskloom folder .taskloom next to the Windows folders, starting `program`,
+    saved by hand in Windows' ANSI code page (cp1252), so an é in those folders' path is a byte UTF-8 cannot read."""
     script = folders.startup.with_suffix(".cmd")
     script.parent.mkdir(parents=True, exist_ok=True)
     text = {"changed by hand": f'@echo off\nstart "" "{program}" scheduler --unless-paused\n', "empty": "",
-            "cut off": '@echo off\nchcp 65001 >nul\nrem Taskloom 0.30.0\nset "TASKLO'}[how]
-    script.write_text(text, encoding="utf-8", newline="\r\n")
+            "cut off": '@echo off\nchcp 65001 >nul\nrem Taskloom 0.30.0\nset "TASKLO',
+            "not in UTF-8": f'@echo off\nrem Taskloom 0.30.0\nset "TASKLOOM_HOME={folders.root.parent / ".taskloom"}"\n'
+                            f'start "" "{program}" scheduler --unless-paused\n'}[how]
+    script.write_text(text, encoding="cp1252" if how == "not in UTF-8" else "utf-8", newline="\r\n")
     return script
 
 
 COULD_NOT = "Could not see to Taskloom's Start menu and Startup entries and older versions: "
 
 
-@pytest.mark.parametrize("how", ["changed by hand", "empty", "cut off"])
+@pytest.mark.parametrize("how", ["changed by hand", "empty", "cut off", "not in UTF-8"])
 @pytest.mark.invariant("UP-2")
 @pytest.mark.invariant("UP-4")
 @pytest.mark.invariant("UP-7")
 def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why(env, tmp_path, monkeypatch,
                                                                                         how):
     """U4, U10: the Startup folder's "Taskloom Scheduler.cmd" has no `set "TASKLOOM_HOME=..."` line (changed by hand to
-    start 0.37.0, empty, or cut off), so which Taskloom folder it is for cannot be told; there is no Startup entry. The
-    Start menu entry starts 0.38.0; 0.38.0 and 0.37.0 were installed by Taskloom. The user's Windows folders are named
-    with an é (as a user José's are). A start of this version (unpacked by hand) goes on, keeps the script as it is (the
-    service still starts at login) and says on stderr which script it is and what it lacks; all the same, the Start
-    menu entry now starts this version (its arguments kept), no Startup entry is made, and the older versions are
-    removed but the one the script starts."""
+    start 0.37.0, empty, or cut off), or is today's script starting 0.37.0 saved by hand in Windows' ANSI code page, not
+    UTF-8 (the é of its folders' path cannot be read), so which Taskloom folder it is for cannot be told; there is no
+    Startup entry. The Start menu entry starts 0.38.0; 0.38.0 and 0.37.0 were installed by Taskloom. The user's Windows
+    folders are named with an é (as a user José's are). A start of this version (unpacked by hand) goes on, keeps the
+    script as it is (the service still starts at login) and says on stderr which script it is and what it lacks or why
+    it cannot be read; all the same, the Start menu entry now starts this version (its arguments kept), no Startup
+    entry is made, and the older versions are removed but the one the script starts (the one a script not in UTF-8
+    starts may be removed too: its text cannot be read)."""
     folders = windows_folders(tmp_path / "José", monkeypatch)
     home, p = env.home, folders.programs
     older = unpacked(p / "0.38.0", "0.38.0", marker_from=p / "0.37.0")
@@ -1805,11 +1811,16 @@ def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert entries_now(folders) == {"Start menu": entry_for(this, editor_args(home)), "Startup": None}, done.stderr
-    assert leftovers(folders) == sorted([__version__, *(["0.37.0"] if how == "changed by hand" else [])]), done.stderr
+    if how == "not in UTF-8":
+        assert [name for name in leftovers(folders) if name != "0.37.0"] == [__version__], done.stderr
+    else:
+        assert leftovers(folders) == sorted([__version__, *(["0.37.0"] if how == "changed by hand" else [])]), \
+            done.stderr
     assert script.read_bytes() == before, "the Startup script was changed"
     lines = done.stderr.splitlines()
-    assert (f"Kept the Startup script {script}: it has no TASKLOOM_HOME line, so which Taskloom folder it is for "
-            "cannot be told") in lines, lines
+    lacks = "it is not in UTF-8" if how == "not in UTF-8" else "it has no TASKLOOM_HOME line"
+    kept = f"Kept the Startup script {script}: {lacks}, so which Taskloom folder it is for cannot be told"
+    assert kept in lines, lines
     assert not [line for line in lines if line.startswith(COULD_NOT)], lines
 
 
