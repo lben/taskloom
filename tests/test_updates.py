@@ -1776,17 +1776,23 @@ def a_script_naming_no_taskloom_folder(folders: Folders, how: str, program: Path
     return script
 
 
+COULD_NOT = "Could not see to Taskloom's Start menu and Startup entries and older versions: "
+
+
 @pytest.mark.parametrize("how", ["changed by hand", "empty", "cut off"])
 @pytest.mark.invariant("UP-2")
 @pytest.mark.invariant("UP-4")
 @pytest.mark.invariant("UP-7")
-def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why(env, folders, how):
+def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why(env, tmp_path, monkeypatch,
+                                                                                        how):
     """U4, U10: the Startup folder's "Taskloom Scheduler.cmd" has no `set "TASKLOOM_HOME=..."` line (changed by hand to
     start 0.37.0, empty, or cut off), so which Taskloom folder it is for cannot be told; there is no Startup entry. The
-    Start menu entry starts 0.38.0; 0.38.0 and 0.37.0 were installed by Taskloom. A start of this version (unpacked by
-    hand) goes on, keeps the script as it is (the service still starts at login) and says on stderr which script it is
-    and what it lacks; all the same, the Start menu entry now starts this version (its arguments kept), no Startup entry
-    is made, and the older versions are removed but the one the script starts."""
+    Start menu entry starts 0.38.0; 0.38.0 and 0.37.0 were installed by Taskloom. The user's Windows folders are named
+    with an é (as a user José's are). A start of this version (unpacked by hand) goes on, keeps the script as it is (the
+    service still starts at login) and says on stderr which script it is and what it lacks; all the same, the Start
+    menu entry now starts this version (its arguments kept), no Startup entry is made, and the older versions are
+    removed but the one the script starts."""
+    folders = windows_folders(tmp_path / "José", monkeypatch)
     home, p = env.home, folders.programs
     older = unpacked(p / "0.38.0", "0.38.0", marker_from=p / "0.37.0")
     named = unpacked(p / "0.37.0", "0.37.0", marker_from=p / "0.36.0")
@@ -1802,8 +1808,44 @@ def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start
     assert leftovers(folders) == sorted([__version__, *(["0.37.0"] if how == "changed by hand" else [])]), done.stderr
     assert script.read_bytes() == before, "the Startup script was changed"
     lines = done.stderr.splitlines()
-    assert [line for line in lines if str(script) in line and "TASKLOOM_HOME" in line], lines
-    assert not [line for line in lines if line.startswith("Could not see to")], lines
+    assert (f"Kept the Startup script {script}: it has no TASKLOOM_HOME line, so which Taskloom folder it is for "
+            "cannot be told") in lines, lines
+    assert not [line for line in lines if line.startswith(COULD_NOT)], lines
+
+
+@pytest.mark.invariant("UP-2")
+@pytest.mark.invariant("UP-7")
+def test_u4_a_start_that_cannot_see_to_the_entries_goes_on_says_why_and_the_next_start_does_it(env, folders):
+    """U4, U10: both entries start 0.30.0, which Taskloom installed, and they cannot be changed just now (where Taskloom
+    locks them, <LOCALAPPDATA>/Taskloom, is a file). A start of this version (unpacked by hand) goes on: the entries and
+    0.30.0 (they still start it) are left as they are, and a line on stderr says it could not see to them and why,
+    with the path as it is (not quoted). Once that file is gone, the next start points both entries at this version
+    and removes 0.30.0, without a word."""
+    home, p = env.home, folders.programs
+    older = unpacked(p / "0.30.0", "0.30.0", marker_from=p / "0.29.0")
+    both_entries(folders, older, home)
+    entries = entries_now(folders)
+    locks = folders.local / "Taskloom"
+    locks.write_text("not a folder\n", encoding="utf-8")
+    this = unpacked(p / __version__, __version__)
+    taskloom, flow = Packaged(env, folders, this), env.write("hello.yaml", HELLO)
+
+    done = taskloom.run("run", flow)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert entries_now(folders) == entries, done.stderr
+    assert leftovers(folders) == sorted(["0.30.0", __version__]), done.stderr
+    lines = done.stderr.splitlines()
+    assert [line for line in lines if re.fullmatch(re.escape(COULD_NOT) + r".+: " + re.escape(str(locks)), line)], lines
+
+    locks.unlink()
+    done = taskloom.run("run", flow)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert entries_now(folders) == {"Start menu": entry_for(this, editor_args(home)),
+                                    "Startup": entry_for(this, login_args(home))}, done.stderr
+    assert leftovers(folders) == [__version__], done.stderr
+    assert not [line for line in done.stderr.splitlines() if line.startswith("Could not")], done.stderr
 
 
 @pytest.mark.invariant("UP-2")

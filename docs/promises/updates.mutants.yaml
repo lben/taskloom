@@ -171,6 +171,7 @@ kinds:
       - taskloom.entries.x__script_home__mutmut_13
       - taskloom.entries.x_version_of__mutmut_6
       - taskloom.update.x__marker__mutmut_6
+      - taskloom.update.x_clean_up__mutmut_31
   - kind: A file of plain ASCII read or written in the locale's encoding
     why: >-
       The marker is written by json.dumps, which writes every character beyond ASCII as \uXXXX, and a VERSION file
@@ -180,13 +181,16 @@ kinds:
       - taskloom.update.x_unpack__mutmut_102
       - taskloom.update.x__marker__mutmut_3
       - taskloom.entries.x_version_of__mutmut_1
-  - kind: Today's Startup script read in the locale's encoding
+  - kind: The Startup script read in the locale's encoding
     why: >-
       On Linux, where mutation testing runs, the locale's encoding is UTF-8, the script's own; on Windows (a code
       page) test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_folder, whose Taskloom folder is
-      named with an é, catches it.
+      named with an é, catches it in today's script, and
+      test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why, whose kept script starts
+      a version in a folder named with an é, catches it in the cleanup (that version would be removed).
     mutants:
       - taskloom.entries.x__script_home__mutmut_11
+      - taskloom.update.x_clean_up__mutmut_29
   - kind: Windows' process flags, which Linux does not have
     why: >-
       On Linux, where mutation testing runs, subprocess has neither DETACHED_PROCESS nor CREATE_NO_WINDOW, so the
@@ -259,8 +263,8 @@ kinds:
       30 seconds, 30.001 seconds, or until the next message replaces it: what it says is the same; how long it shows
       is no promise.
     mutants:
-      - taskloom.editor.window.xǁMainWindowǁ_installed__mutmut_12
-      - taskloom.editor.window.xǁMainWindowǁ_installed__mutmut_15
+      - taskloom.editor.window.xǁMainWindowǁ_installed__mutmut_13
+      - taskloom.editor.window.xǁMainWindowǁ_installed__mutmut_16
   - kind: A widget the layout takes in
     why: >-
       A label or button made without a parent, or for no window, is given the restart window as its parent when the
@@ -348,3 +352,9 @@ kinds:
       whichever part of the shortcut is read.
     mutants:
       - taskloom.update.x_clean_up__mutmut_10
+  - kind: No Startup script, as a text no folder is part of
+    why: >-
+      With no Startup script the cleanup looks for each folder in "" or in "XXXX": a folder's path, ending in a
+      separator, is part of neither, so the same folders are kept and removed.
+    mutants:
+      - taskloom.update.x_clean_up__mutmut_32
