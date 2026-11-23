@@ -45,6 +45,7 @@ from tests.test_scheduler_mutants_times import began
 from tests.test_scheduler_new_promises import (EVERY_TEN, FIRST_SIGHT, HOURLY, NO_TZ_ON_WINDOWS, REAL_POPEN, FakeRuns,
                                                check_after, clock_shows, flow_yaml, one_at_a_time, schedule, statuses,
                                                write)
+from tests.test_scheduler_service_calls import FLOW_LEVEL
 import tests.test_scheduler_new_promises as new_promises
 berlin = new_promises.berlin  # a fixture: the local time zone is Europe/Berlin
 
@@ -513,6 +514,12 @@ def every_seen(env):
     older_checked(env, START - MINUTE, START - MINUTE + SECOND)
 
 
+def own_every_seen(env):
+    """As every_seen, the schedule one of the flow's own `triggers:` (written by hand), not a Schedule block."""
+    schedule(env.home, env.root, {"hourly": FLOW_LEVEL % "  - schedule: {every: 60 minutes}"})
+    older_checked(env, START - MINUTE, START - MINUTE + SECOND)
+
+
 QUIET = {  # what is going, waiting or due as the newer service starts: (arranged so, the check it takes over at)
     "nothing goes, waits or is scheduled": (lambda env: None, 0),
     "a run of yours goes, then ends": (run_going, 2),
@@ -527,6 +534,7 @@ QUIET = {  # what is going, waiting or due as the newer service starts: (arrange
     "a time come 30 s ago, run by the older service": (come_and_run, 0),
     "an Every N schedule not seen yet": (lambda env: schedule(env.home, env.root, {"hourly": flow_yaml(HOURLY)}), None),
     "an Every N schedule seen a minute ago": (every_seen, 0),
+    "an Every N schedule of the flow's own triggers: seen a minute ago": (own_every_seen, 0),
 }
 
 
