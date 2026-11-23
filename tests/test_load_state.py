@@ -80,6 +80,15 @@ TODAY = "Show on today's flow"
 AS_IT_WAS = "Bring back the flow as it was"
 CANCEL = "Cancel"
 STANDARD = {"Yes": QMessageBox.Yes, "No": QMessageBox.No, "Cancel": QMessageBox.Cancel, "OK": QMessageBox.Ok}
+ENTER = "\n"  # answering(ENTER): the Enter key is pressed in the question, so its default button answers
+REAL_QUESTION = QMessageBox.__dict__["question"]  # Qt's own (the win fixture records message boxes in its place)
+# The words a user reads (also as mutation testing found them unchecked): Run history's item, the bar, LS-8's question.
+LOAD_TIP = ("Every block shows its result from this run, and re-runs take their inputs from it, until you leave it or "
+            "run the whole flow")
+FILES_GONE = f"{LOAD} (its files are gone: cleaned up or deleted)"
+TODAYS_FLOW = "shown on today's flow"
+AS_IT_WAS_THEN = "the flow as it was then (not saved)"
+NOT_IN_GIT = "That version of the flow is not in its Git history: it cannot be brought back"
 CLEAN = noting("clean", "len(orders)") + "result = orders"  # the orders flow's clean
 CLEAN_BUG = noting("clean", "len(orders)") + "raise ValueError('clean has a bug')"
 
@@ -184,6 +193,25 @@ def started(win, run: int) -> str:
     return history_rows(win)[run]
 
 
+def loaded_bar(win, run: int, note: str = "") -> str:
+    """What the bar says with run `run`'s state loaded and its files there: the run's number and the time Run history
+    shows for it (the tab's flow on screen), then `note`, what else it says (LS-8: what was chosen)."""
+    return (f"Loaded state of run #{run} · {started(win, run)}: every block shows its result from it, and re-runs "
+            "take their inputs from it" + (f" · {note}" if note else ""))
+
+
+def restored_gone(run: int) -> str:
+    """What the bar says when run `run`, whose state the flow had loaded when Taskloom closed, is gone (LS-9)."""
+    return (f"Run #{run}, whose state this flow had loaded when Taskloom closed, has been cleaned up since (Keep runs, "
+            "keep_runs_for): the newest results are shown")
+
+
+def titled(title: str, text: str) -> str:
+    """A message box's title and text as answering() reads them. On macOS a message box has no title (Qt leaves it
+    out there, as Apple's guidelines ask)."""
+    return plain(f"{'' if sys.platform == 'darwin' else title} {text}")
+
+
 def run_ids(win) -> set[int]:
     """Every run in the history."""
     with contextlib.closing(sqlite3.connect(win.home.history_db)) as db:
@@ -207,13 +235,15 @@ def runs_so_far(win) -> set[int]:
 def answering(answer: str | None = None, monkeypatch=None):
     """Meanwhile, every question the editor asks in a window of its own that waits for the answer (modal) is answered by
     clicking its button whose text starts with `answer` (None, or that button disabled: the window is closed
-    unanswered), and with monkeypatch also every message box (QMessageBox.question, warning, information: answered
-    with its button of that name). Yields the questions asked, each {"text": what it says, "buttons": [{"text",
-    "enabled", "tip"}]} (a message box: no buttons)."""
+    unanswered; ENTER: the Enter key is pressed in it), and with monkeypatch also every message box
+    (QMessageBox.question, warning, information: answered with its button of that name). Yields the questions asked,
+    each {"text": what it says, "buttons": [{"text", "enabled", "tip"}], "owner": the window it belongs to, which
+    the system keeps it over (its transient parent; None: none)} (a message box with monkeypatch: no buttons, no
+    owner)."""
     asked, handled = [], []
 
     def box(parent, title, text, *args, **kw):
-        asked.append({"text": plain(f"{title}: {text}"), "buttons": []})
+        asked.append({"text": plain(f"{title}: {text}"), "buttons": [], "owner": None})
         return STANDARD.get(answer, QMessageBox.Cancel)
 
     if monkeypatch is not None:
@@ -228,12 +258,17 @@ def answering(answer: str | None = None, monkeypatch=None):
         buttons = [b for b in window.findChildren(QAbstractButton) if b.isVisibleTo(window) and b.text()]
         words = [window.windowTitle(), *(label.text() for label in window.findChildren(QLabel)
                                          if label.isVisibleTo(window))]
+        owner = window.windowHandle().transientParent()
         asked.append({"text": plain(" ".join(words)),
                       "buttons": [{"text": b.text().replace("&", ""), "enabled": b.isEnabled(),
-                                   "tip": plain(b.toolTip())} for b in buttons]})
+                                   "tip": plain(b.toolTip())} for b in buttons],
+                      "owner": next((w for w in QApplication.topLevelWidgets()
+                                     if owner is not None and w.windowHandle() == owner), None)})
         chosen = next((b for b in buttons if answer and b.text().replace("&", "").startswith(answer)
                        and b.isEnabled()), None)
-        if chosen is not None:
+        if answer == ENTER:
+            QTest.keyClick(window, Qt.Key_Return)
+        elif chosen is not None:
             QTest.mouseClick(chosen, Qt.LeftButton)
         elif isinstance(window, QDialog):
             window.reject()
@@ -349,7 +384,7 @@ def test_l1_a_loaded_failed_run_shows_the_error_on_the_failed_block_nothing_afte
         ("clean", "report", "send", "archive"), "skipped · something before it failed")
     said = bar(tab)
     assert said is not None, "no loaded-state bar on the tab"
-    assert names(said, first.run) and started(win, first.run) in said, said
+    assert said == loaded_bar(win, first.run), said
     assert leave_button(tab).isEnabled()
 
 
@@ -370,6 +405,23 @@ def test_l17_double_clicking_a_run_still_shows_it_once_and_loads_no_state(win, q
     clean = rerun(win, qtbot, tab, "clean", RUN_ONLY)
     assert clean.status == "success" and received(tmp_path, "clean") == ["10", "12", "10"], clean.log
     assert "12 rows" in under(tab, "load_orders") and bar(tab) is None
+
+
+@pytest.mark.invariant("LS-1")
+def test_l1_with_no_flow_open_load_run_state_on_a_run_still_listed_does_nothing(win, qtbot, tmp_path):
+    """L1: run #1 of the orders flow; its tab closed (File → Close flow), the last one: Run history still lists run #1,
+    as it did before Load run state. Its Load run state, chosen there, has no tab to load it into: it opens no tab,
+    asks nothing and does nothing else (an error would show a message)."""
+    tab, first = full_run(win, qtbot, tmp_path, rows=10)
+    assert first.status == "success", first.log
+    menu(win, "Close flow").trigger()
+    assert win.tabs.count() == 0
+
+    with answering() as asked:
+        right_click_run(win, qtbot, first.run, (LOAD,))
+    QApplication.processEvents()
+
+    assert asked == [] and win.tabs.count() == 0
 
 
 # --- LS-2: re-runs take their inputs from the loaded state and become it -------------------------------------------
@@ -418,7 +470,7 @@ def test_l3_two_reruns_in_a_row_from_a_loaded_state_the_second_takes_its_inputs_
     clean = rerun(win, qtbot, tab, "clean", RUN_ONLY)
 
     assert clean.status == "success" and received(tmp_path, "clean")[-1] == "load_orders1", clean.log
-    assert names(bar(tab), clean.run), bar(tab)
+    assert bar(tab) == loaded_bar(win, clean.run), bar(tab)
     assert under(tab, "report").startswith("old · ") and under(tab, "send").startswith("old · "), canvas(tab)
 
     report = rerun(win, qtbot, tab, "report", RUN_ONLY)
@@ -650,7 +702,8 @@ def test_l9_a_password_and_an_open_connection_are_named_not_kept_and_reruns_need
 
     load_state(win, qtbot, first)
 
-    assert re.search(rf"\banswer\b.*{NOT_KEPT}.*password", on_block(tab, "ask"), re.S), on_block(tab, "ask")
+    assert re.search(rf"\banswer\b.*{NOT_KEPT}it held a password, which is never written to disk", on_block(tab, "ask"),
+                     re.S), on_block(tab, "ask")
     assert re.search(rf"\bconn\b.*{NOT_KEPT}.*cannot be saved", on_block(tab, "connect"), re.S), \
         on_block(tab, "connect")
     before = run_ids(win)
@@ -791,11 +844,13 @@ def test_l6_the_loaded_runs_files_cleaned_up_by_keep_runs_the_bar_says_so_and_a_
     load_state(win, qtbot, first.run)
     shown = canvas(tab)
     assert "10 rows" in shown["load_orders"]
+    cleaned = (f"Loaded state of run #{first.run} · {started(win, first.run)}: its files were cleaned up (Keep runs, "
+               "keep_runs_for), so nothing can be re-run from it; the blocks still show its results")
 
     run_cli(win, tab.doc.path)
     assert not (win.home.runs_dir / str(first.run)).exists(), "Keep runs did not clean run #1 up"
 
-    assert eventually(qtbot, lambda: "cleaned up" in (bar(tab) or ""), timeout=10_000), bar(tab)
+    assert eventually(qtbot, lambda: bar(tab) == cleaned, timeout=10_000), bar(tab)
     assert canvas(tab) == shown
     before, had = run_ids(win), received(tmp_path, "clean")
     clean = rerun(win, qtbot, tab, "clean", RUN_ONLY)
@@ -807,23 +862,29 @@ def test_l6_the_loaded_runs_files_cleaned_up_by_keep_runs_the_bar_says_so_and_a_
 @pytest.mark.invariant("LS-7")
 def test_l7_a_run_whose_files_are_gone_or_that_kept_none_cannot_be_loaded_and_the_item_says_why(
         win, qtbot, tmp_path, monkeypatch):
-    """L7: four runs of the orders flow: one with a block's folder deleted (partly cleaned up), one whose folder was
-    deleted by hand, one stopped at once (it kept no files), one whole. Right-clicking each in Run history: Load run
-    state is disabled and says its files are gone for the first three; it can be chosen for the whole one."""
+    """L7: six runs of the orders flow: two that failed (no orders.txt: load_orders failed, the blocks after it were
+    skipped), one with the failed block's folder deleted, one with a skipped block's; then one with a block's folder
+    deleted (partly cleaned up), one whose folder was deleted by hand, one stopped at once (it kept no files), one
+    whole. Right-clicking each in Run history: Load run state is disabled and says its files are gone for all but
+    the whole one, which can be chosen; hovering the item says what loading does."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "orders.txt").write_text("10")
     path = orders_flow(tmp_path)
+    failed_gone, skipped_gone = engine_runs(win, path, 2)
+    (tmp_path / "orders.txt").write_text("10")
     partly, by_hand, whole = engine_runs(win, path, 3)
     (none_kept,) = engine_runs(win, path, 1, stopped_at_once=True)
+    shutil.rmtree(win.home.runs_dir / str(failed_gone) / "load_orders")
+    shutil.rmtree(win.home.runs_dir / str(skipped_gone) / "clean")
     shutil.rmtree(win.home.runs_dir / str(partly) / "clean")
     shutil.rmtree(win.home.runs_dir / str(by_hand))
     assert not (win.home.runs_dir / str(none_kept)).exists()
     win.open_flow(path)
+    assert {run: status for run, _, status in rows(win)}[str(failed_gone)] == "failed", rows(win)
 
-    for run in (partly, by_hand, none_kept):
-        item = load_item(win, qtbot, run)
-        assert not item["enabled"] and "files" in f"{item['text']} {item['tip']}", (run, item)
-    assert load_item(win, qtbot, whole)["enabled"]
+    for run in (failed_gone, skipped_gone, partly, by_hand, none_kept):
+        assert load_item(win, qtbot, run) == {"text": FILES_GONE, "enabled": False, "submenu": False,
+                                              "tip": LOAD_TIP}, run
+    assert load_item(win, qtbot, whole) == {"text": LOAD, "enabled": True, "submenu": False, "tip": LOAD_TIP}
 
 
 @pytest.mark.invariant("LS-7")
@@ -841,7 +902,7 @@ def test_l7_a_run_still_going_cannot_be_loaded_until_it_ends(win, qtbot, tmp_pat
         (run,) = run_ids(win)
         item = load_item(win, qtbot, run)
         assert proc.poll() is None, "the run ended before it was looked at"
-        assert not item["enabled"] and "still going" in f"{item['text']} {item['tip']}", item
+        assert (item["text"], item["enabled"]) == (f"{LOAD} (still going)", False), item
     finally:
         assert proc.wait(timeout=60) == 0
 
@@ -931,7 +992,8 @@ def test_l10_a_loaded_rerun_shows_carried_blocks_inside_a_loop_and_says_when_the
     """L10: a Loop (work inside it, over 3 items) then report; Keep runs: the last 3. Run #1; report re-run alone (run
     #2: the Loop and work carried over from run #1, whose own folder holds nothing of work's); run #3, item b failing.
     Load run #2: the Loop and work show what they showed when run #1 ended, not run #3's. A run from a terminal then
-    makes Keep runs clean run #1 up: loaded again, run #2's work says its result is gone, naming run #1."""
+    makes Keep runs clean run #1 up: loaded again, run #2's work says its result is gone, naming run #1, and
+    hovering it says why; report, which run #2 ran itself, still shows its result."""
     work = ("import os\nif item == 'b' and os.path.exists('fail_b.txt'):\n    raise ValueError('no b')\n"
             "output = item.upper()")
     path = keep_last(per_item(tmp_path, ["a", "b", "c"], work), 3)
@@ -953,7 +1015,10 @@ def test_l10_a_loaded_rerun_shows_carried_blocks_inside_a_loop_and_says_when_the
     assert not (win.home.runs_dir / str(first.run)).exists(), "Keep runs did not clean run #1 up"
     leave(tab)
     load_state(win, qtbot, again.run)
-    assert "gone" in on_block(tab, "work") and names(on_block(tab, "work"), first.run), on_block(tab, "work")
+    assert on_block(tab, "work") == (
+        f"gone · run #{first.run} was cleaned up\nIts result was carried over from run #{first.run}, which has been "
+        "cleaned up since (Keep runs, keep_runs_for): it is gone."), on_block(tab, "work")
+    assert under(tab, "report").startswith("✓"), canvas(tab)
 
 
 @pytest.mark.invariant("LS-1")
@@ -1024,13 +1089,20 @@ def the_question(asked: list) -> dict:
 @needs_git
 @pytest.mark.invariant("LS-8")
 def test_l14_cancel_on_the_question_changes_nothing(win, qtbot, tmp_path, monkeypatch):
-    """L14: the flow changed since run #1. Loading run #1 asks first; Cancel: nothing changes (the canvas, the flow in
-    the tab and in its file, no bar)."""
+    """L14: the flow changed since run #1. Loading run #1 asks first, over the editor window: the question names run
+    #1 and its time and the flow's file, and says what each answer does; Cancel: nothing changes (the canvas, the
+    flow in the tab and in its file, no bar)."""
     tab, path, v1, v2, first = changed_since_run(win, tmp_path / "flows")
     shown, held = canvas(tab), copy.deepcopy(tab.doc.data)
+    label = f"run #{first} · {started(win, first)}"
 
-    the_question(load_state(win, qtbot, first, CANCEL, monkeypatch))
+    question = the_question(load_state(win, qtbot, first, CANCEL, monkeypatch))
 
+    assert question["text"] == titled("Load run state", (
+        f"{label} was made with an earlier version of the flow: {path.name} has changed since. Its results can be "
+        "shown on today's flow (blocks deleted since are left out; blocks added since show nothing), or the flow can "
+        "be brought back as it was then, into this tab as unsaved edits (Edit → Undo takes them back).")), question
+    assert question["owner"] is win, question
     assert canvas(tab) == shown and tab.doc.data == held and not tab.doc.dirty
     assert bar(tab) is None and path.read_bytes() == v2
 
@@ -1051,7 +1123,7 @@ def test_l14_show_on_todays_flow_leaves_out_deleted_blocks_and_a_block_added_sin
     assert set(tab.scene.nodes) == set(yaml.safe_load(v2)["blocks"])
     assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v2)) and not tab.doc.dirty and path.read_bytes() == v2
     said = bar(tab)
-    assert names(said, first) and "today's flow" in said, said
+    assert said == loaded_bar(win, first, TODAYS_FLOW), said
 
 
 @needs_git
@@ -1068,13 +1140,14 @@ def test_l14_bring_back_puts_the_old_flow_in_the_tab_as_unsaved_edits_and_ctrl_z
 
     question = the_question(load_state(win, qtbot, first, AS_IT_WAS, monkeypatch))
 
-    assert next(b for b in question["buttons"] if b["text"].startswith(AS_IT_WAS))["enabled"]
+    back = next(b for b in question["buttons"] if b["text"].startswith(AS_IT_WAS))
+    assert back["enabled"] and back["tip"] == "", back
     assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1)) and tab.doc.dirty
     assert set(tab.scene.nodes) == set(yaml.safe_load(v1)["blocks"])
     assert "10 rows" in under(tab, "load_orders") and under(tab, "archive").startswith("✓"), canvas(tab)
     assert path.read_bytes() == v2
     said = bar(tab)
-    assert names(said, first) and "as it was" in said, said
+    assert said == loaded_bar(win, first, AS_IT_WAS_THEN), said
 
     menu(win, "Undo").trigger()  # Ctrl+Z
 
@@ -1097,13 +1170,13 @@ def test_l14_after_bring_back_ctrl_z_the_bar_says_todays_flow_and_ctrl_y_as_it_w
     assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v2))
     assert "10 rows" in under(tab, "load_orders") and under(tab, "extra") == "", canvas(tab)
     said = bar(tab)
-    assert names(said, first) and "today's flow" in said and "as it was" not in said, said
+    assert said == loaded_bar(win, first, TODAYS_FLOW), said
 
     menu(win, "Redo").trigger()  # Ctrl+Y
 
     assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1))
     said = bar(tab)
-    assert names(said, first) and "as it was" in said and "today's flow" not in said, said
+    assert said == loaded_bar(win, first, AS_IT_WAS_THEN), said
 
 
 @needs_git
@@ -1122,6 +1195,33 @@ def test_l14_a_rerun_of_a_brought_back_flow_asks_before_saving_it_over_the_file_
         right_click_and_choose(win, qtbot, tab, "clean", RUN_ON)
 
     assert len(asked) == 1, asked
+    assert path.read_bytes() == v2
+    assert run_ids(win) == before and received(folder, "clean") == had
+    assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1)) and tab.doc.dirty
+
+
+@needs_git
+@pytest.mark.invariant("LS-8")
+def test_l14_a_rerun_of_a_brought_back_flow_asks_over_the_window_naming_the_run_and_the_file_and_enter_answers_no(
+        win, qtbot, tmp_path, monkeypatch):
+    """L14: the flow brought back as it was at run #1; clean, Run from this block on: the question, Qt's own message
+    box over the editor window, is "Save the flow as it was?", names run #1 and its time and the file it would be
+    saved over, and offers Yes and No. Enter answers No: the file is not written, no run is made, clean does not
+    run."""
+    folder = tmp_path / "flows"
+    tab, path, v1, v2, first = changed_since_run(win, folder)
+    the_question(load_state(win, qtbot, first, AS_IT_WAS, monkeypatch))
+    label = f"run #{first} · {started(win, first)}"
+    before, had = run_ids(win), received(folder, "clean")
+
+    with monkeypatch.context() as real, answering(ENTER) as asked:
+        real.setattr(QMessageBox, "question", REAL_QUESTION)  # (only meanwhile: closing the window asks no more)
+        right_click_and_choose(win, qtbot, tab, "clean", RUN_ON)
+
+    assert [(q["text"], sorted(b["text"] for b in q["buttons"]), q["owner"]) for q in asked] == [(titled(
+        "Save the flow as it was?",
+        f"This tab holds the flow as it was at {label}, brought back from its Git history and not saved. It is saved "
+        f"before it runs: over {path.name}, in place of the flow that file holds now. Save it?"), ["No", "Yes"], win)]
     assert path.read_bytes() == v2
     assert run_ids(win) == before and received(folder, "clean") == had
     assert flow_of(tab.doc.data) == flow_of(yaml.safe_load(v1)) and tab.doc.dirty
@@ -1172,7 +1272,7 @@ def test_l14_a_version_not_in_the_flows_git_history_cannot_be_brought_back_and_t
     question = the_question(load_state(win, qtbot, first, CANCEL, monkeypatch))
 
     (back,) = [b for b in question["buttons"] if b["text"].startswith(AS_IT_WAS)]
-    assert not back["enabled"] and "Git history" in back["tip"], back
+    assert not back["enabled"] and back["tip"] == NOT_IN_GIT, back
 
 
 @pytest.mark.invariant("LS-8")
@@ -1187,6 +1287,22 @@ def test_l14_a_run_of_the_flow_as_it_is_loads_without_a_question(win, qtbot, tmp
 
     assert asked == []
     assert names(bar(tab), first.run) and "10 rows" in under(tab, "load_orders")
+
+
+@pytest.mark.invariant("LS-8")
+def test_l14_a_run_of_a_flow_whose_file_was_deleted_since_asks_first_and_shows_on_todays_flow(
+        win, qtbot, tmp_path, monkeypatch):
+    """L14: run #1 of the orders flow (10 orders); its file then deleted, the tab still holding the flow. Loading run
+    #1 asks first, as for a flow changed since (no file holds the version run #1 ran); "Show on today's flow": the
+    blocks show run #1's results and the bar says it is shown on today's flow."""
+    tab, first = full_run(win, qtbot, tmp_path, rows=10)
+    assert first.status == "success", first.log
+    says = loaded_bar(win, first.run, TODAYS_FLOW)
+    tab.doc.path.unlink()
+
+    the_question(load_state(win, qtbot, first.run, TODAY, monkeypatch))
+
+    assert bar(tab) == says and "10 rows" in under(tab, "load_orders"), (bar(tab), canvas(tab))
 
 
 # --- LS-9: a loaded state comes back after Taskloom is closed --------------------------------------------------------
@@ -1213,6 +1329,7 @@ def test_l15_states_loaded_in_two_tabs_come_back_after_closing_taskloom_a_cleane
     b_again = rerun(win, qtbot, tab_b, "clean", RUN_ONLY)
     assert {s.status for s in (a_first, a_second, b_first, b_second, b_again)} == {"success"}, b_again.log
     assert names(bar(tab_a), a_first.run) and names(bar(tab_b), b_again.run), (bar(tab_a), bar(tab_b))
+    b_says = loaded_bar(win, b_again.run)  # (B's tab on screen: Run history lists its runs)
     a_path, b_path = tab_a.doc.path, tab_b.doc.path
 
     win.close()
@@ -1225,9 +1342,49 @@ def test_l15_states_loaded_in_two_tabs_come_back_after_closing_taskloom_a_cleane
     tabs = {t.doc.path: t for t in again.tabs_list()}
     assert set(tabs) == {real_path(a_path), real_path(b_path)}
     tab_a, tab_b = tabs[real_path(a_path)], tabs[real_path(b_path)]
-    assert eventually(qtbot, lambda: names(bar(tab_b), b_again.run), timeout=10_000), bar(tab_b)
+    assert eventually(qtbot, lambda: bar(tab_b) == b_says, timeout=10_000), bar(tab_b)
     assert "10 rows" in under(tab_b, "load_orders") and "10 rows" in under(tab_b, "clean"), canvas(tab_b)
-    assert eventually(qtbot, lambda: "cleaned up" in (bar(tab_a) or ""), timeout=10_000), bar(tab_a)
+    assert eventually(qtbot, lambda: bar(tab_a) == restored_gone(a_first.run), timeout=10_000), bar(tab_a)
     assert eventually(qtbot, lambda: "15 rows" in under(tab_a, "load_orders"), timeout=10_000), canvas(tab_a)
+
+
+@pytest.mark.invariant("LS-9")
+def test_l15_a_state_restored_on_a_flow_changed_since_says_todays_flow_and_one_whose_folder_was_deleted_is_gone(
+        win, qtbot, tmp_path):
+    """L15: flow C has its run #1 loaded (10 orders), flow D its run #1 (10 orders). Taskloom closed; C's file then
+    changed by hand (archive deleted); D's run #1 folder deleted by hand, and D run from a terminal (12 orders).
+    Taskloom started again: nothing is asked; C's bar names run #1 and says it is shown on today's flow, its blocks
+    showing run #1's results; D's bar says its run is gone and D shows the newest results (12)."""
+    c, d = tmp_path / "c", tmp_path / "d"
+    c.mkdir()
+    d.mkdir()
+    tab_c, c_first = full_run(win, qtbot, c, rows=10)
+    load_state(win, qtbot, c_first.run)
+    c_says = loaded_bar(win, c_first.run, TODAYS_FLOW)
+    tab_d, d_first = full_run(win, qtbot, d, rows=10)
+    load_state(win, qtbot, d_first.run)
+    assert {s.status for s in (c_first, d_first)} == {"success"}, d_first.log
+    c_path, d_path = tab_c.doc.path, tab_d.doc.path
+
+    win.close()
+    QApplication.processEvents()
+
+    def without_archive(data):
+        del data["blocks"]["archive"]
+        data["edges"] = [e for e in data["edges"] if "archive" not in e]
+    edited(c_path, without_archive)
+    shutil.rmtree(win.home.runs_dir / str(d_first.run))
+    (d / "orders.txt").write_text("12")
+    run_cli(win, d_path)
+    with answering() as asked:
+        again = start_again(win, qtbot)
+
+    assert asked == []
+    tabs = {t.doc.path: t for t in again.tabs_list()}
+    tab_c, tab_d = tabs[real_path(c_path)], tabs[real_path(d_path)]
+    assert eventually(qtbot, lambda: bar(tab_c) == c_says, timeout=10_000), bar(tab_c)
+    assert "10 rows" in under(tab_c, "load_orders") and "10 rows" in under(tab_c, "clean"), canvas(tab_c)
+    assert eventually(qtbot, lambda: bar(tab_d) == restored_gone(d_first.run), timeout=10_000), bar(tab_d)
+    assert eventually(qtbot, lambda: "12 rows" in under(tab_d, "load_orders"), timeout=10_000), canvas(tab_d)
 
 

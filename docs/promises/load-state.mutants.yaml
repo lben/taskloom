@@ -16,15 +16,14 @@ scope:
         - taskloom/editor/window.py MainWindow._not_loadable
         - taskloom/editor/window.py MainWindow._run_menu
       tests:
-        - tests/test_load_state.py -k "l7_ or l1_a_loaded"
+        - tests/test_load_state.py -k "l7_ or l1_a_loaded or l8_a_loaded_run_shows"
         - tests/test_copy_executed_query.py
     - mutate:
         - taskloom/editor/window.py MainWindow.load_state
         - taskloom/editor/window.py MainWindow._flow_as_it_was
         - taskloom/editor/window.py MainWindow._changed_since
-        - taskloom/history.py History.version
       tests:
-        - tests/test_load_state.py -k "l14 or l1_a_loaded or l4_ or l16"
+        - tests/test_load_state.py -k "l14 or l1_a_loaded or l1_with_no_flow_open or l4_ or l16"
     - mutate:
         - taskloom/editor/document.py FlowDocument.restore
         - taskloom/editor/document.py FlowDocument.in_effect
@@ -39,13 +38,14 @@ scope:
         - taskloom/engine.py not_kept
         - taskloom/engine.py _why_not_kept
       tests:
-        - tests/test_load_state.py -k "l1_ or l5_ or l8_ or l9_ or l10_ or l11_ or l14_show or l16"
+        - tests/test_load_state.py -k "l1_a_loaded or l5_ or l8_ or l9_ or l10_ or l11_ or l14_show or l16"
         - tests/test_done_where_needed.py -k not_kept
     - mutate:
         - taskloom/editor/window.py MainWindow._set_state
         - taskloom/editor/window.py MainWindow._show_bar
         - taskloom/editor/window.py MainWindow.leave_state
         - taskloom/editor/window.py MainWindow._restore_state
+        - taskloom/history.py History.version
       tests:
         - tests/test_load_state.py -k "l1_a_loaded or l2_ or l3_ or l6_ or l12 or l13 or l14_show or l14_bring_back or l14_after_bring_back or l15 or l17"
     - mutate:
@@ -113,3 +113,58 @@ not_tested:
   taskloom/editor/canvas.py FlowScene.show_result: >-
     A block's result on the canvas, to which this change added two lines (each value not kept, named with its reason,
     in the hover): test_l9 reads the hover of both blocks.
+kinds:
+  - kind: The same SQL in other letter case
+    why: >-
+      SQLite reads its keywords and the names of tables and columns the same in capital and in small letters:
+      "select version from runs where id=?" does what "SELECT version FROM runs WHERE id=?" does.
+    mutants:
+      - taskloom.history.xǁHistoryǁversion__mutmut_7
+      - taskloom.history.xǁHistoryǁversion__mutmut_8
+      - taskloom.history.xǁHistoryǁcarried_on_from__mutmut_7
+      - taskloom.history.xǁHistoryǁcarried_on_from__mutmut_8
+  - kind: The parent of a menu that opens where it is told
+    why: >-
+      Run history's menu opens at the point right-clicked (QMenu.exec there), as a window of its own, and is closed
+      before _run_menu returns. It takes its style and colours from the application (theme.py sets them there), and
+      its font too: Qt passes a parent's font and colours on to a window only with WA_WindowPropagation, which
+      Taskloom never sets. Nothing reads its parent: with the editor window as its parent or none, it shows and works
+      the same.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_run_menu__mutmut_21
+  - kind: Words put in a bar as it is hidden
+    why: >-
+      _show_bar puts "" (here "XXXX") in the bar only when no state is loaded and no words are given, and hides the
+      bar in the same call. The bar is shown again only with words of its own, put in before it shows (they differ
+      from what it holds), so what a hidden bar holds is never seen.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_show_bar__mutmut_32
+  - kind: A stand-in for None or False where only identity or truth is asked
+    why: >-
+      tab.shown_run is only compared by identity with a run's process (run is tab.shown_run, in _on_output,
+      _on_event and _on_finished, whose run is always a RunProcess): "" is no run's process, as None is not.
+      tab.following_latest is only read for its truth (start_run, inputs_run, _load_last_run): None is false as False
+      is.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_show_state__mutmut_21
+      - taskloom.editor.window.xǁMainWindowǁ_show_state__mutmut_23
+  - kind: The name of a status no drawing has a colour for
+    why: >-
+      A carried block whose run is gone gets the status "gone", which none of the canvas's lists names
+      (STATUS_COLORS, the bold and the dashed borders, the counter of a running block): it is drawn with the plain
+      border and its words in the muted colour, and so are "XXgoneXX" and "GONE". Nothing else reads a block's status
+      on the canvas; the words under it and its hover text, which the tests read, say that it is gone.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_show_state__mutmut_55
+      - taskloom.editor.window.xǁMainWindowǁ_show_state__mutmut_56
+  - kind: A default never used, as every kept file lists both
+    why: >-
+      _why_not_kept is asked only about an output in a kept file's list of outputs not saved (WITHHELD), and every
+      file a run keeps has that list and the list of those that held a password (PASSWORDS) together:
+      _Runner._keep_outputs, which writes every KEPT_OUTPUTS and KEPT_INPUTS file, writes both at once. So
+      saved.get(PASSWORDS, ...) always finds the list, and its default is never used. Only a run kept by a Taskloom
+      from before this change lacks it; older run files are not kept readable (no backwards compatibility until flows
+      are in production, as the maintainer decided on 2026-10-13).
+    mutants:
+      - taskloom.engine.x__why_not_kept__mutmut_7
+      - taskloom.engine.x__why_not_kept__mutmut_9
