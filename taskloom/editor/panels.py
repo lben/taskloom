@@ -771,6 +771,21 @@ class _RowsTable(QTableWidget):
             self.row_menu(row, event.globalPos())
 
 
+class _DateTimeBox(QDateTimeEdit):
+    """A date and time box that takes one typed in full as it shows it ("2027-01-02 15:30"), over all of it selected
+    too. Qt's own refuses digits typed over all of it (so the year was kept), and after a part is filled it moves on
+    to the next part, and then again on the separator typed after it."""
+
+    def keyPressEvent(self, event):
+        edit, key = self.lineEdit(), event.text()
+        start = edit.selectionStart()
+        if key.isdigit() and edit.selectedText() == edit.text():
+            self.setSelectedSection(self.sectionAt(0))  # typed from its first part
+        elif key and not key.isalnum() and start > 0 and edit.text()[start - 1] == key:
+            return  # the separator Qt has already moved past
+        super().keyPressEvent(event)
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -1073,7 +1088,7 @@ class PropertiesPanel(QScrollArea):
     def _at_rows(self, form, at: str, show_preview):
         from ..schedule import At
 
-        edit = QDateTimeEdit(calendarPopup=True)
+        edit = _DateTimeBox(calendarPopup=True)
         edit.setDisplayFormat("yyyy-MM-dd HH:mm")
         try:
             when = At(at).when

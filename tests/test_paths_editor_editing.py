@@ -1040,6 +1040,28 @@ def test_a_one_time_schedule_typed_or_picked_in_its_calendar_is_saved_and_schedu
     clean(win)
 
 
+def test_a_one_time_schedule_typed_over_all_of_its_date_and_time_keeps_the_year_typed(win, tmp_path):
+    """Everything in the On box selected and a date and time typed over it as the box shows them: the year typed is
+    saved too, not the box's year (here from the last evening of a year to the next morning, in the next year)."""
+    flow = flow_file(tmp_path / "once.yaml", {
+        "schedule": {"type": "trigger.schedule", "config": {"at": "2040-12-31 23:30"}},
+        "work": {"type": "logic.python", "config": {"inputs": [], "code": "pass"}},
+    }, ["schedule.start -> work.after"])
+    tab = win.open_flow(flow)
+    select_only(tab, "schedule")
+
+    on = field(win, "On")
+    on.setFocus()
+    QTest.keyClick(on, Qt.Key_A, Qt.ControlModifier)
+    QTest.keyClicks(on, "2041-01-01 00:15")
+    QTest.keyClick(on, Qt.Key_Return)
+    settle()
+
+    assert on.text() == "2041-01-01 00:15"
+    assert tab.doc.blocks["schedule"]["config"] == {"at": "2041-01-01 00:15"}
+    clean(win)
+
+
 def test_an_inactive_schedule_is_not_scheduled_and_its_misfire_choice_is_saved(win, qtbot, tmp_path):
     flow = flow_file(tmp_path / "paused.yaml", {
         "nightly": {"type": "trigger.schedule", "config": {"cron": "0 2 * * *"}},
