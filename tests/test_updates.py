@@ -322,7 +322,7 @@ def json_links(monkeypatch):
 
 # --- the release: a local HTTPS server standing for Taskloom's GitHub releases ----------------------------------------
 
-def release_zip(version: str = NEW, *, leave_out: tuple = (), version_text: str | None = None,
+def release_zip(version: str = NEW, *, leave_out: tuple = (), version_text: str | bytes | None = None,
                 damaged: bool = False, extra: dict | None = None) -> bytes:
     """The Windows zip as packaging/build.py makes it: a top folder taskloom/ (with its folders' entries) holding the
     programs, VERSION, the libraries (a 1.5 MB file), examples. `damaged`: a byte of the libraries changed after the zip
@@ -330,7 +330,7 @@ def release_zip(version: str = NEW, *, leave_out: tuple = (), version_text: str 
     files = {
         "taskloom/taskloomw.exe": f"stand-in windowed program {version}".encode(),
         "taskloom/taskloom.exe": f"stand-in program {version}".encode(),
-        "taskloom/VERSION": (version_text or version).encode(),
+        "taskloom/VERSION": version_text if isinstance(version_text, bytes) else (version_text or version).encode(),
         "taskloom/README.md": b"Taskloom\n",
         "taskloom/_internal/base_library.zip": random.Random(1).randbytes(1_500_000),
         "taskloom/examples/hello.yaml": b"blocks: {}\n",
@@ -348,6 +348,18 @@ def release_zip(version: str = NEW, *, leave_out: tuple = (), version_text: str 
         name_length, extra_length = int.from_bytes(data[info.header_offset + 26:info.header_offset + 28], "little"), \
             int.from_bytes(data[info.header_offset + 28:info.header_offset + 30], "little")
         data[info.header_offset + 30 + name_length + extra_length + 1000] ^= 0xFF
+    return bytes(data)
+
+
+def with_a_password(data: bytes, name: str = "taskloom/README.md") -> bytes:
+    """The zip `data` with its entry `name` marked as encrypted, as in a zip made with a password: no tool reads it
+    without one (Python's zipfile: RuntimeError)."""
+    data = bytearray(data)
+    data[zipfile.ZipFile(io.BytesIO(bytes(data))).getinfo(name).header_offset + 6] |= 0x1  # (its local header's flags)
+    at = data.find(b"PK\x01\x02")
+    while data[at + 46:at + 46 + len(name)] != name.encode():  # (its central directory entry)
+        at = data.find(b"PK\x01\x02", at + 1)
+    data[at + 8] |= 0x1
     return bytes(data)
 
 
@@ -411,7 +423,8 @@ class Releases:
     def __init__(self, certificate):
         self.tag, self.zip = f"v{NEW}", release_zip()
         self.api_status = self.download_status = 200
-        self.digest = None  # (None: the zip's own)
+        self.digest = self.size = None  # (None: the zip's own)
+        self.asset_name = ASSET  # the Windows zip's name in the release
         self.cut_short = False  # the download stops after half, though it said its full size
         self.hold = None  # a threading.Event: the download sends half, then waits for it
         self.redirect = "same host"  # or "another host" (https://localhost: not in HOSTS)
@@ -494,7 +507,7 @@ class Releases:
                 "assets": [
                     {"name": "taskloom-runner-linux-x86_64.tar.gz", "size": 1000, "digest": "sha256:" + "1" * 64,
                      "browser_download_url": f"https://127.0.0.1:{self.port}/elsewhere/runner.tar.gz"},
-                    {"name": ASSET, "size": len(self.zip), "content_type": "application/zip",
+                    {"name": self.asset_name, "size": self.size or len(self.zip), "content_type": "application/zip",
                      "digest": self.digest or "sha256:" + hashlib.sha256(self.zip).hexdigest(),
                      "browser_download_url": download}]}
 
@@ -562,12 +575,13 @@ class Boxes:
     No. A window that waits for an answer some other way (modal) is closed and written down as ("modal", its words)."""
 
     def __init__(self):
-        self.seen, self.answers = [], []
+        self.seen, self.answers, self.over = [], [], []  # over: the window each box was shown over (its parent)
 
     def box(self, kind):
         def shown(parent, title, text, *args, **kwargs):
             said = f"{title}\n{text}"
             self.seen.append((kind, said))
+            self.over.append(parent)
             if kind == "question":
                 return next((button for words, button in self.answers if words in said), QMessageBox.No)
             return QMessageBox.Ok
@@ -637,8 +651,9 @@ def editor(qtbot, tmp_path, monkeypatch, folders, this, releases, boxes):
 class Started:
     """A program started from a version's folder under <LOCALAPPDATA>/Programs/Taskloom (its stand-in exe cannot run)."""
 
-    def __init__(self, args, env):
+    def __init__(self, args, env, how: dict):
         self.args, self.env, self.pid, self.returncode = [str(a) for a in args], env, 999_999, None
+        self.how = how  # Popen's other arguments
         self.stdin = self.stdout = self.stderr = None
 
     def poll(self):
@@ -668,7 +683,7 @@ def starts(monkeypatch, folders) -> list[Started]:
     def popen(args, *rest, **kwargs):
         program = args[0] if isinstance(args, (list, tuple)) else args
         if norm(program).startswith(norm(folders.programs) + os.sep):
-            started.append(Started(args, kwargs.get("env")))
+            started.append(Started(args, kwargs.get("env"), kwargs))
             return started[-1]
         return real(args, *rest, **kwargs)
 
@@ -682,6 +697,15 @@ def editors_started(starts) -> list[Started]:
 
 def services_started(starts) -> list[Started]:
     return [s for s in starts if "scheduler" in s.args]
+
+
+def started_on_its_own(started: Started) -> bool:
+    """Whether a program was started on its own: its input and output not this editor's (nothing to read or write
+    there), on Windows detached from any console and with no console window of its own."""
+    how = started.how
+    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW if WINDOWS else 0  # (only Windows has them)
+    return (all(how.get(name) == subprocess.DEVNULL for name in ("stdin", "stdout", "stderr"))
+            and how.get("creationflags", 0) == flags)
 
 
 def help_items(window) -> list[str]:
@@ -711,6 +735,13 @@ def button(widget: QWidget, text: str) -> QAbstractButton:
     found = [b for b in widget.findChildren(QAbstractButton) if b.text().replace("&", "") == text and b.isVisible()]
     assert found, f"no {text!r} button: {[b.text() for b in widget.findChildren(QAbstractButton)]}"
     return found[0]
+
+
+def at_the_right(cancel: QWidget, window: QWidget) -> bool:
+    """Whether a button is at the right of its window, below its text (not stretched across it)."""
+    texts = [label.geometry() for label in window.findChildren(QLabel) if label.isVisible()]
+    return (cancel.width() < window.width() // 2 and cancel.geometry().right() > window.width() * 3 // 4
+            and all(cancel.geometry().top() > text.bottom() for text in texts))
 
 
 def words_of(widget: QWidget) -> str:
@@ -775,6 +806,9 @@ def install(editor, qtbot, boxes, restart: int = QMessageBox.No, timeout: int = 
     qtbot.waitUntil(lambda: any(RESTART in said for kind, said in boxes.seen if kind == "question")
                     or any(kind == "warning" for kind, _ in boxes.seen), timeout=timeout)
     assert [said for kind, said in boxes.seen if kind == "warning"] == [], "the install failed"
+    assert [said for kind, said in boxes.seen if kind == "question"] == [
+        f"{CHECK}\nTaskloom {NEW} is out; this is {__version__}. {INSTALL}", f"Taskloom updated\n{RESTART}"]
+    assert all(window is editor for window in boxes.over), "a question not shown over the editor window"
 
 
 # --- U1: Check for updates, Install, the download --------------------------------------------------------------------
@@ -814,6 +848,7 @@ def test_u1_u9_check_for_updates_installs_the_newer_release_while_the_editor_sta
     assert len(editor.tabs_list()) == tabs + 1, "the editor did not make a new flow while the download went on"
     releases.hold.set()
     qtbot.waitUntil(lambda: any(RESTART in said for _, said in boxes.seen), timeout=60_000)
+    told = editor.statusBar().currentMessage()
 
     (asked_install, asked_restart) = boxes.take("question")
     assert NEW in asked_install and INSTALL in asked_install, asked_install
@@ -831,6 +866,10 @@ def test_u1_u9_check_for_updates_installs_the_newer_release_while_the_editor_sta
     headers = {k.lower(): v for k, v in api["headers"].items()}
     assert headers.get("accept") == "application/vnd.github+json", headers
     assert headers.get("user-agent", "").startswith("taskloom/"), headers
+    (download,) = [r for r in releases.requests if r["path"] == DOWNLOAD_PATH]
+    headers = {k.lower(): v for k, v in download["headers"].items()}
+    assert headers.get("accept") == "application/octet-stream", headers  # (GitHub's asset URLs: the file, not its info)
+    assert told == f"Taskloom {NEW} is installed in {installed}.", f"the status bar says {told!r}"
     assert shown_widget(editor, "update-progress") is None, "the download window stays open"
     qtbot.wait(1500)
     assert editor.isVisible() and editors_started(starts) == [], "No to the restart did not keep this editor"
@@ -852,6 +891,9 @@ def test_u1_cancel_during_the_download_leaves_nothing_behind(editor, qtbot, fold
     progress = shown_widget(editor, "update-progress")
     (progress_bar,) = progress.findChildren(QProgressBar)
     qtbot.waitUntil(lambda: progress_bar.value() > 0, timeout=30_000)
+    assert progress.windowTitle() == f"Taskloom {NEW}", progress.windowTitle()
+    assert [label.text() for label in progress.findChildren(QLabel)] == [f"Downloading Taskloom {NEW}…"]
+    assert at_the_right(button(progress, "Cancel"), progress), "Cancel is not at the right of the download window"
     QTest.mouseClick(button(progress, "Cancel"), Qt.LeftButton)
     qtbot.waitUntil(lambda: shown_widget(editor, "update-progress") is None, timeout=10_000)
     releases.hold.set()
@@ -865,22 +907,28 @@ def test_u1_cancel_during_the_download_leaves_nothing_behind(editor, qtbot, fold
     assert starts == []
 
 
-@pytest.mark.parametrize("after", ["the first file", "the last file"])
+@pytest.mark.parametrize("after", ["nothing yet", "the first file", "the last file"])
 @pytest.mark.invariant("UP-1")
 @pytest.mark.invariant("UP-3")
 def test_u1_cancel_while_unpacking_leaves_nothing_behind(editor, qtbot, monkeypatch, folders, this, releases, boxes,
                                                          starts, after):
-    """U1: Install? Yes; the zip is downloaded and is being unpacked (the first of its files, or the last, is written
-    in the part of the download) when Cancel is pressed in the download window: nothing is left in
+    """U1: Install? Yes; the zip is downloaded and is being unpacked (nothing is written yet, or the first of its files,
+    or the last, is written in the part of the download): the download window says so and its bar shows the bytes
+    unpacked so far of all (empty before the first), then Cancel is pressed in it: nothing is left in
     <LOCALAPPDATA>/Programs/Taskloom (no version folder, no part of the download), the entries still start this
     version, no message (you cancelled), no restart offered."""
     both_entries(folders, this, editor.home.root)
     entries = entries_now(folders)
-    files = [m.filename for m in zipfile.ZipFile(io.BytesIO(releases.zip)).infolist() if not m.is_dir()]
-    chosen = files[0] if after == "the first file" else files[-1]
+    members = zipfile.ZipFile(io.BytesIO(releases.zip)).infolist()
+    files = [m.filename for m in members if not m.is_dir()]
+    chosen = {"nothing yet": None, "the first file": files[0], "the last file": files[-1]}[after]
+    before = [m.file_size for m in members][:[m.filename for m in members].index(chosen)] if chosen else []
     reached, go, extract = threading.Event(), threading.Event(), zipfile.ZipFile.extract
 
     def extracting(self, member, *args, **kwargs):
+        if chosen is None:  # (waits before the first is written)
+            reached.set()
+            go.wait(60)
         done = extract(self, member, *args, **kwargs)
         if getattr(member, "filename", member) == chosen:
             reached.set()
@@ -895,8 +943,17 @@ def test_u1_cancel_while_unpacking_leaves_nothing_behind(editor, qtbot, monkeypa
         qtbot.waitUntil(reached.is_set, timeout=60_000)
         progress = shown_widget(editor, "update-progress")
         assert progress is not None, "the download window closed while the zip was unpacked"
-        partly = [p for p in folders.programs.iterdir() if p.name.startswith(".partial-")]
-        assert [p for p in partly if (p / chosen).is_file()], f"{chosen} is not unpacked yet: {leftovers(folders)}"
+        assert [label.text() for label in progress.findChildren(QLabel)] == [f"Checking and unpacking Taskloom {NEW}…"]
+        (progress_bar,) = progress.findChildren(QProgressBar)
+        if chosen is None:  # (an empty bar: Qt shows a value at or below its minimum as nothing done)
+            qtbot.waitUntil(lambda: progress_bar.maximum() != len(releases.zip), timeout=5_000)  # (not the download's)
+            assert progress_bar.value() <= progress_bar.minimum(), (progress_bar.value(), progress_bar.minimum())
+        else:
+            partly = [p for p in folders.programs.iterdir() if p.name.startswith(".partial-")]
+            assert [p for p in partly if (p / chosen).is_file()], f"{chosen} is not unpacked yet: {leftovers(folders)}"
+            shows = (sum(before), sum(m.file_size for m in members))  # (the files before the one being written)
+            eventually(qtbot, lambda: (progress_bar.value(), progress_bar.maximum()) == shows, timeout=5_000)
+            assert (progress_bar.value(), progress_bar.maximum()) == shows, (progress_bar.value(), shows)
         QTest.mouseClick(button(progress, "Cancel"), Qt.LeftButton)
     finally:
         go.set()
@@ -944,6 +1001,40 @@ def test_u1_a_version_already_there_is_used_as_it_is_and_nothing_is_downloaded(e
     assert starts == []
 
 
+@pytest.mark.invariant("UP-1")
+@pytest.mark.invariant("UP-2")
+@pytest.mark.invariant("UP-7")
+def test_u1_an_update_of_a_version_taskloom_installed_whose_entries_cannot_change_yet_says_so(
+        editor, qtbot, monkeypatch, folders, this, releases, boxes, starts):
+    """U1: this Taskloom is one Taskloom installed (<LOCALAPPDATA>/Programs/Taskloom/<this version>), its entries start
+    it, and they cannot be changed just now (where Taskloom locks them, <LOCALAPPDATA>/Taskloom, is a file). Install?
+    Yes: 0.40.0 is installed beside it, its marker naming this one's folder, which is left as it is (a later start
+    removes it, U10); the entries are left as they are (0.40.0's first start points them at itself); the status bar
+    says where 0.40.0 is installed and why the entries could not be changed; the restart is offered."""
+    from taskloom.editor import window as window_module
+
+    home = editor.home.root
+    installed = unpacked(folders.programs / __version__, __version__, marker_from=this)
+    monkeypatch.setattr(window_module, "sys", PackagedSys(installed / "taskloomw.exe"))
+    both_entries(folders, installed, home)
+    entries, before = entries_now(folders), files_in(installed)
+    locks = folders.local / "Taskloom"
+    locks.write_text("not a folder\n", encoding="utf-8")
+
+    install(editor, qtbot, boxes)
+    told = editor.statusBar().currentMessage()
+
+    boxes.take("question")
+    new = folders.programs / NEW
+    assert program_folder_contents(new) == zip_files(releases.zip), "the version's folder is not the zip's"
+    assert norm(json.loads((new / MARKER).read_text(encoding="utf-8"))["from"]) == norm(installed)
+    assert leftovers(folders) == sorted([__version__, NEW]), f"left in {folders.programs}: {leftovers(folders)}"
+    assert files_in(installed) == before and entries_now(folders) == entries
+    assert told.startswith(f"Taskloom {NEW} is installed in {new}.  Could not put it in use yet: "), told
+    assert str(locks) in told, told
+    assert starts == []
+
+
 # --- U2: nothing newer; never by itself; only on Windows ---------------------------------------------------------------
 
 @pytest.mark.parametrize("tag", [f"v{__version__}", "v0.38.0"], ids=["the same version", "an older version"])
@@ -958,8 +1049,9 @@ def test_u2_no_newer_release_says_you_have_the_newest_version_and_downloads_noth
     qtbot.waitUntil(lambda: bool(boxes.seen), timeout=30_000)
     qtbot.wait(500)
 
-    (said,) = boxes.take()
-    assert "You have the newest version" in said, said
+    (said,) = boxes.take("information")
+    assert said == f"{CHECK}\nYou have the newest version, Taskloom {__version__}.", said
+    assert boxes.over == [editor], "the message is not shown over the editor window"
     assert releases.downloads() == [] and leftovers(folders) == []
 
 
@@ -1001,18 +1093,45 @@ def test_u2_help_has_check_for_updates_only_in_the_windows_taskloom(qtbot, tmp_p
 
 # --- U3: a failed update changes nothing ------------------------------------------------------------------------------
 
-FAILURES = {
-    "no connection": ({"no connection": True}, []),
-    "release info 404": ({"api_status": 404}, ["404"]),
-    "download 500": ({"download_status": 500}, ["500"]),
-    "download cut short": ({"cut_short": True}, ["incomplete"]),
-    "checksum differs": ({"digest": "sha256:" + "0" * 64}, ["checksum"]),
-    "broken zip": ({"zip": release_zip(damaged=True)}, ["damaged"]),
-    "no taskloomw.exe": ({"zip": release_zip(leave_out=("taskloom/taskloomw.exe",))}, ["taskloomw.exe"]),
-    "VERSION not the release's": ({"zip": release_zip(version_text="0.39.9")}, ["VERSION"]),
-    "full disk": ({"free": 1000}, ["disk space"]),
-    "plain http": ({"scheme": "http"}, ["refused", "http://127.0.0.1:"]),
-    "redirect to another host": ({"redirect": "another host"}, ["refused", "localhost"]),
+NOT_UPDATED = "Taskloom was not updated\n"  # (the title of a message of a failed download or install)
+ZIP_SIZE = len(release_zip())
+FAILURES = {  # what changes: the start of the message (its title, a new line, its text), more words it has
+    "no connection": ({"no connection": True}, f"{CHECK}\nCould not reach Taskloom's releases: ", []),
+    "release info 404": ({"api_status": 404}, f"{CHECK}\nTaskloom's releases answered HTTP 404 for https://127.0.0.1:",
+                         []),
+    "release info 400": ({"api_status": 400}, f"{CHECK}\nTaskloom's releases answered HTTP 400 for https://127.0.0.1:",
+                         []),
+    "a tag without a version": ({"tag": "latest"},
+                                f"{CHECK}\nTaskloom's releases gave an answer Taskloom cannot read: no version in "
+                                f"'latest'", []),
+    "no Windows zip in the release": ({"asset_name": "taskloom-windows-arm64.zip"},
+                                      f"{CHECK}\nTaskloom {NEW} has no {ASSET} to download", []),
+    "download 500": ({"download_status": 500},
+                     f"{NOT_UPDATED}Taskloom's releases answered HTTP 500 for https://127.0.0.1:", []),
+    "download cut short": ({"cut_short": True},
+                           f"{NOT_UPDATED}The download is incomplete ({ZIP_SIZE // 2} of {ZIP_SIZE} bytes): ", []),
+    "download shorter than the release says": ({"size": ZIP_SIZE + 1}, f"{NOT_UPDATED}The download is incomplete: "
+                                               f"{ZIP_SIZE} of {ZIP_SIZE + 1} bytes", []),
+    "checksum differs": ({"digest": "sha256:" + "0" * 64}, f"{NOT_UPDATED}The download's checksum is not the "
+                         "release's: it is not the zip Taskloom published", []),
+    "not a zip": ({"zip": b"<html>Not a zip</html>"}, f"{NOT_UPDATED}The download is damaged: File is not a zip file",
+                  []),
+    "broken zip": ({"zip": release_zip(damaged=True)}, f"{NOT_UPDATED}The download is damaged: "
+                   "taskloom/_internal/base_library.zip does not read back as it was packed", []),
+    "a zip that needs a password": ({"zip": with_a_password(release_zip())},
+                                    f"{NOT_UPDATED}Taskloom {NEW} could not be installed", []),
+    "no taskloomw.exe": ({"zip": release_zip(leave_out=("taskloom/taskloomw.exe",))},
+                         f"{NOT_UPDATED}The download has no taskloom/taskloomw.exe", []),
+    "VERSION not the release's": ({"zip": release_zip(version_text="0.39.9")},
+                                  f"{NOT_UPDATED}The download's VERSION says 0.39.9, not the release's {NEW}", []),
+    "VERSION not text": ({"zip": release_zip(version_text=b"\xff" + NEW.encode())},
+                         f"{NOT_UPDATED}The download's VERSION says \ufffd{NEW}, not the release's {NEW}", []),
+    "full disk": ({"free": 2**20 + 5},
+                  f"{NOT_UPDATED}Not enough disk space to unpack Taskloom {NEW}: it needs 2 MB, 1 MB are free", []),
+    "plain http": ({"scheme": "http"}, f"{CHECK}\nDownload refused: http://127.0.0.1:",
+                   ["is not Taskloom's GitHub releases over https"]),
+    "redirect to another host": ({"redirect": "another host"}, f"{NOT_UPDATED}Download refused: https://localhost:",
+                                 []),
 }
 
 
@@ -1020,11 +1139,14 @@ FAILURES = {
 @pytest.mark.invariant("UP-3")
 def test_u3_a_failed_update_says_what_went_wrong_and_changes_nothing(editor, qtbot, monkeypatch, folders, this,
                                                                      releases, boxes, starts, failure):
-    """U3: no connection, the release info or the download answered with an HTTP error, a download cut short, a zip
-    whose checksum is not the release's, a damaged zip, a zip without taskloomw.exe or with another VERSION, a full
-    disk, a download URL that is not https, a redirect to a host that is not GitHub's: a message says what went wrong;
-    nothing is installed or left behind; the entries still start this version; the editor goes on working."""
-    change, says = FAILURES[failure]
+    """U3: no connection, the release info or the download answered with an HTTP error, a release whose tag holds no
+    version or that has no Windows zip, a download cut short or shorter than the release says, a zip whose checksum
+    is not the release's, a download that is not a zip, a damaged zip, one that needs a password, a zip without
+    taskloomw.exe or with another VERSION (or one that is not text), a full disk (1 MB and a little free, 2 MB
+    needed), a download URL that is not https, a redirect to a host that is not GitHub's: a message over the editor
+    window says what went wrong, word for word; nothing is installed or left behind; the entries still start this
+    version; the editor goes on working."""
+    change, starts_with, says = FAILURES[failure]
     both_entries(folders, this, editor.home.root)
     entries = entries_now(folders)
     for name, value in change.items():
@@ -1045,9 +1167,10 @@ def test_u3_a_failed_update_says_what_went_wrong_and_changes_nothing(editor, qtb
 
     told = boxes.take("warning")
     boxes.take("question")
-    assert len(told) == 1 and told[0].strip(), told
+    assert len(told) == 1 and told[0].startswith(starts_with), f"the message does not start {starts_with!r}: {told}"
     for words in says:
         assert words in told[0], f"the message does not say {words!r}: {told[0]!r}"
+    assert all(window is editor for window in boxes.over), "a message not shown over the editor window"
     assert boxes.take() == []
     assert leftovers(folders) == [], f"left in {folders.programs}: {leftovers(folders)}"
     assert entries_now(folders) == entries
@@ -1215,7 +1338,8 @@ def test_u3_a_check_that_gets_no_answer_says_so_within_the_time_limit(editor, qt
     assert silent.held, "the check never reached the silent server"
     assert told_in_time, f"no message {LIMIT + MARGIN} s after a check the server never answers (time limit {LIMIT} s)"
     told = boxes.take("warning")
-    assert len(told) == 1 and "timed out" in told[0], told
+    assert told == [f"{CHECK}\nTaskloom's releases timed out: nothing came from https://127.0.0.1:{silent.port}"
+                    f"{API_PATH} for {LIMIT} seconds"], told
     assert boxes.take() == []
     assert releases.requests == [] and leftovers(folders) == []
     editor.new_flow()
@@ -1247,7 +1371,8 @@ def test_u3_a_download_that_stalls_ends_within_the_time_limit_and_leaves_nothing
     assert len(asked) == 1 and INSTALL in asked[0], asked
     assert told_in_time, f"no message {LIMIT + MARGIN} s after the download stalled (time limit {LIMIT} s)"
     told = boxes.take("warning")
-    assert len(told) == 1 and "timed out" in told[0], told
+    assert told == [f"{NOT_UPDATED}Taskloom's releases timed out: nothing came from https://127.0.0.1:{releases.port}"
+                    f"{ASSET_PATH} for {LIMIT} seconds"], told
     assert boxes.take() == []
     assert shown_widget(editor, "update-progress") is None, "the download window stays open"
     assert leftovers(folders) == [], f"left in {folders.programs}: {leftovers(folders)}"
@@ -1263,6 +1388,7 @@ ESCAPING = {  # an entry of the zip whose name leaves its folder (None: the abso
     "up out with backslashes": "taskloom/..\\..\\..\\..\\escaped.txt",
     "an absolute path": None,
     "a drive letter": "C:/escaped.txt",
+    "a drive letter inside its taskloom folder": "taskloom/C:escaped.txt",
 }
 
 
@@ -1272,9 +1398,9 @@ def test_u3_a_zip_with_an_entry_that_leaves_its_folder_is_refused_and_nothing_is
         editor, qtbot, tmp_path, folders, this, releases, boxes, starts, entry):
     """U3: the release's zip (its size and checksum the release's own) holds, after its files, an entry whose name
     leaves its folder: up out of it (../), from inside its taskloom folder, with Windows' backslashes, an absolute path
-    (on Windows with its drive letter) or a drive letter. Install? Yes: one message says what went wrong, naming that
-    entry; no file of it is written anywhere; nothing is installed or left in <LOCALAPPDATA>/Programs/Taskloom; the
-    entries still start this version; the editor goes on working."""
+    (on Windows with its drive letter) or a drive letter (at its start, or inside its taskloom folder). Install? Yes:
+    one message says what went wrong, naming that entry; no file of it is written anywhere; nothing is installed or
+    left in <LOCALAPPDATA>/Programs/Taskloom; the entries still start this version; the editor goes on working."""
     name = ESCAPING[entry] or (tmp_path / "outside" / "escaped.txt").as_posix()
     releases.zip = release_zip(extra={name: b"not a file of Taskloom\n"})
     both_entries(folders, this, editor.home.root)
@@ -1337,10 +1463,13 @@ def test_u3_a_folder_in_the_new_versions_place_is_left_as_it_is_and_the_update_s
     told = boxes.take("warning")
     asked = boxes.take("question")
     assert len(asked) == 1 and INSTALL in asked[0], asked
-    assert len(told) == 1 and told[0].strip(), told
+    assert len(told) == 1 and told[0].startswith(NOT_UPDATED), told
+    assert all(window is editor for window in boxes.over), "a message not shown over the editor window"
     if there != "one made while the zip downloads":
-        assert str(place) in told[0], f"the message does not name the folder {place}: {told[0]!r}"
+        assert told[0] == f"{NOT_UPDATED}A folder is in the way: {place}", told[0]
         assert releases.downloads() == [], f"downloaded: {releases.downloads()}"
+    else:
+        assert told[0].startswith(f"{NOT_UPDATED}Could not unpack Taskloom {NEW}: "), told[0]
     assert boxes.take() == []
     assert files_in(place) == before, f"{place} was changed"
     assert leftovers(folders) == [NEW], f"left in {folders.programs}: {leftovers(folders)}"
@@ -1393,9 +1522,10 @@ Path(os.environ["TEST_PID"]).write_text(str(os.getpid()), encoding="utf-8")
 
 
 class Packaged:
-    """What taskloom.cli sees as `sys`: the packaged Windows Taskloom whose program is TEST_PROGRAM."""
-    platform = "win32"
-    frozen = True
+    """What taskloom.cli sees as `sys`: the packaged Windows Taskloom whose program is TEST_PROGRAM (TEST_PLATFORM:
+    on another platform; TEST_FROZEN "no": not packaged, run from source)."""
+    platform = os.environ.get("TEST_PLATFORM", "win32")
+    frozen = os.environ.get("TEST_FROZEN") != "no"
     executable = os.environ["TEST_PROGRAM"]
 
     def __getattr__(self, name):
@@ -1405,7 +1535,7 @@ class Packaged:
 import taskloom.cli as cli
 
 cli.sys = Packaged()
-cli.frozen = lambda: True
+cli.frozen = lambda: Packaged.frozen
 try:
     from taskloom import entries
 except ImportError:  # (not written yet)
@@ -1469,10 +1599,11 @@ class Packaged:
                 "TEST_WRITES": str(self.writes), **({"TEST_GO": str(go)} if go else {}),
                 **({"TEST_STATUS": str(self.status), "QT_QPA_PLATFORM": "offscreen"} if status else {})}
 
-    def run(self, *args) -> subprocess.CompletedProcess:
-        """`taskloom <args>` from a terminal (taskloom.exe), to its end."""
-        return subprocess.run([sys.executable, "-c", PACKAGED, *map(str, args)], env=self.environ("taskloom.exe"),
-                              cwd=self.env.root, capture_output=True, text=True, timeout=120)
+    def run(self, *args, environ: dict | None = None) -> subprocess.CompletedProcess:
+        """`taskloom <args>` from a terminal (taskloom.exe), to its end (`environ`: more environment variables)."""
+        return subprocess.run([sys.executable, "-c", PACKAGED, *map(str, args)],
+                              env={**self.environ("taskloom.exe"), **(environ or {})}, cwd=self.env.root,
+                              capture_output=True, text=True, timeout=120)
 
     def popen(self, *args, program: str = "taskloom.exe", go: Path | None = None, status: bool = False):
         return subprocess.Popen([sys.executable, "-c", PACKAGED, *map(str, args)],
@@ -1505,22 +1636,34 @@ def gone_said(lines) -> list[str]:
     return [line for line in lines if "gone" in line and __version__ in line]
 
 
+GONE = re.compile(r"The (Start menu|Startup) entry started Taskloom from (.+), a folder that is gone: it now starts "
+                  r"Taskloom (\S+) in (.+)")
+
+
+def gone_told(lines) -> dict:
+    """{entry: (the folder that was gone, the version it starts now, its folder)} of each line that tells of one."""
+    return {m[1]: (norm(m[2]), m[3], norm(m[4])) for m in map(GONE.fullmatch, lines) if m}
+
+
 @pytest.mark.parametrize("start", ["editor", "taskloom scheduler", "taskloom run"])
 @pytest.mark.parametrize("before", ["an older version", "a folder that is gone"])
 @pytest.mark.invariant("UP-2")
 @pytest.mark.invariant("UP-4")
 def test_u4_the_first_start_of_a_newer_version_unpacked_by_hand_points_the_entries_at_itself(env, folders, before,
                                                                                             start):
-    """U4: both entries start 0.30.0 (still there), or a folder that is gone. This version, unpacked by hand into
-    <LOCALAPPDATA>/Programs/Taskloom, starts for the first time: its editor (from taskloomw.exe), `taskloom scheduler`
-    (as at login; the service is off, so it ends at once) or `taskloom run`. Both entries now start this version,
-    their arguments kept. An entry that started a folder that is gone is said: on stderr, or in the editor's status
-    bar, with "gone" and this version."""
+    """U4: both entries start 0.30.0 (still there), or folders that are gone (each its own). This version, unpacked by
+    hand into <LOCALAPPDATA>/Programs/Taskloom, starts for the first time: its editor (from taskloomw.exe), `taskloom
+    scheduler` (as at login; the service is off, so it ends at once) or `taskloom run`. Both entries now start this
+    version, their arguments kept. Each entry that started a folder that is gone is said, on stderr or in the editor's
+    status bar: which entry, that folder, and this version and its folder."""
     home = env.home
     this = unpacked(folders.programs / __version__, __version__)
     old = (unpacked(folders.programs / "0.30.0", "0.30.0") if before == "an older version"
            else env.root / "deleted" / "taskloom")
     both_entries(folders, old, home)
+    if before == "a folder that is gone":
+        old_login = env.root / "deleted" / "taskloom 2"
+        write_entry(folders.startup, old_login / "taskloomw.exe", login_args(home), old_login)
     taskloom = Packaged(env, folders, this)
 
     if start == "editor":
@@ -1532,7 +1675,7 @@ def test_u4_the_first_start_of_a_newer_version_unpacked_by_hand_points_the_entri
                                  45)
         finally:
             output = taskloom.end(proc)
-        said = taskloom.said_in_status_bar()
+        said = [line for shown in taskloom.said_in_status_bar() for line in shown.split("  ")]  # (lines 2 spaces apart)
     else:
         if start == "taskloom scheduler":
             set_paused(Home(home), True)
@@ -1546,7 +1689,8 @@ def test_u4_the_first_start_of_a_newer_version_unpacked_by_hand_points_the_entri
                                                 "Startup": entry_for(this, login_args(home))}, (entries_now(folders),
                                                                                                  output)
     if before == "a folder that is gone":
-        assert gone_said(said), f"not said that the entries' folder was gone: {said}"
+        assert gone_told(said) == {"Start menu": (norm(old), __version__, norm(this)),
+                                   "Startup": (norm(old_login), __version__, norm(this))}, said
 
 
 @pytest.mark.parametrize("before", ["this version already", "none", "only the Startup entry, older"])
@@ -1578,16 +1722,36 @@ def test_u4_a_start_makes_no_entry_and_leaves_one_that_needs_no_change(env, fold
         assert entries_now(folders) == {"Start menu": None, "Startup": entry_for(this, login_args(home))}
 
 
+@pytest.mark.parametrize("seen", [{"TEST_FROZEN": "no", "TEST_PROGRAM": sys.executable}, {"TEST_PLATFORM": "linux"}],
+                         ids=["from source on Windows", "packaged, not on Windows"])
+@pytest.mark.invariant("UP-2")
+def test_u4_only_the_packaged_windows_taskloom_points_the_entries_at_itself(env, folders, seen):
+    """U4: both entries start a folder that is gone. Taskloom run from source on Windows (its program is Python), or a
+    packaged Taskloom on another platform, starts: the entries are left as they are and nothing is said of them."""
+    home = env.home
+    both_entries(folders, env.root / "deleted" / "taskloom", home)
+    before = entries_now(folders)
+    taskloom = Packaged(env, folders, unpacked(folders.programs / __version__, __version__))
+
+    done = taskloom.run("run", env.write("hello.yaml", HELLO), environ=seen)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert entries_now(folders) == before and taskloom.written() == [], (entries_now(folders), done.stderr)
+    assert not [line for line in done.stderr.splitlines() if "gone" in line or "Could not" in line], done.stderr
+
+
 @pytest.mark.invariant("UP-2")
 def test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_folder(env, folders):
     """U4: the Startup folder has today's "Taskloom Scheduler.cmd" (Taskloom 0.30.0, for a Taskloom folder of its
-    own). The first start of this version replaces it by the Startup entry Taskloom Scheduler.lnk: this version's
-    program, for that same Taskloom folder; the .cmd is gone (no console window flashes at login any more)."""
+    own, named with a % and an é: the script writes the % as %%, as cmd.exe needs, in UTF-8). The first start of this
+    version replaces it by the Startup entry Taskloom Scheduler.lnk: this version's program, for that same Taskloom
+    folder; the .cmd is gone (no console window flashes at login any more)."""
     old = unpacked(folders.programs / "0.30.0", "0.30.0")
-    other_home = env.root / "other home"
+    other_home = env.root / "other home 100% José"
     script = folders.startup.with_suffix(".cmd")
     script.parent.mkdir(parents=True)
-    script.write_text(f'@echo off\nchcp 65001 >nul\nrem Taskloom 0.30.0\nset "TASKLOOM_HOME={other_home}"\n'
+    in_script = str(other_home).replace("%", "%%")
+    script.write_text(f'@echo off\nchcp 65001 >nul\nrem Taskloom 0.30.0\nset "TASKLOOM_HOME={in_script}"\n'
                       f'start "" "{old / "taskloomw.exe"}" scheduler --unless-paused\n', encoding="utf-8",
                       newline="\r\n")
     this = unpacked(folders.programs / __version__, __version__)
@@ -1598,6 +1762,24 @@ def test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_fol
     assert read_entry(folders.startup) == entry_for(this, login_args(other_home))
     assert not script.exists(), "today's start script is still in the Startup folder"
     assert read_entry(folders.start_menu) is None
+
+
+@pytest.mark.invariant("UP-2")
+def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why(env, folders):
+    """U4: the Startup folder's "Taskloom Scheduler.cmd" was changed by hand: it has no `set "TASKLOOM_HOME=..."` line,
+    so which Taskloom folder it is for cannot be told. A start of this version goes on, keeps the script (the service
+    still starts at login) and says on stderr which script it is and what it lacks."""
+    script = folders.startup.with_suffix(".cmd")
+    script.parent.mkdir(parents=True)
+    script.write_text('@echo off\nstart "" "C:\\Taskloom\\taskloomw.exe" scheduler --unless-paused\n',
+                      encoding="utf-8", newline="\r\n")
+    this = unpacked(folders.programs / __version__, __version__)
+
+    done = Packaged(env, folders, this).run("run", env.write("hello.yaml", HELLO))
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert [line for line in done.stderr.splitlines() if str(script) in line and "TASKLOOM_HOME" in line], done.stderr
+    assert script.exists() and read_entry(folders.startup) is None
 
 
 @pytest.mark.invariant("UP-2")
@@ -1676,6 +1858,21 @@ def test_u5_an_older_version_leaves_a_newer_versions_entries_until_that_folder_i
     assert entries_now(folders) == {"Start menu": entry_for(this, editor_args(home)),
                                     "Startup": entry_for(this, login_args(home))}
     assert gone_said(again.stderr.splitlines()), again.stderr
+
+
+@pytest.mark.invariant("UP-4")
+def test_u5_start_at_login_turned_on_in_an_older_version_keeps_the_newer_versions_startup_entry(env, folders):
+    """U5: the Startup entry starts 99.0.0, which is there. `taskloom scheduler --at-login on` of this (older) version
+    leaves it starting 99.0.0: an older version never takes an entry away from a newer one."""
+    home = env.home
+    newer = unpacked(folders.programs / "99.0.0", "99.0.0")
+    write_entry(folders.startup, newer / "taskloomw.exe", login_args(home), newer)
+    this = unpacked(folders.programs / __version__, __version__)
+
+    done = Packaged(env, folders, this).run("scheduler", "--at-login", "on")
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert entries_now(folders) == {"Start menu": None, "Startup": entry_for(newer, login_args(home))}
 
 
 @pytest.mark.invariant("UP-2")
@@ -1997,6 +2194,45 @@ def test_u7_an_install_starts_the_new_versions_service_only_if_one_runs_and_is_o
     named = (one.args[one.args.index("--home") + 1] if "--home" in one.args
              else (one.env or os.environ).get("TASKLOOM_HOME"))
     assert norm(named) == norm(home), one.args
+    assert started_on_its_own(one), one.how
+
+
+@pytest.mark.invariant("UP-8")
+def test_u7_turned_on_again_while_this_versions_service_still_runs_it_starts_no_second_one(qtbot, tmp_path, monkeypatch,
+                                                                                          boxes):
+    """U7: this version's scheduler service runs, turned off (it runs on until its runs are done). Its button in the
+    editor turns it on again: that same service goes on, and the status bar says the service is on; no second service
+    is started (only an older version's is taken over by a new one)."""
+    from taskloom.editor.window import MainWindow
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", NO_KEYRING)
+    monkeypatch.setenv("TASKLOOM_HOME", str(home))
+    real, started = subprocess.Popen, []
+
+    def popen(args, *rest, **kwargs):  # (a service the editor starts is written down, not started)
+        if isinstance(args, (list, tuple)) and "scheduler" in map(str, args):
+            started.append(Started(args, kwargs.get("env"), kwargs))
+            return started[-1]
+        return real(args, *rest, **kwargs)
+
+    service_proc = stand_in_service(home, __version__)
+    try:
+        set_paused(Home(home), True)
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        window = MainWindow(Home(home))
+        qtbot.addWidget(window)
+        window.show()
+        assert window.scheduler_running() and not window.scheduler_on()
+        window.scheduler_action.trigger()
+        told = window.statusBar().currentMessage()
+        qtbot.wait(500)
+    finally:
+        service_proc.kill()
+        service_proc.wait(timeout=15)
+
+    assert told == "The scheduler service is on", told
+    assert [s.args for s in started] == [], "a second service was started"
 
 
 @pytest.mark.invariant("UP-8")
@@ -2119,6 +2355,7 @@ def test_u8_yes_reopens_the_editor_in_the_new_version_with_its_tabs_and_loaded_s
     (started,) = editors_started(starts)
     assert norm(started.args[0]) == norm(folders.programs / NEW / "taskloomw.exe"), started.args
     assert started.args[1:] == ["--home", str(editor.home.root), "editor"], started.args
+    assert started_on_its_own(started), started.how
     again = start_again(editor, qtbot)  # 0.40.0's editor, on the same Taskloom folder
     assert {t.doc.path for t in again.tabs_list()} == opened
     reopened_a = next(t for t in again.tabs_list() if t.doc.path == tab_a.doc.path)
@@ -2133,22 +2370,29 @@ def test_u8_yes_reopens_the_editor_in_the_new_version_with_its_tabs_and_loaded_s
 @pytest.mark.invariant("UP-6")
 def test_u8_yes_while_a_flow_started_here_runs_waits_for_it_and_cancel_stops_the_restart(
         editor, qtbot, tmp_path, folders, releases, boxes, starts, then):
-    """U8: a flow started from this editor (long-export) is still running when Yes is answered: a window that does not
-    block the editor says Taskloom restarts when long-export ends, with Cancel; the editor stays open, nothing starts
-    yet. When the flow ends, the editor restarts in 0.40.0; after Cancel it does not (also not when the flow ends)."""
+    """U8: two flows started from this editor (long-export, nightly) are still running when Yes is answered: a window
+    over the editor that does not block it ("Restart Taskloom with version 0.40.0") says Taskloom restarts with
+    version 0.40.0 when long-export, nightly end, with Cancel at its right; the editor stays open, nothing starts yet.
+    When the flows end, the editor restarts in 0.40.0; after Cancel it does not (also not when the flows end)."""
     folder = tmp_path / "flows"
     folder.mkdir()
-    flow = folder / "long-export.yaml"
-    flow.write_text(yaml.safe_dump({"blocks": {"manual": {"type": "trigger.manual"}, "hold": hold_until("hold")},
-                                    "edges": ["manual.start -> hold.after"]}, sort_keys=False), encoding="utf-8")
-    tab = editor.open_flow(flow)
-    editor.run_flow(tab)
-    qtbot.waitUntil(lambda: tab.running, timeout=30_000)
+    tabs = []
+    for name in ("nightly", "long-export"):
+        flow = folder / f"{name}.yaml"
+        flow.write_text(yaml.safe_dump({"blocks": {"manual": {"type": "trigger.manual"}, "hold": hold_until("hold")},
+                                        "edges": ["manual.start -> hold.after"]}, sort_keys=False), encoding="utf-8")
+        tabs.append(editor.open_flow(flow))
+        editor.run_flow(tabs[-1])
+    qtbot.waitUntil(lambda: all(tab.running for tab in tabs), timeout=30_000)
     try:
         install(editor, qtbot, boxes, restart=QMessageBox.Yes)
         qtbot.waitUntil(lambda: shown_widget(editor, "restart-waits") is not None, timeout=10_000)
         waits = shown_widget(editor, "restart-waits")
-        assert "long-export" in words_of(waits), words_of(waits)
+        assert waits.windowTitle() == f"Restart Taskloom with version {NEW}", waits.windowTitle()
+        assert [label.text() for label in waits.findChildren(QLabel)] == [
+            f"Taskloom restarts with version {NEW} when long-export, nightly ends."], words_of(waits)
+        assert waits.parentWidget() is editor, "the restart's window is not the editor's (over it, closing with it)"
+        assert at_the_right(button(waits, "Cancel"), waits), "Cancel is not at the right of the restart's window"
         assert QApplication.activeModalWidget() is None, "the restart's window blocks the editor"
         qtbot.wait(1500)
         assert editor.isVisible() and editors_started(starts) == [], "it restarted while the flow ran"
@@ -2156,9 +2400,9 @@ def test_u8_yes_while_a_flow_started_here_runs_waits_for_it_and_cancel_stops_the
             QTest.mouseClick(button(waits, "Cancel"), Qt.LeftButton)
             qtbot.waitUntil(lambda: shown_widget(editor, "restart-waits") is None, timeout=5_000)
     finally:
-        (folder / "hold.go").write_text("go", encoding="utf-8")  # the flow ends
-        ran_out = eventually(qtbot, lambda: not tab.running, timeout=60_000)
-    assert ran_out, "the flow did not end"
+        (folder / "hold.go").write_text("go", encoding="utf-8")  # the flows end
+        ran_out = eventually(qtbot, lambda: not any(tab.running for tab in tabs), timeout=60_000)
+    assert ran_out, "the flows did not end"
 
     boxes.take("question")
     if then == "the flow ends":
@@ -2211,20 +2455,31 @@ def test_u8_cancel_at_the_unsaved_changes_question_of_the_restart_keeps_the_edit
 @pytest.mark.invariant("UP-7")
 def test_u10_a_start_removes_older_versions_taskloom_installed_and_keeps_the_rest(env, folders):
     """U10: in <LOCALAPPDATA>/Programs/Taskloom: this version (installed from 0.38.0), 0.38.0 (installed from 0.37.0),
-    0.37.0 (installed), 0.36.0 (unpacked by you: no marker), 0.35.0 (installed; a flow in it is scheduled), 0.34.0
-    (installed; you saved a flow in it), 99.0.0 (installed, newer), and a part of a download and of a removal left by
-    a start that was cut off. A start of this version removes 0.37.0 and the two leftovers; it keeps the one it updated
-    from, the one you unpacked, the newer one, and the two holding your flows, and says which and why."""
+    0.37.0 (installed; a file of it written in the same clock tick as its marker), 0.36.0 (unpacked by you: no
+    marker), 0.35.0 (installed; a flow in it is scheduled), 0.34.0 (installed; you saved a flow in it), 0.32.0 (its
+    marker is not Taskloom's: not a JSON object), 0.31.0 (installed; you moved a flow into it: a move keeps the
+    flow's time, older than the marker), a copy of this version's folder, 99.0.0 (installed, newer), and a part of a
+    download and of a removal left by a start that was cut off. A start of this version removes 0.37.0 and the two
+    leftovers; it keeps the one it updated from, the one you unpacked, the one whose marker is not Taskloom's, the copy
+    of this version, the newer one, and the three holding your flows, and says which and why."""
     p = folders.programs
     this = unpacked(p / __version__, __version__, marker_from=p / "0.38.0")
     unpacked(p / "0.38.0", "0.38.0", marker_from=p / "0.37.0")
-    unpacked(p / "0.37.0", "0.37.0", marker_from=p / "0.36.0")
+    installed = unpacked(p / "0.37.0", "0.37.0", marker_from=p / "0.36.0")
+    tick = (installed / MARKER).stat().st_mtime_ns
+    os.utime(installed / "taskloomw.exe", ns=(tick, tick))
     unpacked(p / "0.36.0", "0.36.0")
     scheduled = unpacked(p / "0.35.0", "0.35.0", marker_from=p / "0.34.0",
                          extra={"examples/nightly.yaml": flow_yaml({"cron": "0 2 1 1 *"})})
     saved = unpacked(p / "0.34.0", "0.34.0", marker_from=p / "0.33.0")
     time.sleep(0.05)
     (saved / "examples" / "my-report.yaml").write_text(HELLO, encoding="utf-8")
+    (unpacked(p / "0.32.0", "0.32.0") / MARKER).write_text("[]", encoding="utf-8")
+    moved = unpacked(p / "0.31.0", "0.31.0", marker_from=p / "0.30.0") / "examples" / "moved.yaml"
+    moved.write_text(HELLO, encoding="utf-8")
+    earlier = (p / "0.31.0" / MARKER).stat().st_mtime_ns - 3600 * 10**9
+    os.utime(moved, ns=(earlier, earlier))
+    unpacked(p / f"{__version__} - Copy", __version__, marker_from=p / "0.38.0")
     unpacked(p / "99.0.0", "99.0.0", marker_from=p / __version__)
     unpacked(p / ".partial-k3j9" / "taskloom", NEW)
     unpacked(p / ".removing-0.33.0", "0.33.0")
@@ -2233,11 +2488,15 @@ def test_u10_a_start_removes_older_versions_taskloom_installed_and_keeps_the_res
     done = Packaged(env, folders, this).run("run", env.write("hello.yaml", HELLO))
 
     assert done.returncode == 0, done.stdout + done.stderr
-    assert leftovers(folders) == sorted(["0.34.0", "0.35.0", "0.36.0", "0.38.0", "99.0.0", __version__]), done.stderr
+    assert leftovers(folders) == sorted(["0.31.0", "0.32.0", "0.34.0", "0.35.0", "0.36.0", "0.38.0", "99.0.0",
+                                         __version__, f"{__version__} - Copy"]), done.stderr
     assert (saved / "examples" / "my-report.yaml").read_text(encoding="utf-8") == HELLO
+    assert moved.read_text(encoding="utf-8") == HELLO
     lines = done.stderr.splitlines()
     assert [line for line in lines if "0.35.0" in line and "scheduled" in line], f"not said: {lines}"
     assert [line for line in lines if "0.34.0" in line], f"not said: {lines}"
+    assert [line for line in lines if "0.31.0" in line and moved.name in line], f"not said: {lines}"
+    assert not [line for line in lines if "Could not" in line], lines
 
 
 @pytest.mark.skipif(not WINDOWS, reason="only Windows refuses to rename a folder while a file in it is open")
@@ -2261,6 +2520,42 @@ def test_u10_a_folder_in_use_is_kept_and_removed_at_a_later_start(env, folders):
     assert first.returncode == 0 and again.returncode == 0, first.stderr + again.stderr
     assert kept == before and "0.37.0" in listed and not [n for n in listed if n.startswith(".removing")], listed
     assert leftovers(folders) == sorted(["0.38.0", __version__]), again.stderr
+
+
+def writable(folder: Path):
+    """Every file and folder in `folder` can be deleted again."""
+    for path in folder.rglob("*"):
+        path.chmod(0o700)
+
+
+@pytest.mark.skipif(not WINDOWS and os.geteuid() == 0, reason="root deletes a file in a read-only folder all the same")
+@pytest.mark.invariant("UP-7")
+def test_u10_a_removal_cut_off_leaves_a_removing_folder_that_later_starts_finish_without_a_word(env, folders):
+    """U10: 0.37.0 (installed by Taskloom, older) holds a file that cannot be deleted (on Windows a read-only file,
+    elsewhere a file in a read-only folder). A start of this version removes what it can: the rest is left in
+    .removing-0.37.0, and nothing is said. The next start, the file still not deletable, leaves it so and says nothing
+    either; once the file can be deleted, the next start removes it."""
+    p = folders.programs
+    this = unpacked(p / __version__, __version__, marker_from=p / "0.38.0")
+    unpacked(p / "0.38.0", "0.38.0", marker_from=p / "0.37.0")
+    old = unpacked(p / "0.37.0", "0.37.0", marker_from=p / "0.36.0")
+    taskloom, flow = Packaged(env, folders, this), env.write("hello.yaml", HELLO)
+    stuck, mode = (old / "taskloom.exe", 0o400) if WINDOWS else (old / "examples", 0o500)
+    try:
+        stuck.chmod(mode)
+        first = taskloom.run("run", flow)
+        after_first = leftovers(folders)
+        again = taskloom.run("run", flow)
+        after_again = leftovers(folders)
+    finally:
+        writable(p)
+    last = taskloom.run("run", flow)
+
+    said = first.stderr + again.stderr
+    assert [first.returncode, again.returncode, last.returncode] == [0, 0, 0], said + last.stderr
+    assert after_first == after_again == sorted([".removing-0.37.0", "0.38.0", __version__]), said
+    assert not [line for line in said.splitlines() if "0.37.0" in line or "Could not" in line], said
+    assert leftovers(folders) == sorted(["0.38.0", __version__]), last.stderr
 
 
 # --- U11: the docs -----------------------------------------------------------------------------------------------------

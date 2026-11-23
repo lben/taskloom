@@ -57,7 +57,7 @@ scope:
         - taskloom/editor/window.py MainWindow._restart_in
         - taskloom/editor/window.py main
       tests:
-        - tests/test_updates.py -k "u1_u9 or u4_an_install or u7_an_install or u8_"
+        - tests/test_updates.py -k "u1_u9 or u4_an_install or u7_an_install or u8_ or entries_cannot_change_yet"
     # The Start menu and Startup entries, and what each start of the packaged Windows Taskloom does: the entries
     # follow the newest version, and older versions Taskloom installed are removed.
     - mutate:
@@ -101,6 +101,7 @@ scope:
         - tests/test_editor.py -k "older_scheduler_running_is_taken_over or started_beside_an_older_one"
         - tests/test_paths_scheduler.py -k older_scheduler_service_is_taken_over
         - tests/test_service_off.py -k older_service_that_cannot_be_stopped
+        - tests/test_updates.py -k turned_on_again_while_this_versions_service_still_runs
 not_tested:
   taskloom/editor/window.py MainWindow._make_actions: >-
     The editor's menus and toolbar as they are built, about 66 lines, to which this change added two (Help > Check
@@ -160,3 +161,190 @@ not_tested:
     An interface's id for _shell_link (Windows only); the same tests run it on Windows.
   taskloom/entries.py _call: >-
     Calls a method of the shell-link object (Windows only); the same tests run it on Windows.
+kinds:
+  - kind: The same codec named in capital letters
+    why: >-
+      Python reads "UTF-8" as "utf-8": the same codec.
+    mutants:
+      - taskloom.update.x_unpack__mutmut_56
+      - taskloom.update.x_unpack__mutmut_111
+      - taskloom.entries.x__script_home__mutmut_13
+      - taskloom.entries.x_version_of__mutmut_6
+      - taskloom.update.x__marker__mutmut_6
+  - kind: A file of plain ASCII read or written in the locale's encoding
+    why: >-
+      The marker is written by json.dumps, which writes every character beyond ASCII as \uXXXX, and a VERSION file
+      holds a version (digits and dots): plain ASCII, the same in UTF-8 and in each code page Windows uses.
+    mutants:
+      - taskloom.update.x_unpack__mutmut_100
+      - taskloom.update.x_unpack__mutmut_102
+      - taskloom.update.x__marker__mutmut_3
+      - taskloom.entries.x_version_of__mutmut_1
+  - kind: Today's Startup script read in the locale's encoding
+    why: >-
+      On Linux, where mutation testing runs, the locale's encoding is UTF-8, the script's own; on Windows (a code
+      page) test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_folder, whose Taskloom folder is
+      named with an é, catches it.
+    mutants:
+      - taskloom.entries.x__script_home__mutmut_11
+  - kind: Windows' process flags, which Linux does not have
+    why: >-
+      On Linux, where mutation testing runs, subprocess has neither DETACHED_PROCESS nor CREATE_NO_WINDOW, so the
+      flags are 0 (the same as none) either way; on Windows the U7 and U8 tests check them (started_on_its_own:
+      detached, no console window).
+    mutants:
+      - taskloom.update.x_start__mutmut_12
+      - taskloom.update.x_start__mutmut_21
+      - taskloom.update.x_start__mutmut_22
+      - taskloom.update.x_start__mutmut_28
+      - taskloom.update.x_start__mutmut_29
+      - taskloom.update.x_start__mutmut_31
+      - taskloom.update.x_start__mutmut_37
+      - taskloom.update.x_start__mutmut_38
+  - kind: start_new_session, which Windows ignores
+    why: >-
+      Python makes a new session (setsid) only on POSIX and ignores the argument on Windows, the only place a Taskloom
+      updates itself (Check for updates and the restart are in the packaged Windows Taskloom only).
+    mutants:
+      - taskloom.update.x_start__mutmut_5
+      - taskloom.update.x_start__mutmut_11
+      - taskloom.update.x_start__mutmut_18
+      - taskloom.update.x_start__mutmut_19
+      - taskloom.update.x_start__mutmut_20
+  - kind: How much of the download is read at a time for its checksum
+    why: >-
+      Blocks of 1 MB, 2 MB or the whole file at once give the same SHA-256.
+    mutants:
+      - taskloom.update.x__sha256__mutmut_13
+      - taskloom.update.x__sha256__mutmut_15
+      - taskloom.update.x__sha256__mutmut_16
+  - kind: A digest GitHub does not give
+    why: >-
+      With no digest the release's is "" or "XXXX": neither starts with "sha256:", so neither is checked.
+    mutants:
+      - taskloom.update.x_newer_release__mutmut_53
+  - kind: Exactly as many bytes free as the files take
+    why: >-
+      Files take whole clusters of the disk and the marker more: with exactly as many bytes free as the files hold,
+      the unpack fails either way, before it (not enough disk space) or as it writes (could not unpack); nothing is
+      installed and the message says so.
+    mutants:
+      - taskloom.update.x_unpack__mutmut_64
+  - kind: HTTP header names in other letter case
+    why: >-
+      HTTP reads header names the same in capital and in small letters (RFC 9110): accept is Accept.
+    mutants:
+      - taskloom.editor.window.x__ask__mutmut_9
+      - taskloom.editor.window.x__ask__mutmut_10
+      - taskloom.editor.window.x__ask__mutmut_16
+      - taskloom.editor.window.x__ask__mutmut_17
+  - kind: The network manager made again, or without a parent
+    why: >-
+      A new QNetworkAccessManager for each check, or one with no parent (the editor keeps it), asks the same, through
+      the same proxy settings, and gets the same answers.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_web__mutmut_1
+      - taskloom.editor.window.xǁMainWindowǁ_web__mutmut_6
+      - taskloom.editor.window.xǁMainWindowǁ_web__mutmut_7
+      - taskloom.editor.window.xǁMainWindowǁ_web__mutmut_12
+  - kind: Windows' proxy settings
+    why: >-
+      Without a proxy set on the machine (as on every test machine) asking directly and asking through the system's
+      proxy settings are the same; a test cannot set a proxy in Windows' settings (they are the machine's and the
+      user's, not the test's). Not equivalent where a proxy is set: no test checks it.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_web__mutmut_10
+  - kind: How long the status bar says where the new version is installed
+    why: >-
+      30 seconds, 30.001 seconds, or until the next message replaces it: what it says is the same; how long it shows
+      is no promise.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_installed__mutmut_12
+      - taskloom.editor.window.xǁMainWindowǁ_installed__mutmut_15
+  - kind: A widget the layout takes in
+    why: >-
+      A label or button made without a parent, or for no window, is given the restart window as its parent when the
+      window's layout takes it in: the same window, with the same text and Cancel.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_11
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_13
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_15
+  - kind: Stretch where there is no space to share
+    why: >-
+      The window is shown at its own size, so no space is left over for the stretch to give: Cancel is where it was.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_28
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_42
+  - kind: A timer's parent
+    why: >-
+      The timer is kept by what uses it, stopped by Cancel or the end, and with a parent or without it fires the same.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_30
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_32
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_66
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_68
+  - kind: How often a wait looks
+    why: >-
+      Every second (restart) or 100 ms (unpacking), a millisecond more, or as soon as the editor is idle: the end of
+      the flows or of the unpack is seen and acted on the same; only the processor works more meanwhile.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_33
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_34
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_69
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_70
+  - kind: A running flow always has its file
+    why: >-
+      The editor runs a flow from its file (Run saves it first), so each running one has a path: its name is the
+      file's name without .yaml either way.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_restart_in__mutmut_41
+  - kind: The progress bar's ends where it shows the same
+    why: >-
+      0 to 1, 0 to 2, 1 to 1 with nothing done yet, or a minimum of 1 instead of 0 against 1.5 MB: the bar is empty at
+      the start, and after that its fill differs by less than a pixel; a release is never under 2 bytes (a zip is at
+      least 22), nor what it unpacks to (VERSION alone holds the version).
+    mutants:
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_12
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_20
+      - taskloom.editor.window.xǁUpdateDownloadǁ__init____mutmut_25
+      - taskloom.editor.window.xǁUpdateDownloadǁ_unpacking__mutmut_6
+      - taskloom.editor.window.xǁUpdateDownloadǁ_unpacking__mutmut_11
+  - kind: The unpacking thread as a daemon or not
+    why: >-
+      It matters only when Python ends while a zip unpacks (a second or so), and the editor does not end then: it
+      closes after the unpack's end or its Cancel. A .partial-* folder left is removed at the next start either way.
+    mutants:
+      - taskloom.editor.window.xǁUpdateDownloadǁ_downloaded__mutmut_16
+      - taskloom.editor.window.xǁUpdateDownloadǁ_downloaded__mutmut_18
+      - taskloom.editor.window.xǁUpdateDownloadǁ_downloaded__mutmut_19
+  - kind: A close that fails after every write of the download did
+    why: >-
+      Python writes each received block at once (a write that fails ends the download,
+      test_u3_a_disk_that_fills_up_during_the_download_says_so_and_leaves_nothing_behind); a close that still fails
+      leaves fewer bytes than the release says, so the unpack refuses it as incomplete: a message, nothing installed,
+      either way.
+    mutants:
+      - taskloom.editor.window.xǁUpdateDownloadǁ_downloaded__mutmut_2
+      - taskloom.editor.window.xǁUpdateDownloadǁ_downloaded__mutmut_3
+  - kind: The .partial-* folder removed with its errors raised
+    why: >-
+      Taskloom made the folder and closed every file it wrote there; nothing else opens it, so its removal does not
+      fail and there is no error to raise.
+    mutants:
+      - taskloom.editor.window.xǁUpdateDownloadǁ_end__mutmut_2
+      - taskloom.editor.window.xǁUpdateDownloadǁ_end__mutmut_4
+      - taskloom.editor.window.xǁUpdateDownloadǁ_end__mutmut_5
+  - kind: The name of an entry's temporary file
+    why: >-
+      An entry is written as <entry>.new, then renamed over the entry at once: under any name, the entry is the same
+      and the temporary file is gone.
+    mutants:
+      - taskloom.entries.x__write__mutmut_4
+      - taskloom.entries.x__write__mutmut_5
+  - kind: An entry that starts an older version at the cleanup
+    why: >-
+      At each start entries.follow, just before the cleanup, points each entry that starts an older version at this
+      one; so no entry starts a folder the cleanup could remove, and the folders kept for the entries are the same
+      whichever part of the shortcut is read.
+    mutants:
+      - taskloom.update.x_clean_up__mutmut_10
