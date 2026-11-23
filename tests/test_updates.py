@@ -1764,22 +1764,73 @@ def test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_fol
     assert read_entry(folders.start_menu) is None
 
 
-@pytest.mark.invariant("UP-2")
-def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why(env, folders):
-    """U4: the Startup folder's "Taskloom Scheduler.cmd" was changed by hand: it has no `set "TASKLOOM_HOME=..."` line,
-    so which Taskloom folder it is for cannot be told. A start of this version goes on, keeps the script (the service
-    still starts at login) and says on stderr which script it is and what it lacks."""
+def a_script_naming_no_taskloom_folder(folders: Folders, how: str, program: Path) -> Path:
+    """The Startup folder's "Taskloom Scheduler.cmd" with no `set "TASKLOOM_HOME=..."` line: changed by hand (it starts
+    `program`), empty, or cut off before that line's end."""
     script = folders.startup.with_suffix(".cmd")
-    script.parent.mkdir(parents=True)
-    script.write_text('@echo off\nstart "" "C:\\Taskloom\\taskloomw.exe" scheduler --unless-paused\n',
-                      encoding="utf-8", newline="\r\n")
-    this = unpacked(folders.programs / __version__, __version__)
+    script.parent.mkdir(parents=True, exist_ok=True)
+    text = {"changed by hand": f'@echo off\nstart "" "{program}" scheduler --unless-paused\n', "empty": "",
+            "cut off": '@echo off\nchcp 65001 >nul\nrem Taskloom 0.30.0\nset "TASKLO'}[how]
+    script.write_text(text, encoding="utf-8", newline="\r\n")
+    return script
+
+
+@pytest.mark.parametrize("how", ["changed by hand", "empty", "cut off"])
+@pytest.mark.invariant("UP-2")
+@pytest.mark.invariant("UP-4")
+@pytest.mark.invariant("UP-7")
+def test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why(env, folders, how):
+    """U4, U10: the Startup folder's "Taskloom Scheduler.cmd" has no `set "TASKLOOM_HOME=..."` line (changed by hand to
+    start 0.37.0, empty, or cut off), so which Taskloom folder it is for cannot be told; there is no Startup entry. The
+    Start menu entry starts 0.38.0; 0.38.0 and 0.37.0 were installed by Taskloom. A start of this version (unpacked by
+    hand) goes on, keeps the script as it is (the service still starts at login) and says on stderr which script it is
+    and what it lacks; all the same, the Start menu entry now starts this version (its arguments kept), no Startup entry
+    is made, and the older versions are removed but the one the script starts."""
+    home, p = env.home, folders.programs
+    older = unpacked(p / "0.38.0", "0.38.0", marker_from=p / "0.37.0")
+    named = unpacked(p / "0.37.0", "0.37.0", marker_from=p / "0.36.0")
+    write_entry(folders.start_menu, older / "taskloomw.exe", editor_args(home), older)
+    script = a_script_naming_no_taskloom_folder(folders, how, named / "taskloomw.exe")
+    before = script.read_bytes()
+    this = unpacked(p / __version__, __version__)
 
     done = Packaged(env, folders, this).run("run", env.write("hello.yaml", HELLO))
 
     assert done.returncode == 0, done.stdout + done.stderr
-    assert [line for line in done.stderr.splitlines() if str(script) in line and "TASKLOOM_HOME" in line], done.stderr
-    assert script.exists() and read_entry(folders.startup) is None
+    assert entries_now(folders) == {"Start menu": entry_for(this, editor_args(home)), "Startup": None}, done.stderr
+    assert leftovers(folders) == sorted([__version__, *(["0.37.0"] if how == "changed by hand" else [])]), done.stderr
+    assert script.read_bytes() == before, "the Startup script was changed"
+    lines = done.stderr.splitlines()
+    assert [line for line in lines if str(script) in line and "TASKLOOM_HOME" in line], lines
+    assert not [line for line in lines if line.startswith("Could not see to")], lines
+
+
+@pytest.mark.invariant("UP-2")
+@pytest.mark.invariant("UP-8")
+def test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_puts_the_new_version_in_use(
+        editor, qtbot, folders, this, releases, boxes, starts):
+    """U4, U7: the Startup folder's "Taskloom Scheduler.cmd" was changed by hand (no `set "TASKLOOM_HOME=..."` line; it
+    starts this version); the Start menu entry starts this version; a scheduler service runs, not turned off. Install?
+    Yes: the Start menu entry starts 0.40.0 straight away, no Startup entry is made, the script is kept as it is, the
+    status bar says which script it is and what it lacks (not that 0.40.0 could not be put in use), and 0.40.0's
+    service is started to take over."""
+    home, new = editor.home.root, folders.programs / NEW
+    write_entry(folders.start_menu, this / "taskloomw.exe", editor_args(home), this)
+    script = a_script_naming_no_taskloom_folder(folders, "changed by hand", this / "taskloomw.exe")
+    before = script.read_bytes()
+    service_proc = stand_in_service(home, __version__)
+    try:
+        install(editor, qtbot, boxes)
+    finally:
+        service_proc.kill()
+        service_proc.wait(timeout=15)
+    told = editor.statusBar().currentMessage()
+
+    boxes.take("question")
+    assert entries_now(folders) == {"Start menu": entry_for(new, editor_args(home)), "Startup": None}, told
+    assert script.read_bytes() == before, "the Startup script was changed"
+    assert str(script) in told and "TASKLOOM_HOME" in told and "Could not put it in use" not in told, told
+    assert [norm(Path(s.args[0]).parent) for s in services_started(starts)] == [norm(new)], told
 
 
 @pytest.mark.invariant("UP-2")
