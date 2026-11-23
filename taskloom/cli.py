@@ -372,7 +372,7 @@ def _at_start(home: Home) -> list[str]:
     try:
         return entries.follow(folder) + update.clean_up(folder, home)
     except Exception as e:  # (Taskloom starts all the same; tried again at its next start)
-        return [f"Could not see to Taskloom's Start menu and Startup entries and older versions: {e}"]
+        return [f"Could not see to Taskloom's Start menu and Startup entries and older versions: {update.plainly(e)}"]
 
 
 def main(argv=None) -> int:

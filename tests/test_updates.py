@@ -1031,7 +1031,7 @@ def test_u1_an_update_of_a_version_taskloom_installed_whose_entries_cannot_chang
     assert leftovers(folders) == sorted([__version__, NEW]), f"left in {folders.programs}: {leftovers(folders)}"
     assert files_in(installed) == before and entries_now(folders) == entries
     assert told.startswith(f"Taskloom {NEW} is installed in {new}.  Could not put it in use yet: "), told
-    assert str(locks) in told, told
+    assert str(locks) in told and repr(str(locks)) not in told, f"{locks} is not shown as it is: {told}"
     assert starts == []
 
 
@@ -1470,6 +1470,7 @@ def test_u3_a_folder_in_the_new_versions_place_is_left_as_it_is_and_the_update_s
         assert releases.downloads() == [], f"downloaded: {releases.downloads()}"
     else:
         assert told[0].startswith(f"{NOT_UPDATED}Could not unpack Taskloom {NEW}: "), told[0]
+        assert str(place) in told[0] and repr(str(place)) not in told[0], f"{place} is not shown as it is: {told[0]}"
     assert boxes.take() == []
     assert files_in(place) == before, f"{place} was changed"
     assert leftovers(folders) == [NEW], f"left in {folders.programs}: {leftovers(folders)}"

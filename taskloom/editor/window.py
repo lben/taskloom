@@ -2221,7 +2221,7 @@ class MainWindow(QMainWindow):
             folder = update.installed(release.version)
             download = None if folder else UpdateDownload(self._web(), release, Path(sys.executable).parent, self)
         except (update.Failed, OSError) as e:
-            QMessageBox.warning(self, "Taskloom was not updated", str(e))
+            QMessageBox.warning(self, "Taskloom was not updated", update.plainly(e))
             return
         if download is None:
             self._installed(folder, release.version)
@@ -2236,7 +2236,7 @@ class MainWindow(QMainWindow):
         try:
             told += update.put_in_use(folder, self.home)
         except (OSError, RuntimeError, ValueError) as e:  # (its first start sees to the entries again)
-            told.append(f"Could not put it in use yet: {e}")
+            told.append(f"Could not put it in use yet: {update.plainly(e)}")
         self.statusBar().showMessage("  ".join(told), 30000)
         if QMessageBox.question(self, "Taskloom updated",
                                 f"Restart Taskloom now with version {version}?") == QMessageBox.Yes:

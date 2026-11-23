@@ -32,6 +32,13 @@ class Failed(Exception):
     """An update that cannot go on; the message says what went wrong. Nothing was installed."""
 
 
+def plainly(e: Exception) -> str:
+    """What `e` says, with an OSError's paths as they are (str(e) shows them in quotes, a backslash doubled)."""
+    if isinstance(e, OSError) and e.strerror and e.filename is not None:
+        return f"{e.strerror}: {e.filename}" + (f" -> {e.filename2}" if e.filename2 is not None else "")
+    return str(e)
+
+
 class Release(NamedTuple):
     """The newest release's Windows zip, as GitHub's API tells of it."""
     version: str
@@ -142,7 +149,7 @@ def unpack(download: Path, release: Release, source: Path, stop, progress) -> Pa
     except zipfile.BadZipFile as e:
         raise Failed(f"The download is damaged: {e}") from e
     except OSError as e:
-        raise Failed(f"Could not unpack Taskloom {release.version}: {e}") from e
+        raise Failed(f"Could not unpack Taskloom {release.version}: {plainly(e)}") from e
 
 
 def _sha256(path: Path) -> str:
