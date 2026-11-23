@@ -57,7 +57,7 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt, QTimer  # noqa: E
 from PySide6.QtGui import (QColor, QContextMenuEvent, QKeySequence, QMouseEvent, QPalette, QTextCursor,  # noqa: E402
                            QWheelEvent)
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMenu, QPlainTextEdit  # noqa: E402
+from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMenu, QMessageBox, QPlainTextEdit  # noqa: E402
 
 from tests.test_code_editor import drawn_texts  # noqa: E402
 import tests.test_commit_history as commit_history  # noqa: E402
@@ -551,6 +551,8 @@ def test_d3_against_current_the_right_side_is_what_the_tab_holds_titled_current_
     assert not tab.doc.dirty and win.message_boxes == []
     assert shown_right == (tmp_path / "flows" / "report.yaml").read_text(encoding="utf-8").splitlines(), (
         "the right side is not what the tab holds")
+    keys = [[line.split(":")[0] for line in lines if re.match(r"\w+:", line)] for lines in (HAND_WRITTEN, shown_right)]
+    assert keys[1] == keys[0], f"the right side has the flow's keys in another order than its file: {keys}"
 
 
 LONG = ("Explain why the nightly totals are read per region and not per store: " + "the stores report late, " * 8
@@ -1192,7 +1194,7 @@ def test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so(win
         diff = open_diff(history, qtbot, place, item)
         assert not any("No differences" in said for said in diff.says()), f"{item}: {diff.says()}"
         note = diff.note()
-        assert re.search(r"line ends", note, re.IGNORECASE) and "Windows" in note and "Unix" in note, (
+        assert note == "The line ends differ: both versions mix Windows (CRLF) and Unix (LF), on other lines.", (
             f"{item}: the versions differ in line ends (window: {diff.count()!r}), the note line: {note!r}")
         diff.close()
 
@@ -1299,3 +1301,327 @@ def test_d4_a_flow_of_2000_lines_opens_within_2_seconds(win, qtbot, tmp_path, ca
     assert [line for line in diff.left.toPlainText().split("\n") if line] == old
     assert [line for line in diff.right.toPlainText().split("\n") if line] == new
     assert took <= 2.0, f"the window took {took:.2f} s to show the diff"
+
+
+# --- what mutation testing found the tests above let through (docs/promises/source-diff.mutants.yaml) ---------------
+
+def header(diff, side) -> QLabel:
+    """The line over `side` naming its version: the label shown just above it."""
+    top = side.mapTo(diff.window, QPoint(0, 0))
+    found = [label for label in diff.window.findChildren(QLabel) if label.isVisible() and not label.objectName()
+             and abs(label.mapTo(diff.window, QPoint(0, 0)).x() - top.x()) <= 1]
+    assert len(found) == 1, f"over the {side.objectName()} side: {[label.text() for label in found]}"
+    return found[0]
+
+
+def in_window(diff, widget) -> QRect:
+    return QRect(widget.mapTo(diff.window, QPoint(0, 0)), widget.size())
+
+
+def strip_of(diff):
+    """The strip between the two sides."""
+    left, right = in_window(diff, diff.left), in_window(diff, diff.right)
+    strip = diff.window.childAt(QPoint((left.right() + right.left()) // 2, left.center().y()))
+    assert strip is not None and strip not in (diff.left, diff.right), "nothing is between the two sides"
+    return strip
+
+
+@pytest.mark.invariant("CD-1")
+@pytest.mark.invariant("CD-2")
+@pytest.mark.invariant("CD-3")
+def test_d16_the_title_and_the_line_over_each_side_name_each_version_exactly_and_the_parts_are_side_by_side(
+        win, qtbot, tmp_path):
+    """D16: the title is "report.yaml:  "<message>", <time>  ↔  "<message>", <time>" ("current" or "current (not
+    saved)" for the tab's version), a message of 60 characters whole, of 61 its first 59 and "…"; over each side its
+    version: "<message>"  ·  <time>  ·  <its short id> (7 characters, as git gives it), "Current" or "Current (not
+    saved)", in plain text (a message holding <b> shows it). The buttons say "Previous change (Shift+F7)" and "Next
+    change (F7)" beside an up and a down arrow. Each line is over its side; the left side, the strip between and the
+    right side are side by side, level."""
+    messages = ["Load <b>the</b> numbers", "Read the nightly totals per region, not per store, as agreed",
+                "Read the nightly totals per region, not per store, as agreed!"]
+    assert [len(m) for m in messages[1:]] == [60, 61]
+    versions = [flow_lines(code(4)), flow_lines(code(5)), flow_lines(code(6))]
+    ids, when, history, tab = flow_history(win, qtbot, tmp_path / "flows", [(m, as_bytes(v))
+                                                                            for m, v in zip(messages, versions)])
+    cut = messages[2][:59] + "…"
+
+    diff = open_diff(history, qtbot, 0, PREVIOUS)
+    assert diff.title == f'report.yaml:  "{messages[1]}", {when[1]}  ↔  "{cut}", {when[2]}'
+    assert header(diff, diff.left).text() == f'"{messages[1]}"  ·  {when[1]}  ·  {ids[1][:7]}'
+    assert header(diff, diff.right).text() == f'"{cut}"  ·  {when[2]}  ·  {ids[2][:7]}'
+    for name, text, arrow in ((PREVIOUS_CHANGE, "Previous change (Shift+F7)", Qt.UpArrow),
+                              (NEXT_CHANGE, "Next change (F7)", Qt.DownArrow)):
+        button = diff.button(name)
+        assert button.text() == text and button.arrowType() == arrow, (button.text(), button.arrowType())
+        assert text in [t.strip() for _, _, t in drawn_texts(button)], f"{name} does not show {text!r}"
+    diff.close()
+
+    diff = open_diff(history, qtbot, 2, CURRENT)
+    assert diff.title == f'report.yaml:  "{messages[0]}", {when[0]}  ↔  current'
+    left_header = header(diff, diff.left)
+    assert left_header.text() == f'"{messages[0]}"  ·  {when[0]}  ·  {ids[0][:7]}'
+    assert "<b>the</b>" in "".join(t for _, _, t in drawn_texts(left_header)), "the message's <b> is not shown"
+    assert header(diff, diff.right).text() == "Current"
+    left, right, strip = in_window(diff, diff.left), in_window(diff, diff.right), in_window(diff, strip_of(diff))
+    for side, rect in ((diff.left, left), (diff.right, right)):
+        assert in_window(diff, header(diff, side)).bottom() < rect.top(), f"{side.objectName()}'s line is not over it"
+    assert left.right() < strip.left() and strip.right() < right.left(), (left, strip, right)
+    assert left.top() == strip.top() == right.top() and left.height() == strip.height() == right.height(), (
+        left, strip, right)
+    diff.close()
+
+    tab.doc.move_blocks({"manual": (-200, 40)})  # an unsaved change
+    diff = open_diff(history, qtbot, 2, CURRENT)
+    assert diff.title == f'report.yaml:  "{messages[0]}", {when[0]}  ↔  current (not saved)'
+    assert header(diff, diff.right).text() == "Current (not saved)"
+    clean(win)
+
+
+NOTE_LINES = flow_lines(code(6))
+MIXED = (NOTE_LINES[0] + "\r\n" + "\n".join(NOTE_LINES[1:]) + "\n").encode("utf-8")
+# Oldest first: (its bytes, what the note line says against the version before it, the change count there).
+NOTES = [(as_bytes(NOTE_LINES), None, None),
+         (as_bytes(NOTE_LINES, "\r\n"), "The line ends differ: Unix (LF) on the left, Windows (CRLF) on the right.",
+          "No changed lines"),
+         (as_bytes(NOTE_LINES, "\r\n", last=False),
+          "The newline at the end differs: the left version ends with one, the other does not.", "1 of 1 changes"),
+         (as_bytes(NOTE_LINES), "The line ends differ: Windows (CRLF) on the left, Unix (LF) on the right. The newline "
+          "at the end differs: the right version ends with one, the other does not.", "1 of 1 changes"),
+         (MIXED, "The line ends differ: Unix (LF) on the left, Windows (CRLF) and Unix (LF) mixed on the right.",
+          "No changed lines"),
+         (b"", "", "1 of 1 changes"),
+         (as_bytes(NOTE_LINES, "\r\n"), "", "1 of 1 changes")]
+
+
+@pytest.mark.invariant("CD-7")
+@pytest.mark.invariant("CD-4")
+def test_d7_d8_the_note_line_says_which_line_ends_and_which_newline_at_the_end_differ_and_an_empty_or_gone_file(
+        win, qtbot, tmp_path, monkeypatch):
+    """D7, D8: against the version before, the note line says in words how the line ends differ (Unix, Windows, or
+    both mixed, on which side) and which version ends with a newline, both when both differ; versions that differ in
+    line ends only say "No changed lines"; an empty file has no line ends: against it, or it against another, the note
+    says nothing. In a window too narrow for the note on one line, the note wraps. The flow's file emptied: "against
+    current version" on the empty commit says "No differences", Previous and Next greyed. The file gone: a message
+    over Commit History says it cannot be read, and no window opens."""
+    folder = tmp_path / "flows"
+    _, _, history, _ = flow_history(win, qtbot, folder, [(f"Version {i + 1}", data)
+                                                         for i, (data, _, _) in enumerate(NOTES)])
+    for n in range(1, len(NOTES)):
+        diff = open_diff(history, qtbot, len(NOTES) - 1 - n, PREVIOUS)
+        assert (diff.note(), diff.count()) == NOTES[n][1:], f"version {n} -> {n + 1}"
+        if n == 3:
+            diff.window.resize(700, diff.window.height())
+            settle()
+            note = diff.window.findChild(QLabel, NOTE)
+            assert diff.window.width() == 700, "the window cannot be narrower than the note on one line"
+            assert note.height() >= 2 * note.fontMetrics().height(), "the note does not wrap in a narrow window"
+        diff.close()
+
+    (folder / "report.yaml").write_bytes(b"")
+    diff = open_diff(history, qtbot, 1, CURRENT)
+    assert diff.count() == "No differences" and diff.note() == ""
+    assert not diff.button(PREVIOUS_CHANGE).isEnabled() and not diff.button(NEXT_CHANGE).isEnabled()
+    diff.close()
+
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a: warned.append(a) or QMessageBox.Ok))
+    (folder / "report.yaml").unlink()
+    listed, clicked = right_click_card(history, qtbot, 0, CURRENT)
+    assert clicked and diff_windows() == []
+    assert len(warned) == 1 and warned[0][0] is history.window, warned
+    assert warned[0][1] == "Cannot show the source diff", warned
+    assert warned[0][2].startswith("report.yaml cannot be read: "), warned
+    (folder / "report.yaml").write_bytes(NOTES[-1][0])
+
+
+def colour_at(image, x: int, y: int) -> QColor:
+    ratio = image.devicePixelRatio()
+    return image.pixelColor(int(x * ratio), int(y * ratio))
+
+
+def row_top(side, n: int) -> int:
+    """Where the side's viewport shows the top of its row `n` (from 0)."""
+    return line_rect(side, side.document().findBlockByNumber(n)).top()
+
+
+def change_painted(side, image, xs, first: int, last: int, fill: QColor, dy: int = 0, filler: bool = False) -> list:
+    """What is wrong with how the change of rows `first` to `last` (from 0) of `side` is painted in `image` (its
+    viewport's, or the strip's: `dy` lower), at the columns `xs`: along its top and its bottom, straight across, a line
+    in the change's colour; between its rows no such line, and (unless they are the side's filler lines) its rows in
+    `fill`."""
+    wanted = kind(side, Row(None, "", fill, None))
+    wrong = []
+    for x in xs:
+        edges = [row_top(side, first), row_top(side, last + 1) - 1]
+        inner = [y for n in range(first + 1, last + 1) for y in (row_top(side, n) - 1, row_top(side, n))]
+        for y in edges + inner:
+            c = colour_at(image, x, y + dy)
+            line = differs(c, fill, 6) and kind(side, Row(None, "", c, None)) == wanted
+            if line != (y in edges) or (y in inner and not filler and differs(c, fill, 6)):
+                wrong.append(f"{'edge' if y in edges else 'inside'} at x {x}, y {y}: {c.name()} (fill {fill.name()})")
+    return wrong
+
+
+def hatched(side, image, n: int) -> list[str]:
+    """What is wrong with the filler line `n` (from 0) of `side` as hatched in `image`: inside it (its edges aside)
+    only the side's Base colour and the mockup's hatching colour, both."""
+    base = side.palette().color(QPalette.Base)
+    hatch = QColor(HATCH_COLOURS[int(base.lightness() < 128)])
+    seen = {colour_at(image, x, y).name() for y in range(row_top(side, n) + 2, row_top(side, n + 1) - 2)
+            for x in range(side.viewport().width())}
+    other = [c for c in seen if differs(QColor(c), base, 6) and differs(QColor(c), hatch, 6)]
+    found = [any(not differs(QColor(c), want, 6) for c in seen) for want in (base, hatch)]
+    return [] if found == [True, True] and not other else [f"row {n + 1}: {sorted(seen)}"]
+
+
+HATCH_COLOURS = ("#d4d4d4", "#3a3c41")  # the approved mockup's (light, dark)
+PAINT_OLD = flow_lines(code(40), before=["# made by hand", "# for the nightly report"])
+PAINT_NEW = flow_lines([*code(40)[:8], *(line.replace("read(", "load(") for line in code(40)[8:11]), *code(40)[11:21],
+                        *code(2, "added"), *code(40)[21:]])
+# The changes' rows (from 0, first and last): 2 removed at the start, 3 changed, 2 added.
+PAINT_CHANGES = [(0, 1), (CODE_AT + 10, CODE_AT + 12), (CODE_AT + 23, CODE_AT + 24)]
+
+
+@pytest.mark.invariant("CD-2")
+def test_d13_d15_each_change_edged_top_and_bottom_filler_lines_hatched_the_strip_joining_level_numbers_right_aligned(
+        win, qtbot, tmp_path):
+    """D13, D15: two lines removed at the start, three changed, two added. Each change has a line in its colour along
+    its top and its bottom, straight across its rows, none between them; a numbered row is in the change's fill to
+    its left edge, a filler line hatched in the mockup's grey. The strip between the sides is painted, row by row and
+    level with them, in each change's fill (filler lines too), edged as on the sides, with a straight line down each
+    of its sides; it follows when the sides scroll. Line numbers are right-aligned inside their margin. The window
+    opens at the first change (the top of the file); hidden and shown again it stays where it was scrolled; Next
+    puts the next change a third of the way down."""
+    _, _, history, _ = flow_history(win, qtbot, tmp_path / "flows", [("One", as_bytes(PAINT_OLD)),
+                                                                     ("Two", as_bytes(PAINT_NEW))])
+    diff = open_diff(history, qtbot, 0, PREVIOUS)
+    left, right, strip = diff.left, diff.right, strip_of(diff)
+    assert top_row(left) == 0 and top_row(right) == 0, "the window does not open at the top, its first change"
+    numbers = [(x, text.strip()) for x, _, text in drawn_texts(left) if text.strip().isdigit()
+               and x < left.viewport().mapTo(left, QPoint(0, 0)).x()]
+    ends = {round(x + left.fontMetrics().horizontalAdvance(n)) for x, n in numbers}
+    assert {len(n) for _, n in numbers} == {1, 2} and max(ends) - min(ends) <= 1, f"numbers not right-aligned: {ends}"
+    assert max(ends) <= left.viewport().mapTo(left, QPoint(0, 0)).x(), f"numbers drawn past their margin: {ends}"
+
+    def look(changes) -> list[str]:
+        wrong = []
+        strip_image = strip.grab().toImage()
+        dy = left.viewport().mapTo(diff.window, QPoint(0, 0)).y() - strip.mapTo(diff.window, QPoint(0, 0)).y()
+        for first, last in changes:
+            numbered = left if left.document().findBlockByNumber(first).text() and not right.document(
+            ).findBlockByNumber(first).text() else right
+            image = {s: s.viewport().grab().toImage() for s in (left, right)}
+            fill = painted(image[numbered], QRect(0, row_top(numbered, first) + 2, numbered.viewport().width(), 4))
+            for side in (left, right):
+                filler = side is not numbered and not side.document().findBlockByNumber(first).text()
+                width = side.viewport().width()
+                wrong += [f"{side.objectName()}: {w}" for w in change_painted(
+                    side, image[side], [0, width - 40, width - 1], first, last, fill, filler=filler)]
+                if filler:
+                    wrong += [f"{side.objectName()}: {w}" for n in range(first, last + 1)
+                              for w in hatched(side, image[side], n)]
+            wrong += [f"strip: {w}" for w in change_painted(left, strip_image, [1, strip.width() // 2,
+                                                                                strip.width() - 2], first, last,
+                                                            fill, dy=dy)]
+        mid = strip.palette().mid().color()
+        wrong += [f"strip's side line at x {x}, y {y}" for x in (0, strip.width() - 1)
+                  for y in (0, strip.height() // 2, strip.height() - 1)
+                  if differs(colour_at(strip_image, x, y), mid, 6)]
+        return wrong
+
+    assert not (wrong := look(PAINT_CHANGES[:2])), "\n".join(wrong)
+    wheel(left, 2)
+    scrolled = top_row(left)
+    assert scrolled > 0
+    diff.window.hide()
+    settle()
+    diff.window.show()
+    settle()
+    assert top_row(left) == scrolled, "shown again, the window jumps back to the first change"
+
+    QTest.mouseClick(diff.button(NEXT_CHANGE), Qt.LeftButton)
+    settle()
+    assert diff.count() == "2 of 3 changes"
+    height = right.viewport().height()
+    at = row_top(right, PAINT_CHANGES[1][0])
+    assert abs(at - height / 3) <= 1.5 * line_rect(right, right.document().begin()).height(), (
+        f"the change is {at} px down of {height}, not a third of the way down")
+    assert not (wrong := look(PAINT_CHANGES[1:])), "\n".join(wrong)
+    shot = QApplication.primaryScreen().grabWindow(diff.window.winId()).toImage()
+    fresh, place = strip.grab().toImage(), strip.mapTo(diff.window, QPoint(0, 0))
+    stale = [y for y in range(strip.height()) if shot.pixelColor(place.x() + strip.width() // 2, place.y() + y)
+             != fresh.pixelColor(strip.width() // 2, y)]
+    assert not stale, f"the strip on screen is not what it paints now that the sides scrolled (rows {stale[:5]}...)"
+
+
+# A comment of 296 characters: after its first ones, only letters each found more than 3 times in it (difflib's
+# autojunk would take them as junk, and the line as changed from there on).
+COMMENT = ("the stores send their totals late so the totals in the dash are read later than the rest and the last "
+           "stores that send theirs later still are added to the totals in the last one that then ends and the totals "
+           "are sent on as one total to the head and noted there as the totals read")
+RULE = "print('-' * 40)"  # a line found many times in the flow (also more than 1% of its lines: autojunk's "popular")
+SECTIONS = [line for k in range(5) for line in [*code(40, f"part{k}"), RULE, RULE, RULE]]
+LINES_OLD = flow_lines(["# Note 1 " + COMMENT, "region = 'north'", "x = 1  # ==========", *SECTIONS])
+LINES_NEW = flow_lines(["# Note 2 " + COMMENT, "region = 'far north'", "x = 2  # ==========", *SECTIONS[:40],
+                        "x_added = 1", *SECTIONS[40:43], "y_added = 2", *SECTIONS[43:]], before=["# Zürich"])
+
+
+def marked_cells(side, block, image, row_colour: QColor, indexes) -> list[int]:
+    """Which of the characters `indexes` of the row `block` are painted in another colour than the row."""
+    found = []
+    for i in indexes:
+        first, last = QTextCursor(block), QTextCursor(block)
+        first.setPosition(block.position() + i)
+        last.setPosition(block.position() + i + 1)
+        a, b = side.cursorRect(first), side.cursorRect(last)
+        if differs(painted(image, QRect(a.left() + 1, a.top(), b.left() - a.left() - 2, a.height()), 1, 1),
+                   row_colour, 6):
+            found.append(i)
+    return found
+
+
+@pytest.mark.invariant("CD-2")
+@pytest.mark.invariant("CD-7")
+def test_d9_d10_long_lines_repeated_lines_a_byte_not_utf8_and_characters_added_inside_a_line_are_marked_as_changed(
+        win, qtbot, tmp_path):
+    """D9, D10: the older version starts with a line holding a byte that is not UTF-8 (Zürich in Latin-1): it shows,
+    the byte as \\xfc. A comment of 296 characters with one character changed near its start: that character alone
+    is marked, and the line stays one row, the side scrolling sideways. "far " added inside a line: marked on the
+    right, nothing on the left. In a flow of 236 lines with a line repeated 15 times, a line added each side of three
+    such lines: only those two lines are marked, as git diff gives them. On a changed row ending in a comment, the
+    comment's last character is in the same shade as the rest."""
+    old_bytes = b"# Z\xfcrich\n" + as_bytes(LINES_OLD)
+    _, _, history, _ = flow_history(win, qtbot, tmp_path / "flows", [("One", old_bytes),
+                                                                     ("Two", as_bytes(LINES_NEW))])
+    diff = open_diff(history, qtbot, 0, PREVIOUS)
+
+    left, right = rows(diff.left), rows(diff.right)
+    assert left[0].text == "# Z\\xfcrich" and left[0].number == 1, left[0]
+    at = CODE_AT + 1  # (the row of the first line of code, from 0, under the line of Zürich)
+    assert marks(diff.left, left) == {n: "changed" for n in (1, at + 1, at + 2, at + 3)}
+    added = [LINES_NEW.index(f"        {line}") + 1 for line in ("x_added = 1", "y_added = 2")]
+    assert marks(diff.right, right) == {**{n: "changed" for n in (1, at + 1, at + 2, at + 3)},
+                                        **{n: "added" for n in added}}
+
+    for side, far in ((diff.left, []), (diff.right, [18, 19, 20, 21])):
+        side.verticalScrollBar().setValue(0)
+        settle()
+        image = side.viewport().grab().toImage()
+        rects = {n: line_rect(side, side.document().findBlockByNumber(n)) for n in (at, at + 1, at + 2)}
+        colours = {n: painted(image, QRect(0, r.top() + 2, side.viewport().width(), 4)) for n, r in rects.items()}
+        long_row = side.document().findBlockByNumber(at)
+        assert long_row.layout().lineCount() == 1 and side.horizontalScrollBar().maximum() > 0, "the long line wraps"
+        assert marked_cells(side, long_row, image, colours[at], range(10, 30)) == [15], side.objectName()
+        north = side.document().findBlockByNumber(at + 1)
+        assert marked_cells(side, north, image, colours[at + 1], range(len(north.text()))) == far, side.objectName()
+        rule = side.document().findBlockByNumber(at + 2)
+        signs = [i for i in range(rule.text().index("#"), len(rule.text())) if rule.text()[i] == "="]
+        inks = []
+        for i in signs:
+            first, last = QTextCursor(rule), QTextCursor(rule)
+            first.setPosition(rule.position() + i)
+            last.setPosition(rule.position() + i + 1)
+            a, b = side.cursorRect(first), side.cursorRect(last)
+            inks.append(strongest(side, QRect(a.left() + 1, a.top() + 1, b.left() - a.left() - 2, a.height() - 3),
+                                  colours[at + 2]))
+        assert inks[-1] >= 0.9 * max(inks[:-1]), f"{side.objectName()}: the comment's signs read at {inks}"
