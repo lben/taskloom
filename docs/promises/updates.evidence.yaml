@@ -32,20 +32,20 @@ UP-2:
     (cli._at_start, before any command) and right after an install (update.put_in_use). It replaces today's Startup
     script (Taskloom Scheduler.cmd) by the Startup entry for the Taskloom folder its TASKLOOM_HOME line names
     (_script_home), or removes it when that entry is there; a script with no such line (changed by hand, empty, cut
-    off) is kept as it is, follow saying so, and the entries are pointed all the same. It writes under one lock
+    off) or not in UTF-8 is kept as it is, follow saying which, and the entries are pointed all the same. It writes under one lock
     (entries._locked) to <name>.new, then os.replace.
   not_green: >-
     Tests read the shortcuts through Windows' own WScript.Shell on Windows (elsewhere a JSON file stands in for one),
     starting the program as a Python process made to look packaged, also run from source on Windows and packaged on
     another platform (test_u4_only_the_packaged_windows_taskloom_points_the_entries_at_itself: the entries are left
     alone), with today's Startup script for a folder named with a % and an é, and with a Startup script naming no
-    Taskloom folder, changed by hand, empty or cut off, at a start
-    (test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why) and at an install
-    (test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_puts_the_new_version_in_use); no test
-    logs in to Windows or opens the Start menu to see a shortcut start the built taskloomw.exe. Known limits of a
-    Startup script kept by hand: one naming its folder through %LOCALAPPDATA% instead of the full path does not keep
-    that version from removal, and one not in UTF-8 still stops the start's re-point (and with it the removal of
-    older versions).
+    Taskloom folder, changed by hand, empty, cut off or not in UTF-8, at a start
+    (test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why) and, changed by hand, at
+    an install (test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_puts_the_new_version_in_use);
+    no test logs in to Windows or opens the Start menu to see a shortcut start the built taskloomw.exe. Known limits
+    of a Startup script kept by hand: one naming its folder through %LOCALAPPDATA% instead of the full path does not
+    keep that version from removal, and one not in UTF-8 may not either (its text is read with what is not UTF-8
+    replaced).
 UP-3:
   enforced: >-
     update.refused lets only https on a host in update.HOSTS be asked, for the release's file and for each redirect
@@ -86,10 +86,10 @@ UP-4:
     (test_u5_start_at_login_turned_on_in_an_older_version_keeps_the_newer_versions_startup_entry), start beside a
     Startup script naming no Taskloom folder
     (test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why: stderr names the script
-    and what it lacks), read the status bar and stderr, and read the guide's sentence; the tray's message is not
-    checked, and no test pins Taskloom to a real taskbar. Known limits of a Startup script kept by hand: one naming
-    its folder through %LOCALAPPDATA% instead of the full path does not keep that version from removal, and one not
-    in UTF-8 still stops the start's re-point (and with it the removal of older versions).
+    and what it lacks or that it is not in UTF-8), read the status bar and stderr, and read the guide's sentence; the
+    tray's message is not checked, and no test pins Taskloom to a real taskbar. Known limits of a Startup script kept
+    by hand: one naming its folder through %LOCALAPPDATA% instead of the full path does not keep that version from
+    removal, and one not in UTF-8 may not either (its text is read with what is not UTF-8 replaced).
 UP-5:
   enforced: >-
     Settings, run history, credentials and schedules are in the Taskloom folder (Home: --home, TASKLOOM_HOME or
@@ -137,7 +137,7 @@ UP-7:
     byte for byte); "once nothing runs from them" is checked on Windows only, with a file held open in the folder
     rather than a program running from it. Known limits of a Startup script kept by hand: one naming its folder
     through %LOCALAPPDATA% instead of the full path does not keep that version from removal, and one not in UTF-8
-    still stops the start's re-point (and with it the removal of older versions).
+    may not either (its text is read with what is not UTF-8 replaced).
 UP-8:
   enforced: >-
     scheduler.serve, finding the lock held by an older Taskloom's service, waits as the folder's one successor
