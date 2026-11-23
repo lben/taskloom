@@ -168,10 +168,10 @@ kinds:
     mutants:
       - taskloom.update.x_unpack__mutmut_56
       - taskloom.update.x_unpack__mutmut_111
-      - taskloom.entries.x__script_home__mutmut_13
+      - taskloom.entries.x__script_home__mutmut_4
       - taskloom.entries.x_version_of__mutmut_6
       - taskloom.update.x__marker__mutmut_6
-      - taskloom.update.x_clean_up__mutmut_31
+      - taskloom.update.x_clean_up__mutmut_34
   - kind: A file of plain ASCII read or written in the locale's encoding
     why: >-
       The marker is written by json.dumps, which writes every character beyond ASCII as \uXXXX, and a VERSION file
@@ -183,14 +183,16 @@ kinds:
       - taskloom.entries.x_version_of__mutmut_1
   - kind: The Startup script read in the locale's encoding
     why: >-
-      On Linux, where mutation testing runs, the locale's encoding is UTF-8, the script's own; on Windows (a code
-      page) test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_folder, whose Taskloom folder is
+      On Linux, where mutation testing runs, the locale's encoding is UTF-8, the one named, so a script is read the
+      same (one not in UTF-8 too); on Windows (a code page)
+      test_u4_todays_startup_script_is_replaced_by_a_shortcut_for_its_taskloom_folder, whose Taskloom folder is
       named with an é, catches it in today's script, and
       test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why, whose kept script starts
       a version in a folder named with an é, catches it in the cleanup (that version would be removed).
     mutants:
-      - taskloom.entries.x__script_home__mutmut_11
+      - taskloom.entries.x__script_home__mutmut_2
       - taskloom.update.x_clean_up__mutmut_29
+      - taskloom.update.x_clean_up__mutmut_31
   - kind: Windows' process flags, which Linux does not have
     why: >-
       On Linux, where mutation testing runs, subprocess has neither DETACHED_PROCESS nor CREATE_NO_WINDOW, so the
@@ -357,4 +359,4 @@ kinds:
       With no Startup script the cleanup looks for each folder in "" or in "XXXX": a folder's path, ending in a
       separator, is part of neither, so the same folders are kept and removed.
     mutants:
-      - taskloom.update.x_clean_up__mutmut_32
+      - taskloom.update.x_clean_up__mutmut_37
