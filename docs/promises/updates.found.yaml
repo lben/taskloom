@@ -26,6 +26,13 @@ found:
     found_by: the mutation test writer, confirmed by reading
     fixed_in: a78a740
     guarded_by: tests/test_updates.py::test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why
+  - what: >-
+      A message about a folder or file the update could not use showed its path as Python writes it, in quotes and,
+      on Windows, with every backslash doubled (the install's failure and warning, unpacking's rename, the start's
+      clean-up). They now show the path as it is (UP-1, UP-3).
+    found_by: CI (Windows)
+    fixed_in: 9a939ac
+    guarded_by: tests/test_updates.py::test_u1_an_update_of_a_version_taskloom_installed_whose_entries_cannot_change_yet_says_so
 lighter:
   - "Taskloom's real GitHub releases are not asked: a local HTTPS server stands for the API, github.com and its hosts for release files, with Qt trusting a certificate made for the tests."
   - "No proxy is tried, nor TLS in the packaged build, nor the built Windows zip: a zip made by the tests stands for it, holding stand-in programs that cannot run."
