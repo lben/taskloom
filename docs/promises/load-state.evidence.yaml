@@ -12,10 +12,13 @@ LS-1:
     words and FlowTab.leave. A double-click still calls MainWindow.show_history_run, which only ends a loaded
     state first (_set_state(tab, None)) and shows the run once, as before.
   not_green: >-
-    Tests (L1, L4, L8, L10, L11, L17) load a failed run, a second run over a first, a Loop over 5 items, a Merger
-    set to each line, a request in a Session, re-runs that carried blocks over (also inside a Loop) and the oldest
-    of the 200 runs listed, and double-click a run; no check tries every shape of flow, e.g. a Loop inside a Loop,
-    or every chain of re-runs.
+    Tests (L1, L4, L8, L10, L11, L17) load a failed run (the bar read word for word), a second run over a first, a
+    Loop over 5 items, a Merger set to each line, a request in a Session, re-runs that carried blocks over (also
+    inside a Loop: a carried block whose run was cleaned up says so word for word, naming that run, while a block the
+    re-run ran itself still shows its result) and the oldest of the 200 runs listed, double-click a run, and choose
+    Load run state with no flow open, the last tab closed
+    (test_l1_with_no_flow_open_load_run_state_on_a_run_still_listed_does_nothing: no tab opens, nothing is asked);
+    no check tries every shape of flow, e.g. a Loop inside a Loop, or every chain of re-runs.
 LS-2:
   enforced: >-
     MainWindow.inputs_run returns the loaded run (FlowTab.state_run) for a block that, or a block before which,
@@ -27,8 +30,9 @@ LS-2:
     as old the blocks after it that it did not reach.
   not_green: >-
     Tests (L2, L3, L4, L8) fix a failed block and run from it on, run two blocks alone one after the other, load a
-    second state and re-run a request in a Session, and read what each block received and that the bar names the
-    re-run; test_l2_while_a_rerun_from_a_loaded_state_goes_the_bar_never_says_its_files_were_cleaned_up holds a
+    second state and re-run a request in a Session, and read what each block received and the bar naming the
+    re-run (word for word in L3);
+    test_l2_while_a_rerun_from_a_loaded_state_goes_the_bar_never_says_its_files_were_cleaned_up holds a
     re-run's process right after it starts, before it makes its folder, for 3.5 seconds (past the editor's look every
     2 seconds) and reads the bar all along: it never says the files were cleaned up. No check tries every flow or
     every order of re-runs.
@@ -53,9 +57,9 @@ LS-4:
     the same reason, before any run is recorded, and the editor writes the refusal in the Log.
   not_green: >-
     Tests (L9) load a run where an Ask User gave a password (a stored secret) and a Python block an open database
-    connection, read both blocks' hover, and re-run the blocks that need them (refused, with the right reason and
-    not the other) and one that does not (it runs); no check tries every kind of value that cannot be saved, text
-    built from a password, or a value inside a Loop's items.
+    connection, read both blocks' hover (the password's reason word for word), and re-run the blocks that need them
+    (refused, with the right reason and not the other) and one that does not (it runs); no check tries every kind of
+    value that cannot be saved, text built from a password, or a value inside a Loop's items.
 LS-5:
   enforced: >-
     The loaded run is kept on its FlowTab (state_run). MainWindow._show_state stops the tab following the newest
@@ -86,8 +90,11 @@ LS-7:
     folder is still to come), and MainWindow.rerun_block refuses a re-run with that reason in the Log before anything
     runs.
   not_green: >-
-    Tests (L6, L7, L10) clean a loaded run up with Keep runs, delete a block's folder, delete a run's folder by hand,
-    stop a run at once, look at a run still going, and clean up the run a carried block ran in, and (L2) read the bar
+    Tests (L6, L7, L10) clean a loaded run up with Keep runs, delete a block's folder (in a failed run also the failed
+    block's or a skipped block's:
+    test_l7_a_run_whose_files_are_gone_or_that_kept_none_cannot_be_loaded_and_the_item_says_why), delete a run's
+    folder by hand, stop a run at once, look at a run still going, and clean up the run a carried block ran in,
+    reading Run history's item and its tooltip, the bar and the carried block word for word, and (L2) read the bar
     while a re-run from the state goes before its folder is made; no check tries a folder only partly deleted by
     Windows (a file still open).
 LS-8:
@@ -103,9 +110,14 @@ LS-8:
     not saved; No saves and runs nothing. MainWindow.save forgets the step once it is saved.
   not_green: >-
     Tests (L14) change a flow committed in a Git repository of the test's own (a block deleted, one added), answer
-    Cancel, Show on today's flow and Bring back, press Undo and Redo once, re-run and answer No, and load a run of a
-    flow in no repository and of a flow unchanged; no check tries every history of edits between the run and
-    today, a flow renamed or moved in Git, or answering Yes and then editing and re-running again.
+    Cancel, Show on today's flow and Bring back, reading the question, the window it is over (the editor's), the
+    buttons' tooltips and the bar word for word, press Undo and Redo once, re-run and answer No (also with Enter in
+    Qt's own message box:
+    test_l14_a_rerun_of_a_brought_back_flow_asks_over_the_window_naming_the_run_and_the_file_and_enter_answers_no),
+    and load a run of a flow in no repository, of a flow unchanged and of a flow whose file was deleted since
+    (test_l14_a_run_of_a_flow_whose_file_was_deleted_since_asks_first_and_shows_on_todays_flow); no check tries
+    every history of edits between the run and today, a flow renamed or moved in Git, or answering Yes and then
+    editing and re-running again.
 LS-9:
   enforced: >-
     MainWindow._set_state remembers the loaded run in editor.ini, under the flow file's key (_flow_key "state"), and
@@ -115,8 +127,11 @@ LS-9:
     if the flow changed, it is shown on today's flow without asking.
   not_green: >-
     Tests (L15) close Taskloom with states loaded in two tabs (one of them a re-run), clean one run up from a
-    terminal, and start Taskloom again in the same process; no check starts it in a new process, closes a tab that
-    has a state loaded, or changes the flow while Taskloom is closed.
+    terminal, and start Taskloom again in the same process, reading each bar word for word; and, while Taskloom is
+    closed, change one flow's file by hand and delete the other's loaded run folder
+    (test_l15_a_state_restored_on_a_flow_changed_since_says_todays_flow_and_one_whose_folder_was_deleted_is_gone:
+    nothing is asked, the first is shown on today's flow, the second's bar says its run is gone); no check starts it
+    in a new process or closes a tab that has a state loaded.
 
 # The checker of this feature: mutation testing of the functions the change touched, which are the scope in
 # load-state.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).

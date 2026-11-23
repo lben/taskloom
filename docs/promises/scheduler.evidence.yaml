@@ -24,8 +24,9 @@ SCH-1:
     off, and that each way of starting another (On, login, the editor) does nothing, are checked by tests
     (test_updates.py's U6 and U7, test_service_off.py, test_editor.py, test_paths_scheduler.py, and in
     test_scheduler_mutants_final.py, the older service and the clock stood in for:
-    test_a_newer_service_takes_over_from_an_older_one_only_at_a_quiet_moment in 12 cases, a time due in exactly 2
-    minutes included; test_the_hour_a_newer_service_waits_beside_an_older_one_is_an_hour_on_a_night_the_clocks_change
+    test_a_newer_service_takes_over_from_an_older_one_only_at_a_quiet_moment in 13 cases, a time due in exactly 2
+    minutes and an Every N schedule in the flow's own triggers (written by hand) included;
+    test_the_hour_a_newer_service_waits_beside_an_older_one_is_an_hour_on_a_night_the_clocks_change
     on the nights the clocks go back and on; and
     test_a_newer_service_waiting_beside_an_older_one_waits_on_while_a_yaml_file_is_broken_by_hand); the traces run the
     lock the take-over takes (acquire_lock), not its own code (_take_over, _quiet, _stop_old).

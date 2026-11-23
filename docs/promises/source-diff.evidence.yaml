@@ -10,8 +10,10 @@ CD-1:
     makes it the active window; it is always given the older version first, which DiffSide puts on the left.
   not_green: >-
     Tests right-click the newest, a middle and the oldest of three commits, also after Save as and while a search
-    filters the cards, click each item and read both sides' lines as shown (D1, D16); a real mouse and screen are not
-    used, and no check tries every history.
+    filters the cards, click each item and read both sides' lines as shown (D1, D16), and find the left side, the
+    strip between and the right side side by side and level, each with its version's line over it
+    (test_d16_the_title_and_the_line_over_each_side_name_each_version_exactly_and_the_parts_are_side_by_side); a real
+    mouse and screen are not used, and no check tries every history.
 CD-2:
   enforced: >-
     align (taskloom/editor/source_diff.py) turns difflib's comparison of the lines into the rows both sides show:
@@ -27,7 +29,13 @@ CD-2:
     Tests read what the sides paint, pixel by pixel, in light and dark: one character changed, lines added at the end
     and removed at the start, an empty file against a full one, other languages' letters and an emoji, every kind of
     key typed in either side, and three changes far apart with F7, Shift+F7, the buttons and the wheel (D5, D6, D9,
-    D12, D13, D15). The contrast tests measure each word's darkest pixel: thin glyphs such as ', which never reach
+    D12, D13, D15); each change's edge lines, hatched filler lines, the strip between the sides painted level with
+    them and following their scroll, and right-aligned line numbers
+    (test_d13_d15_each_change_edged_top_and_bottom_filler_lines_hatched_the_strip_joining_level_numbers_right_aligned);
+    a line of 296 characters with one changed, characters added inside a line, and a byte that is not UTF-8
+    (test_d9_d10_long_lines_repeated_lines_a_byte_not_utf8_and_characters_added_inside_a_line_are_marked_as_changed);
+    and the buttons' words and arrows (D16). The contrast tests measure each word's darkest pixel: thin glyphs such
+    as ', which never reach
     4.5:1 pixel by pixel, are not measured; no check tries every file, font or screen.
 CD-3:
   enforced: >-
@@ -38,16 +46,22 @@ CD-3:
     The title is the file's name, then the older and the newer version.
   not_green: >-
     Tests open "against current version" with nothing unsaved and with a change not saved, compare the right side
-    with the file Save then writes, and read the title with a long message and while a search filters the cards (D3,
-    D16); no check tries every message or every change.
+    with the file Save then writes (its keys in the file's order), and read the title with a long message and while
+    a search filters the cards (D3, D16), and the title and the line over each side word for word, with messages of
+    60 and 61 characters and one holding <b>
+    (test_d16_the_title_and_the_line_over_each_side_name_each_version_exactly_and_the_parts_are_side_by_side); no
+    check tries every message or every change.
 CD-4:
   enforced: >-
     _card_menu greys out "against previous version" when the commit is the last of the flow's history (after Save
     as, the oldest commit carried over, as the copy's history goes on into the original's). SourceDiff says "No
     differences" when the two versions' bytes are the same, with nothing marked.
   not_green: >-
-    Tests right-click the oldest commit before and after Save as, and compare a hand-written flow file with its last
-    commit (D1, D2); no check tries every history.
+    Tests right-click the oldest commit before and after Save as, compare a hand-written flow file with its last
+    commit (D1, D2), and the flow's file emptied with its empty commit ("No differences", Previous and Next greyed)
+    and gone (a message over Commit History, no window)
+    (test_d7_d8_the_note_line_says_which_line_ends_and_which_newline_at_the_end_differ_and_an_empty_or_gone_file); no
+    check tries every history.
 CD-5:
   enforced: >-
     The diff reads only bytes Taskloom already has: each commit's, which load_versions read for Commit History's
@@ -82,11 +96,16 @@ CD-7:
     (test_d10_ten_real_commit_pairs_mark_exactly_the_lines_git_diff_changes) and on lines holding a lone carriage
     return or another character Python ends a line at and git does not, or U+FDD0 or U+FDD1, at which Qt starts a new
     row (test_d10_a_lone_cr_and_the_other_breaks_inside_a_line_are_numbered_and_marked_as_git_diff_does: each line
-    whole on its row, both sides with as many rows, the lines both versions keep level); take a newline
-    missing at the end (D7), Windows line ends in one version (D8) and both versions mixing line ends on other lines
-    (test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so); and time two flows of 2,000 lines on
-    the test machines (D4). The ten pairs repeat and move no line, where two right answers can differ from git's; no
-    check tries every pair of files.
+    whole on its row, both sides with as many rows, the lines both versions keep level), and on a line repeated 15
+    times in a flow of 236 lines and characters added inside a line
+    (test_d9_d10_long_lines_repeated_lines_a_byte_not_utf8_and_characters_added_inside_a_line_are_marked_as_changed);
+    take a newline missing at the end (D7), Windows line ends in one version (D8) and both versions mixing line ends
+    on other lines (test_d8_both_versions_mix_line_ends_on_other_lines_the_note_line_says_so), reading the note line
+    word for word, for each kind of line ends and newline at the end, both differing, an empty file and a narrow
+    window
+    (test_d7_d8_the_note_line_says_which_line_ends_and_which_newline_at_the_end_differ_and_an_empty_or_gone_file); and
+    time two flows of 2,000 lines on the test machines (D4). The ten pairs repeat and move no line, where two right
+    answers can differ from git's; no check tries every pair of files.
 
 # The checker of this feature: mutation testing of the functions the change touched, which are the scope in
 # source-diff.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).

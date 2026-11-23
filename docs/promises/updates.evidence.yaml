@@ -13,10 +13,15 @@ UP-1:
     written and whose Cancel aborts the download; update.unpack runs in a thread of its own and puts the version in
     update.programs()/<version>, under %LOCALAPPDATA%.
   not_green: >-
-    Tests click the menu item in the editor offscreen against a local HTTPS server standing for GitHub, watch that no
-    request is made while a flow is opened, saved and closed, press Cancel during the download and while the zip
-    unpacks (after its first file and after its last: nothing is left), and find the version already there, installed
-    by Taskloom or unpacked by hand (it is used as it is, nothing downloaded); no test asks the real GitHub, goes
+    Tests click the menu item in the editor offscreen against a local HTTPS server standing for GitHub, read each
+    box's title and words and the window it is over (the editor), the requests' Accept headers, the download window's
+    words, bar and Cancel (at its right) and the status bar after an install, watch that no request is made while a
+    flow is opened, saved and closed, press Cancel during the download and while the zip unpacks (before its first
+    file, after its first and after its last: nothing is left), find the version already there, installed by Taskloom
+    or unpacked by hand (it is used as it is, nothing downloaded), and install beside an installed version whose
+    entries cannot change yet
+    (test_u1_an_update_of_a_version_taskloom_installed_whose_entries_cannot_change_yet_says_so: the status bar says
+    why); no test asks the real GitHub, goes
     through a proxy or runs as a Windows user without admin rights (CI's Windows user is an administrator).
 UP-2:
   enforced: >-
@@ -24,12 +29,23 @@ UP-2:
     in", side by side, and taskloom scheduler --at-login) writes each shortcut to the program folder's taskloomw.exe
     with --home "<Taskloom folder>", which taskloom.cli's main makes TASKLOOM_HOME. entries.follow points each entry
     there is at a newer program folder, keeping its arguments: at every start of the packaged Windows Taskloom
-    (cli._at_start, before any command) and right after an install (update.put_in_use). It writes under one lock
+    (cli._at_start, before any command) and right after an install (update.put_in_use). It replaces today's Startup
+    script (Taskloom Scheduler.cmd) by the Startup entry for the Taskloom folder its TASKLOOM_HOME line names
+    (_script_home), or removes it when that entry is there; a script with no such line (changed by hand, empty, cut
+    off) is kept as it is, follow saying so, and the entries are pointed all the same. It writes under one lock
     (entries._locked) to <name>.new, then os.replace.
   not_green: >-
     Tests read the shortcuts through Windows' own WScript.Shell on Windows (elsewhere a JSON file stands in for one),
-    starting the program as a Python process made to look packaged; no test logs in to Windows or opens the Start
-    menu to see a shortcut start the built taskloomw.exe.
+    starting the program as a Python process made to look packaged, also run from source on Windows and packaged on
+    another platform (test_u4_only_the_packaged_windows_taskloom_points_the_entries_at_itself: the entries are left
+    alone), with today's Startup script for a folder named with a % and an é, and with a Startup script naming no
+    Taskloom folder, changed by hand, empty or cut off, at a start
+    (test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why) and at an install
+    (test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_puts_the_new_version_in_use); no test
+    logs in to Windows or opens the Start menu to see a shortcut start the built taskloomw.exe. Known limits of a
+    Startup script kept by hand: one naming its folder through %LOCALAPPDATA% instead of the full path does not keep
+    that version from removal, and one not in UTF-8 still stops the start's re-point (and with it the removal of
+    older versions).
 UP-3:
   enforced: >-
     update.refused lets only https on a host in update.HOSTS be asked, for the release's file and for each redirect
@@ -44,15 +60,18 @@ UP-3:
     there meanwhile refuses. A failure is update.Failed or such a message, shown as a warning; UpdateDownload._end
     removes the .partial-* folder whatever happened, and update.clean_up what a crash left, at the next start.
   not_green: >-
-    Tests try these failures against the local server: no connection, HTTP 404 and 500, a download cut short, a wrong
-    checksum, a damaged zip, no taskloomw.exe, another VERSION, a full disk before unpacking (its free space faked)
-    and during the download (the download file's writes fail once a third of the zip is written), plain http, a
-    redirect to another host, a check that gets no answer and a download that stalls (each ending within the time
-    limit, 2 s in the tests), a zip entry leaving its folder in five ways (../, from inside taskloom/, backslashes, an
-    absolute path, a drive letter), a folder in the new version's place (another version's, one without
-    taskloomw.exe, one made while the zip downloads) and Cancel while the zip unpacks; not tried are an answer
-    Taskloom cannot read, a release with no Windows zip, a disk filling up while unpacking, a crash halfway, and the
-    real GitHub hosts, proxies, TLS in the packaged build and the built zip.
+    Tests try these failures against the local server, each message's title and opening words read exactly, over the
+    editor window (test_u3_a_failed_update_says_what_went_wrong_and_changes_nothing and the U3 tests after it): no
+    connection, HTTP 400, 404 and 500, a release whose tag holds no version and one with no Windows zip, a download
+    cut short or shorter than the release says, a wrong checksum, a download that is not a zip, a damaged zip, one
+    that needs a password, no taskloomw.exe, another VERSION and one that is not text, a full disk before unpacking
+    (its free space faked) and during the download (the download file's writes fail once a third of the zip is
+    written), plain http, a redirect to another host, a check that gets no answer and a download that stalls (each
+    ending within the time limit, 2 s in the tests), a zip entry leaving its folder in six ways (../, from inside
+    taskloom/, backslashes, an absolute path, a drive letter at its start or inside taskloom/), a folder in the new
+    version's place (another version's, one without taskloomw.exe, one made while the zip downloads) and Cancel while
+    the zip unpacks; not tried are an answer that is not JSON, a disk filling up while unpacking, a crash halfway, and
+    the real GitHub hosts, proxies, TLS in the packaged build and the built zip.
 UP-4:
   enforced: >-
     entries.follow points an entry whose program is gone at the starting Taskloom and returns what to say: the editor
@@ -61,9 +80,16 @@ UP-4:
     (entries._older), so an older Taskloom never takes it. docs/guide.md says taskbar pins are Windows' own copies,
     which an update does not change.
   not_green: >-
-    Tests start real processes with an entry pointing at a deleted folder and at a newer version still there, read
-    the status bar and stderr, and read the guide's sentence; the tray's message is not checked, and no test pins
-    Taskloom to a real taskbar.
+    Tests start real processes with entries pointing at deleted folders (each entry, folder and version named on
+    stderr or in the status bar) and at a newer version still there, turn Start at login on in an older version
+    beside a newer one's Startup entry
+    (test_u5_start_at_login_turned_on_in_an_older_version_keeps_the_newer_versions_startup_entry), start beside a
+    Startup script naming no Taskloom folder
+    (test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why: stderr names the script
+    and what it lacks), read the status bar and stderr, and read the guide's sentence; the tray's message is not
+    checked, and no test pins Taskloom to a real taskbar. Known limits of a Startup script kept by hand: one naming
+    its folder through %LOCALAPPDATA% instead of the full path does not keep that version from removal, and one not
+    in UTF-8 still stops the start's re-point (and with it the removal of older versions).
 UP-5:
   enforced: >-
     Settings, run history, credentials and schedules are in the Taskloom folder (Home: --home, TASKLOOM_HOME or
@@ -82,23 +108,36 @@ UP-6:
     restart), and update.start starts the new version's taskloomw.exe --home <folder> editor, which reopens the tabs
     (restore_session) and starts no flow.
   not_green: >-
-    Tests answer Yes with no flow running, with one running until it ends and with Cancel, and Cancel at the
-    unsaved-changes question as the editor closes (it stays open with your edits, and nothing is started), then open
-    a second editor of this version on the same folder in place of the new one (the started program is a stand-in
-    that cannot run), and compare its tabs, loaded run and run count.
+    Tests answer Yes with no flow running, with two running until they end and with Cancel
+    (test_u8_yes_while_a_flow_started_here_runs_waits_for_it_and_cancel_stops_the_restart: the waiting window's
+    title and words read exactly, the editor its owner, Cancel at its right), and Cancel at the unsaved-changes
+    question as the editor closes (it stays open with your edits, and nothing is started), read the arguments the new
+    version is started with (on its own: no console window, its input and output not the editor's), then open a
+    second editor of this version on the same folder in place of the new one (the started program is a stand-in that
+    cannot run), and compare its tabs, loaded run and run count.
 UP-7:
   enforced: >-
     update.clean_up, at every start of the packaged Windows Taskloom (cli._at_start), removes each folder in
     update.programs() with the marker installed-by-taskloom.json that is older than the starting version, other than
-    it, the one its marker says it updated from and one an entry starts; it renames it to .removing-<name> first, which
-    Windows refuses while something in it is in use (kept, tried at the next start). It keeps, and says so, one holding
-    a scheduled flow or a file not in its marker or changed after it (_yours); a folder without the marker is never
-    touched.
+    it, the one its marker says it updated from, one an entry starts and one a Startup script entries.follow kept
+    starts (its folder's path in the script's text); it renames it to .removing-<name> first, which Windows refuses
+    while something in it is in use (kept, tried at the next start). It keeps, and says so, one holding a scheduled
+    flow or a file not in its marker or changed after it (_yours); a folder without the marker is never touched.
   not_green: >-
-    Tests lay out eight folders and two leftovers and start Taskloom once, and install over a version already there
-    (used as it is; one unpacked by hand gets no marker) and over a folder in its place (left byte for byte);
-    "once nothing runs from them" is checked on Windows only, with a file held open in the folder rather than a
-    program running from it.
+    Tests lay out ten folders (among them a copy of this version's folder, one whose marker is not Taskloom's, one
+    with a flow moved into it, its time older than the marker, and one with a file written in its marker's clock
+    tick) and two leftovers and start Taskloom once; cut a removal off with a file that cannot be deleted, which later
+    starts finish without a word
+    (test_u10_a_removal_cut_off_leaves_a_removing_folder_that_later_starts_finish_without_a_word); install beside an
+    installed version whose entries cannot change yet (left as it is:
+    test_u1_an_update_of_a_version_taskloom_installed_whose_entries_cannot_change_yet_says_so); start beside a Startup
+    script naming no Taskloom folder (older versions removed but the one it starts:
+    test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why); and install over a
+    version already there (used as it is; one unpacked by hand gets no marker) and over a folder in its place (left
+    byte for byte); "once nothing runs from them" is checked on Windows only, with a file held open in the folder
+    rather than a program running from it. Known limits of a Startup script kept by hand: one naming its folder
+    through %LOCALAPPDATA% instead of the full path does not keep that version from removal, and one not in UTF-8
+    still stops the start's re-point (and with it the removal of older versions).
 UP-8:
   enforced: >-
     scheduler.serve, finding the lock held by an older Taskloom's service, waits as the folder's one successor
@@ -110,8 +149,14 @@ UP-8:
   not_green: >-
     Tests run real headless services, the older one being this version with its scheduler.version rewritten and an
     hour stood in for by rewriting scheduler.waiting, plus one random order of starts, stops and runs per test run;
-    the quiet moment, the times run once and the adopted runs are checked by tests only, and no real older release or
-    PC going to sleep during a take-over is tried.
+    an install starts the new version's service on its own (no console window: the arguments it is started with
+    read), also beside a Startup script naming no Taskloom folder
+    (test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_puts_the_new_version_in_use), and
+    this version's service turned on again while it still runs starts no second one
+    (test_u7_turned_on_again_while_this_versions_service_still_runs_it_starts_no_second_one); the quiet moment (13
+    cases, an Every N schedule in the flow's own triggers among them:
+    test_a_newer_service_takes_over_from_an_older_one_only_at_a_quiet_moment), the times run once and the adopted
+    runs are checked by tests only, and no real older release or PC going to sleep during a take-over is tried.
 
 # The checker of this feature: mutation testing of the functions the change touched, which are the scope in
 # updates.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).

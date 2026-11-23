@@ -15,11 +15,23 @@ found:
     found_by: the reviewer
     fixed_in: 2203ce7
     guarded_by: tests/test_updates.py::test_u3_a_check_that_gets_no_answer_says_so_within_the_time_limit
+  - what: >-
+      A Startup script with no TASKLOOM_HOME line (changed by hand, empty, cut off) stopped the Start-menu re-point,
+      the removal of older versions and an install's re-point: entries.follow failed on it, so a start only said it
+      could not see to the entries and older versions, and an install said it could not put the new version in use
+      and started no service to take over. The script is now kept as it is and the start says so, while the Start
+      menu entry is re-pointed, older versions are removed but the one the script starts, and an install puts the new
+      version in use (UP-2, UP-4, UP-7, UP-8; the install is checked by
+      test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_puts_the_new_version_in_use).
+    found_by: the mutation test writer, confirmed by reading
+    fixed_in: a78a740
+    guarded_by: tests/test_updates.py::test_u4_a_startup_script_that_names_no_taskloom_folder_is_kept_and_the_start_says_why
 lighter:
   - "Taskloom's real GitHub releases are not asked: a local HTTPS server stands for the API, github.com and its hosts for release files, with Qt trusting a certificate made for the tests."
   - "No proxy is tried, nor TLS in the packaged build, nor the built Windows zip: a zip made by the tests stands for it, holding stand-in programs that cannot run."
   - "A full disk is stood in for: during the download, the file opened through Python's open takes a third of the zip, then each write fails (no space left on device); before unpacking, the disk's free space is faked."
   - "The time limit is 2 seconds in the tests, not 30; a server that takes the connection and never answers stands for a silent proxy or firewall."
   - "Shortcuts are read through Windows' own WScript.Shell on Windows only (elsewhere a JSON file stands for one), and no test logs in to Windows, opens the Start menu or pins Taskloom to the taskbar."
+  - "A Startup script naming no Taskloom folder is tried changed by hand (naming its version's full path), empty and cut off, all in UTF-8: one naming its version through %LOCALAPPDATA% does not keep that version from removal, and one not in UTF-8 still stops the start's re-point (known limits)."
   - "The restart starts a stand-in program: a second editor of this version on the same Taskloom folder stands for the new version's."
   - "No real older release is tried: the older scheduler service is this version with its scheduler.version rewritten (in tests/test_scheduler_mutants_final.py, the test holding the folder's lock), and its hour without a quiet moment is stood in for by rewriting scheduler.waiting or by the test's clock."
