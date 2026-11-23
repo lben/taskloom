@@ -54,8 +54,8 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt, QTimer  # noqa: E402
-from PySide6.QtGui import (QColor, QContextMenuEvent, QKeySequence, QMouseEvent, QPalette, QTextCursor,  # noqa: E402
-                           QWheelEvent)
+from PySide6.QtGui import (QColor, QContextMenuEvent, QImage, QKeySequence, QMouseEvent, QPalette,  # noqa: E402
+                           QTextCursor, QWheelEvent)
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMenu, QMessageBox, QPlainTextEdit  # noqa: E402
 
@@ -1414,7 +1414,8 @@ def test_d7_d8_the_note_line_says_which_line_ends_and_which_newline_at_the_end_d
             settle()
             note = diff.window.findChild(QLabel, NOTE)
             assert diff.window.width() == 700, "the window cannot be narrower than the note on one line"
-            assert note.height() >= 2 * note.fontMetrics().height(), "the note does not wrap in a narrow window"
+            # (taller than the note on one line: two lines are not twice one line's rounded height on every OS)
+            assert note.height() > note.heightForWidth(10 ** 6), "the note does not wrap in a narrow window"
         diff.close()
 
     (folder / "report.yaml").write_bytes(b"")
@@ -1489,9 +1490,9 @@ def test_d13_d15_each_change_edged_top_and_bottom_filler_lines_hatched_the_strip
     its top and its bottom, straight across its rows, none between them; a numbered row is in the change's fill to
     its left edge, a filler line hatched in the mockup's grey. The strip between the sides is painted, row by row and
     level with them, in each change's fill (filler lines too), edged as on the sides, with a straight line down each
-    of its sides; it follows when the sides scroll. Line numbers are right-aligned inside their margin. The window
-    opens at the first change (the top of the file); hidden and shown again it stays where it was scrolled; Next
-    puts the next change a third of the way down."""
+    of its sides (on a screen at 200 % too); it follows when the sides scroll. Line numbers are right-aligned inside
+    their margin. The window opens at the first change (the top of the file); hidden and shown again it stays where
+    it was scrolled; Next puts the next change a third of the way down."""
     _, _, history, _ = flow_history(win, qtbot, tmp_path / "flows", [("One", as_bytes(PAINT_OLD)),
                                                                      ("Two", as_bytes(PAINT_NEW))])
     diff = open_diff(history, qtbot, 0, PREVIOUS)
@@ -1524,9 +1525,12 @@ def test_d13_d15_each_change_edged_top_and_bottom_filler_lines_hatched_the_strip
                                                                                 strip.width() - 2], first, last,
                                                             fill, dy=dy)]
         mid = strip.palette().mid().color()
-        wrong += [f"strip's side line at x {x}, y {y}" for x in (0, strip.width() - 1)
-                  for y in (0, strip.height() // 2, strip.height() - 1)
-                  if differs(colour_at(strip_image, x, y), mid, 6)]
+        scaled = QImage(strip.width() * 2, strip.height() * 2, QImage.Format_ARGB32_Premultiplied)
+        scaled.setDevicePixelRatio(2)
+        strip.render(scaled)  # (as on a screen at 200 %, where a side line that leans by a pixel shows)
+        wrong += [f"strip's side line at x {x}, y {y} ({image.devicePixelRatio():g}x)"
+                  for image in (strip_image, scaled) for x in (0, strip.width() - 1)
+                  for y in (0, strip.height() // 2, strip.height() - 1) if differs(colour_at(image, x, y), mid, 6)]
         return wrong
 
     assert not (wrong := look(PAINT_CHANGES[:2])), "\n".join(wrong)
