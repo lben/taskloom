@@ -176,9 +176,10 @@ def start(folder: Path, home: Home, *command: str):
 
 def clean_up(folder: Path, home: Home) -> list[str]:
     """Removes from programs() what a cut-off download or removal left, and each version Taskloom installed that is
-    older than the one in `folder`, other than `folder`, the one it was installed from and one an entry starts. Keeps
-    one holding a flow scheduled in `home` or a file of yours (not in its marker's list, or changed after it), and a
-    folder you unpacked (no marker). Returns what to tell: what it kept, and why."""
+    older than the one in `folder`, other than `folder`, the one it was installed from and one an entry or the Startup
+    script (one entries.follow kept) starts. Keeps one holding a flow scheduled in `home` or a file of yours (not in its
+    marker's list, or changed after it), and a folder you unpacked (no marker). Returns what to tell: what it kept, and
+    why."""
     if not programs().is_dir():
         return []
     this = version_tuple(entries.version_of(folder))
@@ -186,6 +187,8 @@ def clean_up(folder: Path, home: Home) -> list[str]:
                             for p in (entries.start_menu(), entries.startup()) if p.exists())}
     if (_marker(folder) or {}).get("from"):
         keep.add(_key(_marker(folder)["from"]))
+    script = entries.startup().with_suffix(".cmd")
+    started = os.path.normcase(script.read_text(encoding="utf-8")) if script.exists() else ""
     said = []
     for child in sorted(programs().iterdir()):
         marker = _marker(child)
@@ -193,7 +196,8 @@ def clean_up(folder: Path, home: Home) -> list[str]:
             shutil.rmtree(child, ignore_errors=True)
         elif child.name.startswith(".partial-"):
             _remove(child)
-        elif marker is not None and _key(child) not in keep and version_tuple(entries.version_of(child)) < this:
+        elif (marker is not None and _key(child) not in keep and os.path.normcase(f"{child}{os.sep}") not in started
+              and version_tuple(entries.version_of(child)) < this):
             yours = _yours(child, marker, home)
             if yours:
                 said.append(f"Kept the older Taskloom in {child}: it holds {yours}")

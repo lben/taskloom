@@ -46,18 +46,24 @@ def set_entry(path: Path, on: bool, folder: Path, home: Path, command: str) -> P
 def follow(folder: Path) -> list[str]:
     """Points each entry there is at Taskloom in `folder` when the program it starts is gone or its folder's VERSION is
     older (none counts as older), keeping its arguments; one that starts this or a newer version is left alone. Today's
-    Startup script (Taskloom Scheduler.cmd) is replaced by the Startup entry for its Taskloom folder. Makes no other
-    entry. Returns what to tell: the entries whose folder was gone."""
+    Startup script (Taskloom Scheduler.cmd) is replaced by the Startup entry for its Taskloom folder; one that names no
+    Taskloom folder is kept as it is. Makes no other entry. Returns what to tell: a script kept, and the entries whose
+    folder was gone."""
     paths = (start_menu(), startup())
     script = paths[1].with_suffix(".cmd")
     if not script.exists() and not any(p.exists() and _older(p, folder) for p in paths):
         return []
-    gone = []
+    gone, kept = [], []
     with _locked():  # (two Taskloom starting at once: the second finds the entries done)
         if script.exists():
-            if not paths[1].exists():
-                _write(paths[1], folder, f'--home "{_script_home(script)}" {SCHEDULER}')
-            script.unlink()
+            if paths[1].exists():
+                script.unlink()
+            elif (home := _script_home(script)) is None:  # (it still starts the scheduler at login)
+                kept.append(f"Kept the Startup script {script}: it has no TASKLOOM_HOME line, so which Taskloom folder "
+                            "it is for cannot be told")
+            else:
+                _write(paths[1], folder, f'--home "{home}" {SCHEDULER}')
+                script.unlink()
         for path in paths:
             if path.exists() and _older(path, folder):
                 target, arguments, _ = read_link(path)
@@ -65,8 +71,8 @@ def follow(folder: Path) -> list[str]:
                     gone.append((path, Path(target).parent))
                 _write(path, folder, arguments)
     version = version_of(folder)
-    return [f"The {'Start menu' if path == paths[0] else 'Startup'} entry started Taskloom from {old}, a folder that "
-            f"is gone: it now starts Taskloom {version} in {folder}" for path, old in gone]
+    return kept + [f"The {'Start menu' if path == paths[0] else 'Startup'} entry started Taskloom from {old}, a "
+                   f"folder that is gone: it now starts Taskloom {version} in {folder}" for path, old in gone]
 
 
 def _older(path: Path, folder: Path) -> bool:
@@ -83,11 +89,12 @@ def version_of(folder: Path) -> str | None:
         return None
 
 
-def _script_home(script: Path) -> str:
-    """The Taskloom folder of the Startup script earlier versions wrote (its `set "TASKLOOM_HOME=..."` line)."""
+def _script_home(script: Path) -> str | None:
+    """The Taskloom folder of the Startup script earlier versions wrote (its `set "TASKLOOM_HOME=..."` line); None if
+    it has no such line (changed by hand, empty, cut off)."""
     found = re.search(r'^set "TASKLOOM_HOME=(.*)"$', script.read_text(encoding="utf-8"), re.MULTILINE)
     if found is None:
-        raise ValueError(f"{script}: no TASKLOOM_HOME line")
+        return None
     return found.group(1).replace("%%", "%")  # (cmd.exe's way of writing a % in a script)
 
 
