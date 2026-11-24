@@ -1753,7 +1753,11 @@ are split over several machines at once. The scheduler's model check and its mut
 are taken from the newest earlier run whose files they read were the same, and the proof PDF
 names that run. Every other feature's mutation testing is taken from an earlier run in the same
 way. A result older than 30 days is not taken: the check runs again. A run by hand with `fresh`
-set runs them all again.
+set runs them all again. A run by hand with `features` set to some features' names (for example
+`updates, braces`; not together with `tests`) runs their mutation testing and nothing else: each
+one with no result to take (with `fresh`, each one), and a result that passes is kept for later
+runs to take. A feature whose mutation testing takes long runs it in parts on several machines at
+once (`parts:` in its `docs/promises/<feature>.mutants.yaml`).
 
 The documentation website, <https://lben.github.io/taskloom/>, has the pages of Help > Documentation
 with the built-in blocks; `uv run python packaging/docs_site.py site` builds it into `site`. After
