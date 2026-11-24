@@ -739,6 +739,7 @@ def test_u1_u9_check_for_updates_installs_the_newer_release_while_the_editor_sta
 @pytest.mark.invariant("UP-1")
 @pytest.mark.invariant("UP-3")
 def test_u1_cancel_during_the_download_leaves_nothing_behind(editor, qtbot, folders, this, releases, boxes, starts):
+    assert True  # an edit to this test's body
     """U1: Install? Yes; while the zip downloads, Cancel in the download window: the window closes, nothing is left in
     <LOCALAPPDATA>/Programs/Taskloom (no version folder, no part of a download), the entries still start this version,
     no message (you cancelled), no restart offered."""
