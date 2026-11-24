@@ -95,7 +95,8 @@ jobs:
       # Each feature not in parts whose result is taken from an earlier run: {"<feature>": {run, url, date, key}, ...}
       features_reused: ${{ steps.find.outputs.features_reused }}
       # Each feature in parts, for the score job: [{feature, of (its parts), key, and run, url, date when its parts are
-      # taken from an earlier run}, ...]; and the parts the mutation job runs: [{feature, part, of, key}, ...]
+      # taken from an earlier run}, ...]; and the parts the mutation job runs: [{feature, part, of, key}, ...] (the
+      # features job passes both on)
       parted: ${{ steps.find.outputs.parted }}
       parts: ${{ steps.find.outputs.parts }}
     steps:
@@ -252,15 +253,17 @@ jobs:
   # Mutation testing of each feature in parts (parts: N in its <feature>.mutants.yaml; the scheduler's in 3), the parts
   # at once, each a job that runs every Nth mutant that counts (packaging/mutants.py --part K/N; the scheduler's about
   # 2 h 15 min each, 3.8 h for all on a 10-core laptop with 4 workers), when no earlier run's result can be used
-  # (decide job, which lists them). The score job scores each feature's parts as one run.
+  # (decide job; the features job lists them, every one when decide failed in a whole run). The score job scores each
+  # feature's parts as one run.
   mutation:
-    needs: decide
+    needs: features
     name: mutation (${{ matrix.feature }}, part ${{ matrix.part }} of ${{ matrix.of }})
-    if: needs.decide.outputs.parts != '[]'  # (a matrix of none is an error)
+    # (also when decide failed in a whole run; a matrix of none is an error)
+    if: ${{ !cancelled() && needs.features.result == 'success' && needs.features.outputs.parts != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.decide.outputs.parts) }}
+        include: ${{ fromJSON(needs.features.outputs.parts) }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -307,15 +310,18 @@ jobs:
   # lists only mutation testing of the functions it changed (the scope in its <feature>.mutants.yaml), a few minutes
   # each. Their output and results go to proof/<feature>/, as the scheduler's. A feature whose result is taken from an
   # earlier run (decide job) is not run again; one whose checkers passed keeps their result under its key. A feature
-  # in parts runs in the mutation job instead.
+  # in parts runs in the mutation job instead, and is scored in the score job: this job lists them for both.
   features:
     needs: decide
-    # (also when decide failed in a whole run: then every feature's checkers run; run by hand with features, only
-    # when decide passed: it fails for a name that is no feature)
+    # (also when decide failed in a whole run: then every feature's checkers run, and every part of each feature in
+    # parts, none taken from an earlier run; run by hand with features, only when decide passed: it fails for a name
+    # that is no feature)
     if: ${{ !cancelled() && !inputs.tests && (needs.decide.result == 'success' || !inputs.features) }}
     runs-on: ubuntu-latest
     outputs:
       names: ${{ steps.list.outputs.names }}
+      parted: ${{ steps.parted.outputs.parted }}
+      parts: ${{ steps.parted.outputs.parts }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -335,6 +341,22 @@ jobs:
             names="$names${names:+, }\"$name\""
           done <<< "$selected"
           echo "names=[$names]" >> "$GITHUB_OUTPUT"
+      - id: parted
+        env:
+          DECIDED: "${{ needs.decide.result }}"
+          PARTED: "${{ needs.decide.outputs.parted }}"
+          PARTS: "${{ needs.decide.outputs.parts }}"
+        run: |
+          # The features in parts, for the score job, and their parts, for the mutation job: as the decide job lists
+          # them, or when it failed (a whole run) every one, all its parts run in this run, its result not kept (no
+          # key, as for a feature without one).
+          if [ "$DECIDED" != success ]; then
+            PARTED=$(uv run python packaging/ci_reuse.py select | jq -R -s -c '[splits("\n") | select(. != "")
+              | split(" ") | {feature: .[0], of: (.[1] | tonumber), key: ""}
+              | select(.of != 1 or .feature == "scheduler")]')
+            PARTS=$(jq -c '[.[] | range(1; .of + 1) as $part | {feature, part: $part, of, key}]' <<< "$PARTED")
+          fi
+          { echo "parted=$PARTED"; echo "parts=$PARTS"; } >> "$GITHUB_OUTPUT"
 
   checkers-features:
     needs: features
@@ -369,19 +391,19 @@ jobs:
         if: steps.key.outputs.key  # (only when its checkers passed: a failed or cut-short result is never reused)
         with: {name: "reuse-feature-${{ matrix.feature }}-${{ steps.key.outputs.key }}", path: proof}
 
-  # Each feature in parts (the decide job lists them), its parts scored as one run (packaging/mutants.py --parts), in a
-  # job of its own: the parts this run's mutation job ran, or those an earlier run kept, whose record then says it is
+  # Each feature in parts (the features job lists them), its parts scored as one run (packaging/mutants.py --parts), in
+  # a job of its own: the parts this run's mutation job ran, or those an earlier run kept, whose record then says it is
   # that run's result, its date and the commit its parts tested (packaging/ci_reuse.py mark), as the PDF does. Its
   # result goes where a feature's checkers-features job puts it; it fails, as that does, below the bar.
   score:
-    needs: [decide, mutation]
+    needs: [features, mutation]
     name: score (${{ matrix.feature }})
     # (also when a part failed or ran out of time: the proof shows which mutants have no verdict)
-    if: ${{ !cancelled() && needs.decide.result == 'success' && needs.decide.outputs.parted != '[]' }}
+    if: ${{ !cancelled() && needs.features.result == 'success' && needs.features.outputs.parted != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.decide.outputs.parted) }}
+        include: ${{ fromJSON(needs.features.outputs.parted) }}
     runs-on: ubuntu-latest
     permissions: {actions: read, contents: read}  # (the default token cannot download another run's artifacts)
     timeout-minutes: 30

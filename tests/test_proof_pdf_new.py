@@ -459,7 +459,7 @@ def test_ci_runs_each_features_checkers_in_a_job_of_its_own_that_keeps_its_resul
     key, _, names = output.read_text(encoding="utf-8").strip().partition("=")
     features = {p.stem for p in (REPO / "docs" / "promises").glob("*.yaml") if p.name.count(".") == 1}
     assert sorted(json.loads(names)) == sorted(features - {"scheduler"} - parted()), "each feature counted once"
-    assert jobs["features"]["outputs"] == {key: f"${{{{ steps.{lists['id']}.outputs.{key} }}}}"}
+    assert jobs["features"]["outputs"][key] == f"${{{{ steps.{lists['id']}.outputs.{key} }}}}"
     assert job["needs"] == "features"
     assert job["strategy"]["matrix"] == {"feature": f"${{{{ fromJSON(needs.features.outputs.{key}) }}}}"}
 
