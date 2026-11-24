@@ -1747,17 +1747,12 @@ uv run pytest
 The JDBC tests start an H2 database server and need Java; they download the H2 jar once.
 GitHub Actions (`.github/workflows/build.yml`) runs the tests on Linux and Windows, builds
 the Windows zip and the Linux runner, and smoke-tests both; tagging `v*` publishes them.
-It runs for a `v*` tag, a pull request, or by hand (Actions > test and build > Run workflow,
-where `tests` can name only some tests); a push to `main` starts nothing. Each system's tests
-are split over several machines at once. The scheduler's model check and its mutation testing
-are taken from the newest earlier run whose files they read were the same, and the proof PDF
-names that run. Every other feature's mutation testing is taken from an earlier run in the same
-way. A result older than 30 days is not taken: the check runs again. A run by hand with `fresh`
-set runs them all again. A run by hand with `features` set to some features' names (for example
-`updates, braces`; not together with `tests`) runs their mutation testing and nothing else: each
-one with no result to take (with `fresh`, each one), and a result that passes is kept for later
-runs to take. A feature whose mutation testing takes long runs it in parts on several machines at
-once (`parts:` in its `docs/promises/<feature>.mutants.yaml`).
+It runs for a `v*` tag, a pull request, or by hand (Actions > test and build > Run workflow:
+`tests` runs only some tests, `features` only some features' mutation testing, for example
+`updates, braces`, and keeps a result that passes); a push to `main` starts nothing. Tests,
+and a long mutation testing (`parts:` in its mutants yaml), are split over several machines at
+once. A model check or mutation testing is taken from the newest earlier run whose files it read
+were the same, unless that run is over 30 days old or `fresh` is set; the proof PDF names it.
 
 The documentation website, <https://lben.github.io/taskloom/>, has the pages of Help > Documentation
 with the built-in blocks; `uv run python packaging/docs_site.py site` builds it into `site`. After
