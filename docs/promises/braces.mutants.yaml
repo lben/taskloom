@@ -12,6 +12,9 @@
 # dependencies, test_reports_are_made_without_jinja2_which_is_no_longer_a_dependency, is not run here either). The mutants the tests let through are explained here, by kind (kinds: a
 # kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could notice).
 # Only those no user could notice are explained: the others stay without a reason until a test catches them.
+# parts: the CI jobs its mutants run in at once, each job every Nth mutant (packaging/mutants.py --part K/N),
+# the parts scored as one run in one job; it took 76 to 99 minutes whole.
+parts: 2
 scope:
   mutate:
     - mutate:

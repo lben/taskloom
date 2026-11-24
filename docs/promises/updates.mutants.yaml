@@ -23,6 +23,9 @@
 # The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it explains) or
 # one by one (mutant name: why it changes nothing a user could notice). Only those no user could notice are
 # explained: the others stay without a reason until a test catches them.
+# parts: the CI jobs its mutants run in at once, each job every Nth mutant (packaging/mutants.py --part K/N),
+# the parts scored as one run in one job; it took 168 to 178 minutes whole.
+parts: 4
 scope:
   mutate:
     # Help > Check for updates: the release asked of GitHub, the download, its checks and the unpacking.

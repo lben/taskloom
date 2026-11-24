@@ -6,6 +6,7 @@ every file it reads is byte for byte as it was there.
     python packaging/ci_reuse.py files model|mutation|feature:<f> [--root DIR]
     python packaging/ci_reuse.py pick --repo-id ID [--days 30] [--now ISO8601] NAME...
     python packaging/ci_reuse.py mark DIR --run RUN --url URL --date YYYY-MM-DD [--commit SHA]
+    python packaging/ci_reuse.py select [--features NAMES] [--root DIR]
 
 key prints a key over the contents of the files the check reads, and TEXT (CI passes the versions of the tools it
 runs with); CI keeps a check's result under its key and looks for it there. files prints those files:
@@ -28,6 +29,11 @@ when no run has them all.
 mark adds to every checker record under DIR (each checkers.json) the run it was taken from, its link, its date and
 the commit it checked (SHA, or the record's own), for the proof PDF to name; a record that already says where it
 comes from keeps that.
+select prints the features whose mutation testing a run runs, one line each, sorted: its name, the CI jobs it runs in
+at once (parts: in its docs/promises/<name>.mutants.yaml, else 1) and the check whose key keeps its result (mutation
+for the scheduler, feature:<name> for the others). Every docs/promises/*.mutants.yaml, or only those NAMES names
+(separated by commas and/or spaces; a run by hand with features). A name that is no feature, NAMES that name none and
+a parts: that is not a whole number of 1 or more are refused (exit 2).
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ import ast
 import datetime as dt
 import hashlib
 import json
+import re
 import shlex
 import sys
 import tomllib
@@ -156,6 +163,24 @@ def mark(folder: Path, origin: dict, commit: str | None) -> int:
     return 0
 
 
+def select(root: Path, features: str | None) -> list[str]:
+    """`<name> <parts> <check>` of each mutation feature `features` names (all, when it is empty), sorted by name."""
+    parts = {}
+    for path in sorted((root / "docs" / "promises").glob("*.mutants.yaml")):
+        name = path.name.removesuffix(".mutants.yaml")
+        parts[name] = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("parts", 1)
+        if type(parts[name]) is not int or parts[name] < 1:  # (YAML's true is a bool, which Python counts as an int)
+            raise ValueError(f"{name}: parts: {parts[name]!r} in {path.relative_to(root).as_posix()} is not a whole "
+                             "number of 1 or more")
+    named = set(re.split(r"[,\s]+", features.strip())) - {""} if features else set(parts)
+    unknown = sorted(named - set(parts))
+    if not named or unknown:
+        raise ValueError((f"no feature {', '.join(unknown)}" if unknown else f"{features!r} names no feature")
+                         + f"; the features: {', '.join(parts)}")
+    return [f"{name} {parts[name]} {'mutation' if name == 'scheduler' else f'feature:{name}'}"
+            for name in sorted(named)]
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser()
     do = p.add_subparsers(dest="do", required=True)
@@ -176,7 +201,17 @@ def main(argv=None) -> int:
     sub.add_argument("--url", required=True)
     sub.add_argument("--date", required=True)
     sub.add_argument("--commit")
+    sub = do.add_parser("select")
+    sub.add_argument("--features", metavar="NAMES")
+    sub.add_argument("--root", type=Path, default=ROOT)
     a = p.parse_args(argv)
+    if a.do == "select":
+        try:
+            print("\n".join(select(a.root.resolve(), a.features)))
+        except ValueError as refused:
+            print(f"ci_reuse.py select: {refused}", file=sys.stderr)
+            return 2
+        return 0
     if a.do == "mark":
         return mark(a.folder, {"run": a.run, "url": a.url, "date": a.date}, a.commit)
     if a.do == "pick":
