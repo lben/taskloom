@@ -37,7 +37,7 @@ to rename a folder holding an open file). Every other test runs on Windows, macO
 # - taskloom.update: RELEASE_URL (GitHub's /releases/latest API URL), ASSET = "taskloom-windows-amd64.zip", HOSTS (the
 #   hosts a URL or redirect may name); read when a check runs, so tests can point them at the local server. One GET of
 #   RELEASE_URL with the header Accept: application/vnd.github+json and a User-Agent starting "taskloom/"; tag_name
-#   ("v0.40.0") and the asset named ASSET (browser_download_url, size, digest "sha256:<hex>"). Downloads through Qt's
+#   ("v<version>") and the asset named ASSET (browser_download_url, size, digest "sha256:<hex>"). Downloads through Qt's
 #   QNetworkAccessManager (the default QSslConfiguration: the test adds its certificate there).
 # - Help menu: the action "Check for updates" (a trailing "…" allowed), only where the editor is the packaged Windows
 #   Taskloom: taskloom.editor.window's `frozen()` true and its `sys.platform == "win32"`; the program folder is
@@ -152,7 +152,10 @@ from tests.test_scheduler_new_promises import (HOURLY, end_runs, ended, flow_yam
                                                schedule, stop_the_service, wait_until)
 
 WINDOWS = sys.platform == "win32"
-NEW = "0.40.0"  # the release the local server offers (newer than this Taskloom, __version__)
+# The release the local server offers: the minor version after this Taskloom's (__version__), so that it is newer
+# whatever version this is (a fixed 0.40.0 stopped being newer when Taskloom became 0.40.0).
+_MAJOR, _MINOR = __version__.split(".")[:2]
+NEW = f"{_MAJOR}.{int(_MINOR) + 1}.0"
 ASSET = "taskloom-windows-amd64.zip"
 API_PATH = "/repos/lben/taskloom/releases/latest"
 DOWNLOAD_PATH = f"/lben/taskloom/releases/download/v{NEW}/{ASSET}"
@@ -821,12 +824,12 @@ def install(editor, qtbot, boxes, restart: int = QMessageBox.No, timeout: int = 
 def test_u1_u9_check_for_updates_installs_the_newer_release_while_the_editor_stays_usable(
         editor, qtbot, tmp_path, folders, this, releases, boxes, starts):
     """U1, U9: Taskloom 0.39.x unpacked by hand; its Start menu and Startup entries start it. Help > Check for updates:
-    the newest release, 0.40.0, is newer: "Install?" with its version. Yes: the zip downloads with a progress bar in a
+    the newest release, NEW, is newer: "Install?" with its version. Yes: the zip downloads with a progress bar in a
     window that does not block the editor (a new flow can be made meanwhile), then unpacks into
-    <LOCALAPPDATA>/Programs/Taskloom/0.40.0: exactly the zip's files, plus the marker naming the folder it updated from;
-    nothing else is left there. Both entries now start 0.40.0, their arguments (the Taskloom folder) kept. The Taskloom
+    <LOCALAPPDATA>/Programs/Taskloom/NEW: exactly the zip's files, plus the marker naming the folder it updated from;
+    nothing else is left there. Both entries now start NEW, their arguments (the Taskloom folder) kept. The Taskloom
     folder (settings, history, credentials, schedules) and the flow are byte-equal before and after. Then "Restart
-    Taskloom now with version 0.40.0?"; No keeps this editor open and starts nothing (U8)."""
+    Taskloom now with version NEW?"; No keeps this editor open and starts nothing (U8)."""
     home = editor.home.root
     flow = a_taskloom_folder(home, tmp_path / "flows")
     flow_bytes, flow_time = flow.read_bytes(), flow.stat().st_mtime_ns
@@ -980,7 +983,7 @@ def files_in(folder: Path) -> dict:
 @pytest.mark.invariant("UP-7")
 def test_u1_a_version_already_there_is_used_as_it_is_and_nothing_is_downloaded(editor, qtbot, folders, this,
                                                                                releases, boxes, starts, how):
-    """U1: <LOCALAPPDATA>/Programs/Taskloom/0.40.0 is there already, whole (installed by Taskloom before, or unpacked
+    """U1: <LOCALAPPDATA>/Programs/Taskloom/NEW is there already, whole (installed by Taskloom before, or unpacked
     there by hand: no marker). Check for updates; Install? Yes: nothing is downloaded; that folder is used as it is (not
     a byte of it changed; one unpacked by hand gets no marker, so it is never removed as Taskloom's); the entries now
     start it; the restart is offered; nothing else is left in <LOCALAPPDATA>/Programs/Taskloom."""
@@ -1008,9 +1011,9 @@ def test_u1_an_update_of_a_version_taskloom_installed_whose_entries_cannot_chang
         editor, qtbot, monkeypatch, folders, this, releases, boxes, starts):
     """U1: this Taskloom is one Taskloom installed (<LOCALAPPDATA>/Programs/Taskloom/<this version>), its entries start
     it, and they cannot be changed just now (where Taskloom locks them, <LOCALAPPDATA>/Taskloom, is a file). Install?
-    Yes: 0.40.0 is installed beside it, its marker naming this one's folder, which is left as it is (a later start
-    removes it, U10); the entries are left as they are (0.40.0's first start points them at itself); the status bar
-    says where 0.40.0 is installed and why the entries could not be changed; the restart is offered."""
+    Yes: NEW is installed beside it, its marker naming this one's folder, which is left as it is (a later start
+    removes it, U10); the entries are left as they are (NEW's first start points them at itself); the status bar
+    says where NEW is installed and why the entries could not be changed; the restart is offered."""
     from taskloom.editor import window as window_module
 
     home = editor.home.root
@@ -1431,9 +1434,9 @@ def test_u3_a_zip_with_an_entry_that_leaves_its_folder_is_refused_and_nothing_is
 @pytest.mark.invariant("UP-7")
 def test_u3_a_folder_in_the_new_versions_place_is_left_as_it_is_and_the_update_says_so(
         editor, qtbot, folders, this, releases, boxes, starts, there):
-    """U3: where 0.40.0 goes (<LOCALAPPDATA>/Programs/Taskloom/0.40.0) there is a folder that is not that version whole:
-    another version's (its VERSION says 0.39.9), or 0.40.0 without its taskloomw.exe; or, while the zip downloads,
-    0.40.0's folder is made there whole (as by another install of it). Install? Yes: one message says what went wrong
+    """U3: where NEW goes (<LOCALAPPDATA>/Programs/Taskloom/NEW) there is a folder that is not that version whole:
+    another version's (its VERSION says 0.39.9), or NEW without its taskloomw.exe; or, while the zip downloads,
+    NEW's folder is made there whole (as by another install of it). Install? Yes: one message says what went wrong
     (before downloading, it names the folder); that folder is left byte-equal, nothing else is left in
     <LOCALAPPDATA>/Programs/Taskloom; the entries still start this version; nothing is started; the editor goes on
     working."""
@@ -1488,7 +1491,7 @@ def test_u3_a_folder_in_the_new_versions_place_is_left_as_it_is_and_the_update_s
 @pytest.mark.invariant("UP-4")
 def test_u4_an_install_points_the_entries_at_the_new_version_straight_away(editor, qtbot, tmp_path, folders, this,
                                                                            releases, boxes, before):
-    """U4: right after an install of 0.40.0, each entry there is starts 0.40.0 (its arguments kept): one that started
+    """U4: right after an install of NEW, each entry there is starts NEW (its arguments kept): one that started
     this version, or a folder that is gone; an entry that was not there is not made; one that starts a newer version
     still there is left as it was."""
     home, installed = editor.home.root, folders.programs / NEW
@@ -1865,8 +1868,8 @@ def test_u4_u7_an_install_beside_a_startup_script_that_names_no_taskloom_folder_
         editor, qtbot, folders, this, releases, boxes, starts):
     """U4, U7: the Startup folder's "Taskloom Scheduler.cmd" was changed by hand (no `set "TASKLOOM_HOME=..."` line; it
     starts this version); the Start menu entry starts this version; a scheduler service runs, not turned off. Install?
-    Yes: the Start menu entry starts 0.40.0 straight away, no Startup entry is made, the script is kept as it is, the
-    status bar says which script it is and what it lacks (not that 0.40.0 could not be put in use), and 0.40.0's
+    Yes: the Start menu entry starts NEW straight away, no Startup entry is made, the script is kept as it is, the
+    status bar says which script it is and what it lacks (not that NEW could not be put in use), and NEW's
     service is started to take over."""
     home, new = editor.home.root, folders.programs / NEW
     write_entry(folders.start_menu, this / "taskloomw.exe", editor_args(home), this)
@@ -2436,8 +2439,8 @@ def test_u7_lifecycle_older_and_newer_services_in_random_orders_never_two_and_ev
 @pytest.mark.invariant("UP-5")
 def test_u8_yes_reopens_the_editor_in_the_new_version_with_its_tabs_and_loaded_states_and_starts_no_flow(
         editor, qtbot, tmp_path, folders, releases, boxes, starts):
-    """U8: two flows open, one with a run loaded (Load run state). Installed 0.40.0; "Restart Taskloom now with version
-    0.40.0?" Yes: this editor closes as usual and 0.40.0's editor is started for the same Taskloom folder. That editor,
+    """U8: two flows open, one with a run loaded (Load run state). Installed NEW; "Restart Taskloom now with version
+    NEW?" Yes: this editor closes as usual and NEW's editor is started for the same Taskloom folder. That editor,
     opening the folder, has both tabs back, the loaded run still loaded, and starts no flow."""
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
@@ -2461,7 +2464,7 @@ def test_u8_yes_reopens_the_editor_in_the_new_version_with_its_tabs_and_loaded_s
     assert norm(started.args[0]) == norm(folders.programs / NEW / "taskloomw.exe"), started.args
     assert started.args[1:] == ["--home", str(editor.home.root), "editor"], started.args
     assert started_on_its_own(started), started.how
-    again = start_again(editor, qtbot)  # 0.40.0's editor, on the same Taskloom folder
+    again = start_again(editor, qtbot)  # NEW's editor, on the same Taskloom folder
     assert {t.doc.path for t in again.tabs_list()} == opened
     reopened_a = next(t for t in again.tabs_list() if t.doc.path == tab_a.doc.path)
     qtbot.waitUntil(lambda: names(bar(reopened_a), first.run), timeout=10_000)
@@ -2476,9 +2479,9 @@ def test_u8_yes_reopens_the_editor_in_the_new_version_with_its_tabs_and_loaded_s
 def test_u8_yes_while_a_flow_started_here_runs_waits_for_it_and_cancel_stops_the_restart(
         editor, qtbot, tmp_path, folders, releases, boxes, starts, then):
     """U8: two flows started from this editor (long-export, nightly) are still running when Yes is answered: a window
-    over the editor that does not block it ("Restart Taskloom with version 0.40.0") says Taskloom restarts with
-    version 0.40.0 when long-export, nightly end, with Cancel at its right; the editor stays open, nothing starts yet.
-    When the flows end, the editor restarts in 0.40.0; after Cancel it does not (also not when the flows end)."""
+    over the editor that does not block it ("Restart Taskloom with version NEW") says Taskloom restarts with
+    version NEW when long-export, nightly end, with Cancel at its right; the editor stays open, nothing starts yet.
+    When the flows end, the editor restarts in NEW; after Cancel it does not (also not when the flows end)."""
     folder = tmp_path / "flows"
     folder.mkdir()
     tabs = []
@@ -2521,9 +2524,9 @@ def test_u8_yes_while_a_flow_started_here_runs_waits_for_it_and_cancel_stops_the
 @pytest.mark.invariant("UP-6")
 def test_u8_cancel_at_the_unsaved_changes_question_of_the_restart_keeps_the_editor_and_your_edits(
         editor, qtbot, tmp_path, folders, releases, boxes, starts):
-    """U8: two flows open, the second with a change not saved. Installed 0.40.0; "Restart Taskloom now with version
-    0.40.0?" Yes; closing asks "Save changes to changed.yaml?"; Cancel: this editor stays open with both flows, the
-    change still there and still not saved (the file as it was); 0.40.0's editor is not started, not even later."""
+    """U8: two flows open, the second with a change not saved. Installed NEW; "Restart Taskloom now with version
+    NEW?" Yes; closing asks "Save changes to changed.yaml?"; Cancel: this editor stays open with both flows, the
+    change still there and still not saved (the file as it was); NEW's editor is not started, not even later."""
     folder = tmp_path / "flows"
     folder.mkdir()
     for name in ("saved.yaml", "changed.yaml"):
