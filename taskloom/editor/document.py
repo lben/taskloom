@@ -24,6 +24,11 @@ def new_flow_data(name: str = DEFAULT_NAME) -> dict:
     return {"taskloom": 1, "name": name, "params": {}, "blocks": {}, "edges": []}
 
 
+def flow_text(data: dict) -> str:
+    """The text of the flow file holding `data`, as File → Save writes it."""
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+
+
 def parse_edge(text: str) -> tuple[str, str, str, str] | None:
     match = _EDGE.match(text)
     return match.groups() if match else None
@@ -85,7 +90,7 @@ class FlowDocument(QObject):
         data = self.data
         if path != self.path and data.get("name") == DEFAULT_NAME:  # saved as a file (first time, Save as): its name
             data = {**data, "name": path.stem}
-        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8", newline="\n")
+        path.write_text(flow_text(data), encoding="utf-8", newline="\n")
         self.data, self.path = data, path  # only once written: a file that cannot be written leaves the flow as it was
         self.dirty = False
         self.changed.emit()
@@ -455,13 +460,20 @@ class FlowDocument(QObject):
             self.data[key] = value
         self._done()
 
-    def restore(self, data: dict):
+    def restore(self, data: dict) -> dict:
         """Put back recovered unsaved changes, or a version from the Git history (unsaved until you save), in one
-        step."""
+        step. Returns that step's undo (see in_effect)."""
         self._change()
+        undo = self._undo[-1]
         self.data = data
         self._fill_in_lists()
         self._done()
+        return undo
+
+    def in_effect(self, undo: dict) -> bool:
+        """Whether the step that restore returned `undo` for is in the flow (as far back as Undo reaches): not undone,
+        or redone since."""
+        return any(step is undo for step in self._undo)
 
     def set_params(self, params: dict):
         if params == self.data["params"]:

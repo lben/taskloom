@@ -1,0 +1,29 @@
+# The bugs proving Load run state found, each fixed and guarded by a test since (the proof PDF counts and lists them
+# before the details; tests/test_promises_found.py checks each test exists), and where it is checked more lightly.
+found:
+  - what: "A re-run refused for a value not kept said “held a password (or something that cannot be saved)”, the same words for both reasons, so it did not say whether the value was a password, never written to disk, or something that cannot be saved, such as an open connection, as the block itself does."
+    found_by: the test writer
+    fixed_in: e764448
+    guarded_by: tests/test_load_state.py::test_l9_a_password_and_an_open_connection_are_named_not_kept_and_reruns_needing_them_are_refused
+  - what: "After “Bring back the flow as it was”, Undo put today's flow back in the tab, but the bar still said the tab held the flow as it was then."
+    found_by: the main session
+    fixed_in: e764448
+    guarded_by: tests/test_load_state.py::test_l14_after_bring_back_ctrl_z_the_bar_says_todays_flow_and_ctrl_y_as_it_was_again
+  - what: "After Undo of a flow brought back as it was, a block run again still asked “Save the flow as it was?”, although the tab held today's flow again."
+    found_by: the main session
+    fixed_in: 0bfbd56
+    guarded_by: tests/test_load_state.py::test_l14_after_ctrl_z_of_a_brought_back_flow_a_rerun_asks_nothing_and_after_ctrl_y_it_asks_again
+  - what: "While a block ran again from a loaded state, the bar said the re-run's files were cleaned up and nothing could be re-run from it, until the editor's next look 2 seconds later: the re-run's folder is made after it starts, and the bar took a run with no folder yet for one cleaned up."
+    found_by: the proof's pictures
+    fixed_in: 2203ce7
+    guarded_by: tests/test_load_state.py::test_l2_while_a_rerun_from_a_loaded_state_goes_the_bar_never_says_its_files_were_cleaned_up
+  - what: "Right after Leave, the status bar under the window still said “Showing run #N · …”, as loading the state had said it, though the tab no longer showed that run."
+    found_by: the proof's pictures
+    fixed_in: 2203ce7
+    guarded_by: tests/test_load_state.py::test_l13_right_after_leave_the_status_bar_no_longer_says_it_shows_the_loaded_run
+lighter:
+  - "A state comes back after Taskloom is closed in a new window of the same process, not in a new process started again."
+  - "The flow brought back as it was is tried with one change (a block deleted, one added) in a Git repository of the test's own; a flow renamed or moved in Git is not tried."
+  - "No test answers Yes to “Save the flow as it was?”: the save itself is the usual Save, tried by its own tests."
+  - "Values not kept are tried with a password from Ask User and an open database connection, not with text built from a password or a value inside a Loop's items."
+  - "Closing a tab that has a state loaded, and opening its flow again, is not tried: the state should then be forgotten."

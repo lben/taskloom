@@ -14,7 +14,7 @@ import design_health  # noqa: E402
 # C1: the layers, 1 (entry points) to 5 (foundations). A module not listed here fails test_every_module_has_a_layer:
 # a new module is placed in a layer of the charter first.
 LAYERS = {
-    1: ["cli", "editor", "scheduler", "check"],
+    1: ["cli", "editor", "scheduler", "check", "entries", "update"],
     2: ["blocks"],
     3: ["flow", "engine", "registry", "pyenv", "upgrade"],
     4: ["config", "history", "jdbc", "ssh", "mail"],

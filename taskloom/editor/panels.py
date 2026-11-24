@@ -435,19 +435,23 @@ SQL_TOKENS = _tokens("--.*", r"/\*", "'(?:[^']|'')*'?", """select from where and
 CURL_TOKENS = re.compile("|".join([r"""(?P<string>'[^']*'|\$'(?:\\.|[^\\'])*'|"(?:\\.|[^"\\])*")""",
                                    r"""(?P<long>\$?'|")""", r"(?P<keyword>(?<!\S)--?[A-Za-z0-9][\w.-]*)",
                                    r"""(?P<url>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s'"^]+)""", r"(?P<word>\S)"]))
+# A YAML file (a flow's source, in Commit History's source diffs): its comments, quoted strings, keys and numbers.
+YAML_TOKENS = re.compile(r"""(?P<comment>(?<!\S)#.*)|(?P<string>"[^"]*"?|'[^']*'?)|(?P<key>[\w.]+(?=:(?:\s|$)))"""
+                         r"|(?P<number>\b\d[\d_]*(?:\.\d*)?\b)|(?P<word>\w+)")
 # Each language's tokens, and what its `long` starts (a string or a comment).
-LANGUAGES = {"python": (PYTHON_TOKENS, "string"), "sql": (SQL_TOKENS, "comment"), "curl": (CURL_TOKENS, "string")}
+LANGUAGES = {"python": (PYTHON_TOKENS, "string"), "sql": (SQL_TOKENS, "comment"), "curl": (CURL_TOKENS, "string"),
+             "yaml": (YAML_TOKENS, "string")}
 # How a string or comment over several lines ends (its index + 1: the line's state).
 LONG_ENDS = ["'''", '"""', "*/", "'", '"']
-# Keyword, string, comment, number and URL colours (as in JetBrains' light and dark themes), on a light and a dark
-# background.
+# Keyword, string, comment, number, URL and YAML key colours (as in JetBrains' light and dark themes), on a light and a
+# dark background.
 CODE_COLORS = {"keyword": ("#0033b3", "#cf8e6d"), "string": ("#067d17", "#6aab73"), "comment": ("#808080", "#7a7e85"),
-               "number": ("#1750eb", "#2aacb8"), "url": ("#871094", "#c77dbb")}
+               "number": ("#1750eb", "#2aacb8"), "url": ("#871094", "#c77dbb"), "key": ("#871094", "#cf8e6d")}
 
 
 class CodeHighlighter(QSyntaxHighlighter):
-    """Colours a Python or SQL code box's keywords, strings, comments and numbers, and a curl command's options,
-    strings and URLs: only on the screen."""
+    """Colours a Python or SQL code box's keywords, strings, comments and numbers, a curl command's options, strings
+    and URLs, and a YAML file's keys, strings, numbers and comments: only on the screen."""
 
     def __init__(self, document, language: str):
         super().__init__(document)
@@ -767,6 +771,21 @@ class _RowsTable(QTableWidget):
             self.row_menu(row, event.globalPos())
 
 
+class _DateTimeBox(QDateTimeEdit):
+    """A date and time box that takes one typed in full as it shows it ("2027-01-02 15:30"), over all of it selected
+    too. Qt's own refuses digits typed over all of it (so the year was kept), and after a part is filled it moves on
+    to the next part, and then again on the separator typed after it."""
+
+    def keyPressEvent(self, event):
+        edit, key = self.lineEdit(), event.text()
+        start = edit.selectionStart()
+        if key.isdigit() and edit.selectedText() == edit.text():
+            self.setSelectedSection(self.sectionAt(0))  # typed from its first part
+        elif key and not key.isalnum() and start > 0 and edit.text()[start - 1] == key:
+            return  # the separator Qt has already moved past
+        super().keyPressEvent(event)
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -1069,7 +1088,7 @@ class PropertiesPanel(QScrollArea):
     def _at_rows(self, form, at: str, show_preview):
         from ..schedule import At
 
-        edit = QDateTimeEdit(calendarPopup=True)
+        edit = _DateTimeBox(calendarPopup=True)
         edit.setDisplayFormat("yyyy-MM-dd HH:mm")
         try:
             when = At(at).when

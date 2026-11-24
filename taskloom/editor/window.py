@@ -9,39 +9,40 @@ import heapq
 import os
 import queue
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
-import time
+import threading
 import uuid
 from copy import deepcopy
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QEvent, QMargins, QObject, QPoint, QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import (QEvent, QMargins, QObject, QPoint, QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl,
+                            Signal)
 from PySide6.QtGui import (QAction, QColor, QFontMetricsF, QImageReader, QKeySequence, QPainter, QPalette,
                            QTextDocument)
-from PySide6.QtWidgets import (QApplication, QDockWidget, QFileDialog, QHBoxLayout, QMainWindow, QMenu, QMessageBox,
-                               QSizePolicy, QStyle, QStyleOptionToolButton, QStylePainter, QTabBar, QTabWidget,
-                               QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkProxyFactory, QNetworkReply, QNetworkRequest
+from PySide6.QtWidgets import (QApplication, QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QLabel,
+                               QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QStyle,
+                               QStyleOptionToolButton, QStylePainter, QTabBar, QTabWidget, QTextBrowser, QToolButton,
+                               QVBoxLayout, QWidget)
 
-from .. import __version__, upgrade
+from .. import __version__, update, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
 from ..blocks.servers import api_connection, curl_command
 from ..config import Home
-from ..engine import Failed, _filled, block_inputs, finished_text, input_ports, run_part
-from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, block_config, flow_from_data,
-                   keep_source_names, load_flow, per_line_of, read_flow_file, real_path, run_clock, schedules_of,
-                   validate)
+from ..engine import KEPT_OUTPUTS, Failed, _filled, block_inputs, finished_text, input_ports, not_kept, run_part
+from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, block_config, flow_file_data,
+                   flow_from_data, keep_source_names, load_flow, per_line_of, read_flow_file, real_path, run_clock,
+                   schedules_of, validate, version_id)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, run_alive, runner_command
 from ..scheduler import (counted_from, forget_schedules, paused, request_turn_off, running_scheduler_version,
-                         runs_going, service_running, set_paused, set_start_at_login, startup_file,
-                         startup_script_outdated, tell_crashed, version_tuple)
+                         runs_going, service_running, set_paused, tell_crashed, version_tuple)
 from ..registry import discover
 from .canvas import FlowScene, FlowView
 from . import dialogs, docs, git, theme
@@ -362,7 +363,25 @@ class FlowTab(QWidget):
         self.view = FlowView(self.scene)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        # Above the canvas while a run's state is loaded (Run history → Load run state): which run, and Leave.
+        self.bar = QFrame(objectName="loaded-state-bar", frameShape=QFrame.StyledPanel)
+        self.bar_text, self.leave = QLabel(wordWrap=True), QPushButton("Leave")
+        self.leave.setToolTip("Show the newest results again; re-runs take their inputs from them")
+        row = QHBoxLayout(self.bar)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.addWidget(self.bar_text, 1)
+        row.addWidget(self.leave)
+        self.bar.hide()
+        layout.addWidget(self.bar)
         layout.addWidget(self.view)
+        # The loaded run (None: none): what the canvas shows and re-runs take their inputs from; how it was named then
+        # (run #12 · when it started), and what else the bar says of it (e.g. shown on today's flow).
+        self.state_run: int | None = None
+        self.state_label, self.state_note = "", ""
+        self.state_undo = None  # the note is of the flow brought back by this step: once undone, today's flow is shown
+        # The run whose flow, as it was then, the step (FlowDocument.restore's undo) brought into the tab, not saved
+        # since (None: none): a re-run asks before saving it over the file while that step is in effect (Undo, Redo).
+        self.brought_back: tuple[str, dict] | None = None
         self.runs: list[RunProcess] = []
         self.queued: list[dict] = []
         self.tab_id = uuid.uuid4().hex[:12]  # names this tab's autosaved copy
@@ -495,9 +514,6 @@ class MainWindow(QMainWindow):
         self.running_flows.setToolTip("The flows running now, also on schedule or from a terminal: choose one to "
                                       "open it")
         self.statusBar().addWidget(self.running_flows)
-        self._offered_restart = False  # asked once per session to restart an older scheduler
-        if frozen() and sys.platform == "win32":
-            self._update_start_at_login()
         self._told_later: queue.Queue = queue.Queue()  # (title, message) from the emails being sent: shown at the check
         self._poll = QTimer(self, interval=2000)
         self._poll.timeout.connect(self._refresh_statuses)
@@ -612,6 +628,8 @@ class MainWindow(QMainWindow):
         documentation.setText("Documentation")
         documentation.setShortcut(QKeySequence("F1"))
         m.addAction(documentation)
+        if frozen() and sys.platform == "win32":  # (the packaged Windows Taskloom installs its newer versions: UP-1)
+            act(m, "Check for updates…", self.check_for_updates)
         toolbar = self.addToolBar("Run")
         toolbar.setObjectName("run-toolbar")
         toolbar.setMovable(False)
@@ -647,9 +665,12 @@ class MainWindow(QMainWindow):
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
         doc.changed.connect(tab.autosave.start)
         tab.autosave.timeout.connect(lambda t=tab: self._autosave(t))
+        tab.leave.clicked.connect(lambda _=False, t=tab: self.leave_state(t))
         self.tabs.addTab(tab, doc.title)
         self._refresh_schedule(tab)
         self._load_last_run(tab)
+        if doc.path is not None and (loaded := self.settings.value(_flow_key("state", doc.path))) is not None:
+            self._restore_state(tab, int(loaded))
         self.flow_status.update_tab(tab)
         self.tabs.setCurrentWidget(tab)
         QTimer.singleShot(0, tab.view.center_on_flow)
@@ -747,6 +768,8 @@ class MainWindow(QMainWindow):
         except OSError as e:  # e.g. a read-only file, or a folder you may not write to
             QMessageBox.warning(self, "Cannot save flow", f"{e}\n\nThe changes are not saved.")
             return False
+        if tab.brought_back and tab.doc.in_effect(tab.brought_back[1]):
+            tab.brought_back = None  # (saved; while undone, Redo still brings it back unsaved)
         if tab.doc.path != before:
             tab.seen_up_to = None  # another file: which of its runs you saw is read again
             self._close_history(tab)  # (its window showed the other file's history)
@@ -888,6 +911,8 @@ class MainWindow(QMainWindow):
         return True
 
     def _remove_tab(self, tab: FlowTab):
+        if not self._quitting:  # (quitting, a loaded state is kept for the next start: LS-9)
+            self._set_state(tab, None)
         self._close_history(tab)
         tab.autosave.stop()
         self.safety.drop_copy(tab.tab_id)
@@ -914,6 +939,8 @@ class MainWindow(QMainWindow):
 
     def _on_doc_changed(self, tab: FlowTab):
         self.tabs.setTabText(self.tabs.indexOf(tab), tab.doc.title + (" *" if tab.doc.dirty else ""))
+        if tab.state_undo is not None:  # (Undo, Redo: the bar says which flow the tab holds)
+            self._show_bar(tab)
         self._refresh_schedule(tab)
         self.flow_status.update_tab(tab)
         if tab is self.current:
@@ -1005,8 +1032,16 @@ class MainWindow(QMainWindow):
 
     def _ready_to_run(self, tab: FlowTab, run: dict | None = None, check: bool = True):
         """Save and validate: for the run `run` says (engine.run_part's trigger, only or run_from), or the flow as a
-        whole (None, as Validate does); not `check`: only save and load it. Returns the loaded flow or None."""
+        whole (None, as Validate does); not `check`: only save and load it. A flow brought back as it was at a run
+        (Load run state) is saved over its file only once you say so. Returns the loaded flow or None."""
         self._finish_editing(tab)
+        back = tab.brought_back
+        if back and tab.doc.in_effect(back[1]) and tab.doc.dirty and QMessageBox.question(
+                self, "Save the flow as it was?",
+                f"This tab holds the flow as it was at {back[0]}, brought back from its Git history and not "
+                f"saved. It is saved before it runs: over {tab.doc.path.name}, in place of the flow that file holds "
+                "now. Save it?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return None
         if tab.doc.dirty or tab.doc.path is None:
             if not self.save(tab):
                 return None
@@ -1125,8 +1160,10 @@ class MainWindow(QMainWindow):
         run.output.connect(lambda level, line, t=tab, r=run: self._on_output(t, r, level, line))
         run.finished.connect(lambda status, t=tab, r=run: self._on_finished(t, r, status))
         tab.runs.append(run)
-        if not tab.following_latest:  # an older run was on the canvas: each block's latest result again
-            self._show_results(tab)
+        if not rerun:  # a full run ends a loaded state (a re-run from it becomes it: see run_started)
+            self._set_state(tab, None)
+        if not tab.following_latest and tab.state_run is None:  # an older run was on the canvas: each block's latest
+            self._show_results(tab)  # result again
         self._end_waits(tab)  # (the run on screen until now, if it is still going)
         tab.shown_run, tab.run_blocks = run, []
         if not rerun:
@@ -1161,10 +1198,12 @@ class MainWindow(QMainWindow):
         before it made when it ran again is seen), whose files still exist; none: that run itself. With none of
         those runs' files left, the same from the next newest of the runs shown. Not the flow's newest run: a run
         none of these blocks took part in holds nothing of theirs. While the canvas shows a run you opened from
-        Run history, that run as it is."""
+        Run history, that run as it is; while a run's state is loaded, that run."""
         edges, before, todo = tab.doc.edges(), {block_id}, [block_id]
         if all(tab.result_run(b) is None for b in (block_id, *(src for src, _, dst, _ in edges if dst == block_id))):
             return None
+        if tab.state_run is not None:  # a loaded run: its folder holds every block's result, carried over or not
+            return tab.state_run
         while todo:
             block = todo.pop()
             for src in {src for src, _, dst, _ in edges if dst == block} - before:
@@ -1396,6 +1435,12 @@ class MainWindow(QMainWindow):
         if tab.running:
             QMessageBox.information(self, "A run is going", "Wait for it to finish, or stop it, first.")
             return
+        if tab.state_run is not None and not (self.home.runs_dir / str(tab.state_run)).is_dir():
+            self._log(tab, {"ts": dt.datetime.now().isoformat(), "level": "ERROR", "header": True, "message": (
+                f"{block_id} was not run: the files of the loaded run #{tab.state_run} were cleaned up (Keep runs, "
+                "keep_runs_for). Leave it and run the whole flow instead.")})
+            self.bottom_tabs.setCurrentWidget(self.log)
+            return
         flow = self._ready_to_run(tab, {"run_from" if on else "only": block_id})  # saves your fix and checks the flow
         if flow is None:
             return
@@ -1466,7 +1511,10 @@ class MainWindow(QMainWindow):
             return
         block = e.get("block")
         if kind == "run_started":
-            tab.following_latest = True
+            if tab.state_run is not None:  # a re-run from a loaded state becomes it (LS-2); the canvas stays on it
+                self._set_state(tab, e["run_id"])
+            else:
+                tab.following_latest = True
             # The runs of the flow since the editor last looked (another line's, e.g. started by the scheduler as
             # you pressed Run now) are still to show, once they have finished.
             history = self._history()
@@ -1642,6 +1690,8 @@ class MainWindow(QMainWindow):
             self._refresh_schedule(tab)
             if not tab.running:
                 self._load_last_run(tab)
+            if tab.state_run is not None:  # (its bar says when the loaded run's files have been cleaned up)
+                self._show_bar(tab)
         if self.current is not None:  # each run as it comes, whoever started it, whatever the canvas shows
             self._refresh_history(self.current)
         self._show_scheduler_state(self.scheduler_on())
@@ -1749,7 +1799,7 @@ class MainWindow(QMainWindow):
                                 "you turned off or changed does not start afresh while the scheduler service is off."
                                 "\n\nSave the flow again to try again.")
         self._refresh_schedule(tab)
-        if scheduled and not self.scheduler_running():
+        if scheduled and self._scheduler_to_start():
             if paused(self.home):
                 self.statusBar().showMessage("This flow is scheduled, but the scheduler service is off (you turned "
                                              "it off): turn it on (top right) to run it.", 10000)
@@ -1762,12 +1812,18 @@ class MainWindow(QMainWindow):
             scheduled = bool(self.home.scheduled_flows())
         except ValueError:
             scheduled = False
-        if scheduled and not paused(self.home) and not self.scheduler_running():
+        if scheduled and not paused(self.home) and self._scheduler_to_start():
             self.start_scheduler()
 
     def scheduler_running(self) -> bool:
         """The scheduler holds its lock file while it runs."""
         return service_running(self.home)
+
+    def _scheduler_to_start(self) -> bool:
+        """No scheduler service runs, or an older Taskloom's does: this version's is to start (it takes that one over
+        at a quiet moment, UP-8)."""
+        return (not self.scheduler_running()
+                or version_tuple(running_scheduler_version(self.home)) < version_tuple(__version__))
 
     def scheduler_on(self) -> bool:
         """The scheduler service runs, and you have not turned it off (turned off, it runs on until the runs you let
@@ -1820,47 +1876,6 @@ class MainWindow(QMainWindow):
              "tray), and starts your scheduled flows at their times. It starts by itself when a flow is "
              "scheduled. Click to turn it off: no scheduled flow runs until you turn it on again.") if running else
             "The scheduler service is off: scheduled flows do not run. Click to turn it on.")
-        if older and not self._offered_restart:
-            self._offered_restart = True
-            answer = QMessageBox.question(
-                self, "Restart the scheduler service?",
-                f"The scheduler service running is from an older Taskloom ({version or 'before 0.14.1'}); this is "
-                f"Taskloom {__version__}. It may not read flows saved by this version (it says they cannot be "
-                "read). Restart it with this version?")
-            if answer == QMessageBox.Yes:
-                self.restart_scheduler()
-
-    def restart_scheduler(self):
-        """Stop the running scheduler, then start this version's once it has stopped."""
-        try:
-            os.kill(int((self.home.root / "scheduler.pid").read_text()), signal.SIGTERM)
-        except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Cannot stop the scheduler service", f"{e}\n\nTurn it off from its tray "
-                                "icon, then turn it on here (top right).")
-            return
-        deadline = time.monotonic() + 15
-
-        def when_stopped():
-            if not self.scheduler_running():
-                self.start_scheduler()
-            elif time.monotonic() < deadline:
-                QTimer.singleShot(300, self, when_stopped)
-            else:
-                QMessageBox.warning(self, "Cannot restart the scheduler service", "It did not stop. Turn it off "
-                                    "from its tray icon, then turn it on here (top right).")
-
-        QTimer.singleShot(300, self, when_stopped)
-
-    def _update_start_at_login(self):
-        """If you start the scheduler at login, it starts this version from now on (not an older one)."""
-        try:
-            path = startup_file()
-            if path.exists() and startup_script_outdated(path.read_text(encoding="utf-8"), self.home):
-                set_start_at_login(self.home, True)
-                self.statusBar().showMessage(f"The scheduler service now starts at login with Taskloom {__version__}",
-                                             10000)
-        except (OSError, RuntimeError) as e:
-            self.statusBar().showMessage(f"Could not update starting the scheduler service at login: {e}", 10000)
 
     def toggle_scheduler(self):
         if not self.scheduler_on():
@@ -1890,12 +1905,12 @@ class MainWindow(QMainWindow):
     def start_scheduler(self, by_you: bool = False):
         if by_you:
             set_paused(self.home, False)  # you turned it on: it starts by itself again when needed
-        if self.scheduler_running():  # (one turning off is on again: its runs go on, and new times start)
+        if not self._scheduler_to_start():  # (one turning off is on again: its runs go on, and new times start)
             self.statusBar().showMessage("The scheduler service is on", 5000)
             self._show_scheduler_state(self.scheduler_on())
             return
-        self._offered_restart = True  # this version's: nothing to offer
-        # (turned on by you, it is on by now; started by itself, it stays off if you turn it off before it is up)
+        # (turned on by you, it is on by now; started by itself, it stays off if you turn it off before it is up; an
+        # older Taskloom's running, this version's waits beside it and takes it over at a quiet moment)
         subprocess.Popen(
             runner_command() + ["scheduler", "--unless-paused"],
             env={**os.environ, "TASKLOOM_HOME": str(self.home.root)},
@@ -1920,6 +1935,7 @@ class MainWindow(QMainWindow):
         tab = tab or self.current
         if tab is None:
             return
+        self._set_state(tab, None)  # (it ends a loaded state)
         tab.shown_run = None
         self._end_waits(tab)  # (a past run's waits have ended)
         newest = tab.last is None or run_id >= tab.last["id"]
@@ -1929,7 +1945,7 @@ class MainWindow(QMainWindow):
         self._show_log(tab, run_id)
 
     def _run_menu(self, pos):
-        """Run history's menu for the run you right-clicked: Copy executed query."""
+        """Run history's menu for the run you right-clicked: Load run state, Copy executed query."""
         table = self.history_panel.table
         row = table.rowAt(pos.y())
         if row < 0:
@@ -1937,10 +1953,16 @@ class MainWindow(QMainWindow):
         run_id = int(table.item(row, 0).text())
         history = self._history()
         try:
-            queries = history.queries(run_id)
+            queries, why_not = history.queries(run_id), self._not_loadable(history, run_id)
         finally:
             history.close()
         menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        load = menu.addAction("Load run state" + (f" ({why_not})" if why_not else ""),
+                              lambda: self.load_state(self.current, run_id))
+        load.setEnabled(not why_not)
+        load.setToolTip("Every block shows its result from this run, and re-runs take their inputs from it, until you "
+                        "leave it or run the whole flow")
         if len(queries) == 1:
             menu.addAction("Copy executed query", lambda: self._copy_query(run_id, queries[0]))
         elif queries:  # in the order they ran
@@ -1956,6 +1978,175 @@ class MainWindow(QMainWindow):
         """Copy the SQL a block sent in run `run_id`, with each value written in, to paste into a SQL tool."""
         QApplication.clipboard().setText(P.written_in(query["sql"], query["values"]))
         self.statusBar().showMessage(f"Copied the query of {query['block']}, run #{run_id}", 10000)
+
+    # --- a loaded run state (Run history → Load run state): what the tab shows and re-runs from ------------------
+    # Loading only reads a run (its history rows and its folder): nothing is written into it. Re-runs from it are new
+    # runs, which carry its folder over.
+
+    def _not_loadable(self, history: History, run_id: int) -> str:
+        """Why run `run_id` cannot be loaded ("": it can): it is still going, or its files are gone (its folder, or
+        the saved results of a block that ended in it)."""
+        run = history.run(run_id)
+        if run is not None and run["status"] == "running":
+            return "still going"
+        folder = self.home.runs_dir / str(run_id)
+        # (A block inside a Loop keeps its results in the Loop's folder, by item.)
+        if run is None or not folder.is_dir() or any(
+                info["status"] in ("success", "failed", "skipped") and "items" not in info
+                and not (folder / block / KEPT_OUTPUTS).exists() for block, info in history.blocks(run_id).items()):
+            return "its files are gone: cleaned up or deleted"
+        return ""
+
+    def load_state(self, tab: FlowTab | None, run_id: int):
+        """Load run `run_id`'s state into the tab: every block shows its result from that run (see _show_state); a bar
+        names it; re-runs take their inputs from it and become it. A run of an earlier version of the flow file: asked
+        first, to show it on today's flow or to bring back the flow as it was (from its Git history, as unsaved
+        edits), or to cancel."""
+        if tab is None or tab.doc.path is None:
+            return
+        history = self._history()
+        try:
+            label, version = history.label(run_id), history.version(run_id)
+        finally:
+            history.close()
+        note, undo = "", None
+        if self._changed_since(tab, version):
+            then = self._flow_as_it_was(tab.doc.path, version)
+            box = QMessageBox(QMessageBox.Question, "Load run state",
+                              f"{label} was made with an earlier version of the flow: {tab.doc.path.name} has changed "
+                              "since. Its results can be shown on today's flow (blocks deleted since are left out; "
+                              "blocks added since show nothing), or the flow can be brought back as it was then, into "
+                              "this tab as unsaved edits (Edit → Undo takes them back).", parent=self)
+            today = box.addButton("Show on today's flow", QMessageBox.AcceptRole)
+            back = box.addButton("Bring back the flow as it was", QMessageBox.AcceptRole)
+            box.addButton(QMessageBox.Cancel)
+            back.setEnabled(then is not None)
+            back.setToolTip("" if then is not None else
+                            "That version of the flow is not in its Git history: it cannot be brought back")
+            box.exec()
+            if box.clickedButton() is back:
+                self._finish_editing(tab)
+                undo = tab.doc.restore(then)
+                tab.brought_back, note = (label, undo), "the flow as it was then (not saved)"
+            elif box.clickedButton() is today:
+                note = "shown on today's flow"
+            else:
+                return
+        self._set_state(tab, run_id, note, undo)
+        self._show_state(tab, run_id)
+        self._show_log(tab, run_id)
+
+    @staticmethod
+    def _flow_as_it_was(path: Path, version: str) -> dict | None:
+        """The flow in the file `path` as it was in the version `version` (a Git blob id), from the Git history of the
+        file; None: that version is not in it. Blocks without a place on the canvas get one, as on opening it."""
+        found = git._versions(path)
+        raw = next((blob.data for _, _, blob in (found[0] if found else ()) if blob.id.decode() == version), None)
+        return None if raw is None else FlowDocument(flow_file_data(raw)).data  # (the run read those very bytes)
+
+    def _show_state(self, tab: FlowTab, run_id: int):
+        """A loaded run on the canvas: each block's result in it; a block it carried over from an earlier run (a
+        re-run's), its result there, and so on back. Each names the outputs whose values the run's folder does not
+        hold, and why. A carried block whose run has been cleaned up says its result is gone. Blocks no longer in
+        the flow are left out. Other runs ending meanwhile do not change it (not following the latest)."""
+        results, gone, run = {}, None, run_id
+        history = self._history()
+        try:
+            while run is not None and gone is None:
+                if history.run(run) is None:
+                    gone = run
+                else:
+                    for block, info in history.blocks(run).items():
+                        results.setdefault(block, {**info, "run_id": run})
+                    run = history.carried_on_from(run)
+        finally:
+            history.close()
+        folder = self.home.runs_dir / str(run_id)
+        tab.shown_run = None
+        self._end_waits(tab)
+        tab.following_latest = False
+        tab.block_info = {}
+        tab.scene.clear_statuses()
+        for block, info in results.items():
+            if block in tab.doc.blocks:
+                self._apply_block_result(tab, block, {**info, "not_kept": not_kept(folder, block)})
+        for block in tab.doc.blocks:  # carried over (it, or the Loop it is in, has its results in the folder)
+            if gone is not None and block not in results and any(
+                    (folder / b / KEPT_OUTPUTS).exists() for b in (block, *tab.doc.containers(block))):
+                tab.scene.set_status(block, "gone", f"gone · run #{gone} was cleaned up",
+                                     f"Its result was carried over from run #{gone}, which has been cleaned up since "
+                                     "(Keep runs, keep_runs_for): it is gone.")
+        self._mark_old(tab)
+
+    def _set_state(self, tab: FlowTab, run_id: int | None, note: str = "", undo: dict | None = None):
+        """The run whose state the tab has loaded (None: none), with what else its bar says (of the flow brought back by
+        the step `undo` takes back, if given); remembered for when Taskloom starts again (LS-9)."""
+        tab.state_run, tab.state_note, tab.state_undo = run_id, note, undo
+        if run_id is not None:
+            history = self._history()
+            try:
+                tab.state_label = history.label(run_id)
+            finally:
+                history.close()
+        if tab.doc.path is not None:
+            key = _flow_key("state", tab.doc.path)
+            if run_id is None:
+                self.settings.remove(key)
+            else:
+                self.settings.setValue(key, run_id)
+        self._show_bar(tab)
+
+    def _show_bar(self, tab: FlowTab, text: str | None = None):
+        """The tab's loaded-state bar: what it says of the loaded run (`text`: that instead); none loaded: hidden."""
+        if text is None and tab.state_run is not None:
+            going = any(r.running and r.run_id == tab.state_run for r in tab.runs)  # (its folder may be still to come)
+            if going or (self.home.runs_dir / str(tab.state_run)).is_dir():
+                note = tab.state_note
+                if tab.state_undo is not None and not tab.doc.in_effect(tab.state_undo):
+                    note = "shown on today's flow"  # (Undo took the flow as it was back out of the tab)
+                text = (f"Loaded state of {tab.state_label}: every block shows its result from it, and re-runs take "
+                        "their inputs from it" + (f" · {note}" if note else ""))
+            else:
+                text = (f"Loaded state of {tab.state_label}: its files were cleaned up (Keep runs, keep_runs_for), so "
+                        "nothing can be re-run from it; the blocks still show its results")
+        if text != tab.bar_text.text():
+            tab.bar_text.setText(text or "")
+        tab.bar.setVisible(text is not None)
+
+    def leave_state(self, tab: FlowTab):
+        """The bar's Leave: the loaded state ends, and the tab shows the newest results again (LS-3)."""
+        loaded, showing = tab.state_run is not None, f"Showing {tab.state_label}"
+        self._set_state(tab, None)
+        if loaded:
+            self._show_results(tab)
+            if self.statusBar().currentMessage() == showing:  # (as loading it said: no longer so)
+                self.statusBar().clearMessage()
+
+    def _restore_state(self, tab: FlowTab, run_id: int):
+        """The state the tab had loaded when Taskloom closed, loaded again (LS-9); on today's flow if the flow has
+        changed since (nothing is asked as Taskloom starts). Its run cleaned up since: the bar says so, and the tab
+        shows the newest results."""
+        history = self._history()
+        try:
+            run, version = history.run(run_id), history.version(run_id)
+        finally:
+            history.close()
+        if run is None or not (self.home.runs_dir / str(run_id)).is_dir():
+            self._set_state(tab, None)
+            self._show_bar(tab, f"Run #{run_id}, whose state this flow had loaded when Taskloom closed, has been "
+                                "cleaned up since (Keep runs, keep_runs_for): the newest results are shown")
+            return
+        self._set_state(tab, run_id, "shown on today's flow" if self._changed_since(tab, version) else "")
+        self._show_state(tab, run_id)
+
+    @staticmethod
+    def _changed_since(tab: FlowTab, version: str | None) -> bool:
+        """Whether the tab's flow file holds another version than `version`, a run's (None, a run from before runs kept
+        their version: no)."""
+        try:
+            return version not in (None, version_id(tab.doc.path.read_bytes()))
+        except OSError:  # (its file is gone: today's flow is the tab's)
+            return True
 
     def _show_results(self, tab: FlowTab, run_id: int | None = None):
         """On the canvas: each block's result from the latest run (since the flow was opened) it took part in,
@@ -1993,6 +2184,94 @@ class MainWindow(QMainWindow):
             self.bottom_tabs.setCurrentWidget(self.log)
             self.statusBar().showMessage(f"Showing {run_label(run_id, run['started'] if run else None)}", 5000)
 
+    # --- updates (the packaged Windows Taskloom) --------------------------------------------------------------
+
+    def check_for_updates(self):
+        """Help > Check for updates (UP-1): asks Taskloom's GitHub releases for the newest version; only on this click,
+        never by itself."""
+        reply = _ask(self._web(), update.RELEASE_URL, "application/vnd.github+json")
+        reply.finished.connect(lambda: self._release_told(reply))
+
+    def _web(self) -> QNetworkAccessManager:
+        """The editor's way to GitHub, through Windows' proxy settings (as the browser's)."""
+        if getattr(self, "_network", None) is None:
+            QNetworkProxyFactory.setUseSystemConfiguration(True)
+            self._network = QNetworkAccessManager(self)
+        return self._network
+
+    def _release_told(self, reply: QNetworkReply):
+        reply.deleteLater()
+        try:
+            failure = _failure(reply, f"Could not reach Taskloom's releases: {reply.errorString()}")
+            if failure:
+                raise update.Failed(failure)
+            release = update.newer_release(bytes(reply.readAll()))
+        except update.Failed as e:
+            QMessageBox.warning(self, "Check for updates", str(e))
+            return
+        if release is None:
+            QMessageBox.information(self, "Check for updates", f"You have the newest version, Taskloom {__version__}.")
+        elif QMessageBox.question(self, "Check for updates", f"Taskloom {release.version} is out; this is "
+                                  f"{__version__}. Install?") == QMessageBox.Yes:
+            self._install(release)
+
+    def _install(self, release: update.Release):
+        """Downloads and installs `release` (a window shows how far, with Cancel), unless that version is installed."""
+        try:
+            folder = update.installed(release.version)
+            download = None if folder else UpdateDownload(self._web(), release, Path(sys.executable).parent, self)
+        except (update.Failed, OSError) as e:
+            QMessageBox.warning(self, "Taskloom was not updated", update.plainly(e))
+            return
+        if download is None:
+            self._installed(folder, release.version)
+            return
+        download.installed.connect(lambda folder: self._installed(folder, release.version))
+        download.failed.connect(lambda said: QMessageBox.warning(self, "Taskloom was not updated", said))
+
+    def _installed(self, folder: Path, version: str):
+        """The entries start the new version and its scheduler service takes over a running one (UP-2, UP-8); then the
+        restart is offered (UP-6)."""
+        told = [f"Taskloom {version} is installed in {folder}."]
+        try:
+            told += update.put_in_use(folder, self.home)
+        except (OSError, RuntimeError, ValueError) as e:  # (its first start sees to the entries again)
+            told.append(f"Could not put it in use yet: {update.plainly(e)}")
+        self.statusBar().showMessage("  ".join(told), 30000)
+        if QMessageBox.question(self, "Taskloom updated",
+                                f"Restart Taskloom now with version {version}?") == QMessageBox.Yes:
+            self._restart_in(folder, version)
+
+    def _restart_in(self, folder: Path, version: str):
+        """Once no flow started from this editor runs (meanwhile a window says which, with Cancel), closes it as usual
+        (its tabs and loaded states kept; Cancel of a question there cancels the restart) and starts the editor of the
+        Taskloom in `folder` on the same Taskloom folder (UP-6)."""
+        waits = QDialog(self, objectName="restart-waits", windowTitle=f"Restart Taskloom with version {version}")
+        said, cancel = QLabel(waits), QPushButton("Cancel", waits)
+        layout = QVBoxLayout(waits)
+        layout.addWidget(said)
+        layout.addWidget(cancel, 0, Qt.AlignRight)
+        check = QTimer(waits, interval=1000)
+        cancel.clicked.connect(waits.reject)
+        waits.rejected.connect(check.stop)
+        waits.rejected.connect(waits.deleteLater)
+
+        def restart():
+            running = sorted({t.doc.path.stem if t.doc.path else t.doc.title
+                              for t in self.tabs_list() if any(r.running for r in t.runs)})
+            if running:
+                said.setText(f"Taskloom restarts with version {version} when {', '.join(running)} ends.")
+                waits.show()
+                return
+            check.stop()
+            waits.deleteLater()
+            if self.close():
+                update.start(folder, self.home, "editor")
+
+        check.timeout.connect(restart)
+        check.start()
+        restart()
+
     def closeEvent(self, event):
         running = [r for t in self.tabs_list() for r in t.runs if r.running]
         if running:
@@ -2018,6 +2297,134 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _ask(web: QNetworkAccessManager, url: str, accept: str) -> QNetworkReply:
+    """GET `url` of Taskloom's GitHub releases. A redirect is followed only where update.refused allows (UP-3), else
+    the reply is aborted (its target never asked), why in its property "refused"."""
+    request = QNetworkRequest(QUrl(url))
+    request.setRawHeader(b"Accept", accept.encode())
+    request.setRawHeader(b"User-Agent", f"taskloom/{__version__}".encode())
+    request.setAttribute(QNetworkRequest.RedirectPolicyAttribute, QNetworkRequest.UserVerifiedRedirectPolicy)
+    request.setTransferTimeout(round(update.TIMEOUT_SECONDS * 1000))  # (no byte for that long: TimeoutError)
+    reply = web.get(request)
+
+    def redirected(to: QUrl):
+        why = update.refused(to.toString())
+        if why is None:
+            reply.redirectAllowed.emit()
+        else:
+            reply.setProperty("refused", why)
+            reply.abort()
+
+    reply.redirected.connect(redirected)
+    return reply
+
+
+def _failure(reply: QNetworkReply, broken: str) -> str | None:
+    """What went wrong with a finished reply of _ask: a refused redirect, an HTTP error, a time-out, else `broken` if it
+    did not arrive whole; None if nothing did."""
+    if reply.property("refused"):
+        return reply.property("refused")
+    status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+    if status is not None and int(status) >= 400:
+        return f"Taskloom's releases answered HTTP {status} for {reply.url().toString()}"
+    if reply.error() == QNetworkReply.TimeoutError:
+        return (f"Taskloom's releases timed out: nothing came from {reply.url().toString()} for "
+                f"{reply.request().transferTimeout() / 1000:g} seconds")
+    return broken if reply.error() != QNetworkReply.NoError else None
+
+
+class UpdateDownload(QDialog):
+    """Help > Check for updates' download (UP-1, UP-3): `release`'s zip into a new .partial-* folder beside the
+    versions' folders, then checked and unpacked in a thread (update.unpack), with a progress bar and Cancel; it blocks
+    nothing. Ends with `installed` (the version's folder) or `failed` (what went wrong), or nothing after Cancel; the
+    .partial-* folder is gone in each case."""
+
+    installed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, web: QNetworkAccessManager, release: update.Release, source: Path, parent: QWidget):
+        super().__init__(parent, objectName="update-progress", windowTitle=f"Taskloom {release.version}")
+        self.release, self.source = release, source
+        self.stop, self.unpacked, self.unwritten = threading.Event(), (0, 1), None  # unwritten: a write's OSError
+        self.said = QLabel(f"Downloading Taskloom {release.version}…")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, max(release.size, 1))
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.said)
+        layout.addWidget(self.bar)
+        layout.addWidget(cancel, 0, Qt.AlignRight)
+        self.partial = update.partial()
+        self.file = open(self.partial / "download.zip", "wb")
+        self.reply = _ask(web, release.url, "application/octet-stream")
+        self.reply.readyRead.connect(self._received)
+        self.reply.finished.connect(self._downloaded)
+        self.watch = QTimer(self, interval=100)
+        self.watch.timeout.connect(self._unpacking)
+        self.show()
+
+    def _received(self):  # (the bar follows the bytes: Qt's downloadProgress says nothing while a download stalls)
+        try:
+            self.file.write(bytes(self.reply.readAll()))
+        except OSError as e:  # e.g. the disk is full (UP-3): the download ends there (finished: _downloaded says so)
+            self.unwritten = e
+            self.reply.abort()
+            return
+        self.bar.setValue(self.file.tell())
+
+    def reject(self):  # Cancel, Esc or the window's close button
+        self.stop.set()
+        super().reject()
+        if self.reply.isRunning():
+            self.reply.abort()
+
+    def _downloaded(self):
+        got = self.file.tell()
+        try:
+            self.file.close()  # (writes what it still holds)
+        except OSError as e:
+            self.unwritten = self.unwritten or e
+        if self.stop.is_set():
+            return self._end(None)
+        failure = (f"Could not save the download in {self.partial.parent}: {self.unwritten}" if self.unwritten else
+                   _failure(self.reply, f"The download is incomplete ({got} of {self.release.size} bytes): "
+                                        f"{self.reply.errorString()}"))
+        if failure:
+            return self._end(failure)
+        self.said.setText(f"Checking and unpacking Taskloom {self.release.version}…")
+        self.result = f"Taskloom {self.release.version} could not be installed"  # (what update.unpack did not say)
+        self.unpacking = threading.Thread(target=self._unpack, daemon=True)
+        self.unpacking.start()
+        self.watch.start()
+
+    def _unpack(self):  # (in a thread of its own: the editor goes on meanwhile)
+        try:
+            self.result = update.unpack(self.partial / "download.zip", self.release, self.source, self.stop,
+                                        lambda done, of: setattr(self, "unpacked", (done, of)))
+        except update.Failed as e:
+            self.result = str(e)
+
+    def _unpacking(self):
+        done, of = self.unpacked
+        self.bar.setRange(0, max(of, 1))
+        self.bar.setValue(done)
+        if not self.unpacking.is_alive():
+            self.watch.stop()
+            self._end(self.result)
+
+    def _end(self, result):
+        """`result`: the version's folder, what went wrong, or None (cancelled)."""
+        shutil.rmtree(self.partial, ignore_errors=True)
+        self.hide()
+        self.reply.deleteLater()
+        self.deleteLater()
+        if isinstance(result, Path):
+            self.installed.emit(result)
+        elif result:
+            self.failed.emit(result)
+
+
 class NoOpenAnimation(QObject):
     """On Windows, every window and dialog of the editor appears at once: just before it shows, the open and close
     animation Windows plays for a new window is turned off for it. Menus, tooltips and popups are left as they are."""
@@ -2037,7 +2444,8 @@ class NoOpenAnimation(QObject):
         return False
 
 
-def main(paths=()) -> int:
+def main(paths=(), told=()) -> int:
+    """The editor; `told`: what Taskloom's start has to tell (taskloom.cli), shown in its status bar."""
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Taskloom")
     app.setOrganizationName("Taskloom")
@@ -2049,6 +2457,8 @@ def main(paths=()) -> int:
     window.restore_session(paths)
     if not window.tabs_list():
         window.new_flow()
+    if told:
+        window.statusBar().showMessage("  ".join(told), 30000)
     if os.environ.get("TASKLOOM_EDITOR_SMOKE") and paths:  # used by packaging/smoke.py
         _smoke_test(app, window, window.open_flow(Path(paths[0])), Path(os.environ["TASKLOOM_EDITOR_SMOKE"]))
     return app.exec()

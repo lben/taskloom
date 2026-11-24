@@ -14,9 +14,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QFont, QFontMetrics, QPainter
-from PySide6.QtWidgets import (QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QPushButton, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+                               QMessageBox, QPushButton, QSplitter, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from ..block import fields
 from ..config import Home
@@ -24,8 +24,9 @@ from ..flow import flow_file_data, version_id
 from ..history import History
 from . import git
 from .canvas import FlowScene, is_dark
-from .document import FlowDocument
+from .document import FlowDocument, flow_text
 from .panels import INVALID, FindToggles, find_pattern
+from .source_diff import SourceDiff
 
 CARD = Qt.UserRole  # a card's (Version, where the search found it)
 PAD = 6
@@ -208,6 +209,8 @@ class CommitHistory(QWidget):
         self.list.setItemDelegate(CardDelegate(self.list))
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.itemSelectionChanged.connect(self._show_selected)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._card_menu)
         left = QWidget()
         column = QVBoxLayout(left)
         column.setContentsMargins(0, 0, 0, 0)
@@ -311,3 +314,47 @@ class CommitHistory(QWidget):
         if version is not None and version.flow is not None:
             self.restore.emit(copy.deepcopy(version.flow), f"Restored the version of {version.when} "
                                                            f"({version.subject}): Save or Save & Commit to keep it")
+
+    def _card_menu(self, at):
+        """The right-clicked card's menu: its source diffs against the version before it in the history (not the card
+        under it: the search filters and reorders them; greyed out on the first commit) and against the current one."""
+        item = self.list.itemAt(at)
+        if item is None:
+            return
+        version = item.data(CARD)[0]
+        place = self.versions.index(version)
+        before = self.versions[place + 1] if place + 1 < len(self.versions) else None
+        menu = QMenu(self)
+        menu.addAction("Show source diff against previous version",
+                       lambda: self._show_diff(before, version)).setEnabled(before is not None)
+        menu.addAction("Show source diff against current version", lambda: self._show_diff(version, None))
+        menu.exec(self.list.viewport().mapToGlobal(at))
+
+    def _show_diff(self, old: Version, new: Version | None):
+        """The source diff window of `old` against `new` (None: the current version, what the flow's tab holds now:
+        its file, or what Save would write if it has unsaved changes). Nothing is written."""
+        old_title, old_header = _named(old)
+        if new is not None:
+            (new_title, new_header), data = _named(new), new.data
+        else:
+            tab = next((t for t in self.parentWidget().tabs_list() if t.doc.path == self.path), None)
+            unsaved = tab is not None and tab.doc.dirty
+            try:
+                data = flow_text(tab.doc.data).encode("utf-8") if unsaved else self.path.read_bytes()
+            except OSError as e:  # e.g. the file was removed since
+                QMessageBox.warning(self, "Cannot show the source diff", f"{self.path.name} cannot be read: {e}")
+                return
+            new_title = "current (not saved)" if unsaved else "current"
+            new_header = new_title.capitalize()
+        window = SourceDiff(f"{self.path.name}:  {old_title}  ↔  {new_title}", (old_header, old.data),
+                            (new_header, data), self)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+
+def _named(version: Version) -> tuple[str, str]:
+    """How a source diff's title and the line over its side name a version: by its message's first line (its start,
+    if long) and its time (and its short id)."""
+    subject = version.subject if len(version.subject) <= 60 else version.subject[:59] + "…"
+    return f'"{subject}", {version.when}', f'"{subject}"  ·  {version.when}  ·  {version.id[:7]}'

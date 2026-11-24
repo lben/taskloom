@@ -17,7 +17,7 @@ from pathlib import Path
 from .config import Home
 from .engine import Cancelled, finished_text, run_flow
 from .flow import FlowError, load_flow, real_path, validate
-from .launch import ARGS_VARIABLE
+from .launch import ARGS_VARIABLE, frozen
 from .registry import discover
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -308,7 +308,12 @@ def cmd_scheduler(args, home: Home) -> int:
 
     try:
         if args.at_login:
-            path = scheduler.set_start_at_login(home, args.at_login == "on")
+            from . import entries
+
+            path = entries.startup()
+            if not frozen():
+                raise RuntimeError("starting the scheduler at login needs the packaged Windows Taskloom (taskloomw.exe)")
+            entries.set_entry(path, args.at_login == "on", Path(sys.executable).parent, home.root, entries.SCHEDULER)
             print(f"start at login {'enabled' if args.at_login == 'on' else 'disabled'}: {path}")
             return EXIT_OK
         if args.unless_paused and scheduler.paused(home):
@@ -316,7 +321,7 @@ def cmd_scheduler(args, home: Home) -> int:
             return EXIT_OK
         if not args.unless_paused:  # started by you, it is on (before it takes its lock: see Scheduler._take_requests)
             scheduler.set_paused(home, False)
-        return scheduler.serve(home, args.headless)
+        return scheduler.serve(home, args.headless, args.told)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_FAILED
@@ -353,7 +358,21 @@ def cmd_env(args, home: Home) -> int:
 def cmd_editor(args, home: Home) -> int:
     from .editor.window import main as editor_main  # Qt is only needed for the editor
 
-    return editor_main(args.flows)
+    return editor_main(args.flows, args.told)
+
+
+def _at_start(home: Home) -> list[str]:
+    """At each start of the packaged Windows Taskloom (any command): its Start menu and Startup entries start the
+    newest Taskloom (UP-2, UP-4), and older versions it installed are removed (UP-7). Returns what to tell."""
+    if not (frozen() and sys.platform == "win32"):
+        return []
+    from . import entries, update
+
+    folder = Path(sys.executable).parent
+    try:
+        return entries.follow(folder) + update.clean_up(folder, home)
+    except Exception as e:  # (Taskloom starts all the same; tried again at its next start)
+        return [f"Could not see to Taskloom's Start menu and Startup entries and older versions: {update.plainly(e)}"]
 
 
 def main(argv=None) -> int:
@@ -361,6 +380,7 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(prog="taskloom", description="Run and check Taskloom flows.")
     parser.add_argument("--version", action="version", version=f"taskloom {__version__}")
+    parser.add_argument("--home", metavar="FOLDER", help="the Taskloom folder (instead of TASKLOOM_HOME or ~/.taskloom)")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("run", help="run a flow")
     p.add_argument("flow")
@@ -435,8 +455,15 @@ def main(argv=None) -> int:
     s.set_defaults(func=cmd_secret_set)
 
     args = parser.parse_args(argv)
+    if args.home:  # (as TASKLOOM_HOME: also for the runs and services this process starts)
+        os.environ["TASKLOOM_HOME"] = str(Path(args.home).resolve())
     try:
-        return args.func(args, Home.default())
+        home = Home.default()
+        args.told = _at_start(home)
+        if args.func is not cmd_editor:  # (the editor says it in its status bar)
+            for line in args.told:
+                print(line, file=sys.stderr)
+        return args.func(args, home)
     except FlowError as e:
         for message in e.errors:
             print(f"error: {message}", file=sys.stderr)

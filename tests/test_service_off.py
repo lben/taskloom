@@ -214,22 +214,62 @@ def test_turning_the_service_off_from_its_tray_icon_keeps_it_off(qapp, env, monk
     stays_off_at_login(env.home)  # it stays off until you turn it on
 
 
-def test_an_older_service_that_cannot_be_restarted_is_not_called_paused(win, qtbot, monkeypatch):
-    from taskloom.scheduler import acquire_lock
+@pytest.mark.invariant("UP-8")
+@pytest.mark.invariant("SCH-1")
+def test_an_older_service_that_cannot_be_stopped_is_called_on_and_not_taken_over(win, qtbot, tmp_path, monkeypatch):
+    """An older Taskloom's scheduler service holds the folder (from before 0.14.1: it says no version) and its
+    scheduler.pid is gone, so it cannot be stopped. A scheduled flow is saved: the editor starts this version's service,
+    which waits beside it to take it over (UP-8), tries to stop it and cannot. All along the editor asks and warns
+    nothing, and calls the service on and the older Taskloom's: never paused or off, never this version's."""
+    from taskloom import __version__
+    from taskloom.scheduler import STOP_OLD_SECONDS, acquire_lock
 
-    warned = []
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))  # restart it: yes
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a[1:3])))
-    assert not (win.home.root / "scheduler.pid").exists()  # its PID file is gone: it cannot be stopped
-    lock = acquire_lock(win.home)  # a scheduler service from an older Taskloom (it writes no version)
+    started, said, seen = [], [], []
+
+    class Recorded(subprocess.Popen):  # this version's service, which the editor starts: stopped at the end
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            started.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", Recorded)
+    monkeypatch.setattr(win, "start_scheduler", lambda by_you=False: REAL_START_SCHEDULER(win, by_you))  # the real one
+
+    def shown() -> tuple[str, str]:  # the Scheduler service button (top right) and its tooltip
+        said.extend([win.scheduler_action.text(), win.scheduler_action.toolTip(), win.statusBar().currentMessage()])
+        return win.scheduler_action.text(), win.scheduler_action.toolTip()
+
+    def waits_beside_it() -> bool:  # (scheduler.waiting: "<version> <process> <when>"; that process is the service's
+        # own, not always one the editor started: on Windows a venv's python.exe is a launcher, the service its child)
+        try:
+            version = (win.home.root / "scheduler.waiting").read_text().split()[0]
+        except (OSError, IndexError):
+            return False
+        return version == __version__ and any(proc.poll() is None for proc in started)
+
+    lock = acquire_lock(win.home)  # a scheduler service from an older Taskloom
     try:
         for name in ("scheduler.pid", "scheduler.version"):  # (this Taskloom's lock writes both: here they are gone)
             (win.home.root / name).unlink()
-        qtbot.waitUntil(lambda: bool(warned), timeout=10_000)
+        qtbot.waitUntil(lambda: "older Taskloom" in shown()[1], timeout=10_000)  # (the editor checks every 2 s)
+        win.save(win.open_flow(write_flow(tmp_path / "nightly.yaml", QUICK)))  # scheduled: this version's starts
+        said.append(win.statusBar().currentMessage())
+        qtbot.waitUntil(waits_beside_it, timeout=30_000)
+        # Nothing is due: a quiet moment, so it tries to stop the older one at once, and gives up STOP_OLD_SECONDS
+        # later; the editor shows what it finds every 2 s.
+        for _ in range(2 * (STOP_OLD_SECONDS + 5)):
+            qtbot.wait(500)
+            seen.append(shown())
     finally:
+        for proc in started:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
         lock.close()
 
-    assert [t for box in warned for t in box if "paus" in str(t).lower()] == [], warned
+    assert win.message_boxes == []  # no question, no warning
+    assert {text for text, _ in seen} == {"Scheduler service on"}, seen
+    assert all("older Taskloom" in tip for _, tip in seen), seen  # this version's never holds the folder
+    assert [t for t in said if "paus" in t.lower()] == [], said
 
 
 def test_the_scheduler_command_help_says_off_not_paused(env):

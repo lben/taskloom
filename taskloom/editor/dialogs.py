@@ -694,14 +694,23 @@ class SettingsDialog(QDialog):
         form.addRow("Keep runs for", keep_row)
         form.addRow("Scheduled runs at once", self.max_runs)
         form.addRow("Java folder", java_row)
+        self.start_menu = QCheckBox("Add Taskloom to the Start menu")
         self.at_login = QCheckBox("Start the scheduler service when I log in")
-        if sys.platform == "win32":
-            from ..scheduler import startup_file
-            self.at_login.setChecked(startup_file().exists())
+        entries_row = QWidget()
+        both = QHBoxLayout(entries_row)
+        both.setContentsMargins(0, 0, 0, 0)
+        for box in (self.start_menu, self.at_login):
+            both.addWidget(box)
+        both.addStretch()
+        if sys.platform == "win32" and getattr(sys, "frozen", False):  # (each entry starts this taskloomw.exe)
+            from .. import entries
+            self.start_menu.setChecked(entries.start_menu().exists())
+            self.at_login.setChecked(entries.startup().exists())
         else:
-            self.at_login.setEnabled(False)
-            self.at_login.setToolTip("Windows only; on servers the keeper starts the scheduler")
-        form.addRow("Scheduler", self.at_login)
+            for box in (self.start_menu, self.at_login):
+                box.setEnabled(False)
+                box.setToolTip("In the Windows Taskloom only; on servers the keeper starts the scheduler")
+        form.addRow("Windows", entries_row)
         self.notify_email = QLineEdit(", ".join(self.settings["notify_email"]) if isinstance(self.settings["notify_email"], list)
                                       else self.settings["notify_email"] or "", placeholderText="you@example.com")
         self.smtp = QComboBox(editable=True)
@@ -773,8 +782,10 @@ class SettingsDialog(QDialog):
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "settings.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         if self.at_login.isEnabled():
-            from ..scheduler import set_start_at_login
-            set_start_at_login(self.home, self.at_login.isChecked())
+            from .. import entries
+            folder = Path(sys.executable).parent
+            entries.set_entry(entries.start_menu(), self.start_menu.isChecked(), folder, self.home.root, entries.EDITOR)
+            entries.set_entry(entries.startup(), self.at_login.isChecked(), folder, self.home.root, entries.SCHEDULER)
         self.accept()
 
 

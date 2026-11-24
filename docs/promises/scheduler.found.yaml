@@ -57,8 +57,20 @@ found:
     found_by: CI
     fixed_in: 58cc42e
     guarded_by: tests/test_scheduler_ci_findings.py::test_an_on_time_run_beside_a_catch_up_whose_runs_wait_for_one_another_is_not_held_for_a_free_slot
+  - what: A newer service waiting beside an older one measured its hour on this PC's local clock, without the UTC offset, so on a night the clocks change the hour before it takes over at a run's end could last two hours or none (charter C11).
+    found_by: review
+    fixed_in: f4737f6
+    guarded_by: tests/test_scheduler_mutants_final.py::test_the_hour_a_newer_service_waits_beside_an_older_one_is_an_hour_on_a_night_the_clocks_change
+  - what: >-
+      A one-time schedule's On box, its date and time selected whole and typed over, could keep the year it had, so
+      the run was saved for the wrong year (a test typing a date in 2027 saved one in 2026). Typing over the whole box
+      now starts at its year, and a separator the box has already moved past is not typed twice.
+    found_by: CI
+    fixed_in: 01cc298
+    guarded_by: tests/test_paths_editor_editing.py::test_a_one_time_schedule_typed_over_all_of_its_date_and_time_keeps_the_year_typed
 lighter:
   - "Real-world events the tests only simulate: a PC going to sleep, a real daylight-saving change and a real crash run on a fake clock or stand-ins."
   - "The outer shell: the tray icon, the service's main loop and the server checks over SSH are covered by tests but not mutation-tested (see Not mutation-tested)."
   - "Lines that run only on Windows: the Windows tests run them, but mutation testing ran on Linux."
+  - "The one-time schedule's On box (fixed in 01cc298) is outside these promises, SCH-5 being the nearest: its test guards the fix, but it is not mutation-tested."
   - "One suspicion not reproduced: a run might begin up to 5 seconds late in one case (the service waits up to 5 seconds for a finished run's output)."

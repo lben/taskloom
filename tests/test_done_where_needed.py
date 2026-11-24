@@ -40,7 +40,7 @@ RUN_AFTER_TIP = ("Run after: connect an output of another block (or a start bloc
                  "wait for it. Its value is not used.")
 DONE_TIP = ("Done: fires when this block has finished successfully, even if it produced none of its other outputs. "
             "Connect it to another block's 'run after'. No data goes out through here.")
-WITHHELD = "held a password (or something that cannot be saved), so it was not kept"
+WITHHELD = "cannot be saved (e.g. an open connection), so it was not kept"
 
 
 def ports_of(cls) -> tuple[list, list]:

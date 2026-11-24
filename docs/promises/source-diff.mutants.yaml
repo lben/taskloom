@@ -1,0 +1,248 @@
+# Mutation testing of the source diffs in Commit History (read by packaging/mutants.py --explained). scope: what the
+# bugs are planted in, the functions the change added or changed, in groups: each group's bugs run the tests that can
+# see them (each line of tests: is one pytest run, a file with -k words or without). source_diff.py is new: every
+# function in it is tested whole, but _on_mark, in which mutmut plants nothing (it leaves out a function with a
+# decorator, here @cache), so it is under not_tested. So are the functions in which the change touched a line or two
+# among much that was there before: their bugs are planted and counted, not run, and the reason names the tests that
+# check the changed lines. The source diff tests run on each bug but the one that times a 2,000-line flow (D4): before
+# any bug, each worker runs the tests at the same time with none on, and a run over its 2 seconds on a busy CI machine
+# would stop every verdict. The change's other lines are not functions of their own, so nothing is planted in them:
+# source_diff.py's constants (READS, INK, FILL, EDGE, CHARACTERS, HATCH, SHOWN) and its Row class, panels.py's
+# YAML_TOKENS, its "yaml" entry of LANGUAGES and the YAML key colour of CODE_COLORS (the D15 tests read them on screen),
+# the docstring of CodeHighlighter, and commits.py's imports. The mutants the tests let through are explained here, by
+# kind (kinds: a kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a user could
+# notice). Only those no user could notice are explained: the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/editor/source_diff.py _lines
+        - taskloom/editor/source_diff.py _qt
+        - taskloom/editor/source_diff.py _changed_characters
+        - taskloom/editor/source_diff.py align
+        - taskloom/editor/source_diff.py _line_ends
+        - taskloom/editor/source_diff.py note
+        - taskloom/editor/source_diff.py _luminance
+        - taskloom/editor/source_diff.py _contrast
+        - taskloom/editor/source_diff.py _darkest_pixel
+        - taskloom/editor/source_diff.py _OnMarks.__init__
+        - taskloom/editor/source_diff.py _OnMarks.highlightBlock
+        - taskloom/editor/source_diff.py DiffSide.__init__
+        - taskloom/editor/source_diff.py DiffSide.keyPressEvent
+        - taskloom/editor/source_diff.py DiffSide.changeEvent
+        - taskloom/editor/source_diff.py DiffSide.in_view
+        - taskloom/editor/source_diff.py DiffSide.paint_rows
+        - taskloom/editor/source_diff.py DiffSide.paintEvent
+        - taskloom/editor/source_diff.py DiffSide.paint_line_numbers
+        - taskloom/editor/source_diff.py Strip.__init__
+        - taskloom/editor/source_diff.py Strip.paintEvent
+        - taskloom/editor/source_diff.py SourceDiff.__init__
+        - taskloom/editor/source_diff.py SourceDiff.showEvent
+        - taskloom/editor/source_diff.py SourceDiff.step
+        - taskloom/editor/source_diff.py SourceDiff.go
+        - taskloom/editor/source_diff.py SourceDiff._show_count
+        - taskloom/editor/commits.py CommitHistory.__init__
+        - taskloom/editor/commits.py CommitHistory._card_menu
+        - taskloom/editor/commits.py CommitHistory._show_diff
+        - taskloom/editor/commits.py _named
+      tests:
+        - tests/test_source_diff.py -k "not 2000_lines"
+    - mutate:
+        - taskloom/editor/document.py flow_text
+        - taskloom/editor/document.py FlowDocument.save
+      tests:
+        - tests/test_source_diff.py -k "d3_ or d11_"
+        - tests/test_paths_editor_editing.py -k keeps_backslashes_accents
+not_tested:
+  taskloom/editor/source_diff.py _on_mark: >-
+    The colour a token of the YAML takes on a change's mark, shaded in its own hue until it reads there. mutmut plants
+    no bug in a function with a decorator (@cache here), so it has no mutants to count. Both D15 tests check what it
+    gives on screen, in light and dark, on every kind of mark:
+    test_d15_yaml_keys_and_strings_in_the_mockups_colours_reading_well_on_every_mark_and_following_the_theme (each
+    key's and string's darkest pixel reads at 4.5:1 or more, in the hue of its code colour) and
+    test_d15_added_removed_and_changed_colours_read_well_in_light_and_dark_and_follow_the_theme.
+  taskloom/editor/commits.py CommitHistory.__init__: >-
+    Commit History's window as it is built, 50 lines, to which this change added two (the list's right-click
+    asks for the card's menu, _card_menu): every source diff test right-clicks a card through them, first
+    test_d1_both_items_on_a_commit_previous_greyed_on_the_first_also_after_save_as_and_the_window_opens_on_top. The
+    rest is as it was.
+  taskloom/editor/document.py FlowDocument.save: >-
+    File > Save, in which this change replaced the YAML dump by a call of flow_text (mutated whole above), which
+    writes the same text: test_a_text_field_keeps_backslashes_accents_and_brackets_exactly and
+    test_d3_against_current_the_right_side_is_what_the_tab_holds_titled_current_or_current_not_saved save through
+    it and read what was written.
+kinds:
+  - kind: The name of the UTF-8 codec in capitals
+    why: >-
+      Python finds a codec by its name in any letter case: "UTF-8" is the same codec as "utf-8", so the tab's text and a
+      version's bytes are encoded and decoded alike.
+    mutants:
+      - taskloom.editor.commits.xǁCommitHistoryǁ_show_diff__mutmut_20
+      - taskloom.editor.source_diff.x__lines__mutmut_12
+  - kind: None where only true or false is asked
+    why: >-
+      difflib's SequenceMatcher (autojunk), PyYAML's dump (sort_keys) and the code box's set_wrap only ask whether the
+      value is true: None is taken as False, the value written, so the same lines and characters are matched, the flow's
+      keys keep their order and long lines do not wrap.
+    mutants:
+      - taskloom.editor.source_diff.x__changed_characters__mutmut_4
+      - taskloom.editor.source_diff.x_align__mutmut_4
+      - taskloom.editor.document.x_flow_text__mutmut_2
+      - taskloom.editor.source_diff.xǁDiffSideǁ__init____mutmut_3
+  - kind: The text a side is made with, replaced at once
+    why: >-
+      Each side is made as a code box with some text, which the next lines replace by its version's lines (setPlainText,
+      which also empties Undo): what the side shows and holds is the same whatever it was made with.
+    mutants:
+      - taskloom.editor.source_diff.xǁDiffSideǁ__init____mutmut_1
+      - taskloom.editor.source_diff.xǁDiffSideǁ__init____mutmut_7
+  - kind: The sides' zoom kept under another name
+    why: >-
+      The name is only the key under which the sides' zoom is written to editor.ini and read back from it. Spelled
+      another way that no other pane has, both sides still zoom as one and keep their size apart from the other panes';
+      no editor.ini holds a size under the name from before, as the source diffs are new in this release.
+    mutants:
+      - taskloom.editor.source_diff.xǁDiffSideǁ__init____mutmut_35
+      - taskloom.editor.source_diff.xǁDiffSideǁ__init____mutmut_36
+  - kind: A shortcut's keys in other letter case
+    why: >-
+      Qt reads a key sequence's text in any letter case: "shift+f7", "SHIFT+F7" and "f7" are Shift+F7 and F7.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_73
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_74
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_77
+  - kind: A default for the click's argument
+    why: >-
+      A button's click passes whether it is checked, which the step's lambda takes in its first argument and never
+      reads: its default, False or True, is never used.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_80
+  - kind: The alpha of a colour left out by zip
+    why: >-
+      zip stops at the shorter of the two: with four values of one colour and three of the other only red, green and
+      blue are paired, as before.
+    mutants:
+      - taskloom.editor.source_diff.x__darkest_pixel__mutmut_10
+      - taskloom.editor.source_diff.x__darkest_pixel__mutmut_11
+  - kind: The luminance of a very dark channel
+    why: >-
+      The sum's first branch is for a channel at or below 0.03928 (10 of 255). The app's colours never reach it where it
+      decides anything: for each code colour (string, comment, number, key) on each mark (added, removed, changed,
+      changed characters), in light and dark, the shade found is the same with each of the four changes (computed for
+      all 32 pairs); only the light string's red channel is that dark, and blended at 90 % over a mark it is not.
+    mutants:
+      - taskloom.editor.source_diff.x__luminance__mutmut_1
+      - taskloom.editor.source_diff.x__luminance__mutmut_3
+      - taskloom.editor.source_diff.x__luminance__mutmut_4
+      - taskloom.editor.source_diff.x__luminance__mutmut_5
+  - kind: A position in Qt's units as a whole float
+    why: >-
+      A text's length in UTF-16 bytes is always even, so halving it gives the same whole number, as a float (e.g. 18.0),
+      and Qt takes 18.0 as position 18: the same characters are marked.
+    mutants:
+      - taskloom.editor.source_diff.x__qt__mutmut_1
+  - kind: An empty span of changed characters
+    why: >-
+      A span that starts where it ends (a side with nothing inserted or deleted there) colours no character and paints a
+      rectangle 0 pixels wide: nothing.
+    mutants:
+      - taskloom.editor.source_diff.x__changed_characters__mutmut_15
+  - kind: A row whose top is the viewport's bottom
+    why: >-
+      A row starting exactly at the viewport's height is below what the side shows: painting it or not shows nothing.
+    mutants:
+      - taskloom.editor.source_diff.xǁDiffSideǁin_view__mutmut_7
+  - kind: Positions past a row's text
+    why: >-
+      The highlighter's format past the last character of a row is the default one, with no colour of its own, which the
+      loop skips: reaching one or two positions further changes no character.
+    mutants:
+      - taskloom.editor.source_diff.xǁ_OnMarksǁhighlightBlock__mutmut_11
+  - kind: Where the strip's rows start, which is 0
+    why: >-
+      The strip is in the same row of the grid as the sides, and a side has no frame, so the top of its viewport is the
+      top of the strip: the rows are painted `top` lower, `top` higher or 0 lower, all the same; and the x of the point
+      mapped is not used, only its y.
+    mutants:
+      - taskloom.editor.source_diff.xǁDiffSideǁpaint_rows__mutmut_20
+      - taskloom.editor.source_diff.xǁStripǁpaintEvent__mutmut_15
+      - taskloom.editor.source_diff.xǁStripǁpaintEvent__mutmut_32
+  - kind: One pixel more or less
+    why: >-
+      A size, gap, margin or offset one pixel larger or smaller in a window of 1,200 by 700: the line numbers one pixel
+      further left or right in their margin, the filler lines' hatching started one pixel over, the strip 31 pixels
+      wide, one pixel between the parts of the grid, the window one pixel wider or taller, a version's name one pixel
+      further from its side, the count one pixel further from the buttons. No one can tell which of the two it is.
+    mutants:
+      - taskloom.editor.source_diff.xǁDiffSideǁpaint_line_numbers__mutmut_28
+      - taskloom.editor.source_diff.xǁDiffSideǁpaint_line_numbers__mutmut_30
+      - taskloom.editor.source_diff.xǁDiffSideǁpaint_rows__mutmut_28
+      - taskloom.editor.source_diff.xǁDiffSideǁpaint_rows__mutmut_29
+      - taskloom.editor.source_diff.xǁStripǁ__init____mutmut_3
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_133
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_14
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_15
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_149
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_150
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_151
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_152
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_93
+  - kind: The strip's first column, under its side line
+    why: >-
+      Column 0 of the strip is left out of the rows painted, and the line down the strip's left side is then drawn on
+      it: it shows the same line either way.
+    mutants:
+      - taskloom.editor.source_diff.xǁStripǁpaintEvent__mutmut_25
+  - kind: A row or column of the grid left empty
+    why: >-
+      With no spacing in the grid, an empty row or column takes no room: the right side in column 3 (2 empty) or the
+      find bars in row 3 (2 empty) are where they were, next to the strip and under the sides.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_135
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_177
+  - kind: Room shared out the same
+    why: >-
+      Both sides stretched by 2 share the width as by 1, half each; and the grid is what grows in the window whether its
+      stretch is 1, 2 or none, as only its sides can grow (the bar and the note keep their height).
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_182
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_199
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_200
+  - kind: The note in rich text, which it never is
+    why: >-
+      The note is one of its fixed sentences, none holding a tag or <, so Qt shows it as plain text either way.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_110
+  - kind: The find toggles with no parent
+    why: >-
+      Both find bars keep the toggles, so they live as long as the window and are shared as before.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁ__init____mutmut_130
+  - kind: The change a row lower
+    why: >-
+      Rows counted as a fraction: the scroll bar takes the value as a whole number, so the change is put at most one row
+      lower, still a third of the way down.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁgo__mutmut_3
+      - taskloom.editor.source_diff.xǁSourceDiffǁgo__mutmut_17
+  - kind: A line at least 2 pixels high
+    why: >-
+      A font's line is always higher than 2 pixels, so the larger of 2 and its height is its height, as with 1.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁgo__mutmut_8
+  - kind: The event Qt's own showEvent is given
+    why: >-
+      QWidget's showEvent does nothing with its event, so passing it or none is the same.
+    mutants:
+      - taskloom.editor.source_diff.xǁSourceDiffǁshowEvent__mutmut_1
+  - kind: The card's menu with no parent
+    why: >-
+      The menu opens at the right-click by exec and is gone when it closes, with or without a parent; it looks the same,
+      the theme being the whole application's palette.
+    mutants:
+      - taskloom.editor.commits.xǁCommitHistoryǁ_card_menu__mutmut_19
+  - kind: No tab holding the history's file
+    why: >-
+      Commit History closes with its tab, and when its tab is saved as another file, so while it is open its tab is
+      always there to be found: the default for none is never used.
+    mutants:
+      - taskloom.editor.commits.xǁCommitHistoryǁ_show_diff__mutmut_9

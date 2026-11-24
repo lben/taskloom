@@ -1,0 +1,54 @@
+# What must always be true of Load run state, as agreed with the maintainer in chat on 2026-11-20.
+# Each row is checked by the tests marked @pytest.mark.invariant("LS-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: Load run state
+agreed: 2026-11-20
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    words: "Run history: right-click a run, \"Load run state\" (inputs and outputs of every block, \"like a savegame\")"
+  - date: 2026-11-20
+    # Asked whether to load a run made with an earlier version of the flow (LS-8); then chose B: ask, and also offer
+    # to bring back the flow as it was.
+    words: "Ask the user, tell him the flow isn't in sync with disk and if the user wants to override what he has (or am I misunderstanding this question?)"
+  - date: 2026-11-20
+    words: "Question 4: B"
+  - date: 2026-11-20
+    # A loaded state after Taskloom is closed (LS-9).
+    words: "restored, work shouldn't be lost"
+  - date: 2026-11-20
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_load_state]
+rows:
+  LS-1: >-
+    Right-click a run in Run history and choose "Load run state": every block shows its result from that run, also
+    the blocks that run carried over from an earlier run. A bar on the tab names the run and its time and has a Leave
+    button. Double-clicking a run stays as before: it shows that run once (RR-9).
+  LS-2: >-
+    While a state is loaded, "Run only this block" and "Run from this block on" take their inputs from it. Each such
+    re-run becomes the loaded state, and the bar says so. Blocks after it that the re-run did not reach keep their old
+    result, greyed as old.
+  LS-3: >-
+    A full run, or Leave, ends the loaded state: the tab shows the newest results again.
+  LS-4: >-
+    A value that was not kept (a password, or something that cannot be saved, such as an open connection) is named on
+    its block with the reason. A re-run that needs it is refused before anything runs, with that reason.
+  LS-5: >-
+    The loaded state belongs to its tab. Runs that finish meanwhile (scheduled, from the terminal, or in another tab)
+    do not change what the tab shows; they still appear in Run history.
+  LS-6: >-
+    Loading never changes a stored run. Re-runs make new runs.
+  LS-7: >-
+    A run whose files are gone (partly cleaned up, deleted by hand, or none were kept) cannot be loaded, nor a run
+    that is still going: the menu item is greyed and says why. If a loaded run's files are cleaned up while it is
+    loaded, the bar says so, and a re-run that needs them is refused with that reason.
+  LS-8: >-
+    If the flow changed since that run, Taskloom asks first. It says the run was made with an earlier version of the
+    flow and offers: show the results on today's flow; also bring back the flow as it was (from its Git history, into
+    the tab as unsaved edits that Ctrl Z undoes; greyed with the reason when that version is not in the history); or
+    Cancel. Results of blocks that no longer exist are left out. The bar keeps saying which was chosen. Before a re-run
+    saves a brought-back flow over the file, Taskloom asks once.
+  LS-9: >-
+    A tab that has a state loaded when Taskloom closes opens with that state loaded the next time. If its run was
+    cleaned up meanwhile, the bar says so and the tab shows the newest results.

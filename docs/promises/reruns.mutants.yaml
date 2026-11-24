@@ -166,7 +166,7 @@ kinds:
       result. Past that, one of them shows a run, so the list of runs it ends with always holds one: what it would
       give for an empty list is never asked.
     mutants:
-      - taskloom.editor.window.xǁMainWindowǁinputs_run__mutmut_25
+      - taskloom.editor.window.xǁMainWindowǁinputs_run__mutmut_26
   - kind: Nothing left to draw again
     why: >-
       A result stops being old only when its block runs again or another run is opened from Run history. Both clear

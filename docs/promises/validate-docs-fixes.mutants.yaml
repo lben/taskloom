@@ -4,7 +4,9 @@
 # pytest run, of a file or several, with -k words or without): the box of problems (from the flow, from how its file
 # is written, from connections.yaml; one per line, at most 12, over the window), the Log brought to the front with
 # each problem and warning and its time whichever block it shows, a new flow saved first, and Run only and Run from
-# checking just the blocks they run. The other function the change touched, DocsBrowser.__init__, is under
+# checking just the blocks they run; and the tests of Load run state that re-run a flow brought back as it was, whose
+# lines in it ask once before such a flow is saved over its file (Enter answers No: nothing is saved nor run), and
+# ask nothing once Undo took it back. The other function the change touched, DocsBrowser.__init__, is under
 # not_tested: its bugs are planted and counted, not run, and its reason names the test that checks the changed line.
 # The change's other line is not in a function of the package, so nothing is planted in it: the README proof's copy
 # of the column's style (tests/proofs/test_proof_readme.py). The mutants the tests let through would be explained
@@ -17,6 +19,7 @@ scope:
         - taskloom/editor/window.py DocsBrowser.__init__
       tests:
         - tests/test_paths_editor_editing.py tests/test_paths_editor_running.py tests/test_run_scope.py -k "finds_problems or cancelling_that_runs_nothing or editor_run_run_only_and_run_from or editor_validate_lists_every_problem or new_flow_you_have_not_changed or run_from_stop_at"
+        - tests/test_load_state.py -k "l14_a_rerun or l14_after_ctrl_z"
 not_tested:
   taskloom/editor/window.py DocsBrowser.__init__: >-
     The Documentation column as it is built, to which this change added one rule to its style (a code line longer

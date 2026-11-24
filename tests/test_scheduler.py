@@ -2,7 +2,6 @@
 
 import datetime as dt
 import json
-import os
 import sys
 import time
 
@@ -10,7 +9,7 @@ import pytest
 
 from taskloom.config import Home
 from taskloom.history import History
-from taskloom.scheduler import Scheduler, set_start_at_login, startup_script
+from taskloom.scheduler import Scheduler
 from taskloom.schedule import Cron, Trigger
 from tests.test_scheduler_promises import on
 
@@ -138,43 +137,30 @@ def test_only_one_scheduler_runs_per_home(env):
         assert first.wait(timeout=30) == 0
 
 
-def test_start_at_login_writes_a_startup_script(env, monkeypatch):
-    monkeypatch.setenv("APPDATA", str(env.root / "AppData"))
-    home = Home(env.home)
-
-    path = set_start_at_login(home, True)
-
-    assert path.parent.name == "Startup" and path.read_text() == startup_script(home)
-    assert "scheduler" in path.read_text() and str(env.home) in path.read_text()
-    set_start_at_login(home, False)
-    assert not path.exists()
-
-
 @pytest.mark.invariant("SCH-3")
-def test_start_at_login_puts_its_script_in_the_windows_startup_folder_for_this_taskloom_folder(env, monkeypatch):
+def test_start_at_login_puts_its_entry_in_the_windows_startup_folder_for_this_taskloom_folder(env, tmp_path,
+                                                                                              monkeypatch):
     """README: Start the scheduler service when I log in "adds it to your Startup folder; no admin needed". On Windows
     that folder is %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup, and it is there already (turning it
-    on twice works too). The script has Windows line ends and is read as UTF-8 (chcp 65001); it starts this Taskloom
-    without a console window, each part of its command line quoted, for this Taskloom folder, written so cmd.exe
-    reads it as it is: a folder with a letter outside ASCII or a % in its name (cmd.exe reads %NAME% as a variable)."""
-    from taskloom.launch import windowed_command
+    on twice works too). The entry is a shortcut, Taskloom Scheduler.lnk (UP-2): it starts this Taskloom's windowed
+    program (no console window), in its folder, for this Taskloom folder, the folder's name kept as it is: a letter
+    outside ASCII and a % in it. (`taskloom scheduler --at-login on` of the packaged Windows Taskloom, as in
+    tests/test_updates.py; `off` is tests/test_paths_cli_config.py's.)"""
+    from taskloom import __version__
+    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
-    appdata = env.root / "AppData" / "Roaming"
-    startup = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    startup.mkdir(parents=True)
-    monkeypatch.setenv("APPDATA", str(appdata))
+    folders = windows_folders(tmp_path, monkeypatch)
+    folders.startup.parent.mkdir(parents=True)
     root = env.root / "100% José"
-    home = Home(root)
+    env.env["TASKLOOM_HOME"] = str(root)
+    taskloom = Packaged(env, folders, unpacked(tmp_path / "Downloads" / "taskloom", __version__))
 
-    path = set_start_at_login(home, True)
-    assert set_start_at_login(home, True) == path == startup / "Taskloom Scheduler.cmd"
+    for _ in range(2):
+        on = taskloom.run("scheduler", "--at-login", "on")
+        assert on.returncode == 0, on.stdout + on.stderr
 
-    raw = path.read_bytes()
-    assert raw.count(b"\r\n") == raw.count(b"\n") > 0, raw
-    text = raw.decode("utf-8")
-    assert "chcp 65001" in text and f'set "TASKLOOM_HOME={env.root}{os.sep}100%% José"' in text, text
-    program = " ".join(f'"{part}"' for part in windowed_command()).replace("%", "%%")
-    assert f'start "" {program} scheduler --unless-paused' in text, text
+    assert sorted(folders.startup.parent.iterdir()) == [folders.startup]
+    assert read_entry(folders.startup) == entry_for(taskloom.folder, login_args(root.resolve()))
 
 
 def test_cli_as_of_computes_parameters_for_that_time(env):
@@ -217,21 +203,29 @@ def test_a_cron_line_no_plan_covers_is_custom():
     assert cron_plan("0 7 * * 1-5") == {"kind": "weekdays", "hour": 7, "minute": 0}  # numbers read too
 
 
-def test_a_start_at_login_script_says_which_version_starts(env, monkeypatch):
+@pytest.mark.parametrize("entry", ["older", "from before versions were written", "newer", "another folder's"])
+def test_a_start_at_login_entry_says_which_version_starts(env, tmp_path, monkeypatch, entry):
+    """The Startup entry says which version it starts by its program's folder (its VERSION file). A start of this
+    version (`taskloom run` of the packaged Windows Taskloom, as in tests/test_updates.py) points it at itself when it
+    starts an older one (0.1.0), or one whose folder has no VERSION (from before versions were written there); a newer
+    Taskloom set it: left as it is. Another Taskloom folder's entry stays that folder's (its arguments are kept)."""
     from taskloom import __version__
-    from taskloom.scheduler import startup_script_outdated
+    from tests.test_updates import HELLO, Packaged, entry_for, login_args, read_entry, unpacked, windows_folders, \
+        write_entry
 
-    home = Home(env.home)
-    script = startup_script(home)
+    folders = windows_folders(tmp_path, monkeypatch)
+    this = unpacked(folders.programs / __version__, __version__)
+    version = "999.0.0" if entry == "newer" else "0.1.0"
+    other = unpacked(folders.programs / version, version)
+    if entry == "from before versions were written":
+        (other / "VERSION").unlink()
+    home = env.root / "elsewhere" if entry == "another folder's" else env.home
+    write_entry(folders.startup, other / "taskloomw.exe", login_args(home), other)
 
-    assert f"rem Taskloom {__version__}" in script and not startup_script_outdated(script, home)
-    older = script.replace(f"rem Taskloom {__version__}", "rem Taskloom 0.1.0")
-    assert startup_script_outdated(older, home)
-    assert startup_script_outdated(script.replace(f"rem Taskloom {__version__}\r\n", "").replace(
-        f"rem Taskloom {__version__}\n", ""), home)  # from before versions were written in it
-    newer = script.replace(f"rem Taskloom {__version__}", "rem Taskloom 999.0.0")
-    assert not startup_script_outdated(newer, home)  # a newer Taskloom set it: leave it
-    assert not startup_script_outdated(older.replace(str(env.home), "C:\\elsewhere"), home)  # another folder's
+    done = Packaged(env, folders, this).run("run", env.write("hello.yaml", HELLO))
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert read_entry(folders.startup) == entry_for(other if entry == "newer" else this, login_args(home))
 
 
 def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
@@ -256,11 +250,18 @@ def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
 
 
 @pytest.mark.invariant("SCH-2")
-def test_starting_at_login_keeps_a_paused_scheduler_service_off(env):
+def test_starting_at_login_keeps_a_paused_scheduler_service_off(env, tmp_path, monkeypatch):
+    from taskloom import __version__
     from taskloom.scheduler import set_paused
+    from tests.test_updates import Packaged, read_entry, unpacked, windows_folders
 
     home = Home(env.home)
-    assert "scheduler --unless-paused" in startup_script(home)
+    folders = windows_folders(tmp_path, monkeypatch)
+    on = Packaged(env, folders, unpacked(tmp_path / "Downloads" / "taskloom", __version__)).run(
+        "scheduler", "--at-login", "on")
+    assert on.returncode == 0, on.stdout + on.stderr
+    at_login = read_entry(folders.startup)  # the Startup entry (a shortcut, UP-2): what it starts Taskloom with
+    assert at_login is not None and at_login.arguments.endswith(" scheduler --unless-paused"), at_login
     set_paused(home, True)
 
     result = env.taskloom("scheduler", "--headless", "--unless-paused", timeout=30)

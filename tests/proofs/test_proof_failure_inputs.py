@@ -429,7 +429,7 @@ def test_a_block_run_again_reports_the_inputs_it_received(proof, win, qtbot, tmp
     before = recorded(win)
     p.while_open(lambda: right_click(upload, "upload_report"),
                  lambda menu: choose(menu, "Run only this block, with the same inputs"))
-    refused = "ask_password.answer held a password (or something that cannot be saved), so it was not kept"
+    refused = "ask_password.answer held a password, which is never written to disk, so it was not kept"
     qtbot.waitUntil(lambda: refused in log_text(win) and not upload.running, timeout=60_000)
     QTest.qWait(300)
     scroll_log_to(win, None, refused)

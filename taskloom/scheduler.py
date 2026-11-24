@@ -56,6 +56,9 @@ KEEPER_INTERVAL_SECONDS = 300
 KEEPER_START_SECONDS = 30  # how long the keeper waits for a server scheduler it started to check
 KEEPER_STOP_SECONDS = 5  # how long it waits for a hung one asked to stop, before it forces it
 LIST_UNREADABLE = "The list of scheduled flows cannot be read"  # (what you are told: no scheduled flow starts then)
+QUIET = dt.timedelta(minutes=2)  # a newer Taskloom takes the service over when no scheduled time is due this soon
+TAKE_OVER_AFTER = dt.timedelta(hours=1)  # waited this long without a quiet moment, it takes over as a run ends
+STOP_OLD_SECONDS = 15  # how long a newer Taskloom waits for the older service it stopped to let go of the folder
 # The service's state in the history database: each schedule's newest time handled; the runs it saved (_Waiting); the
 # service on (its Scheduler.id; none while a service starts, acquire_lock, or before any has); and how many times you
 # turned the service off or on again (its epoch: a run claims only in the epoch the service started it in).
@@ -1000,8 +1003,9 @@ def acquire_lock(home: Home):
     of the service before (it has gone, or is ending: it let go of the lock): a run it started does not begin from now
     on, also before this process's service is made the one on (Scheduler: see claim_time); one that began before is
     in the run history, for the next service (Scheduler._adopt). Holding it, it says at once, in turn (_taking_turns),
-    which process it is (scheduler.pid: the keeper checks it, and the editor stops it so) and which Taskloom
-    (scheduler.version, with that process: an older Taskloom's service writes none, and the editor offers a restart)."""
+    which process it is (scheduler.pid: the keeper checks it, and a newer Taskloom's service stops it so) and which
+    Taskloom (scheduler.version, with that process: an older Taskloom's service writes none, and a newer Taskloom's
+    takes it over: serve)."""
     with _taking_turns(home):
         handle = _lock(home.root / "scheduler.lock")
         if handle is not None:
@@ -1273,13 +1277,26 @@ def _stop_runs_going(home: Home, flows: set[str]):
         history.close()
 
 
-def serve(home: Home, headless: bool) -> int:
+def serve(home: Home, headless: bool, told=()) -> int:
     """The scheduler service, until you turn it off (from its first check on, also if you did while it started) or it
-    is stopped."""
-    with acquire_lock(home):  # held until the scheduler stops (it says its process and Taskloom: scheduler.pid)
+    is stopped. `told`: what Taskloom's start has to tell (taskloom.cli), shown by its tray icon (headless: printed
+    before). Another service holding the folder's lock: one of this Taskloom or a newer one, it ends at once (SCH-1);
+    an older Taskloom's, it waits and takes it over at a quiet moment (_take_over, UP-8)."""
+    try:
+        lock = acquire_lock(home)  # (it says its process and Taskloom: scheduler.pid)
+    except RuntimeError:
+        if version_tuple(running_scheduler_version(home)) >= version_tuple(__version__):
+            raise
+        lock = _take_over(home)
+        if lock is None:
+            return 0
+    # Never closed: the OS lets go of the lock only once this process has ended, so a newer Taskloom taking the service
+    # over never holds the folder while this one still runs.
+    os.dup(lock.fileno())
+    with lock:
         stop = threading.Event()
         if not headless and _tray_available():
-            return _serve_tray(home, stop)
+            return _serve_tray(home, stop, told)
 
         def notify(title, message):
             print(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S} {title}: {message}", flush=True)
@@ -1297,6 +1314,99 @@ def serve(home: Home, headless: bool) -> int:
         notify("Scheduler stopped", "turned off by you" if scheduler.off else
                f"{sum(r.run_id is not None for r in scheduler.runs)} run(s) still going continue on their own")
         return 0
+
+
+def _take_over(home: Home):
+    """A newer Taskloom's service started while an older one's holds the folder (UP-8). It waits beside it as the
+    folder's one successor (scheduler.successor: another newer one ends at once), saying so in scheduler.waiting
+    ("<version> <process> <when it began waiting>", read back at each check). At a quiet moment (_quiet), or once it has
+    waited TAKE_OVER_AFTER without one at the first check after a run ends, it stops the old service and takes the
+    folder's lock (_stop_old); if the old one ends otherwise, it takes the lock at once. The lock; None when it gives
+    up, as you turned the service off (SCH-2). A service of this Taskloom or a newer one holding the folder: it ends,
+    as one does at once (SCH-1)."""
+    successor = _lock(home.root / "scheduler.successor")
+    if successor is None:
+        raise RuntimeError(f"a scheduler is already running for {home.root}, and a newer one waits to take it over")
+    waiting = home.root / "scheduler.waiting"
+    began = dt.datetime.now().astimezone().replace(microsecond=0)  # (with its UTC offset: an hour is an hour, C11)
+    waiting.write_text(f"{__version__} {os.getpid()} {began.isoformat()}")
+    print(f"{began:%Y-%m-%d %H:%M:%S} The scheduler service running is an older Taskloom's: Taskloom {__version__} "
+          "takes it over at a quiet moment", flush=True)
+    going = None
+    try:
+        while not paused(home):
+            with contextlib.suppress(RuntimeError):
+                return acquire_lock(home)  # (the old service has ended)
+            was = going
+            try:
+                going, quiet = _quiet(home)
+            except (OSError, ValueError, sqlite3.Error):  # (it cannot read them now: the old service goes on)
+                going, quiet = None, False
+            if version_tuple(running_scheduler_version(home)) >= version_tuple(__version__):
+                raise RuntimeError(f"a scheduler is already running for {home.root}")
+            try:
+                since = dt.datetime.fromisoformat(waiting.read_text().split()[2]).astimezone()  # (no offset: local)
+            except (OSError, ValueError, IndexError):
+                since = began
+            run_ended = was is not None and going is not None and bool(was - going)
+            if quiet or (run_ended and dt.datetime.now(UTC) - since >= TAKE_OVER_AFTER):
+                if (lock := _stop_old(home)) is not None:
+                    return lock
+            time.sleep(TICK_SECONDS)
+        print(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S} The scheduler service was turned off: Taskloom {__version__} "
+              "does not take it over", flush=True)
+        return None
+    finally:
+        waiting.unlink(missing_ok=True)
+        _unlock(successor)
+
+
+def _quiet(home: Home) -> tuple[set, bool]:
+    """The runs going (their ids: the service's and yours, as the run history has them, their processes still going),
+    and whether it is a quiet moment to take the service over: none going, none waiting its turn or your answer
+    (waiting_runs), and no scheduled time due within QUIET that the service has not handled (schedule_state, read as
+    Scheduler._check reads it: a time that has just come counts until the service has handled it; a schedule it has not
+    seen yet counts from now, a new Every N one being due at once). It reads the settings, scheduled.yaml and the saved
+    state as the new service will: OSError, ValueError or sqlite3.Error if it cannot."""
+    home.settings()
+    paths = home.scheduled_flows()
+    going = {run["id"] for run in _running(home) if run_alive(run["pid"], run["began"])}
+    now = dt.datetime.now(UTC)
+    db = history_connect(home.history_db)
+    try:
+        for table in STATE_TABLES:  # (none yet if no service has made them)
+            db.execute(table)
+        if going or db.execute("SELECT 1 FROM waiting_runs").fetchone():
+            return going, False
+        for path in paths:
+            try:
+                flow = load_flow(path)
+            except FlowError:  # (the service leaves it out too, until it can be read)
+                continue
+            for i, trigger in enumerate(flow.triggers):
+                row = db.execute("SELECT last FROM schedule_state WHERE trigger=?",
+                                 (schedule_key(path, i, trigger),)).fetchone()
+                if (row is None and trigger.every) or trigger.due(_moment(row[0]) if row else now, now + QUIET):
+                    return going, False
+        return going, True
+    finally:
+        db.close()
+
+
+def _stop_old(home: Home):
+    """Stops the older service holding the folder (SIGTERM; on Windows that ends it at once), whatever its version, and
+    takes the folder's lock once it has let go of it, which it does as its process ends. The lock; None if the old one
+    still holds it STOP_OLD_SECONDS later (it goes on: still one service)."""
+    with contextlib.suppress(OSError, ValueError):  # (it may have ended meanwhile)
+        pid = int((home.root / "scheduler.pid").read_text())
+        if 0 < pid != os.getpid():
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_OLD_SECONDS
+    while time.monotonic() < deadline:
+        with contextlib.suppress(RuntimeError):
+            return acquire_lock(home)
+        time.sleep(0.1)
+    return None
 
 
 def _check_once(scheduler: Scheduler, failed: str | None) -> tuple[float, str | None]:
@@ -1326,7 +1436,7 @@ def _tray_available() -> bool:
     return QSystemTrayIcon.isSystemTrayAvailable()
 
 
-def _serve_tray(home: Home, stop: threading.Event) -> int:
+def _serve_tray(home: Home, stop: threading.Event, told=()) -> int:
     from PySide6.QtCore import QTimer, Qt
     from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -1375,6 +1485,8 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
     tray.setContextMenu(menu)
     tray.messageClicked.connect(open_editor.trigger)
     tray.show()
+    if told:
+        tray.showMessage("Taskloom", "\n".join(told))
     threading.Thread(target=_keeper_loop, args=(scheduler, stop), daemon=True).start()
     timer = QTimer(singleShot=True, timerType=Qt.PreciseTimer)
     failed = None
@@ -1393,46 +1505,4 @@ def _serve_tray(home: Home, stop: threading.Event) -> int:
         return app.exec()
     finally:
         stop.set()
-
-
-def startup_file() -> Path:
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
-        raise RuntimeError("starting the scheduler at login is supported on Windows only")
-    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Taskloom Scheduler.cmd"
-
-
-def startup_script(home: Home) -> str:
-    """A Startup-folder script (no admin needed) that starts the scheduler without a console window."""
-    # The program is quoted, so a folder named e.g. R&D is not read as two commands.
-    program = " ".join(f'"{_in_script(a)}"' for a in windowed_command())
-    # cmd.exe reads a script in the console's code page (e.g. 437): the lines after chcp are read as the UTF-8
-    # they are written in, so a folder such as C:\Users\José is not garbled.
-    return (f'@echo off\nchcp 65001 >nul\nrem Taskloom {__version__}\nset "TASKLOOM_HOME={_in_script(home.root)}"\n'
-            f'start "" {program} scheduler --unless-paused\n')  # unless you turned it off: then it stays off
-
-
-def _in_script(text) -> str:
-    """Text as a cmd.exe script writes it: also inside quotes, cmd.exe reads %NAME% as a variable."""
-    return str(text).replace("%", "%%")
-
-
-def startup_script_outdated(text: str, home: Home) -> bool:
-    """A start-at-login script for this Taskloom folder that starts an older Taskloom than this one."""
-    if f'TASKLOOM_HOME={_in_script(home.root)}"' not in text:
-        return False  # another Taskloom folder's: not ours to change
-    import re
-
-    found = re.search(r"^rem Taskloom (\S+)", text, re.MULTILINE)
-    return version_tuple(found.group(1) if found else None) < version_tuple(__version__)
-
-
-def set_start_at_login(home: Home, enabled: bool) -> Path:
-    path = startup_file()
-    if enabled:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(startup_script(home), encoding="utf-8", newline="\r\n")  # Windows line ends
-    elif path.exists():
-        path.unlink()
-    return path
 
