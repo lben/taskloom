@@ -1023,7 +1023,8 @@ def test_opening_the_editor_switches_starting_at_login_to_this_version(env, tmp_
     # does it, so the editor is started as that one, a real process (tests/test_updates.py). The Startup entry is a
     # shortcut (UP-2): one starting an older Taskloom starts this one, for the Taskloom folder it was for (another
     # folder's stays that folder's: its arguments are kept, UP-4); one a newer Taskloom set is left as it is.
-    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders, write_entry
+    from tests.packaged_windows import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders, \
+        write_entry
 
     folders = windows_folders(tmp_path, monkeypatch)
     this = unpacked(folders.programs / __version__, __version__)
@@ -1051,7 +1052,8 @@ def test_the_settings_box_start_at_login_adds_and_removes_this_folders_startup_e
     # --at-login on`) adds it to your Startup folder". Elsewhere the box is disabled ("Windows only"), so the
     # dialog is opened as the packaged Windows Taskloom's (tests/test_updates.py). The entry is a shortcut (UP-2).
     from taskloom.editor import dialogs
-    from tests.test_updates import PackagedSys, entry_for, json_links, login_args, read_entry, unpacked, windows_folders
+    from tests.packaged_windows import PackagedSys, entry_for, json_links, login_args, read_entry, unpacked, \
+        windows_folders
 
     folders = windows_folders(tmp_path, monkeypatch)
     json_links(monkeypatch)
@@ -1078,7 +1080,7 @@ def test_start_at_login_starts_the_scheduler_from_a_folder_whose_name_has_an_amp
     # README: unzip Taskloom "anywhere you can write"; `taskloom scheduler --at-login on` adds the scheduler to your
     # Startup folder. A folder such as C:\Tools\R&D\Taskloom: the entry, a shortcut (UP-2), starts the program there
     # whole (written here by the packaged Taskloom unzipped there, tests/test_updates.py).
-    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
+    from tests.packaged_windows import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
     folders = windows_folders(tmp_path, monkeypatch)
     install = unpacked(env.root / "Tools" / "R&D" / "Taskloom", __version__)
