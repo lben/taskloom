@@ -4,19 +4,26 @@ those of an earlier run whose results can still be downloaded, and uses those re
 records taken from the earlier run are marked with the run, its date and its commit (ci_reuse.py mark), so that the
 proof PDF can name them (A5). Every other feature's mutation testing is reused the same way, its key over the whole
 files it reads (key feature:<f>, B1); an earlier run's stored results are taken only when none is expired, none comes
-from a fork and none is 30 days old or more, and of those runs the newest (ci_reuse.py pick, B4). The script runs as CI
+from a fork and none is 30 days old or more, and of those runs the newest (ci_reuse.py pick, B4). A run by hand may name
+the features whose mutation testing it runs: ci_reuse.py select lists them, each with the parts its mutation testing
+runs in and the check whose key keeps its result (I1, W2, W6 of the CI work). An edit to a test's body in
+tests/test_updates.py changes only the keys of the checks whose own tests name that file (W7). The script runs as CI
 runs it, on a copy of the repository's files or on a made-up repository."""
 
+import ast
 import datetime as dt
 import itertools
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 REUSE = REPO / "packaging" / "ci_reuse.py"
@@ -440,8 +447,8 @@ def test_a_feature_the_key_cannot_cover_gets_no_key_and_a_message(made_up, what)
 
 
 def ci_features() -> list[str]:
-    """The features the features job (build.yml) lists: each docs/promises/<f>.yaml but <f>.<part>.yaml and the
-    scheduler's (whose checks have keys of their own)."""
+    """The features whose checkers CI runs and keeps under a key of the feature's: each docs/promises/<f>.yaml but
+    <f>.<part>.yaml and the scheduler's (whose checks have keys of their own)."""
     return sorted(path.stem for path in (REPO / "docs" / "promises").glob("*.yaml")
                   if path.name.count(".") == 1 and path.stem != "scheduler")
 
@@ -557,10 +564,178 @@ def test_on_a_tag_release_and_pages_run_also_when_a_long_check_was_taken_from_an
     skips every job after it whose `if` has no status function, however far down (v0.39.1's tag run skipped release
     and pages so, though all they need had passed). So each says !cancelled(), the tag, and that every job it needs
     succeeded."""
-    import yaml
     jobs = yaml.safe_load((REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8"))["jobs"]
     for name in ("release", "pages"):
         needs, condition = jobs[name]["needs"], jobs[name]["if"]
         assert "!cancelled()" in condition and "startsWith(github.ref, 'refs/tags/v')" in condition, (name, condition)
         for need in [needs] if isinstance(needs, str) else needs:
             assert f"needs.{need}.result == 'success'" in condition, (name, need, condition)
+
+
+# --- select: the features a run by hand names, each with its parts and its check (I1; W2, W6 of the CI work) ---------
+
+# The jobs each feature's mutation testing runs in at once (`parts:` in its mutants yaml; without it, 1): the
+# scheduler's 3 as before, and the three that took longest whole in stage 3's full runs, updates (168-178 minutes),
+# braces (76-99) and rows (77 and 103). Every other feature: 1.
+SPLIT = {"scheduler": 3, "updates": 4, "braces": 2, "rows": 2}
+LISTING = re.compile(r"^\S+ \d+ (mutation|feature:\S+)\s*$", re.M)
+
+
+def mutation_features() -> list[str]:
+    """The name of each docs/promises/<name>.mutants.yaml of this repository."""
+    return sorted(path.name.removesuffix(".mutants.yaml")
+                  for path in (REPO / "docs" / "promises").glob("*.mutants.yaml"))
+
+
+def check_of(name: str) -> str:
+    """The check whose key keeps a feature's mutation testing result (what `key` takes)."""
+    return "mutation" if name == "scheduler" else f"feature:{name}"
+
+
+def selected(*args) -> list[str]:
+    """What `select` prints, line by line."""
+    done = reuse("select", *args)
+    assert done.returncode == 0, f"select exited {done.returncode}:\n{done.stdout}\n{done.stderr}"
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def lines(*names) -> list[str]:
+    """`select`'s lines for these features of this repository: sorted by name, each once."""
+    return [f"{name} {SPLIT.get(name, 1)} {check_of(name)}" for name in sorted(set(names))]
+
+
+def test_select_lists_every_mutation_feature_with_its_parts_and_its_check():
+    """A full run (no features named, or the by-hand input left empty) runs every feature's mutation testing: one line
+    for each docs/promises/*.mutants.yaml, sorted by name, with the jobs it runs in and the check whose key keeps its
+    result."""
+    names = mutation_features()
+    assert set(SPLIT) <= set(names), names
+    assert selected() == lines(*names)
+    assert selected("--features", "") == lines(*names)
+
+
+NAMED = {
+    "one name": ("updates", ["updates"]),
+    "commas": ("updates,braces,scheduler", ["updates", "braces", "scheduler"]),
+    "spaces": ("rows zoom", ["rows", "zoom"]),
+    "commas and spaces": ("rows, zoom ,scheduler", ["rows", "zoom", "scheduler"]),
+    "spaces before and after": ("  rows,  zoom  ", ["rows", "zoom"]),
+    "a name more than once": ("rows,rows rows, zoom", ["rows", "zoom"]),
+}
+
+
+@pytest.mark.parametrize("what", NAMED)
+def test_select_lists_the_features_named_each_once(what):
+    """A run by hand with features runs only the mutation testing of those named, however the names are separated
+    (commas, spaces or both), each once."""
+    given, names = NAMED[what]
+    assert selected("--features", given) == lines(*names)
+
+
+def assert_refused(done: subprocess.CompletedProcess, *named: str):
+    """Exit 2, no feature listed, and the message on stderr names each of `named`."""
+    assert done.returncode == 2, f"exited {done.returncode}:\n{done.stdout}\n{done.stderr}"
+    assert not LISTING.search(done.stdout), f"it listed features all the same:\n{done.stdout}"
+    missing = [name for name in named if not re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", done.stderr)]
+    assert not missing, f"the message does not name {missing}:\n{done.stderr}"
+
+
+UNKNOWN = {
+    "a name that is no feature": ("nonesuch", ["nonesuch"]),
+    "beside a feature": ("rows, nonesuch", ["nonesuch"]),
+    "two of them": ("nonesuch,rows other-thing", ["nonesuch", "other-thing"]),
+}
+
+
+@pytest.mark.parametrize("what", UNKNOWN)
+def test_select_refuses_a_name_that_is_no_feature_and_names_it_and_the_known_ones(what):
+    """A mistyped name would otherwise run nothing for it, and the run would pass: the run fails at once, its message
+    naming what is unknown and every feature it could have named."""
+    given, unknown = UNKNOWN[what]
+    assert_refused(reuse("select", "--features", given), *unknown, *mutation_features())
+
+
+@pytest.mark.parametrize("given", [",", " ", " , ,", ",,"], ids=["a comma", "a space", "commas and spaces", "commas"])
+def test_select_refuses_features_that_name_none(given):
+    """Only separators names no feature: not a full run (that is the input left empty) and not a run of nothing; the
+    message lists the features it could name."""
+    assert_refused(reuse("select", "--features", given), *mutation_features())
+
+
+# A made-up repository's mutation features: one in 2 parts, one without parts:, the scheduler in 3; and the other files
+# of a feature, which are no mutation feature.
+FAKE_MUTANTS = {
+    "docs/promises/alpha.mutants.yaml": "parts: 2\nnot_tested: {}\n",
+    "docs/promises/beta.mutants.yaml": "not_tested: {}\n",
+    "docs/promises/scheduler.mutants.yaml": "parts: 3\nnot_tested: {}\n",
+    "docs/promises/alpha.yaml": "feature: Alpha\nagreed: 2026-11-24\nrows:\n  A-1: Alpha works.\n",
+    "docs/promises/alpha.evidence.yaml": "A-1:\n  enforced: Alpha.\ncheckers: []\n",
+}
+
+
+@pytest.mark.parametrize("bad", ["0", "x", "true", "2.5"])
+def test_select_refuses_parts_that_are_not_a_whole_number_of_at_least_one(tmp_path, bad):
+    """parts: is how many jobs a feature's mutation testing runs in; anything but a whole number of 1 or more is a
+    mistake in the mutants yaml (YAML's true is no number of parts, 2.5 is not 2), said rather than guessed at."""
+    for name, text in FAKE_MUTANTS.items():
+        write(tmp_path / name, text)
+    assert selected("--root", tmp_path) == ["alpha 2 feature:alpha", "beta 1 feature:beta", "scheduler 3 mutation"]
+    write(tmp_path / "docs/promises/alpha.mutants.yaml", f"parts: {bad}\nnot_tested: {{}}\n")
+    done = reuse("select", "--root", tmp_path)
+    assert_refused(done, "alpha")
+    assert "parts" in done.stderr, done.stderr
+
+
+# --- W7: an edit to a test of updates reruns only the checks that run that test ---------------------------------------
+
+UPDATES_TESTS = "tests/test_updates.py"
+
+
+def own_tests(check: str) -> set[str]:
+    """The test files a check's own test selection names (not those they import): pyproject.toml's selection for the
+    scheduler's mutation testing, each tests: line of a feature's scope and its groups; none for the model check."""
+    if check == "model":
+        return set()
+    if check == "mutation":
+        args = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["mutmut"][
+            "pytest_add_cli_args_test_selection"]
+    else:
+        mutants = REPO / "docs" / "promises" / f"{check.removeprefix('feature:')}.mutants.yaml"
+        scope = yaml.safe_load(mutants.read_text(encoding="utf-8"))["scope"]
+        groups = [scope, *(entry for entry in scope["mutate"] if isinstance(entry, dict))]
+        args = [arg for group in groups for line in group.get("tests") or [] for arg in shlex.split(line)]
+    return {arg.split("::")[0] for arg in args if arg.split("::")[0].endswith(".py")}
+
+
+def add_a_statement_to_a_test(file: Path) -> str:
+    """Add a statement at the end of the body of the file's first test function (its other bytes as they were);
+    return the test's name."""
+    text = file.read_bytes().decode("utf-8")
+    test = next(node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef)
+                and node.name.startswith("test_") and node.body[0].lineno > node.lineno)
+    rows = text.splitlines(keepends=True)
+    rows.insert(test.body[-1].end_lineno, " " * test.body[0].col_offset + "assert True  # an edit to this test\n")
+    edited = "".join(rows)
+    ast.parse(edited)
+    file.write_bytes(edited.encode("utf-8"))
+    return test.name
+
+
+def test_an_edit_to_a_test_of_updates_changes_only_the_keys_of_the_checks_whose_tests_name_it(tmp_path):
+    """v0.40.1's one-line fix to a test in tests/test_updates.py changed the keys of the scheduler's mutation testing
+    and of six features (other test files imported helpers from it), and their mutation testing, hours of it, ran again
+    for nothing. In a copy of what the keys read, a statement added to a test's body there changes the key of no check
+    (the model check, the scheduler's mutation testing, every feature's) but those whose own tests name that file."""
+    checks = ["model", *(check_of(name) for name in mutation_features())]
+    read = {UPDATES_TESTS}.union(*(listed(check, REPO) for check in checks))
+    root = tmp_path / "repo"
+    for name in read:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / name, root / name)
+    before = {check: key(check, root) for check in checks}
+    test = add_a_statement_to_a_test(root / UPDATES_TESTS)
+    changed = {check for check in checks if key(check, root) != before[check]}
+    running = {check for check in checks if UPDATES_TESTS in own_tests(check)}
+    assert running, f"no check's own tests name {UPDATES_TESTS}"
+    assert changed == running, (f"{test} edited: changed also {sorted(changed - running)}; "
+                                f"unchanged though their tests name it {sorted(running - changed)}")
