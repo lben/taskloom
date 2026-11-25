@@ -1,0 +1,230 @@
+# Mutation testing of Local and Global reusable blocks (read by packaging/mutants.py --explained). scope: what the bugs
+# are planted in, the functions the change touched (494dbef: the flow file, a flow's block types, the command line and
+# Check flows; 111e271 and 77de9df: the editor), in groups: each group's bugs run the tests that can see them (each
+# line of tests: is one pytest run, a file or several, with -k words or without). The functions that are new or mostly
+# rewritten are tested whole. A function in which the change touched a few lines, among much that was there before, is
+# under not_tested: its bugs are planted and counted, not run, and its reason names the tests that fail when the
+# changed lines are taken out by hand, or says that none does. The change's other lines are not functions of their own,
+# or changed only a docstring or a comment, so nothing is planted in them: registry.LOCAL, flow.FLOW_KEYS and
+# Flow.local_blocks, panels.LOCAL_NOTE and SHARED_STYLE, the imports, ReusableBlock's docstring and a comment in
+# MainWindow.delete_user_block. mutmut plants nothing in a function with a decorator other than staticmethod or
+# classmethod, so the three registry properties are not in the scope: FlowDocument.registry, which makes a flow's
+# block types again after each change of its definitions or of the blocks folder, and FlowScene.registry and
+# PropertiesPanel.registry, which read it; every editor test of tests/test_local_blocks_editor.py goes through them.
+# MainWindow.copy_blocks, Edit > Copy, is left out too: Qt calls it with the menu item's checked value, which mutmut's
+# wrapper of a function it plants in would pass on, so Copy would fail with no bug planted. Its lines of this change
+# (the definitions of the copies copied, put on the clipboard with them) are checked by
+# test_the_last_copy_copied_then_deleted_is_pasted_with_its_definition_and_typed_value_in_another_tab_and_back, which
+# fails without them.
+# The mutants the tests let through are explained here, by kind (kinds: a kind, its why, the mutants it explains) or
+# one by one (mutant name: why it changes nothing a user could notice). Only those no user could notice are explained:
+# the others stay without a reason until a test catches them.
+scope:
+  mutate:
+    - mutate:
+        - taskloom/registry.py for_flow
+        - taskloom/blocks/logic.py PythonCode.local_block
+        - taskloom/editor/panels.py _unknown_type
+      tests:
+        - tests/test_local_blocks.py tests/test_local_blocks_editor.py -k "(every_copy_runs and two_copies) or definition_is_missing or problem_in_a_definition or check_flows_finds or (however_it_is_run and engine) or create_local_turns"
+    - mutate:
+        - taskloom/editor/document.py _port_changes
+        - taskloom/editor/document.py FlowDocument.set_port_names
+        - taskloom/editor/document.py FlowDocument._refuse_removing
+      tests:
+        - tests/test_local_blocks_editor.py tests/test_typed_values_editor.py tests/test_editor.py -k "renaming_the_definitions or removing_an_input_that or renaming_a_python_input or renaming_an_input_or_output_keeps"
+    - mutate:
+        - taskloom/editor/document.py FlowDocument._add_definitions
+      tests:
+        - tests/test_local_blocks_editor.py -k "last_copy_copied or same_code_joins or other_code_is_kept or global_block_has_its_name_is_kept"
+    - mutate:
+        - taskloom/editor/document.py FlowDocument.local_name
+        - taskloom/editor/document.py FlowDocument.copies
+        - taskloom/editor/document.py FlowDocument.settings
+        - taskloom/editor/document.py FlowDocument._settings_to_edit
+        - taskloom/editor/document.py FlowDocument._definitions
+        - taskloom/editor/document.py FlowDocument._drop_unused_definitions
+        - taskloom/editor/document.py FlowDocument.make_local
+      tests:
+        - tests/test_local_blocks_editor.py -k "create_local_turns or properties_of_any_copy or deleting_the_copies or last_copy_copied"
+    - mutate:
+        - taskloom/editor/window.py MainWindow.create_reusable_block
+        - taskloom/editor/window.py MainWindow._add_block_file
+        - taskloom/editor/dialogs.py ReusableBlockDialog.__init__
+      tests:
+        - tests/test_reusable_block.py tests/test_local_blocks_editor.py -k "right_click_create_reusable or cancel_saves or empty_name_is_refused or another_block_already_has or keeps_the_run_in_my or its_ports_no_code_field or create_local_turns"
+        - tests/test_local_blocks_editor.py -k promote_with_a_name
+    - mutate:
+        - taskloom/editor/window.py MainWindow.promote_local_block
+        - taskloom/editor/document.py FlowDocument.promote
+      tests:
+        - tests/test_local_blocks_editor.py -k "promote_asks_first or promote_with_a_name"
+    - mutate:
+        - taskloom/editor/window.py MainWindow._reusable_name_problem
+      tests:
+        - tests/test_reusable_block.py -k "empty_name_is_refused or another_block_already_has or right_click_create_reusable"
+        - tests/test_local_blocks_editor.py -k "already_has_is_refused or promote_with_a_name"
+    - mutate:
+        - taskloom/registry.py Registry.__init__
+        - taskloom/flow.py flow_from_data
+        - taskloom/flow.py validate
+        - taskloom/engine.py run_flow
+        - taskloom/cli.py cmd_run
+        - taskloom/upgrade.py _check
+        - taskloom/blocks/logic.py write_reusable_block
+        - taskloom/editor/canvas.py FlowScene.__init__
+        - taskloom/editor/commits.py where_found
+        - taskloom/editor/commits.py CommitHistory._show_selected
+        - taskloom/editor/document.py FlowDocument.__init__
+        - taskloom/editor/document.py FlowDocument.paste_blocks
+        - taskloom/editor/document.py FlowDocument.remove
+        - taskloom/editor/document.py FlowDocument.set_block_value
+        - taskloom/editor/panels.py PropertiesPanel.__init__
+        - taskloom/editor/panels.py PropertiesPanel.show_block
+        - taskloom/editor/panels.py PropertiesPanel.refresh
+        - taskloom/editor/panels.py PropertiesPanel._set_names
+        - taskloom/editor/window.py FlowTab.__init__
+        - taskloom/editor/window.py MainWindow._on_tab_changed
+        - taskloom/editor/window.py MainWindow._on_block_selected
+        - taskloom/editor/window.py MainWindow.paste_blocks
+        - taskloom/editor/window.py MainWindow._ready_to_run
+        - taskloom/editor/window.py MainWindow.run_flow
+        - taskloom/editor/window.py MainWindow._run_now_says
+        - taskloom/editor/window.py MainWindow._block_menu_for
+        - taskloom/editor/window.py MainWindow._value_items
+        - taskloom/editor/window.py MainWindow.copy_as_curl
+        - taskloom/editor/window.py MainWindow._user_block_file
+        - taskloom/editor/window.py MainWindow.run_block_with_inputs
+        - taskloom/editor/window.py MainWindow._load_last_run
+      tests:
+        - tests/test_local_blocks.py -k problem_in_a_definition
+not_tested:
+  taskloom/registry.py Registry.__init__: >-
+    This change added one line to it, the problems of a flow's definitions (.problems), which for_flow fills and
+    validate reads: without it every run of a flow fails, e.g.
+    test_every_copy_runs_its_definitions_code_on_what_is_connected_to_it.
+  taskloom/flow.py flow_from_data: >-
+    The reading of a flow file, about ninety lines, to which this change added two (its local_blocks kept with the
+    flow, each checked by validate): without them, test_every_copy_runs_its_definitions_code_on_what_is_connected_to_it
+    fails, every copy's definition said to be missing.
+  taskloom/flow.py validate: >-
+    The check of a flow, over a hundred lines, to which this change added about ten. Without its first (the flow's block
+    types made with its Local blocks, for_flow), test_every_copy_runs_its_definitions_code_on_what_is_connected_to_it
+    fails; without the lines that say a definition's problem once and leave its copies alone,
+    test_validate_reports_a_problem_in_a_definition_once_naming_each_of_its_copies fails; with a copy whose definition is
+    missing called an unknown block type again, both cases of
+    test_validate_names_a_copy_whose_definition_is_missing_from_the_flow_file fail.
+  taskloom/engine.py run_flow: >-
+    The whole of a run, to which this change added one line (the flow's block types made with its Local blocks): without
+    it, the engine case of test_a_flow_with_local_blocks_gives_the_same_results_however_it_is_run fails.
+  taskloom/cli.py cmd_run: >-
+    taskloom run, in which this change touched one line (the flow's block types made with its Local blocks). No test
+    fails with the blocks folder's there: run_flow makes them again itself, and the other use, whether --from names a
+    start block, gives the same answer, as a Local block is never a start block.
+  taskloom/upgrade.py _check: >-
+    Check flows on one flow, to which this change added one line (its block types made with its Local blocks): without
+    it, test_check_flows_fixes_a_connection_into_an_input_a_definition_lacks_and_keeps_the_definitions fails (the copy's
+    inputs are not known); test_check_flows_finds_nothing_to_fix_in_a_flow_with_local_blocks still passes, as Validate
+    makes them itself.
+  taskloom/blocks/logic.py write_reusable_block: >-
+    This change reworded one line of the comment it writes at the top of a block's file (Create reusable block…). No
+    test reads it.
+  taskloom/editor/canvas.py FlowScene.__init__: >-
+    This change only took out the block types it was given: the canvas reads its flow's (FlowScene.registry, in which
+    nothing is planted). Nothing is left to take out; every editor test draws a canvas.
+  taskloom/editor/commits.py where_found: >-
+    Commit History's search, to which this change added four lines (a match in a Local block's code is a code match):
+    without them, test_commit_history_previews_and_searches_each_version_with_its_own_local_definitions fails.
+  taskloom/editor/commits.py CommitHistory._show_selected: >-
+    Commit History's preview, in which this change touched three lines (a version drawn with the blocks folder's block
+    types and its own Local blocks): without the blocks folder's,
+    test_commit_history_previews_and_searches_each_version_with_its_own_local_definitions fails.
+  taskloom/editor/document.py FlowDocument.__init__: >-
+    This change gave it, in place of a registry, the two values FlowDocument.registry makes a flow's block types from:
+    without the registry last made (_registry), or with no block types given to a tab's flow (FlowTab.__init__),
+    test_create_local_turns_the_source_block_into_the_first_copy_kept_in_the_flow_file_not_in_the_tree fails.
+  taskloom/editor/document.py FlowDocument.paste_blocks: >-
+    The paste of blocks, about forty lines, to which this change added the pasted definitions (_add_definitions) and
+    the new type of the copies of one kept under a new name: without the first,
+    test_the_last_copy_copied_then_deleted_is_pasted_with_its_definition_and_typed_value_in_another_tab_and_back and
+    test_a_copy_pasted_into_a_flow_whose_local_block_of_that_name_has_other_code_is_kept_renamed_and_said fail; without
+    the second, the latter fails.
+  taskloom/editor/document.py FlowDocument.remove: >-
+    The removal of blocks, to which this change added one line (a definition goes with its last copy): without it,
+    test_deleting_the_copies_one_by_one_removes_the_definition_with_the_last_and_one_undo_brings_back_both fails.
+  taskloom/editor/document.py FlowDocument.set_block_value: >-
+    A block's value set, in which this change touched two lines (a copy's settings go into its Local block's
+    definition): without them, test_properties_of_any_copy_show_the_shared_definition_and_an_edit_there_changes_every_copy
+    fails. Its lines for typed values are under typed-values.mutants.yaml.
+  taskloom/editor/panels.py PropertiesPanel.__init__: >-
+    This change only took out the block types it kept: Properties reads its flow's (PropertiesPanel.registry, in which
+    nothing is planted). Nothing is left to take out.
+  taskloom/editor/panels.py PropertiesPanel.show_block: >-
+    This change only took out the block types it was given, as in PropertiesPanel.__init__. Nothing is left to take
+    out; every test of Properties goes through it.
+  taskloom/editor/panels.py PropertiesPanel.refresh: >-
+    Properties of a block, about a hundred lines, in which this change (with 80c0d6c) touched fifteen (a copy's
+    settings are its definition's, shown as a Python Code block's; its code box; the note Shared by N blocks; the line
+    under its title, wrapped when too long; what is said of a copy that cannot be shown): with the settings read from
+    the copy's own as before, or without the note,
+    test_properties_of_any_copy_show_the_shared_definition_and_an_edit_there_changes_every_copy fails; with the line
+    under the title not wrapped, four cases of
+    test_properties_of_a_local_copy_show_the_line_under_its_title_whole_and_never_scroll_sideways fail. No test reads
+    what Properties says of a copy whose definition is missing or has a problem.
+  taskloom/editor/panels.py PropertiesPanel._set_names: >-
+    An edit of a block's input or output names, in which this change touched one line (the names in effect are the
+    definition's): with the copy's own as before,
+    test_renaming_the_definitions_inputs_and_output_moves_every_copys_lines_and_typed_values and
+    test_removing_an_input_that_copies_use_is_refused_naming_each_copy_and_what_it_has_until_they_are_cleared fail.
+  taskloom/editor/window.py FlowTab.__init__: >-
+    A flow's tab, in which this change touched two lines (the tab's flow given the blocks folder's block types; the
+    canvas made without them): without the first,
+    test_create_local_turns_the_source_block_into_the_first_copy_kept_in_the_flow_file_not_in_the_tree fails, as does
+    every other editor test.
+  taskloom/editor/window.py MainWindow._on_tab_changed: >-
+    This change only took out the block types it gave Properties (PropertiesPanel.show_block). Nothing is left to take
+    out; every test that changes tabs goes through it.
+  taskloom/editor/window.py MainWindow._on_block_selected: >-
+    This change only took out the block types it gave Properties (PropertiesPanel.show_block). Nothing is left to take
+    out; every test of Properties goes through it.
+  taskloom/editor/window.py MainWindow.paste_blocks: >-
+    Paste, in which this change touched seven lines (the definitions copied given to the flow, and the status bar's
+    words for one kept under a new name): with none given,
+    test_the_last_copy_copied_then_deleted_is_pasted_with_its_definition_and_typed_value_in_another_tab_and_back fails;
+    without the words, test_a_copy_pasted_into_a_flow_whose_local_block_of_that_name_has_other_code_is_kept_renamed_and_said
+    fails.
+  taskloom/editor/window.py MainWindow._ready_to_run: >-
+    The checks before a run in the editor, in which this change touched one line (the part of the run worked out with
+    the flow's block types). No test fails with the blocks folder's there: no test runs a Local copy alone, or from it
+    on, in the editor.
+  taskloom/editor/window.py MainWindow.run_flow: >-
+    Run now, in which this change touched three lines (the flow's start blocks found, and a Manual Start added, with the
+    flow's block types). No test fails with the blocks folder's there: a Local block is never a start block, and no
+    test runs a flow of copies that has no start block.
+  taskloom/editor/window.py MainWindow._run_now_says: >-
+    What Run now's question says, in which this change touched two lines (the start blocks found with the block types
+    it is given). No test fails with the blocks folder's: a Local block is never a start block.
+  taskloom/editor/window.py MainWindow._block_menu_for: >-
+    The right-click menu of a block, about sixty lines, in which this change touched five (its block found among the
+    flow's block types, Promote to global reusable block… for a copy, the words Create reusable block…): without the
+    Promote item, or with the blocks folder's block types,
+    test_promote_asks_first_then_every_copy_uses_the_global_block_and_undo_brings_the_local_back_not_the_file fails;
+    with the old words, test_create_local_turns_the_source_block_into_the_first_copy_kept_in_the_flow_file_not_in_the_tree
+    and test_create_reusable_block_is_in_the_menu_of_python_code_blocks_only fail.
+  taskloom/editor/window.py MainWindow._value_items: >-
+    An input hole's menu items, in which this change touched one line (whether the hole takes a value, found with the
+    flow's block types). No test fails with the blocks folder's there: no test opens the menu of a copy's input.
+  taskloom/editor/window.py MainWindow.copy_as_curl: >-
+    Copy as cURL, in which this change touched one line (the API Request block found among the flow's block types). No
+    test fails with the blocks folder's: the API Request block is built in, the same in both.
+  taskloom/editor/window.py MainWindow._user_block_file: >-
+    The file of a block of the blocks tree, to which this change added one word (a Local block has none). No test fails
+    without it: the tree is made from the blocks folder's block types, which hold no Local block.
+  taskloom/editor/window.py MainWindow.run_block_with_inputs: >-
+    The "with inputs I choose…" runs, in which this change touched two lines (the block's inputs, and what reached
+    them, found with the flow's block types). No test fails with the blocks folder's there: no test opens that window
+    on a copy.
+  taskloom/editor/window.py MainWindow._load_last_run: >-
+    The results shown when a flow opens, in which this change touched one line (each start block's line found with the
+    flow's block types). No test fails with the blocks folder's there: no test opens a flow of copies and reads their
+    results.
