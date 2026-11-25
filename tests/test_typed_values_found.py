@@ -21,7 +21,13 @@ The contract these tests fix (the implementer follows it):
   reasons of other inputs;
 - `taskloom run` refuses to start with the same line (exit code 2, no run recorded).
 
-Through `taskloom` on the command line, on a temporary Taskloom folder; the editor is not driven here."""
+TV-6 says both "…with the same inputs" items give today's typed value. After a re-run (Run only this block or Run from
+this block on, with the same inputs), that run keeps what the block got, its typed value too; a value cleared since
+(Clear value: the hole then has neither a value nor a line) must not come back from there: the block gets no value, as
+a full run gives it, while a changed value gives the new one and lines still bring what they brought in that run.
+
+Through `taskloom` on the command line, on a temporary Taskloom folder; the editor (the `win` fixture, real clicks and
+menus) only for TV-6's "…with the same inputs" and Clear value."""
 
 import os
 
@@ -32,8 +38,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor.canvas import takes_no_value  # noqa: E402
 from taskloom.registry import discover  # noqa: E402
+from tests.test_paths_editor_running import right_click  # noqa: E402
 from tests.test_typed_values import (as_recorded, flow_file, python, recorded, recorder, runs_recorded,  # noqa: E402
                                      said, typed)
+from tests.test_typed_values_editor import CLEAR, at, hole_menu, offers, open_in, run_ended, run_now  # noqa: E402
 
 # --- TV-3: {{name}} in typed values with --only and --from -----------------------------------------------------------
 
@@ -209,3 +217,83 @@ def test_a_typed_value_written_by_hand_on_an_input_that_takes_none_is_refused_by
     assert not [why for key, why in REASONS.items() if key != reason and why in said_why], found[0]
     assert ran.returncode == 2 and naming(ran) == found, said(ran)
     assert runs_recorded(env) == 0
+
+
+# --- TV-6: "…with the same inputs" after a re-run: today's typed value, none once it is cleared -----------------------
+
+ONLY_SAME, FROM_SAME = "Run only this block, with the same inputs", "Run from this block on, with the same inputs"
+TODAY = {"value cleared": (None, None), "value changed to 50": ("50", 50)}  # (use's n now, what use gets)
+
+
+def same_inputs_flow(env, n: str | None):
+    """flow.yaml: start → src, which gives what seed.txt holds by a line into use's line_in; use's n has the typed int
+    `n` (None: no value, and no line either). use records what it got (use.jsonl). The flow and the record."""
+    out = env.root / "use.jsonl"
+    flow = flow_file(env.root / "flow.yaml", {
+        "start": {"type": "trigger.manual"},
+        "src": python([], "output = open('seed.txt', encoding='utf-8').read()"),
+        "use": recorder(out, ["n", "line_in"], None if n is None else {"n": typed("int", n)})},
+        ["start.start -> src.after", "src.output -> use.line_in"])
+    return flow, out
+
+
+@pytest.mark.invariant("TV-6")
+@pytest.mark.parametrize("mode", ["--only", "--from"])
+@pytest.mark.parametrize("today, gets", list(TODAY.values()), ids=list(TODAY))
+def test_the_same_inputs_after_a_rerun_give_todays_typed_value_and_no_value_once_it_is_cleared(env, mode, today, gets):
+    """use's n has the typed int 10, its line_in a line from src (seed.txt: "first"). A full run, seed.txt changed to
+    "second", then `--only use` (or `--from use`) `--inputs-from <the full run>`: use gets 10 and "first". Then n's
+    value is cleared in the file (Clear value), or changed to 50, and the same again from that re-run (`--inputs-from
+    <the re-run>`): use gets no value at n once it is cleared (not the 10 that re-run kept), or 50; line_in still gets
+    "first", what the line brought."""
+    seed = env.root / "seed.txt"
+    seed.write_text("first", encoding="utf-8")
+    flow, out = same_inputs_flow(env, "10")
+    full = full_run(env, flow)
+    seed.write_text("second", encoding="utf-8")
+    again = env.taskloom("run", flow, mode, "use", "--inputs-from", full)
+    assert again.returncode == 0, said(again)
+    again_id, _ = env.last_run()
+    same_inputs_flow(env, today)  # (n cleared, or changed, and saved)
+
+    once_more = env.taskloom("run", flow, mode, "use", "--inputs-from", again_id)
+
+    assert once_more.returncode == 0, said(once_more)
+    assert recorded(out) == [as_recorded({"n": 10, "line_in": "first"})] * 2 + [
+        as_recorded({"n": gets, "line_in": "first"})]
+
+
+def the_same_again(win, qtbot, tab, item: str):
+    """Right-click use → `item` (…with the same inputs), until its run has ended well."""
+    runs = len(tab.runs)
+    items = right_click(qtbot, win, tab, "use", "title", item)
+    assert any(text.startswith(item) for text in items), items
+    run_ended(win, qtbot, tab, runs)
+
+
+@pytest.mark.invariant("TV-6")
+@pytest.mark.parametrize("item", [ONLY_SAME, FROM_SAME], ids=["run only", "run from"])
+def test_with_the_same_inputs_after_clear_value_gives_no_value_in_the_editor(win, qtbot, tmp_path, item):
+    """In the editor: use's n has the typed int 10, its line_in a line from src (which gives what seed.txt holds,
+    "first"). Run now; seed.txt changed to "second"; right-click use → "Run only this block, with the same inputs" (or
+    "Run from this block on, …"): use gets 10 and "first". Right-click the hole n → Clear value, then the same item
+    again: use gets no value at n, as a full run would give it, not the 10 the re-run kept; line_in still "first"."""
+    out, seed = tmp_path / "use.jsonl", tmp_path / "seed.txt"
+    seed.write_text("first", encoding="utf-8")
+    flow = flow_file(tmp_path / "same.yaml", {
+        "start": {"type": "trigger.manual", **at(-300, 0)},
+        "src": {**python([], f"output = open({str(seed)!r}, encoding='utf-8').read()"), **at(0, 0)},
+        "use": {**recorder(out, ["n", "line_in"], {"n": typed("int", "10")}), **at(300, 0)}},
+        ["start.start -> src.after", "src.output -> use.line_in"])
+    tab = open_in(win, flow)
+    run_now(win, qtbot, tab)
+    seed.write_text("second", encoding="utf-8")
+    the_same_again(win, qtbot, tab, item)
+    items, _ = hole_menu(qtbot, win, tab, "use", "n", CLEAR)
+    assert offers(items, CLEAR), items
+
+    the_same_again(win, qtbot, tab, item)
+
+    assert recorded(out) == [as_recorded({"n": 10, "line_in": "first"})] * 2 + [
+        as_recorded({"n": None, "line_in": "first"})]
+    tab.doc.dirty = False

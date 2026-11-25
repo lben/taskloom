@@ -21,8 +21,21 @@ or a file put in the blocks folder). The flow then has both. The contract these 
 - In the editor the copies still show as copies of their Local block (its holes, not the Global block's), so the user
   can see what to rename.
 
+RB-6 again: "the same code" compares the settings as they take effect. Create reusable block…, Local stores
+use_environment: false; ticking then unticking "Run in my Python environment" in a copy's Properties removes the key
+(the default, false, applies). A copy pasted after that, its definition still holding use_environment: false, has the
+same code: it joins, as above.
+
+RB-4 with RB-8: Promote to global reusable block writes the Global block's file; Undo makes the copies Local again and
+leaves the file, so the flow then has a Local and a Global block with one name and refuses to run (RB-8), which is
+right. The user is told before: Promote's question keeps the words "Undo cannot remove the global block's file" and
+also says that after an Undo the flow does "not run" until the Promote is redone ("Redo") or the global block is
+deleted ("Delete block…" in the blocks tree). Both ways out work: after Undo, Redo, and the copies use the Global
+block and Run now runs; after Undo, Delete block… on the Global block, and the flow runs with its Local block.
+
 Through the real entry points: the editor window (the `win` fixture, its Taskloom folder a temporary one) with real
-clicks, menus and the tab bar; `taskloom validate` and `taskloom run` on a temporary Taskloom folder."""
+clicks, menus, the tab bar and the blocks tree; `taskloom validate` and `taskloom run` on a temporary Taskloom
+folder."""
 
 import os
 import sqlite3
@@ -31,13 +44,19 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QCheckBox, QMessageBox, QStyle, QStyleOptionButton  # noqa: E402
+
 from taskloom.blocks.logic import write_reusable_block  # noqa: E402
 from taskloom.config import Home  # noqa: E402
-from tests.test_local_blocks import SHOUT, errors, python, write_flow, writer  # noqa: E402
-from tests.test_local_blocks_editor import (RENAMED, click, code_box, copy_block, create, flow_file,  # noqa: E402
-                                            greetings, note, paste, ports, saved, shared, show_tab, status_bar)
-from tests.test_paths_editor_editing import clean, menu, settle, taskloom  # noqa: E402
-from tests.test_reusable_block import block_files  # noqa: E402
+from tests.test_delete_user_block import delete_with_right_click  # noqa: E402
+from tests.test_local_blocks import SHOUT, errors, python, shouted, write_flow, writer  # noqa: E402
+from tests.test_local_blocks_editor import (RENAMED, UNDO_WORDS, answer, click, code_box, copy_block,  # noqa: E402
+                                            create, flow_file, greetings, note, paste, ports, promote, read_json,
+                                            saved, shared, show_tab, source_flow, status_bar)
+from tests.test_paths_editor_editing import clean, field, menu, settle, taskloom  # noqa: E402
+from tests.test_reusable_block import block_files, user_created  # noqa: E402
 
 KEPT_AS = "The pasted Local block"  # how the status bar's message starts when a pasted definition is renamed
 SAME_NAME = "the same name"  # in Validate's error about a Local and a Global block with one name
@@ -226,4 +245,139 @@ def test_a_global_block_made_in_another_tab_with_a_local_blocks_name_is_named_by
 
     assert [line for line in problems_box(win) if SAME_NAME in line] == validated
     assert tab_a.runs == [] and not out.exists()
+    clean(win)
+
+
+# --- RB-6: the environment choice compared as it takes effect --------------------------------------------------------
+
+ENVIRONMENT = "Run in my Python environment"  # the definition's use_environment, in Properties of a copy
+
+
+def environment_box(win) -> QCheckBox:
+    widget = field(win, ENVIRONMENT)
+    box = widget if isinstance(widget, QCheckBox) else widget.findChild(QCheckBox)
+    assert box is not None, f"Properties shows no check box {ENVIRONMENT!r}"
+    return box
+
+
+def tick(box: QCheckBox):
+    """A click on the check box's square."""
+    option = QStyleOptionButton()
+    box.initStyleOption(option)
+    spot = box.style().subElementRect(QStyle.SE_CheckBoxIndicator, option, box).center()
+    QTest.mouseClick(box, Qt.LeftButton, Qt.NoModifier, spot)
+    settle()
+
+
+@pytest.mark.invariant("RB-6")
+def test_a_copy_pasted_after_its_environment_choice_was_ticked_and_unticked_joins_its_local_block(win, qtbot, tmp_path):
+    """The user makes the Python Code block filter a Local block (right-click → Create reusable block…, Local, Shout)
+    and copies it (Edit → Copy). In its Properties they tick "Run in my Python environment", then untick it: the
+    definition runs as before. Edit → Paste: the pasted block is a second copy of shout (local.shout), the flow file
+    holds the one definition shout, not running in the Python environment, and the status bar says nothing was kept
+    under a new name."""
+    flow, _ = source_flow(tmp_path / "flows")
+    tab = win.open_flow(flow)
+    settle()
+    create(win, qtbot, tab, "filter", "Local", "Shout")
+    copy_block(win, tab, "filter")
+    click(tab, "filter")
+    assert not environment_box(win).isChecked()
+    tick(environment_box(win))
+    assert environment_box(win).isChecked()
+    tick(environment_box(win))
+    assert not environment_box(win).isChecked()
+
+    (pasted,) = paste(win)
+    told = status_bar(win)
+    data = saved(win, tab)  # (first: whatever the checks find, no unsaved change is left to ask about)
+
+    assert not told.startswith(KEPT_AS) and "kept as" not in told, told
+    assert data["blocks"][pasted]["type"] == "local.shout", data["blocks"][pasted]
+    assert list(data["local_blocks"]) == ["shout"], data["local_blocks"]
+    assert data["local_blocks"]["shout"].get("use_environment", False) is False, data["local_blocks"]
+    clean(win)
+
+
+# --- RB-4 with RB-8: Promote, then Undo: said before, and both ways out work -----------------------------------------
+
+def promoted_then_undone(win, qtbot, monkeypatch, tmp_path):
+    """The user's case: the Python Code block filter made a Local block Shout (Create reusable block…, Local),
+    promoted (Yes to the question), then Edit → Undo. The tab, the Global block's file and what save writes."""
+    flow, out = source_flow(tmp_path / "flows")
+    tab = win.open_flow(flow)
+    settle()
+    create(win, qtbot, tab, "filter", "Local", "Shout")
+    answer(monkeypatch, QMessageBox.Yes)
+    promote(qtbot, win, tab, "filter")
+    (path,) = block_files(win)
+    show_tab(win, tab)
+    menu(win, "Undo").trigger()
+    settle()
+    assert tab.doc.blocks["filter"]["type"] == "local.shout" and path.exists()
+    return tab, path, out
+
+
+@pytest.mark.invariant("RB-4")
+@pytest.mark.invariant("RB-8")
+def test_promotes_question_says_that_after_an_undo_the_flow_runs_again_only_after_redo_or_delete_block(
+        win, qtbot, monkeypatch, tmp_path):
+    """Right-click the copy filter of the Local block Shout → Promote to global reusable block: before anything is
+    written, the question says "Undo cannot remove the global block's file" and that after an Undo the flow does not
+    run until the Promote is redone (Redo) or the global block is deleted (Delete block… in the blocks tree). No:
+    nothing is written."""
+    flow, _ = source_flow(tmp_path / "flows")
+    tab = win.open_flow(flow)
+    settle()
+    create(win, qtbot, tab, "filter", "Local", "Shout")
+    asked = answer(monkeypatch, QMessageBox.No)
+
+    promote(qtbot, win, tab, "filter")
+
+    assert len(asked) == 1, asked
+    text = asked[0][1]
+    assert UNDO_WORDS in text, text
+    assert "not run" in text.lower() and "Redo" in text and "Delete block" in text, text
+    assert block_files(win) == [] and tab.doc.blocks["filter"]["type"] == "local.shout"
+    clean(win)
+
+
+@pytest.mark.invariant("RB-4")
+@pytest.mark.invariant("RB-8")
+@pytest.mark.parametrize("way_out", ["Redo", "Delete block…"])
+def test_after_promote_and_undo_the_flow_runs_again_once_redone_or_once_its_global_block_is_deleted(
+        win, qtbot, monkeypatch, tmp_path, way_out):
+    """Create reusable block…, Local, Shout; Promote (Yes); Undo: the copy filter is Local again, the Global block's
+    file stays, and Run now refuses with the box "The flow has problems" naming the two blocks of the same name.
+    Then the way out: Edit → Redo (the copy uses the Global block again, the flow file holds no definition), or
+    right-click Shout in the blocks tree → Delete block…, Yes (the file is gone, the copy is still a copy of its Local
+    block). Run now runs, and filter gives what Shout's code gives."""
+    tab, path, out = promoted_then_undone(win, qtbot, monkeypatch, tmp_path)
+    win.run_action.trigger()
+    settle()
+    assert [line for line in problems_box(win) if SAME_NAME in line], "Run now did not name the two blocks"
+    assert tab.runs == []
+
+    if way_out == "Redo":
+        menu(win, "Redo").trigger()
+        settle()
+    else:
+        delete_with_right_click(qtbot, win, "Shout", "yes")
+    data = saved(win, tab)  # (first: whatever the checks find, no unsaved change is left to ask about)
+    win.run_action.trigger()
+    qtbot.waitUntil(lambda: bool(win.message_boxes) or (len(tab.runs) == 1 and not tab.running
+                                                        and tab.runs[-1].status is not None), timeout=60_000)
+    boxes = list(win.message_boxes)
+    win.message_boxes.clear()  # (said below, not by the fixture)
+
+    if way_out == "Redo":
+        assert data["blocks"]["filter"]["type"] == "user.shout" and not data.get("local_blocks"), data
+        assert path.exists() and user_created(win) == ["Shout"]
+    else:
+        assert data["blocks"]["filter"]["type"] == "local.shout" and data["local_blocks"] == {"shout": SHOUT}, data
+        assert not path.exists() and user_created(win) is None
+        assert ports(tab, "filter")[0] == ["after", "word", "tail"]
+    assert boxes == [], boxes
+    assert tab.runs[-1].status == "success", win.log.text.toPlainText()[-2000:]
+    assert read_json(out) == {"loud": shouted("ana", "?!")}
     clean(win)
