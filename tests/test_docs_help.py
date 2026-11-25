@@ -965,8 +965,8 @@ def test_a_block_whose_type_is_not_installed_shows_only_name_and_its_card_works(
 
 
 def test_a_reusable_block_has_cards_on_name_and_retry_only_and_none_on_its_what_it_does_text(win, qtbot):
-    """Edge path: a Reusable block shows Name and Retry rows only, each with its card; its "What it does" text is not a
-    row and shows no card."""
+    """Edge path: a Reusable block shows Name, its input's row in Input values (TV-2) and Retry rows only, each with its
+    card; its "What it does" text is not a row and shows no card."""
     try:
         what = "Tidies a list of names: trims and sorts them."
         write_reusable_block(win.home.blocks_dir, "Tidy names", what, "names: a list of names",
@@ -978,7 +978,7 @@ def test_a_reusable_block_has_cards_on_name_and_retry_only_and_none_on_its_what_
         add_block(mine, tab, "Tidy names")
         pages = Pages(mine.registry)
         rows = property_rows(mine, "Tidy names", mine.registry.get("user.tidy_names"))
-        assert [r.label for r in rows] == ["Name", "Policy", "Timeout"], [r.label for r in rows]
+        assert [r.label for r in rows] == ["Name", "names", "Policy", "Timeout"], [r.label for r in rows]
         problems = check_rows(qtbot, mine, rows, pages)
         dismiss(qtbot, mine)
         (text,) = [w for w in mine.properties.widget().findChildren(QLabel) if w.text() == what]

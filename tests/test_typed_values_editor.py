@@ -660,6 +660,7 @@ def test_the_value_shows_in_the_block_right_of_the_holes_name_and_whole_on_hover
     assert shown_value(tab, "filter", "threshold") == "10"
     span = check_label_fits(tab, "filter", "threshold", before)
     assert "10" in hover_label(qtbot, tab, "filter", "threshold", span)
+    assert saved_values(win, tab, "filter") == {"threshold": typed("int", "10")}
 
 
 LONG = "0123456789" * 50  # 500 characters
@@ -792,6 +793,7 @@ def test_in_the_dark_theme_the_box_opens_beside_the_hole_and_the_value_fits_the_
 
     assert shown_value(tab, "filter", "threshold") == "10"
     check_label_fits(tab, "filter", "threshold", before)
+    assert saved_values(win, tab, "filter") == {"threshold": typed("int", "10")}
 
 
 # --- T8: the box open while the canvas is drawn again ---------------------------------------------------------------
