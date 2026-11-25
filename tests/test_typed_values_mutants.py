@@ -373,8 +373,9 @@ def test_the_value_is_drawn_in_the_names_font_between_the_name_and_the_output(wi
     c's row has none. Values: 7 at n, a 500-character text at b and c, and (written by hand) at run after. Each value is
     written in the font and size of its hole's name, level with it, and starts just right of the name (run after's
     right of the words "run after"); a long one fits its frame with its "…", ends as far before the row's output name
-    on the run after row as on b's, and on c's row (no output) as far from the block's right edge as the names are
-    from its left edge."""
+    on the run after row as on b's (to within half a character: each font rounds the widths of the letters of done,
+    in italics, and of error its own way), and on c's row (no output) as far from the block's right edge as the names
+    are from its left edge."""
     tab = open_in(win, one_block_flow(tmp_path, recorder(tmp_path / "got.jsonl", ["n", "b", "c"], {
         "after": typed("text", LONG), "n": typed("int", "7"), "b": typed("text", LONG), "c": typed("text", LONG)})))
     rows = {hole: row(tab, "block", hole) for hole in ("after", "n", "b", "c")}
@@ -390,7 +391,8 @@ def test_the_value_is_drawn_in_the_names_font_between_the_name_and_the_output(wi
         assert advance(value) <= width(frame) - 10 + 0.5, f"{hole}: {value['text']!r} does not fit its frame {frame}"
     assert rows["n"]["value"]["text"] == "7" and rows["c"]["value"]["text"].endswith("…")
     before_output = {hole: rows[hole]["output"]["box"][0] - rows[hole]["frame"]["box"][2] for hole in ("after", "b")}
-    assert abs(before_output["after"] - before_output["b"]) <= 2, before_output
+    half_a_character = advance({**rows["b"]["value"], "text": "0"}) / 2  # (of the long value, in its font)
+    assert abs(before_output["after"] - before_output["b"]) <= half_a_character + 0.5, (before_output, half_a_character)
     assert rows["c"].get("output") is None
     assert abs((NODE_W - rows["c"]["frame"]["box"][2]) - rows["c"]["name"]["box"][0]) <= 1, rows["c"]["frame"]
 
