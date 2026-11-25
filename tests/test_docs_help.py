@@ -1521,7 +1521,7 @@ def test_user_blocks_are_in_contents_on_a_page_of_their_own_category_or_on_the_b
 def test_a_reusable_block_created_while_the_column_is_open_is_in_contents_and_on_the_user_created_page(win, qtbot,
                                                                                                       tmp_path):
     """Spec T5, rule 19 and edge path: with the column open on Contents, right-click a Python Code block → Create
-    Reusable block…; without a restart the column reloads: Contents and the User Created page list the new block and
+    reusable block…; without a restart the column reloads: Contents and the User Created page list the new block and
     its <type_id> anchor resolves."""
     try:
         tab = win.open_flow(names_flow(tmp_path, tmp_path / "out.json"))
@@ -1549,7 +1549,7 @@ def test_a_reusable_block_created_while_the_column_is_open_is_in_contents_and_on
 def test_a_reusable_block_created_while_the_column_is_closed_is_in_contents_when_the_column_opens_again(win, qtbot,
                                                                                                          tmp_path):
     """Spec T5, rules 15 and 19: the column is opened on Contents and closed; right-click a Python Code block →
-    Create Reusable block…; opening the column again shows the last page, Contents, and it lists the new block, which
+    Create reusable block…; opening the column again shows the last page, Contents, and it lists the new block, which
     is on its category page at its <type_id> anchor."""
     try:
         tab = win.open_flow(names_flow(tmp_path, tmp_path / "out.json"))

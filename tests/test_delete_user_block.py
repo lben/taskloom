@@ -506,7 +506,7 @@ def test_a_file_that_cannot_be_deleted_is_said_so_and_nothing_changes(win, qtbot
 
 def test_the_user_created_group_goes_with_the_last_block_and_comes_back_when_one_is_created_again(win, qtbot,
                                                                                                 tmp_path):
-    """Spec 4: a reusable block made with Create Reusable block… and then deleted: no User Created block is left, so
+    """Spec 4: a reusable block made with Create reusable block… and then deleted: no User Created block is left, so
     the User Created group is gone from the Blocks list; made again (the same name: it is free again), the group
     comes back with it."""
     tab = win.open_flow(names_flow(tmp_path, tmp_path / "out.json"))

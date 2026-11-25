@@ -1023,7 +1023,7 @@ class ReusableBlockDialog(QDialog):
 
     def __init__(self, problem, parent=None, block: str = "", flow: str = "", taken: tuple | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Promote to global reusable block" if taken else "Create Reusable block")
+        self.setWindowTitle("Promote to global reusable block" if taken else "Create reusable block")
         self.resize(520, 0)
         self.problem = problem
         layout = QVBoxLayout(self)

@@ -1362,7 +1362,7 @@ class MainWindow(QMainWindow):
         try:  # its inputs, outputs, code and Run in my Python environment, the defaults for those it leaves out
             python_code = block_config(cls, BlockSpec(id=block_id, type=cls.type_id, config=config))
         except ValueError as e:
-            QMessageBox.warning(self, "Create Reusable block", f"{block_id} cannot be saved as a block yet: {e}")
+            QMessageBox.warning(self, "Create reusable block", f"{block_id} cannot be saved as a block yet: {e}")
             return
         dialog = dialogs.ReusableBlockDialog(lambda title: self._reusable_name_problem(title, tab.doc.registry), self,
                                              block=block_id, flow=tab.doc.title)

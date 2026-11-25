@@ -439,6 +439,9 @@ def test_properties_of_any_copy_show_the_shared_definition_and_an_edit_there_cha
     assert read_json(out) == {"ana": titled("ana"), "bo": titled("bo", "?!")}
 
     copy_block(win, tab, "greet_ana")
+    below = max(node.sceneBoundingRect().bottom() for node in tab.scene.nodes.values()) + 600
+    tab.view.centerOn(QPointF(0, below))  # (Paste puts the copy in view: here no block is under it, so each is clicked)
+    settle()
     (third,) = paste(win)
 
     assert tab.doc.blocks[third]["type"] == "local.shout"

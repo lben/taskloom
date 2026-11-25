@@ -1,4 +1,4 @@
-"""Create Reusable block: right-click a Python Code block, choose "Create Reusable block...", give it a name, what it
+"""Create reusable block: right-click a Python Code block, choose "Create reusable block...", give it a name, what it
 does and what its inputs expect, and it is saved as a block of your own (one Python file in your blocks folder),
 listed under "User Created" in the block list, to use in any flow: in the editor, with `taskloom run` and in the
 scheduler service, it runs the code of the block it was made from on the inputs connected to it."""
@@ -84,7 +84,7 @@ def groups(win) -> list[str]:
 
 
 def menu_item(win, tab, block):
-    """The block's right-click menu item Create Reusable block…"""
+    """The block's right-click menu item Create reusable block…"""
     items = win._block_menu_for(tab, block).actions()
     found = [a for a in items if a.text().startswith(CREATE)]
     assert found, f"no {CREATE}... in the menu of {block}: {[a.text() for a in items]}"
@@ -141,7 +141,7 @@ def fill_all(dialog, name: str, what: str = WHAT_IT_DOES, expects: str = INPUTS_
 
 
 def in_the_window(win, qtbot, open_it, do):
-    """open_it() opens the Create Reusable block window (a window waits for you inside the call that opens it);
+    """open_it() opens the Create reusable block window (a window waits for you inside the call that opens it);
     when it shows, do(window). What open_it() returns is returned; an error in do() is raised here."""
     done, errors, returned, tries = [], [], [], []
 
@@ -182,7 +182,7 @@ def in_the_window(win, qtbot, open_it, do):
 
 
 def make_reusable(win, qtbot, tab, block, name="Tidy names"):
-    """Right-click menu → Create Reusable block…, fill in the window and press OK."""
+    """Right-click menu → Create reusable block…, fill in the window and press OK."""
     in_the_window(win, qtbot, lambda: menu_item(win, tab, block).trigger(),
                   lambda dialog: (fill_all(dialog, name), press(dialog, "OK")))
 

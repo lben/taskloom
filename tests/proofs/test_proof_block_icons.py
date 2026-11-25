@@ -319,7 +319,7 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
            "Blocks list keep one colour for each group, as before.")
     p.fits("The new Theme setting (Tools > Settings > Theme) changes the editor's colours, not the group colours: the "
            "icons are the same white drawings on the same colours in Light and in Dark.")
-    p.fits("Blocks of your own, written by hand or made with Create Reusable block…, show the puzzle piece: they "
+    p.fits("Blocks of your own, written by hand or made with Create reusable block…, show the puzzle piece: they "
            "are under User Created in the Blocks list, in its colour, and Taskloom cannot know what they do.")
     p.fits("The drawings ship inside Taskloom, in the wheel and in the Windows build, with Tabler Icons' licence "
            "(README's License section names it too). Splitter and Merger, which came later, show Tabler's "
@@ -430,7 +430,7 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
 
     # --- a block of your own ------------------------------------------------------------------------------------------
     p.step(f"Make a block of your own from add_tax, a Python Code block. Type {ZOOM} in the zoom box, press Enter and "
-           f"drag the canvas back to the Logic part; right-click add_tax, choose Create Reusable block…, name it "
+           f"drag the canvas back to the Logic part; right-click add_tax, choose Create reusable block…, name it "
            f"{MINE_TITLE} and press OK. Then double-click {MINE_TITLE}, now under User Created in the Blocks list, "
            f"drag the new block, {MINE}, to the free place below split_regions, and save the flow (File > Save).")
     type_zoom(tab, ZOOM)
@@ -442,7 +442,7 @@ def test_every_block_shows_its_own_icon(proof, win, qtbot, tmp_path, monkeypatch
         press(dialog, "OK")
 
     p.while_open(lambda: right_click(tab, "add_tax"),
-                 lambda menu: p.while_open(lambda: choose(menu, "Create Reusable block…"), name_it))
+                 lambda menu: p.while_open(lambda: choose(menu, "Create reusable block…"), name_it))
     QApplication.processEvents()
     item = tree_item(win, MINE_TITLE)
     p.check(f"{MINE_TITLE} is listed under User Created in the Blocks list",

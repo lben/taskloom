@@ -536,7 +536,7 @@ def run_now(win, qtbot, tab):
 
 @pytest.fixture
 def gives_back_win(tmp_path, request):
-    """The editor, started with the reusable block Gives Back (Global: a file in the blocks folder, as Create Reusable
+    """The editor, started with the reusable block Gives Back (Global: a file in the blocks folder, as Create reusable
     block… writes it), whose input x it gives back at its output."""
     write_reusable_block(Home(tmp_path / "home").blocks_dir, "Gives Back", "Gives back what arrives at x.",
                          "x: anything", {"inputs": ["x"], "outputs": ["output"], "use_environment": False,
