@@ -38,6 +38,7 @@ scope:
         - tests/test_merger_each_line.py -k without_a_placeholder
         - tests/test_paths_logic.py -k cannot_work_is_refused_by_validate
         - tests/test_paths_flow_format.py -k a_setting_of_the_wrong_kind
+        - tests/test_braces_typed_names.py
         - tests/test_engine.py -k validate_reports_all_problems
     - mutate:
         - taskloom/blocks/logic.py _message_source
