@@ -28,7 +28,7 @@ class Registry:
         self.blocks: dict[str, type[Block]] = {}
         self.sources: dict[str, str] = {}  # type_id -> "built-in", "plugin", "local" (for_flow) or a file path
         self.warnings: list[str] = []
-        self.problems: dict[str, str] = {}  # a Local block whose definition has a problem: its type_id -> the problem
+        self.problems: dict[str, str] = {}  # a Local block with a problem (for_flow): its type_id -> the problem
 
     def get(self, type_id: str) -> type[Block] | None:
         return self.blocks.get(type_id)
@@ -85,18 +85,28 @@ def for_flow(registry: Registry, local_blocks) -> Registry:
     """The blocks a flow can use: those of `registry` (the blocks folder's, as discover finds them) and the flow's Local
     blocks, from the definitions its file holds (`local_blocks`: {name: definition}), each a block of type
     local.<name> made by the Python Code block (logic.PythonCode.local_block). A definition with a problem is no
-    block: its problem is in .problems."""
+    block: its problem is in .problems. A Local block with the name (user.<name>) or the title of a Global block (a
+    file in the blocks folder, made later, e.g. from another flow) is a block, its copies still its own, and that
+    problem is in .problems too: a Local and a Global block cannot have the same name."""
     python = registry.get("logic.python")
     found = Registry()
     found.warnings = registry.warnings
     for type_id, cls in registry.blocks.items():
         if registry.sources[type_id] != "local":  # (another flow's, if `registry` was one flow's)
             found.blocks[type_id], found.sources[type_id] = cls, registry.sources[type_id]
+    global_blocks = {type_id: cls for type_id, cls in found.blocks.items()
+                     if found.sources[type_id] not in ("built-in", "plugin")}  # (a file path)
     # (local_blocks not a mapping: the flow's checks say so)
     for name, definition in (local_blocks.items() if isinstance(local_blocks, dict) else ()):
         type_id = f"{LOCAL}{name}"
         try:
-            found.blocks[type_id], found.sources[type_id] = python.local_block(name, definition), "local"
+            cls = python.local_block(name, definition)
         except ValueError as e:
             found.problems[type_id] = str(e)
+            continue
+        found.blocks[type_id], found.sources[type_id] = cls, "local"
+        same = next((g for g, other in global_blocks.items() if g == f"user.{name}" or other.title == cls.title), None)
+        if same is not None:
+            found.problems[type_id] = (f"{cls.title} ({type_id}) and the Global block {global_blocks[same].title} "
+                                       f"({same}) have the same name: rename one of them")
     return found

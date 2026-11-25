@@ -16,6 +16,8 @@ from ..flow import (_EDGE, ONE_AFTER_ANOTHER, FlowError, flow_from_data, keep_so
 from ..registry import LOCAL, for_flow
 
 UNDO_LIMIT = 200
+# What a Local block's copies run (its Python Code settings): two definitions with these the same have the same code.
+SAME_CODE = ("inputs", "outputs", "use_environment", "code")
 
 
 DEFAULT_NAME = "untitled"  # a new flow's, until it is saved as a file
@@ -238,9 +240,10 @@ class FlowDocument(QObject):
 
     def _add_definitions(self, blocks: dict, local_blocks: dict) -> dict[str, str]:
         """Pasting `blocks`: the definitions (`local_blocks`, as copied) of the Local blocks they are copies of. One the
-        flow has under that name joins it; one it has with other content, or whose name or title a Global block has
-        (block_types), is kept under the first free name <name>_2, <name>_3, ..., titled so too. Returns {name: the
-        name it is kept as} of those renamed."""
+        flow has under that name with the same code (SAME_CODE; its title and help may differ) joins it, the flow's
+        definition kept as it is; one it has with other code, or whose name or title a Global block has (block_types),
+        is kept under the first free name <name>_2, <name>_3, ..., titled so too. Returns {name: the name it is kept
+        as} of those renamed."""
         names = {spec["type"][len(LOCAL):] for spec in blocks.values()
                  if isinstance(spec, dict) and str(spec.get("type")).startswith(LOCAL)}
         known = self.block_types.blocks if self.block_types is not None else {}
@@ -248,7 +251,7 @@ class FlowDocument(QObject):
         for name in sorted(n for n in names if isinstance(local_blocks.get(n), dict)):
             mine = self.data.get("local_blocks") if isinstance(self.data.get("local_blocks"), dict) else {}
             n, new, wanted = 1, name, copy.deepcopy(local_blocks[name])
-            while mine.get(new) != wanted:
+            while not (isinstance(mine.get(new), dict) and all(mine[new].get(k) == wanted.get(k) for k in SAME_CODE)):
                 if new not in mine and f"user.{new}" not in known and wanted.get("title") not in {
                         cls.title for cls in known.values() if cls.title}:
                     self._definitions()[new] = wanted

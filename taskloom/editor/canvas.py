@@ -21,7 +21,7 @@ from ..block import AFTER, DONE, all_ports
 from ..blocks.logic import written_seconds
 from ..engine import _label
 from ..flow import (API_REQUEST, ERROR_PORT, INDEX, ITEM, ITEMS, LINES, LOOP, RESULT, RESULTS, SESSION, BlockSpec,
-                    block_config)
+                    block_config, no_value_reason)
 from .document import FlowDocument, edge_text
 from .zoom import mark
 
@@ -154,25 +154,10 @@ class PortItem(QGraphicsItem):
 
 # --- typed values: a value of its own for an input hole (flow.BLOCK_KEYS `inputs`) ----------------------------------
 
-DICT_INPUTS = {("db.run_query", "params"), ("data.statistics", "extra")}  # inputs that expect a dictionary
-
-
 def takes_no_value(registry, spec: dict, hole: str) -> str | None:
-    """Why the input `hole` of a block (`spec`: as in the flow file) can never hold a typed value; None: it can."""
-    port = block_ports(registry, spec)[0].get(hole)
-    if hole == AFTER:
-        return "Run after only says when the block runs: no value goes in."
-    if port is None:
-        return f"The block has no input {hole}."
-    if spec.get("type") == LOOP and hole == RESULT:
-        return "The Loop's result comes from the blocks inside the Loop: connect the one that gives it."
-    if port.kind == "table":
-        return "A table input takes a table from a line: no typed value is a table."
-    if port.many:
-        return "This input collects many lines into a list: connect lines to it."
-    if (spec.get("type"), hole) in DICT_INPUTS:
-        return "This input expects a dictionary, and no type of value is one: connect a line that brings one."
-    return None
+    """Why the input `hole` of a block (`spec`: as in the flow file) can never hold a typed value (flow.no_value_reason,
+    which Validate refuses one by); None: it can."""
+    return no_value_reason(spec.get("type"), hole, block_ports(registry, spec)[0].get(hole))
 
 
 def why_no_value(doc: FlowDocument, registry, block_id: str, hole: str) -> str | None:

@@ -424,18 +424,41 @@ def placeholder_problems(f: fields.Field | None, text: str, params, inputs, type
             for n in sorted(names) if n in typed or (n in params) == (n in data)]
 
 
+DICT_INPUTS = {("db.run_query", "params"), ("data.statistics", "extra")}  # inputs that expect a dictionary
+
+
+def no_value_reason(type_id: str, hole: str, port) -> str | None:
+    """Why the input `hole` of a block of type `type_id` can never hold a typed value (`port`: that input's, None: the
+    block has no such input), as the editor's menu says it and Validate refuses one there; None: it can."""
+    if hole == AFTER:
+        return "Run after only says when the block runs: no value goes in."
+    if port is None:
+        return f"The block has no input {hole}."
+    if type_id == LOOP and hole == RESULT:
+        return "The Loop's result comes from the blocks inside the Loop: connect the one that gives it."
+    if port.kind == "table":
+        return "A table input takes a table from a line: no typed value is a table."
+    if port.many:
+        return "This input collects many lines into a list: connect lines to it."
+    if (type_id, hole) in DICT_INPUTS:
+        return "This input expects a dictionary, and no type of value is one: connect a line that brings one."
+    return None
+
+
 def _typed_value_problems(block_id: str, spec: BlockSpec, inputs: dict, sources: dict, params,
                           named: set) -> tuple[list[str], list[str]]:
-    """(what is wrong with the block's typed values: one for an input it does not have or that takes none, one with a
-    line into its input too, one that does not fit its type, a {{name}} in a text or a list's item that cannot be
-    filled; the single-brace {name} in those that are likely slips). `inputs`: its input ports; `sources`: the lines
-    into them; `named`: what a {{name}} can name."""
+    """(what is wrong with the block's typed values: one for an input it does not have or that takes none
+    (no_value_reason), one with a line into its input too, one that does not fit its type, a {{name}} in a text or a
+    list's item that cannot be filled; the single-brace {name} in those that are likely slips). `inputs`: its input
+    ports; `sources`: the lines into them; `named`: what a {{name}} can name."""
     problems, slips = [], []
     for hole, typed in spec.inputs.items():
         port, where = inputs.get(hole), f"{block_id}: the value typed for the input {hole}"
-        if port is None or hole == AFTER or port.kind == "table" or port.many:
-            problems.append(f"{where}: " + (f"{block_id} has no such input" if port is None else "it takes none (a "
-                                             "table input, one that collects many lines, or run after)"))
+        if port is None:
+            problems.append(f"{where}: {block_id} has no such input")
+            continue
+        if why := no_value_reason(spec.type, hole, port):
+            problems.append(f"{where}: it takes no typed value. {why}")
             continue
         if hole in sources:
             problems.append(f"{where}: a line comes into {hole} too: keep the value or the line")
