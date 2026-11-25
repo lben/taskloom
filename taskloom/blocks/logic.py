@@ -28,7 +28,8 @@ from ..expr import evaluate, functions
 from ..engine import Failed, SecretStr, _masked, inline, line_names, preview
 from ..flow import (ALL_LINES, AS_FINISHED, AT_MOST, AT_ONCE, EACH_LINE, INDEX, ITEM, ITEMS, LINE_ORDER, LINES,
                     LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, PASSES_ON, RESULT, RESULTS, RUNS_AGAIN, SAME_TIME,
-                    SPLITTER)
+                    SPLITTER, BlockSpec, block_config)
+from ..registry import LOCAL
 from ..table import Table
 
 
@@ -189,6 +190,26 @@ class PythonCode(Block):
                 except Exception as error:  # e.g. an open file or connection
                     left_out[name] = str(error) or type(error).__name__
         return produced, left_out
+
+    @staticmethod
+    def local_block(name: str, definition) -> type[ReusableBlock]:
+        """The block of the flow's Local block `name`, from its definition in the flow file (local_blocks): its
+        copies, blocks of type local.<name>, run the definition's code as a Python Code block with its settings
+        (inputs, outputs, use_environment and code) does. Raises ValueError saying what is wrong with the definition.
+        (registry.for_flow calls it on the Python Code block it found: the registry is below the blocks, charter C1.)"""
+        about = ("title", "description", "inputs_help")
+        if not isinstance(definition, dict):
+            raise ValueError(f"expected a mapping: {', '.join([*about, *PythonCode.config])}")
+        unknown = set(definition) - set(about) - set(PythonCode.config)
+        if unknown:
+            raise ValueError(f"unknown key(s) {sorted(unknown)}")
+        settings = {key: value for key, value in definition.items() if key not in about}
+        return type(f"Local_{name}", (ReusableBlock,), {
+            "type_id": f"{LOCAL}{name}", "title": str(definition.get("title") or name),
+            "description": str(definition.get("description") or ""),
+            "inputs_help": str(definition.get("inputs_help") or ""),
+            "python_code": block_config(PythonCode, BlockSpec(id=str(name), type=PythonCode.type_id, config=settings)),
+        })
 
 
 def _created(name: str, value) -> bool:

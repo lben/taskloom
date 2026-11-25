@@ -1,4 +1,5 @@
-"""Finds block classes: built-ins, installed plugins, then the user blocks folder.
+"""Finds block classes: built-ins, installed plugins, then the user blocks folder; and, for one flow, also its own Local
+blocks (for_flow).
 
 Later sources override earlier ones by `type_id`, so a user block can replace a built-in.
 """
@@ -19,13 +20,15 @@ BUILTIN_MODULES = ("taskloom.blocks.triggers", "taskloom.blocks.logic", "taskloo
                    "taskloom.blocks.check_table", "taskloom.blocks.database", "taskloom.blocks.files",
                    "taskloom.blocks.servers", "taskloom.blocks.reports")
 ENTRY_POINT_GROUP = "taskloom.blocks"
+LOCAL = "local."  # the type of a copy of the flow's Local block <name>: local.<name>
 
 
 class Registry:
     def __init__(self):
         self.blocks: dict[str, type[Block]] = {}
-        self.sources: dict[str, str] = {}  # type_id -> "built-in", "plugin" or a file path
+        self.sources: dict[str, str] = {}  # type_id -> "built-in", "plugin", "local" (for_flow) or a file path
         self.warnings: list[str] = []
+        self.problems: dict[str, str] = {}  # a Local block whose definition has a problem: its type_id -> the problem
 
     def get(self, type_id: str) -> type[Block] | None:
         return self.blocks.get(type_id)
@@ -76,3 +79,24 @@ def discover(user_blocks_dir: Path | None) -> Registry:
             if not path.name.startswith("_"):
                 registry.add_file(path)
     return registry
+
+
+def for_flow(registry: Registry, local_blocks) -> Registry:
+    """The blocks a flow can use: those of `registry` (the blocks folder's, as discover finds them) and the flow's Local
+    blocks, from the definitions its file holds (`local_blocks`: {name: definition}), each a block of type
+    local.<name> made by the Python Code block (logic.PythonCode.local_block). A definition with a problem is no
+    block: its problem is in .problems."""
+    python = registry.get("logic.python")
+    found = Registry()
+    found.warnings = registry.warnings
+    for type_id, cls in registry.blocks.items():
+        if registry.sources[type_id] != "local":  # (another flow's, if `registry` was one flow's)
+            found.blocks[type_id], found.sources[type_id] = cls, registry.sources[type_id]
+    # (local_blocks not a mapping: the flow's checks say so)
+    for name, definition in (local_blocks.items() if isinstance(local_blocks, dict) else ()):
+        type_id = f"{LOCAL}{name}"
+        try:
+            found.blocks[type_id], found.sources[type_id] = python.local_block(name, definition), "local"
+        except ValueError as e:
+            found.problems[type_id] = str(e)
+    return found

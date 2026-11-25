@@ -28,6 +28,7 @@ from .flow import (API_REQUEST, AS_FINISHED, AT_ONCE, ERROR_PORT, INDEX, ITEM, I
                    validate)
 from .config import REVEALED, before_now, kept_runs, runs_kept_since
 from .history import History
+from .registry import for_flow
 from .table import Table
 
 # How long a block gets to stop on its own after a timeout or cancel before it is abandoned.
@@ -320,7 +321,9 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     `before_start` is called once the flow is loaded and checked, just before its run is recorded and begins
     (`taskloom run --start-at` waits there for its time). `scheduled`: the schedule the scheduler service started it for;
     `claim(db)`, done as its run is recorded, may refuse it (its run history says both: see History.start_run).
+    `registry`: the blocks folder's (discover); the flow's own Local blocks come from the flow itself (for_flow).
     """
+    registry = for_flow(registry, flow.local_blocks)
     fired = _fired_triggers(flow, registry, trigger)
     part = run_part(flow, registry, trigger, only, run_from)
     # A problem of a block taking no part in it does not stop it: its Log warns about it.

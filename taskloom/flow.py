@@ -20,11 +20,14 @@ from .block import AFTER, DONE, IDENTIFIER, all_ports, applies, fields, has_plac
 from .calendars import load_calendar
 from .config import keep_runs_for
 from .expr import functions
+from .registry import LOCAL, for_flow
 from .schedule import Trigger
 
 FORMAT_VERSION = 1
+# local_blocks: the flow's Local block definitions (registry.for_flow); notes: text on the canvas, only the editor uses
+# them.
 FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone", "triggers", "overlap", "notify",
-             "blocks", "edges", "notes"}  # notes: text on the canvas; only the editor uses them
+             "local_blocks", "blocks", "edges", "notes"}
 OVERLAP_POLICIES = ("skip", "queue", "allow")
 # inside: the Loop (logic.loop) a block is inside, which runs it once per item, or the Session (servers.api_session);
 # ui: where the canvas draws it (a Loop's or a Session's box: also its width and height, once you resized it).
@@ -158,6 +161,7 @@ class Flow:
     edges: list[Edge]
     version: str | None = None  # the Git blob id of the bytes it was loaded from (load_flow)
     sessions: dict = field(default_factory=dict)  # each Session: the Loop it is inside (None: in none)
+    local_blocks: dict = field(default_factory=dict)  # its Local blocks' definitions, by name (registry.for_flow)
 
 
 class _FlowLoader(yaml.SafeLoader):
@@ -248,6 +252,7 @@ def flow_from_data(data, path: Path) -> Flow:
         errors.append(f"unsupported flow format taskloom: {version} (this version reads {FORMAT_VERSION})")
     errors += [f"unknown top-level key '{k}'" for k in data if k not in FLOW_KEYS]
 
+    local_blocks = dict(_mapping(data.get("local_blocks"), "local_blocks", errors))  # (each checked by validate)
     flow_params = {}
     for name, spec in _mapping(data.get("params"), "params", errors).items():
         if not IDENTIFIER.match(str(name)):
@@ -326,6 +331,7 @@ def flow_from_data(data, path: Path) -> Flow:
         name=str(data.get("name") or path.stem), path=path, params=flow_params,
         calendar=data.get("calendar"), timezone=data.get("timezone"),
         triggers=triggers, overlap=overlap, notify=notify, blocks=blocks, edges=edges, sessions=sessions,
+        local_blocks=local_blocks,
     )
 
 
@@ -465,7 +471,9 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
     `part`: the blocks of the run it checks the flow for; None: the flow as a whole, whose blocks taking part in some
     run are those a start block's line reaches (all of them, without start blocks). A problem only blocks that do not
     take part have (in their settings, an input not connected, a loop among them) is a warning that says so; the
-    others (the flow's connections and parameters, the settings) are errors whatever block they are about."""
+    others (the flow's connections and parameters, the settings) are errors whatever block they are about.
+    `registry`: the blocks folder's (discover); the flow's own Local blocks come from the flow itself (for_flow)."""
+    registry = for_flow(registry, flow.local_blocks)
     errors, warnings, apart = [], [], []  # apart: the problems of blocks that do not take part
     if part is None:
         on = _taking_part(flow, registry, _start_blocks(flow, registry))
@@ -483,12 +491,21 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
     except Exception as e:
         errors.append(str(e))
 
+    # A problem in a Local block's definition is said once, naming its copies (then not checked one by one).
+    for type_id, problem in registry.problems.items():
+        copies = [b for b, spec in flow.blocks.items() if spec.type == type_id]
+        (errors if part & set(copies) else apart).append(
+            f"the Local block {type_id[len(LOCAL):]} (used by {', '.join(copies) or 'no block'}): {problem}")
     ports = {}
     for block_id, spec in flow.blocks.items():
         found = errors if block_id in part else apart
+        if spec.type in registry.problems:
+            continue
         cls = registry.get(spec.type)
         if cls is None:
-            found.append(f"{block_id}: unknown block type '{spec.type}'")
+            found.append(f"{block_id}: the definition of its Local block {spec.type[len(LOCAL):]} is missing from the "
+                         "flow file" if spec.type.startswith(LOCAL)
+                         else f"{block_id}: unknown block type '{spec.type}'")
             continue
         try:
             config = block_config(cls, spec)

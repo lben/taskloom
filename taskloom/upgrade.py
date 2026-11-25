@@ -26,6 +26,7 @@ import yaml
 from .block import all_ports
 from .flow import (_EDGE, ERROR_PORT, FORMAT_VERSION, OFF, BlockSpec, FlowError, block_config, flow_from_data,
                    read_flow_file, unconnected_starts, validate)
+from .registry import for_flow
 
 # Format version N -> a function that turns a flow of version N into one of version N + 1.
 MIGRATIONS: dict = {}
@@ -79,6 +80,7 @@ def _check(path: Path, registry, home) -> Report:
         new["taskloom"] = version
         report.fixes.append(f"update the flow format from {version - 1} to {version}")
 
+    registry = for_flow(registry, new.get("local_blocks"))  # with the flow's own Local blocks
     blocks = new.get("blocks") if isinstance(new.get("blocks"), dict) else {}
     ports = {}
     for block_id, spec in blocks.items():

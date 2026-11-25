@@ -18,7 +18,7 @@ from .config import Home
 from .engine import Cancelled, finished_text, run_flow
 from .flow import FlowError, load_flow, real_path, validate
 from .launch import ARGS_VARIABLE, frozen
-from .registry import discover
+from .registry import discover, for_flow
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
 
@@ -151,7 +151,7 @@ def cmd_run(args, home: Home) -> int:
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
     os.chdir(flow.path.parent)
-    registry = discover(home.blocks_dir)
+    registry = for_flow(discover(home.blocks_dir), flow.local_blocks)
     sinks = [_print_json] if args.json_events else [_print_event]
     cancel = threading.Event()
 
