@@ -1402,7 +1402,9 @@ class MainWindow(QMainWindow):
                 f"({self.home.blocks_dir}), under User Created in the blocks tree, for every flow. The "
                 f"{copies} {'copy' if copies == 1 else 'copies'} in this flow then use it, and the flow file no longer "
                 "holds its definition.\n\nUndo cannot remove the global block's file: Undo makes them Local again, "
-                "the file stays.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                "the file stays, and the flow does not run (a Local and a Global block cannot have the same name) "
+                "until you Redo, or delete the global block (Delete block… in the blocks tree).",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         title, what, expects = cls.title, cls.description, cls.inputs_help
 

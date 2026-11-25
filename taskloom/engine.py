@@ -1059,8 +1059,11 @@ class _Runner:
         if inputs is None:
             return
         self.ran.add(block_id)
-        if alone:  # what it gets (maybe values you chose), saved before it can change them
-            self._keep_outputs(block_id, inputs, KEPT_INPUTS, typed=self.only_typed, came=self.only_came)
+        if alone:  # what it gets (maybe values you chose), saved before it can change them; not its typed values: a
+            # re-run from this run gives them as the flow has them then (none, once cleared)
+            typed_now = set(self.flow.blocks[block_id].inputs) - set(self.only_typed)
+            self._keep_outputs(block_id, {k: v for k, v in inputs.items() if k not in typed_now}, KEPT_INPUTS,
+                               typed=self.only_typed, came=self.only_came)
             self.brought = {name: _by_edge(inputs[name], came) for name, came in self.only_came.items()}
         spec = self.flow.blocks[block_id]
         # A Loop's: each item's (item, status, result); a Merger's each line: each line's (output, status, what its run

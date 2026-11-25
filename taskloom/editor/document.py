@@ -10,14 +10,13 @@ import yaml
 from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
+from ..blocks.logic import PythonCode
 from ..engine import lines as start_lines
 from ..flow import (_EDGE, ONE_AFTER_ANOTHER, FlowError, flow_from_data, keep_source_names, lines_run, per_line,
                     read_flow_file, splitter_lines)
 from ..registry import LOCAL, for_flow
 
 UNDO_LIMIT = 200
-# What a Local block's copies run (its Python Code settings): two definitions with these the same have the same code.
-SAME_CODE = ("inputs", "outputs", "use_environment", "code")
 
 
 DEFAULT_NAME = "untitled"  # a new flow's, until it is saved as a file
@@ -30,6 +29,16 @@ def new_flow_data(name: str = DEFAULT_NAME) -> dict:
 def flow_text(data: dict) -> str:
     """The text of the flow file holding `data`, as File → Save writes it."""
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+
+
+def same_code(definition, other) -> bool:
+    """Whether two Local block definitions run the same code: their Python Code settings (inputs, outputs,
+    use_environment and code) as their copies run them, one left out taking its default; not their title or help. One
+    that cannot run (a problem in it) has no code."""
+    try:
+        return PythonCode.local_block("x", definition).python_code == PythonCode.local_block("x", other).python_code
+    except ValueError:
+        return False
 
 
 def parse_edge(text: str) -> tuple[str, str, str, str] | None:
@@ -240,7 +249,7 @@ class FlowDocument(QObject):
 
     def _add_definitions(self, blocks: dict, local_blocks: dict) -> dict[str, str]:
         """Pasting `blocks`: the definitions (`local_blocks`, as copied) of the Local blocks they are copies of. One the
-        flow has under that name with the same code (SAME_CODE; its title and help may differ) joins it, the flow's
+        flow has under that name with the same code (same_code; its title and help may differ) joins it, the flow's
         definition kept as it is; one it has with other code, or whose name or title a Global block has (block_types),
         is kept under the first free name <name>_2, <name>_3, ..., titled so too. Returns {name: the name it is kept
         as} of those renamed."""
@@ -251,7 +260,7 @@ class FlowDocument(QObject):
         for name in sorted(n for n in names if isinstance(local_blocks.get(n), dict)):
             mine = self.data.get("local_blocks") if isinstance(self.data.get("local_blocks"), dict) else {}
             n, new, wanted = 1, name, copy.deepcopy(local_blocks[name])
-            while not (isinstance(mine.get(new), dict) and all(mine[new].get(k) == wanted.get(k) for k in SAME_CODE)):
+            while not same_code(mine.get(new), wanted):
                 if new not in mine and f"user.{new}" not in known and wanted.get("title") not in {
                         cls.title for cls in known.values() if cls.title}:
                     self._definitions()[new] = wanted
