@@ -8,6 +8,9 @@
 # here, by kind (kinds: a kind, its why, the mutants it explains) or one by one (mutant name: why it changes nothing a
 # user could notice). Only those no user could notice are explained: the others stay without a reason until a test
 # catches them.
+# parts: the CI jobs its mutants run in at once, each job every Nth mutant (packaging/mutants.py --part K/N),
+# the parts scored as one run in one job; it took 77 and 103 minutes whole.
+parts: 2
 scope:
   mutate:
     - mutate:

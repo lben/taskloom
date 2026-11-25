@@ -22,9 +22,10 @@ from proofs.conftest import WINDOW, choose, menu_item
 from taskloom import __version__
 from taskloom.config import Home
 import tests.test_updates as updates
-from tests.test_updates import (API_PATH, HELLO, MARKER, NEW, NO_KEYRING, Packaged, PackagedSys, _powershell, _quoted,
-                                both_entries, editor_args, entries_now, entry_for, leftovers, login_args, norm,
-                                program_folder_contents, shown_widget, unpacked, zip_files)
+from tests.packaged_windows import (HELLO, MARKER, NO_KEYRING, Packaged, PackagedSys, _powershell, _quoted, entry_for,
+                                    login_args, norm, unpacked)
+from tests.test_updates import (API_PATH, NEW, both_entries, editor_args, entries_now, leftovers,
+                                program_folder_contents, shown_widget, zip_files)
 
 # Fixtures of the updates tests, used here by name (bound, not imported, so that pyflakes passes): Windows' per-user
 # folders made temporary, and the local HTTPS server standing for Taskloom's GitHub releases.

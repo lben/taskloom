@@ -272,7 +272,7 @@ def test_scheduler_at_login_on_and_off_from_the_command_line(env, tmp_path, monk
     # The Startup entry is a shortcut (UP-2): the packaged Windows Taskloom's windowed program, for this Taskloom
     # folder (tests/test_updates.py: Windows' folders are the test's own, never the real ones).
     from taskloom import __version__
-    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
+    from tests.packaged_windows import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
     folders = windows_folders(tmp_path, monkeypatch)
     taskloom = Packaged(env, folders, unpacked(tmp_path / "Downloads" / "taskloom", __version__))
@@ -308,7 +308,7 @@ def test_start_at_login_starts_the_scheduler_also_when_a_folder_name_has_an_acce
     # you can write. E.g. for a user José: C:\Users\José\.taskloom, or Taskloom unzipped in his Downloads. The entry
     # is a shortcut (UP-2), written here by the packaged Taskloom unzipped there (tests/test_updates.py).
     from taskloom import __version__
-    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
+    from tests.packaged_windows import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
     folders = windows_folders(tmp_path, monkeypatch)
     user = env.root / "Users" / "José"

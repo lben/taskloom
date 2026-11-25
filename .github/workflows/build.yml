@@ -12,6 +12,11 @@ on:
         description: "Only these tests, on Windows and Linux, and nothing else (pytest arguments, for example
           tests/test_scheduler.py -k overlap). Empty: the whole run."
         default: ""
+      features:
+        description: "Only the mutation testing of these features, and nothing else (the names of their
+          docs/promises/<name>.mutants.yaml, separated by commas or spaces, for example updates,braces or scheduler):
+          each that has no kept result for its files runs, and keeps its result for later runs. Not with tests."
+        default: ""
       fresh:
         description: "Run every long check again (the scheduler's model check and mutation testing, each feature's
           mutation testing) rather than take its result from an earlier run; its result is still kept for later runs."
@@ -29,6 +34,7 @@ jobs:
   # The tests, on machines that run at once, each a share of the test files, whole (packaging/test_shards.py, by the
   # minutes each file took): 3 on Windows and 2 on Linux, about 35 minutes each instead of 1 h 30 and 1 h 15 on one.
   test:
+    if: ${{ !inputs.features }}  # (run by hand with features: only their mutation testing)
     strategy:
       fail-fast: false
       matrix:
@@ -68,15 +74,17 @@ jobs:
           name: "test-results-${{ runner.os }}-${{ matrix.shard }}"
           path: "results-${{ runner.os }}-${{ matrix.shard }}.json"
 
-  # The scheduler's model check (about 2 h) and mutation testing (3 parts of about 1 h), and each other feature's
-  # checkers (its mutation testing), are not run again when every file they read is byte for byte as in an earlier run
-  # of this repository whose result is less than 30 days old: that result is used instead, and the proof PDF names its
-  # run. A check's key is a hash of those files and of the tools' versions (packaging/ci_reuse.py key); a run whose
-  # check passed keeps its result under that key (reuse-model-<key>, reuse-mutation-<key>-part-<k>,
-  # reuse-feature-<feature>-<key>). This job works out the keys and the newest run that has them; run by hand with
-  # fresh, it looks for none, so every long check runs (and keeps its result).
+  # The scheduler's model check (about 2 h), and each feature's mutation testing (the scheduler's in 3 parts of about
+  # 1 h), are not run again when every file they read is byte for byte as in an earlier run of this repository whose
+  # result is less than 30 days old: that result is used instead, and the proof PDF names its run. A check's key is a
+  # hash of those files and of the tools' versions (packaging/ci_reuse.py key); a run whose check passed keeps its
+  # result under that key (reuse-model-<key>, reuse-feature-<feature>-<key>, or each part of a feature in parts:
+  # reuse-feature-<feature>-<key>-part-<k>). This job works out the keys and the newest run that has them (for a
+  # feature in parts, every part from one run); run by hand with fresh, it looks for none, so every long check runs
+  # (and keeps its result). Run by hand with features, it does so for those features' mutation testing only, and fails
+  # at once for a name that is no feature, or when tests is given too.
   decide:
-    if: ${{ !inputs.tests }}
+    if: ${{ !inputs.tests || inputs.features }}  # (with both: it fails at once)
     runs-on: ubuntu-latest
     permissions: {actions: read, contents: read}  # (the default token cannot list artifacts or read runs)
     outputs:
@@ -84,18 +92,24 @@ jobs:
       model_run: ${{ steps.find.outputs.model_run }}
       model_url: ${{ steps.find.outputs.model_url }}
       model_date: ${{ steps.find.outputs.model_date }}
-      mutation_key: ${{ steps.find.outputs.mutation_key }}
-      mutation_run: ${{ steps.find.outputs.mutation_run }}
-      mutation_url: ${{ steps.find.outputs.mutation_url }}
-      mutation_date: ${{ steps.find.outputs.mutation_date }}
-      # Each feature whose result is taken from an earlier run: {"<feature>": {run, url, date, key}, ...}
+      # Each feature not in parts whose result is taken from an earlier run: {"<feature>": {run, url, date, key}, ...}
       features_reused: ${{ steps.find.outputs.features_reused }}
+      # Each feature in parts, for the score job: [{feature, of (its parts), key, and run, url, date when its parts are
+      # taken from an earlier run}, ...]; and the parts the mutation job runs: [{feature, part, of, key}, ...] (the
+      # features job passes both on)
+      parted: ${{ steps.find.outputs.parted }}
+      parts: ${{ steps.find.outputs.parts }}
     steps:
+      - name: Run by hand with tests or with features, not both
+        if: ${{ inputs.tests && inputs.features }}
+        run: |
+          echo "::error::Run by hand with tests or with features, not both: only one of them may be given"
+          exit 1
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --python 3.12
       - id: find
-        env: {GH_TOKEN: "${{ github.token }}", FRESH: "${{ inputs.fresh }}"}
+        env: {GH_TOKEN: "${{ github.token }}", FRESH: "${{ inputs.fresh }}", FEATURES: "${{ inputs.features }}"}
         run: |
           # The newest run that has every artifact named, none expired, none 30 days old or more, all uploaded by this
           # repository's own branches, not by a fork's pull request (anyone can write what that uploads): ci_reuse.py
@@ -106,51 +120,66 @@ jobs:
               gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" --jq '.artifacts[]' || true
             done | uv run python packaging/ci_reuse.py pick --repo-id "$GITHUB_REPOSITORY_ID" "$@" || true
           }
+          # The features whose mutation testing runs, each with its parts and the check whose key keeps its result
+          # (ci_reuse.py select): every one, or run by hand with features those named (a name that is none fails here).
+          selected=$(uv run python packaging/ci_reuse.py select --features "$FEATURES")
           [ "$FRESH" != true ] || echo "Run by hand with fresh: every long check runs"
           # Besides the files: TLC (as downloaded in the model-check job), Java and Python (as the jobs set them up).
           # The checkers-features job passes the same.
           salt="tlc 1.7.4 $TLC_SHA256 java 17 python 3.12"
-          for check in model mutation; do
-            key=$(uv run python packaging/ci_reuse.py key $check --salt "$salt")
-            echo "${check}_key=$key" >> "$GITHUB_OUTPUT"
-            names="reuse-model-$key"
-            [ $check = model ] || names=$(echo reuse-mutation-$key-part-{1,2,3})  # (all 3 parts from one run)
-            run=$(newest $names)
+          if [ -z "$FEATURES" ]; then  # (run by hand with features, the model check does not run)
+            key=$(uv run python packaging/ci_reuse.py key model --salt "$salt")
+            echo "model_key=$key" >> "$GITHUB_OUTPUT"
+            run=$(newest "reuse-model-$key")
             if [ -n "$run" ] && about=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" \
                 --jq '"run=\(.id)\nurl=\(.html_url)\ndate=\(.created_at[:10])"'); then
-              echo "$about" | sed "s/^/${check}_/" >> "$GITHUB_OUTPUT"
-              echo "$check: reused from run $run, its files unchanged (key $key)"
+              echo "$about" | sed "s/^/model_/" >> "$GITHUB_OUTPUT"
+              echo "model: reused from run $run, its files unchanged (key $key)"
             else
-              echo "$check: no earlier result of key $key; it runs"
+              echo "model: no earlier result of key $key; it runs"
             fi
-          done
-          # Each other feature's checkers, all of them mutation testing of the scope in its <feature>.mutants.yaml (a
-          # feature without one has no key). The features job leaves those taken from an earlier run out of its list.
-          reused='{}'
-          for mutants in docs/promises/*.mutants.yaml; do
-            feature=$(basename "$mutants" .mutants.yaml)
-            [ "$feature" != scheduler ] || continue
-            if ! key=$(uv run python packaging/ci_reuse.py key "feature:$feature" --salt "$salt"); then
-              echo "$feature: no key; it runs, and its result is not kept"
-            elif run=$(newest "reuse-feature-$feature-$key") && [ -n "$run" ] && about=$(gh api \
-                "repos/$GITHUB_REPOSITORY/actions/runs/$run" \
-                --jq '{run: .id | tostring, url: .html_url, date: .created_at[:10]}'); then
-              reused=$(jq -c --arg feature "$feature" --arg key "$key" --argjson about "$about" \
+          fi
+          # Each feature's mutation testing (a feature without a key always runs, and its result is not kept). One not
+          # in parts runs in the checkers-features job, which leaves out those taken from an earlier run; one in parts
+          # (and the scheduler's, whose other checkers have jobs of their own) in the mutation job, those not taken
+          # from an earlier run, and is scored in the score job.
+          reused='{}' parted='[]' parts='[]'
+          while read -r -u 3 feature of check; do
+            about='{}'
+            if ! key=$(uv run python packaging/ci_reuse.py key "$check" --salt "$salt"); then
+              key=; echo "$feature: no key; it runs, and its result is not kept"
+            else
+              names="reuse-feature-$feature-$key"
+              if [ "$of" != 1 ] || [ "$feature" = scheduler ]; then  # (all its parts from one run)
+                names=$(for part in $(seq "$of"); do echo "$names-part-$part"; done)
+              fi
+              if run=$(newest $names) && [ -n "$run" ] && about=$(gh api \
+                  "repos/$GITHUB_REPOSITORY/actions/runs/$run" \
+                  --jq '{run: .id | tostring, url: .html_url, date: .created_at[:10]}'); then
+                echo "$feature: reused from run $run, its files unchanged (key $key)"
+              else
+                about='{}'; echo "$feature: no earlier result of key $key; it runs"
+              fi
+            fi
+            if [ "$of" = 1 ] && [ "$feature" != scheduler ]; then
+              [ "$about" = '{}' ] || reused=$(jq -c --arg feature "$feature" --arg key "$key" --argjson about "$about" \
                 '.[$feature] = $about + {key: $key}' <<< "$reused")
-              echo "$feature: reused from run $run, its files unchanged (key $key)"
             else
-              echo "$feature: no earlier result of key $key; it runs"
+              parted=$(jq -c --arg feature "$feature" --argjson of "$of" --arg key "$key" --argjson about "$about" \
+                '. + [{feature: $feature, of: $of, key: $key} + $about]' <<< "$parted")
+              [ "$about" != '{}' ] || parts=$(jq -c --arg feature "$feature" --argjson of "$of" --arg key "$key" \
+                '. + [range(1; $of + 1) | {feature: $feature, part: ., of: $of, key: $key}]' <<< "$parts")
             fi
-          done
-          echo "features_reused=$reused" >> "$GITHUB_OUTPUT"
+          done 3<<< "$selected"
+          { echo "features_reused=$reused"; echo "parted=$parted"; echo "parts=$parts"; } >> "$GITHUB_OUTPUT"
 
   # The checkers of the scheduler feature (docs/promises/scheduler.evidence.yaml): each one's whole output and result
   # go to proof/, which the proof job turns into the feature's pages. A GitHub job runs at most 6 hours, so they run in
   # parallel jobs: the model check alone, in the model-check job (about 2 h 10 min; 1 h 24 min on a 10-core laptop
   # with 4 workers); the trace validation, the leak check and design health together, here (about 20 min); mutation
-  # testing in 3 parts, in the mutation job. The evidence job puts their results together.
+  # testing in 3 parts, in the mutation job (scored in the score job). The evidence job puts their results together.
   checkers:
-    if: ${{ !inputs.tests }}  # (run by hand with tests: only those tests run)
+    if: ${{ !inputs.tests && !inputs.features }}  # (run by hand with tests or features: only those run)
     runs-on: ubuntu-latest
     timeout-minutes: 330  # (packaging/checkers.py stops a checker after 5 hours, so its log is kept)
     steps:
@@ -185,7 +214,8 @@ jobs:
   # The scheduler's TLA+ model check, when no earlier run's result can be used (decide job).
   model-check:
     needs: decide
-    if: ${{ !cancelled() && !inputs.tests && !needs.decide.outputs.model_run }}  # (also when decide failed)
+    # (also when decide failed in a whole run)
+    if: ${{ !cancelled() && !inputs.tests && !inputs.features && !needs.decide.outputs.model_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 330  # (packaging/checkers.py stops a checker after 5 hours, so its log is kept)
     steps:
@@ -220,16 +250,20 @@ jobs:
             proof
             !proof/**/tlc-states
 
-  # Mutation testing of the scheduler in 3 parts at once, each every 3rd mutant that counts (packaging/mutants.py
-  # --part; about 2 h 15 min each, 3.8 h for all on a 10-core laptop with 4 workers), when no earlier run's result can
-  # be used (decide job). The evidence job scores them.
+  # Mutation testing of each feature in parts (parts: N in its <feature>.mutants.yaml; the scheduler's in 3), the parts
+  # at once, each a job that runs every Nth mutant that counts (packaging/mutants.py --part K/N; the scheduler's about
+  # 2 h 15 min each, 3.8 h for all on a 10-core laptop with 4 workers), when no earlier run's result can be used
+  # (decide job; the features job lists them, every one when decide failed in a whole run). The score job scores each
+  # feature's parts as one run.
   mutation:
-    needs: decide
+    needs: features
+    name: mutation (${{ matrix.feature }}, part ${{ matrix.part }} of ${{ matrix.of }})
+    # (also when decide failed in a whole run; a matrix of none is an error)
+    if: ${{ !cancelled() && needs.features.result == 'success' && needs.features.outputs.parts != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        part: [1, 2, 3]
-    if: ${{ !cancelled() && !inputs.tests && !needs.decide.outputs.mutation_run }}  # (also when decide failed)
+        include: ${{ fromJSON(needs.features.outputs.parts) }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -240,26 +274,30 @@ jobs:
       - name: Qt libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - run: uv sync --python 3.12
-      - name: Mutation testing, part ${{ matrix.part }} of 3 (its whole output goes to proof/scheduler/logs)
+      - name: Mutation testing, this part (its whole output goes to proof/<feature>/logs)
         run: |
           set -o pipefail
-          mkdir -p proof/scheduler/logs
-          uv run python packaging/mutants.py . --run --part ${{ matrix.part }}/3 \
-            --explained docs/promises/scheduler.mutants.yaml 2>&1 \
-            | tee proof/scheduler/logs/mutation-part-${{ matrix.part }}.log
+          mkdir -p "proof/${{ matrix.feature }}/logs"
+          uv run python packaging/mutants.py . --run --part ${{ matrix.part }}/${{ matrix.of }} \
+            --explained "docs/promises/${{ matrix.feature }}.mutants.yaml" 2>&1 \
+            | tee "proof/${{ matrix.feature }}/logs/mutation-part-${{ matrix.part }}.log" || status=1
+          # A feature with a scope runs in build/mutation/<feature>: its records go to mutants/, as the scheduler's
+          # (where the score job looks for each part's), also when the run failed.
+          [ ! -d "build/mutation/${{ matrix.feature }}/mutants" ] || mv "build/mutation/${{ matrix.feature }}/mutants" .
           git rev-parse HEAD > tested-commit  # the commit tested (on a pull request, its merge commit), for a reuse
+          exit ${status:-0}
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}  # also when it failed: the evidence job says which mutants have no verdict
+        if: ${{ !cancelled() }}  # also when it failed: the score job says which mutants have no verdict
         with:
-          name: mutation-part-${{ matrix.part }}
+          name: mutation-${{ matrix.feature }}-part-${{ matrix.part }}
           path: |
             mutants
             proof
             !mutants/**/__pycache__
       - uses: actions/upload-artifact@v4
-        if: needs.decide.outputs.mutation_key  # (only when it passed: a failed or cut-short part is never reused)
+        if: matrix.key  # (only when it passed: a failed or cut-short part is never reused)
         with:
-          name: reuse-mutation-${{ needs.decide.outputs.mutation_key }}-part-${{ matrix.part }}
+          name: reuse-feature-${{ matrix.feature }}-${{ matrix.key }}-part-${{ matrix.part }}
           path: |
             mutants
             proof
@@ -271,29 +309,54 @@ jobs:
   # testing once took all its machine's memory) takes no other feature's results with it: a bug fix or small feature
   # lists only mutation testing of the functions it changed (the scope in its <feature>.mutants.yaml), a few minutes
   # each. Their output and results go to proof/<feature>/, as the scheduler's. A feature whose result is taken from an
-  # earlier run (decide job) is not run again; one whose checkers passed keeps their result under its key.
+  # earlier run (decide job) is not run again; one whose checkers passed keeps their result under its key. A feature
+  # in parts runs in the mutation job instead, and is scored in the score job: this job lists them for both.
   features:
     needs: decide
-    if: ${{ !cancelled() && !inputs.tests }}  # (also when decide failed: then every feature's checkers run)
+    # (also when decide failed in a whole run: then every feature's checkers run, and every part of each feature in
+    # parts, none taken from an earlier run; run by hand with features, only when decide passed: it fails for a name
+    # that is no feature)
+    if: ${{ !cancelled() && !inputs.tests && (needs.decide.result == 'success' || !inputs.features) }}
     runs-on: ubuntu-latest
     outputs:
       names: ${{ steps.list.outputs.names }}
+      parted: ${{ steps.parted.outputs.parted }}
+      parts: ${{ steps.parted.outputs.parts }}
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --python 3.12
       - id: list
-        env: {REUSED: "${{ needs.decide.outputs.features_reused }}"}
+        env: {FEATURES: "${{ inputs.features }}", REUSED: "${{ needs.decide.outputs.features_reused }}"}
         run: |
-          # A feature is its agreed list, <feature>.yaml; the scheduler's checkers run in the jobs above. Those whose
-          # result is taken from an earlier run are left out.
-          for promises in docs/promises/*.yaml; do
-            case "$promises" in *.*.yaml|*/scheduler.yaml) continue;; esac
-            name=$(basename "$promises" .yaml)
+          # Each feature's checkers are mutation testing of the scope in its <feature>.mutants.yaml (ci_reuse.py
+          # select: every feature, or run by hand with features those named). Those in parts, and the scheduler's,
+          # run in the jobs above; those whose result is taken from an earlier run are left out.
+          selected=$(uv run python packaging/ci_reuse.py select --features "$FEATURES")
+          while read -r name of check; do
+            [ "$of" = 1 ] && [ "$name" != scheduler ] || continue
             if [ -n "$REUSED" ] && jq -e --arg name "$name" 'has($name)' <<< "$REUSED" > /dev/null; then
               continue
             fi
             names="$names${names:+, }\"$name\""
-          done
+          done <<< "$selected"
           echo "names=[$names]" >> "$GITHUB_OUTPUT"
+      - id: parted
+        env:
+          DECIDED: "${{ needs.decide.result }}"
+          PARTED: "${{ needs.decide.outputs.parted }}"
+          PARTS: "${{ needs.decide.outputs.parts }}"
+        run: |
+          # The features in parts, for the score job, and their parts, for the mutation job: as the decide job lists
+          # them, or when it failed (a whole run) every one, all its parts run in this run, its result not kept (no
+          # key, as for a feature without one).
+          if [ "$DECIDED" != success ]; then
+            PARTED=$(uv run python packaging/ci_reuse.py select | jq -R -s -c '[splits("\n") | select(. != "")
+              | split(" ") | {feature: .[0], of: (.[1] | tonumber), key: ""}
+              | select(.of != 1 or .feature == "scheduler")]')
+            PARTS=$(jq -c '[.[] | range(1; .of + 1) as $part | {feature, part: $part, of, key}]' <<< "$PARTED")
+          fi
+          { echo "parted=$PARTED"; echo "parts=$PARTS"; } >> "$GITHUB_OUTPUT"
 
   checkers-features:
     needs: features
@@ -328,14 +391,73 @@ jobs:
         if: steps.key.outputs.key  # (only when its checkers passed: a failed or cut-short result is never reused)
         with: {name: "reuse-feature-${{ matrix.feature }}-${{ steps.key.outputs.key }}", path: proof}
 
+  # Each feature in parts (the features job lists them), its parts scored as one run (packaging/mutants.py --parts), in
+  # a job of its own: the parts this run's mutation job ran, or those an earlier run kept, whose record then says it is
+  # that run's result, its date and the commit its parts tested (packaging/ci_reuse.py mark), as the PDF does. Its
+  # result goes where a feature's checkers-features job puts it; it fails, as that does, below the bar.
+  score:
+    needs: [features, mutation]
+    name: score (${{ matrix.feature }})
+    # (also when a part failed or ran out of time: the proof shows which mutants have no verdict)
+    if: ${{ !cancelled() && needs.features.result == 'success' && needs.features.outputs.parted != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.features.outputs.parted) }}
+    runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read}  # (the default token cannot download another run's artifacts)
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --python 3.12
+      - name: Its parts, from this run
+        if: ${{ !matrix.run }}
+        uses: actions/download-artifact@v4
+        with: {pattern: "mutation-${{ matrix.feature }}-part-*", path: parts}
+      - name: Its parts, from the earlier run
+        if: ${{ matrix.run }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: reuse-feature-${{ matrix.feature }}-${{ matrix.key }}-part-*
+          path: parts
+          run-id: ${{ matrix.run }}
+          github-token: ${{ github.token }}  # (without it, run-id is not used)
+      - name: All its parts came, each with the commit it tested (a pattern that finds nothing does not fail)
+        id: reused
+        if: ${{ matrix.run }}
+        run: |
+          for part in $(seq ${{ matrix.of }}); do
+            file="parts/reuse-feature-${{ matrix.feature }}-${{ matrix.key }}-part-$part/tested-commit"
+            commit=$(cat "$file") && [ -n "$commit" ] || { echo "::error::Not downloaded: $file"; exit 1; }
+          done
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Its parts scored as one run, in proof/<feature> with each part's log
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p proof
+          for part in parts/*/proof; do [ ! -d "$part" ] || cp -r "$part/." proof/; done
+          uv run python packaging/checkers.py "docs/promises/${{ matrix.feature }}.yaml" proof \
+            --only "Mutation testing" \
+            --command "python packaging/mutants.py . --parts parts/* --explained docs/promises/${{ matrix.feature }}.mutants.yaml --out {out}/mutants.json"
+      - name: Its record says its verdicts are the earlier run's, of the commit its parts tested (scored here)
+        if: ${{ !cancelled() && steps.reused.outcome == 'success' }}  # (a failed reuse shows as failed)
+        run: >-
+          uv run python packaging/ci_reuse.py mark proof --run "${{ matrix.run }}" --url "${{ matrix.url }}"
+          --date "${{ matrix.date }}" --commit "${{ steps.reused.outputs.commit }}"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}  # also when it failed: the proof shows its output
+        with: {name: "checkers-feature-${{ matrix.feature }}", path: proof}
+
   # The checkers' results together, where the proof job reads them (proof-evidence: proof/<feature>/ with
-  # checkers.json, every checker in its listed order, their logs, mutants.json and, for the scheduler, leak.json): the
-  # scheduler's mutation testing parts scored as one run, then every job's results merged, feature by feature
-  # (packaging/checkers.py --merge). A result taken from an earlier run (decide job) goes where this run's would, and
-  # its record names that run, its date and the commit it checked (packaging/ci_reuse.py mark), as the PDF does.
+  # checkers.json, every checker in its listed order, their logs, mutants.json and, for the scheduler, leak.json): every
+  # job's results merged, feature by feature (packaging/checkers.py --merge). A result taken from an earlier run (decide
+  # job) goes where this run's would, and its record names that run, its date and the commit it checked
+  # (packaging/ci_reuse.py mark), as the PDF does (a feature in parts: by its score job).
   evidence:
-    needs: [decide, checkers, model-check, mutation, checkers-features]
-    if: ${{ !cancelled() && !inputs.tests }}  # also when a checker failed or ran out of time: the proof shows which
+    needs: [decide, checkers, model-check, checkers-features, score]
+    # also when a checker failed or ran out of time: the proof shows which
+    if: ${{ !cancelled() && !inputs.tests && !inputs.features }}
     runs-on: ubuntu-latest
     permissions: {actions: read, contents: read}  # (the default token cannot download another run's artifacts)
     timeout-minutes: 30
@@ -375,44 +497,13 @@ jobs:
         run: >-
           uv run python packaging/ci_reuse.py mark jobs/checkers-model --run "${{ needs.decide.outputs.model_run }}"
           --url "${{ needs.decide.outputs.model_url }}" --date "${{ needs.decide.outputs.model_date }}"
-      - uses: actions/download-artifact@v4
-        if: ${{ !cancelled() }}
-        with: {pattern: "mutation-part-*", path: mutation-parts}
-      - name: Mutation testing's 3 parts, from the earlier run
-        if: ${{ !cancelled() && needs.decide.outputs.mutation_run }}
-        uses: actions/download-artifact@v4
-        with:
-          pattern: reuse-mutation-${{ needs.decide.outputs.mutation_key }}-part-*
-          path: mutation-parts
-          run-id: ${{ needs.decide.outputs.mutation_run }}
-          github-token: ${{ github.token }}  # (without it, run-id is not used)
-      - name: All 3 parts came, each with the commit it tested (a pattern that finds nothing does not fail)
-        id: reused-mutation
-        if: ${{ !cancelled() && needs.decide.outputs.mutation_run }}
-        run: |
-          for part in 1 2 3; do
-            file="mutation-parts/reuse-mutation-${{ needs.decide.outputs.mutation_key }}-part-$part/tested-commit"
-            commit=$(cat "$file") && [ -n "$commit" ] || { echo "::error::Not downloaded: $file"; exit 1; }
-          done
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-      - name: Mutation testing, its parts scored as one run
-        if: ${{ !cancelled() }}
-        run: |
-          uv run python packaging/checkers.py docs/promises/scheduler.yaml jobs/mutation --only "Mutation testing" \
-            --command "python packaging/mutants.py . --parts mutation-parts/* --explained docs/promises/scheduler.mutants.yaml --out {out}/mutants.json"
-      - name: Mutation testing's record says its verdicts are the earlier run's, of that run's commit (scored here)
-        if: ${{ !cancelled() && steps.reused-mutation.outcome == 'success' }}  # (a failed reuse shows as failed)
-        run: >-
-          uv run python packaging/ci_reuse.py mark jobs/mutation --run "${{ needs.decide.outputs.mutation_run }}"
-          --url "${{ needs.decide.outputs.mutation_url }}" --date "${{ needs.decide.outputs.mutation_date }}"
-          --commit "${{ steps.reused-mutation.outputs.commit }}"
       - name: Every checker's result, in proof/
         if: ${{ !cancelled() }}
         run: |
           # A feature is its agreed list, <feature>.yaml; each job's folder holds the features whose checkers it ran.
           for promises in docs/promises/*.yaml; do
             case "$promises" in *.*.yaml) continue;; esac
-            uv run python packaging/checkers.py "$promises" proof --merge jobs/* mutation-parts/*/proof || status=1
+            uv run python packaging/checkers.py "$promises" proof --merge jobs/* || status=1
           done
           exit ${status:-0}
       - uses: actions/upload-artifact@v4
@@ -421,7 +512,7 @@ jobs:
 
   # The proofs Windows cannot show (marked linux_proof, each saying why), on Linux: the proof job puts them in its PDF.
   proof-linux:
-    if: ${{ !inputs.tests }}
+    if: ${{ !inputs.tests && !inputs.features }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -443,7 +534,8 @@ jobs:
   # Windows cannot show), as one PDF of screenshots and checks.
   proof:
     needs: [proof-linux, test, evidence]
-    if: ${{ !cancelled() && !inputs.tests }}  # also when a Linux proof, a test or a checker failed: the PDF shows what failed
+    # also when a Linux proof, a test or a checker failed: the PDF shows what failed
+    if: ${{ !cancelled() && !inputs.tests && !inputs.features }}
     runs-on: windows-latest
     timeout-minutes: 45  # the proofs alone take about 28 minutes on Windows
     env:

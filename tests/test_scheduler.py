@@ -147,7 +147,7 @@ def test_start_at_login_puts_its_entry_in_the_windows_startup_folder_for_this_ta
     outside ASCII and a % in it. (`taskloom scheduler --at-login on` of the packaged Windows Taskloom, as in
     tests/test_updates.py; `off` is tests/test_paths_cli_config.py's.)"""
     from taskloom import __version__
-    from tests.test_updates import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
+    from tests.packaged_windows import Packaged, entry_for, login_args, read_entry, unpacked, windows_folders
 
     folders = windows_folders(tmp_path, monkeypatch)
     folders.startup.parent.mkdir(parents=True)
@@ -210,7 +210,7 @@ def test_a_start_at_login_entry_says_which_version_starts(env, tmp_path, monkeyp
     starts an older one (0.1.0), or one whose folder has no VERSION (from before versions were written there); a newer
     Taskloom set it: left as it is. Another Taskloom folder's entry stays that folder's (its arguments are kept)."""
     from taskloom import __version__
-    from tests.test_updates import HELLO, Packaged, entry_for, login_args, read_entry, unpacked, windows_folders, \
+    from tests.packaged_windows import HELLO, Packaged, entry_for, login_args, read_entry, unpacked, windows_folders, \
         write_entry
 
     folders = windows_folders(tmp_path, monkeypatch)
@@ -253,7 +253,7 @@ def test_a_flow_this_scheduler_cannot_read_names_its_version(env):
 def test_starting_at_login_keeps_a_paused_scheduler_service_off(env, tmp_path, monkeypatch):
     from taskloom import __version__
     from taskloom.scheduler import set_paused
-    from tests.test_updates import Packaged, read_entry, unpacked, windows_folders
+    from tests.packaged_windows import Packaged, read_entry, unpacked, windows_folders
 
     home = Home(env.home)
     folders = windows_folders(tmp_path, monkeypatch)
