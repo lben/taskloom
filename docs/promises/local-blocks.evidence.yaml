@@ -41,10 +41,13 @@ RB-4:
     block of the tree or of this flow, or a file of the blocks folder), ReusableBlockDialog asks for another name before
     anything is written; then it writes the block file from the definition, adds it to the tree (_add_block_file), and
     FlowDocument.promote (taskloom/editor/document.py) gives every copy the type of the global block and drops the
-    definition (_drop_unused_definitions), in one undo step.
+    definition (_drop_unused_definitions), in one undo step. Its question also says that after an Undo the flow does
+    not run (the file stays, and a Local and a Global block cannot have the same name, RB-8) until you Redo, or delete
+    the global block (Delete block… in the blocks tree); No is the answer Enter gives.
   not_green: >-
-    Tests say No, then Yes, with two copies holding typed values, run the flow, undo, and promote with a name a Global
-    block has; no check tries every name.
+    Tests say No (also with Enter), then Yes, with one and two copies, some holding typed values, run the flow, undo,
+    then Redo or Delete block… and run it again, and promote with a name a Global block or another Local block has;
+    no check tries every name.
 RB-5:
   enforced: >-
     FlowDocument.remove (taskloom/editor/document.py) drops, in the same change, each definition no copy uses any more
@@ -57,14 +60,17 @@ RB-6:
     MainWindow.copy_blocks (taskloom/editor/window.py) puts the definitions of the copies copied on the clipboard with
     them, so they are there in any tab and after the copies are deleted. FlowDocument._add_definitions
     (taskloom/editor/document.py), called by paste_blocks, lets a pasted copy join this flow's Local block of that
-    name when the two have the same code (SAME_CODE: the same inputs, outputs, Run in my Python environment and code;
-    the title, what it does and what its inputs expect may differ, the flow's own kept), and otherwise keeps the pasted
-    one as the first free <name>_2, <name>_3, … (also when a Global block has that name or title), and paste_blocks
-    gives the pasted copies its type; MainWindow.paste_blocks names it in the status bar.
+    name when the two have the same code (same_code: the same Python Code settings as their copies run them, inputs,
+    outputs, Run in my Python environment and code, one left out taking its default, so use_environment false and
+    left out are the same; the title, what it does and what its inputs expect may differ, the flow's own kept), and
+    otherwise keeps the pasted one as the first free <name>_2, <name>_3, …, titled with that number too (also when a
+    Global block has that name or title), and paste_blocks gives the pasted copies its type;
+    MainWindow.paste_blocks names it in the status bar.
   not_green: >-
     Tests paste the only copy, deleted, into a new tab and back, and into flows whose Local block of that name has the
-    same definition, the same code with another title, description or inputs help, other code, other inputs or another
-    environment choice, and with a Global block of that name; no check tries every pair of definitions.
+    same definition, the same code with another title, description or inputs help, the same code after its
+    environment choice was ticked and unticked, other code, other inputs or another environment choice, and with a
+    Global block of that name or title; no check tries every pair of definitions.
 RB-7:
   enforced: >-
     run_flow (taskloom/engine.py) and validate (taskloom/flow.py) make the flow's block types from the flow itself

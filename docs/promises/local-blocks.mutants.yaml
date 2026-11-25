@@ -1,13 +1,14 @@
 # Mutation testing of Local and Global reusable blocks (read by packaging/mutants.py --explained). scope: what the bugs
 # are planted in, the functions the change touched (494dbef: the flow file, a flow's block types, the command line and
 # Check flows; 111e271, 77de9df and 80c0d6c: the editor; 0f99ccf: a paste joins on the same code, and a Local block
-# with a Global block's name is a problem), in groups: each group's bugs run the tests that can see them (each
-# line of tests: is one pytest run, a file or several, with -k words or without). The functions that are new or mostly
+# with a Global block's name is a problem; df7655f: the same code is the settings as they take effect, same_code), in
+# groups: each group's bugs run the tests that can see them (each line of tests: is one pytest run, a file or several,
+# with -k words or without). The functions that are new or mostly
 # rewritten are tested whole. A function in which the change touched a few lines, among much that was there before, is
 # under not_tested: its bugs are planted and counted, not run, and its reason names the tests that fail when the
 # changed lines are taken out by hand, or says that none does. The change's other lines are not functions of their own,
 # or changed only a docstring or a comment, so nothing is planted in them: registry.LOCAL, flow.FLOW_KEYS and
-# Flow.local_blocks, document.SAME_CODE, panels.LOCAL_NOTE and SHARED_STYLE, the imports, ReusableBlock's docstring and a comment in
+# Flow.local_blocks, panels.LOCAL_NOTE and SHARED_STYLE, the imports, ReusableBlock's docstring and a comment in
 # MainWindow.delete_user_block. mutmut plants nothing in a function with a decorator other than staticmethod or
 # classmethod, so the three registry properties are not in the scope: FlowDocument.registry, which makes a flow's
 # block types again after each change of its definitions or of the blocks folder, and FlowScene.registry and
@@ -29,16 +30,20 @@ scope:
       tests:
         - tests/test_local_blocks.py tests/test_local_blocks_editor.py -k "(every_copy_runs and two_copies) or definition_is_missing or problem_in_a_definition or check_flows_finds or (however_it_is_run and engine) or create_local_turns"
         - tests/test_local_blocks_found.py -k local_block_has_the_name_of_a_global
+        - tests/test_local_blocks_mutants.py -k "says_what_is_wrong_with_each_definition or titled_as_a_built_in or with_no_title_is_named or say_what_its_local_block_does or promote_asks_over_the_window"
     - mutate:
         - taskloom/editor/document.py _port_changes
         - taskloom/editor/document.py FlowDocument.set_port_names
         - taskloom/editor/document.py FlowDocument._refuse_removing
       tests:
         - tests/test_local_blocks_editor.py tests/test_typed_values_editor.py tests/test_editor.py -k "renaming_the_definitions or removing_an_input_that or renaming_a_python_input or renaming_an_input_or_output_keeps"
+        - tests/test_local_blocks_mutants.py -k "refused_in_words_naming or holes_moves_only or names_a_template_gives"
     - mutate:
         - taskloom/editor/document.py FlowDocument._add_definitions
+        - taskloom/editor/document.py same_code
       tests:
-        - tests/test_local_blocks_editor.py tests/test_local_blocks_found.py -k "last_copy_copied or same_code_joins or other_code_is_kept or global_block_has_its_name_is_kept or (same_code_but_other_words and all) or other_code_is_still_kept"
+        - tests/test_local_blocks_editor.py tests/test_local_blocks_found.py -k "last_copy_copied or same_code_joins or other_code_is_kept or global_block_has_its_name_is_kept or (same_code_but_other_words and all) or other_code_is_still_kept or ticked_and_unticked"
+        - tests/test_local_blocks_mutants.py -k titled_with_its_number
     - mutate:
         - taskloom/editor/document.py FlowDocument.local_name
         - taskloom/editor/document.py FlowDocument.copies
@@ -49,6 +54,7 @@ scope:
         - taskloom/editor/document.py FlowDocument.make_local
       tests:
         - tests/test_local_blocks_editor.py -k "create_local_turns or properties_of_any_copy or deleting_the_copies or last_copy_copied"
+        - tests/test_local_blocks_mutants.py -k "beside_a_local_block_named_python or hand_written_block_with_a_version"
     - mutate:
         - taskloom/editor/window.py MainWindow.create_reusable_block
         - taskloom/editor/window.py MainWindow._add_block_file
@@ -56,16 +62,19 @@ scope:
       tests:
         - tests/test_reusable_block.py tests/test_local_blocks_editor.py -k "right_click_create_reusable or cancel_saves or empty_name_is_refused or another_block_already_has or keeps_the_run_in_my or its_ports_no_code_field or create_local_turns"
         - tests/test_local_blocks_editor.py -k promote_with_a_name
+        - tests/test_local_blocks_mutants.py -k "window_over_the_editor_shows or settings_cannot_be_read or taken_name_asks_over"
     - mutate:
         - taskloom/editor/window.py MainWindow.promote_local_block
         - taskloom/editor/document.py FlowDocument.promote
       tests:
         - tests/test_local_blocks_editor.py -k "promote_asks_first or promote_with_a_name"
+        - tests/test_local_blocks_mutants.py -k "promote_asks_over_the_window or taken_name_asks_over"
     - mutate:
         - taskloom/editor/window.py MainWindow._reusable_name_problem
       tests:
         - tests/test_reusable_block.py -k "empty_name_is_refused or another_block_already_has or right_click_create_reusable"
         - tests/test_local_blocks_editor.py -k "already_has_is_refused or promote_with_a_name"
+        - tests/test_local_blocks_mutants.py -k skips_only_its_own
     - mutate:
         - taskloom/registry.py Registry.__init__
         - taskloom/flow.py flow_from_data
@@ -230,3 +239,131 @@ not_tested:
     The results shown when a flow opens, in which this change touched one line (each start block's line found with the
     flow's block types). No test fails with the blocks folder's there: no test opens a flow of copies and reads their
     results.
+# The mutants the tests let through, none of which a user could notice (numbered as mutmut numbers them at df7655f).
+kinds:
+  - kind: A default no caller leaves out
+    why: >-
+      ReusableBlockDialog reads block and flow only for Create reusable block's window, and create_reusable_block always
+      gives both; Promote's window (taken) reads neither. _reusable_name_problem's own is given by Promote and left out
+      by Create reusable block, and no block type is "" or XXXX: no block is skipped either way, and local.<name> is
+      never own.
+    mutants:
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_1
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_2
+      - taskloom.editor.window.xǁMainWindowǁ_reusable_name_problem__mutmut_1
+  - kind: One pixel wider, or a height below the least the window can have
+    why: >-
+      The window opens 521 pixels wide instead of 520, which no one can tell apart; or it is asked to be 1 pixel high
+      instead of 0, both far below the least height its layout allows (some 300 pixels), which it takes either way.
+    mutants:
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_17
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_18
+  - kind: The choices given the room a taller window has, which they cannot take
+    why: >-
+      With it, the Global and Local choices are laid out with a stretch of 1, but a radio button is never taller than
+      its line, and the room a taller (or wider and taller) window has still all goes to the two text boxes, which can
+      grow: every part of the window is where it was, at its size, as measured at 520 and 900 pixels wide, 300 pixels
+      taller.
+    mutants:
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_89
+  - kind: A Local choice made but never shown in Promote's window
+    why: >-
+      In Promote's window (taken) the Local radio button is then made, but with no parent and outside the layout, so it
+      is never shown; Promote reads only the name and the two texts (only Create reusable block, which never gives
+      taken, reads the Local choice).
+    mutants:
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_38
+  - kind: The Global choice's object name, which no one sees
+    why: >-
+      An object name is a name for code to find a widget by: it is not shown, and nothing in Taskloom looks the Global
+      choice up by it (create_reusable_block asks only whether Local is chosen).
+    mutants:
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_52
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_55
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_60
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_61
+  - kind: A style sheet in capitals
+    why: >-
+      Qt reads a style sheet's property names, values, functions and palette roles in any letter case: the choices'
+      names are as bold, their notes as grey and as far in
+      (test_create_reusable_blocks_window_over_the_editor_shows_its_choices_and_says_why_a_name_is_refused checks all
+      three, and passes with these).
+    mutants:
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_73
+      - taskloom.editor.dialogs.xǁReusableBlockDialogǁ__init____mutmut_82
+  - kind: One millisecond longer on the status bar
+    why: >-
+      What Create reusable block… and Promote say on the status bar goes 15.001 seconds after it is shown instead of
+      15.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁcreate_reusable_block__mutmut_70
+      - taskloom.editor.window.xǁMainWindowǁcreate_reusable_block__mutmut_87
+      - taskloom.editor.window.xǁMainWindowǁpromote_local_block__mutmut_80
+  - kind: The name and type a block's settings are read under
+    why: >-
+      flow.block_config reads only the settings (config) and the version of the BlockSpec it is given, never its id or
+      its type: the Python Code settings it gives, and a problem it finds in them, are the same.
+    mutants:
+      - taskloom.blocks.logic.xǁPythonCodeǁlocal_block__mutmut_59
+      - taskloom.blocks.logic.xǁPythonCodeǁlocal_block__mutmut_60
+      - taskloom.blocks.logic.xǁPythonCodeǁlocal_block__mutmut_65
+      - taskloom.editor.window.xǁMainWindowǁcreate_reusable_block__mutmut_18
+      - taskloom.editor.window.xǁMainWindowǁcreate_reusable_block__mutmut_19
+  - kind: The name two definitions are compared under
+    why: >-
+      same_code reads each definition with PythonCode.local_block and compares only the Python Code settings it gives
+      (python_code, made by block_config, which does not read the name): read under None, XXxXX or X in place of x,
+      either definition gives the same settings, and a problem in it is the same.
+    mutants:
+      - taskloom.editor.document.x_same_code__mutmut_1
+      - taskloom.editor.document.x_same_code__mutmut_5
+      - taskloom.editor.document.x_same_code__mutmut_6
+      - taskloom.editor.document.x_same_code__mutmut_8
+      - taskloom.editor.document.x_same_code__mutmut_12
+      - taskloom.editor.document.x_same_code__mutmut_13
+  - kind: A shallow copy of a definition read anew from the clipboard
+    why: >-
+      The definitions pasted are read from the clipboard's text at each paste (MainWindow.paste_blocks), so nothing
+      else holds them: the definition kept shares its lists with that reading only, which is then dropped, and no edit
+      changes a definition's list in place (set_port_names puts a new one). The flow and its undo steps are as with a
+      deep copy.
+    mutants:
+      - taskloom.editor.document.xǁFlowDocumentǁ_add_definitions__mutmut_25
+      - taskloom.editor.document.xǁFlowDocumentǁ_add_definitions__mutmut_48
+  - kind: Only the definitions of copies pasted are on the clipboard
+    why: >-
+      With it, the names looked at are also those of the other pasted blocks' types after their first six letters
+      (logic.python gives python), but only names with a definition copied are kept, and MainWindow.copy_blocks copies
+      the definitions of the copies copied and no others: such a name's copy is pasted too, so its name is there
+      either way. (A block written as no mapping never gets here: paste_blocks reads each block's place first.)
+    mutants:
+      - taskloom.editor.document.xǁFlowDocumentǁ_add_definitions__mutmut_4
+  - kind: A flow in a tab always has its block types
+    why: >-
+      Blocks are pasted only into a flow's tab, whose flow has the blocks folder's block types from the moment the tab
+      is made (FlowTab.__init__), so the case of none, which the mutant no longer handles, is never reached.
+    mutants:
+      - taskloom.editor.document.xǁFlowDocumentǁ_add_definitions__mutmut_12
+  - kind: An emptied list of names is None, never empty text, and is only set when written
+    why: >-
+      Properties gives set_port_names a list of names, or None when the box is emptied, never "", so (None, "XXXX")
+      matches the same values. And it calls set_port_names only when the names change, which for an emptied box
+      means the block (or its definition) has them written: pop(key) always finds the key.
+    mutants:
+      - taskloom.editor.document.xǁFlowDocumentǁset_port_names__mutmut_24
+      - taskloom.editor.document.xǁFlowDocumentǁset_port_names__mutmut_27
+  - kind: A copy whose definition is missing is an unknown block
+    why: >-
+      With it, local_name names the Local block of a copy whose definition is missing from the flow file. Everything
+      that asks it first needs the copy's block type, which such a copy has not: Properties says its definition is
+      missing before it reads any setting and shows no field to edit, and its right-click menu has no Promote, so
+      settings, _settings_to_edit, set_port_names and promote_local_block never run for it.
+    mutants:
+      - taskloom.editor.document.xǁFlowDocumentǁlocal_name__mutmut_16
+  - kind: A Python Code block made reusable always has settings
+    why: >-
+      Create reusable block… goes on only when the block's settings can be read, and a Python Code block's code is
+      required and kept in its settings (config): one written with none is refused before make_local ("cannot be
+      saved as a block yet: Code is required"). So the block always has a config to take away.
+    mutants:
+      - taskloom.editor.document.xǁFlowDocumentǁmake_local__mutmut_8

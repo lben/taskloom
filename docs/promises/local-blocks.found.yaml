@@ -14,6 +14,14 @@ found:
     found_by: the writer of the feature files (evidence)
     fixed_in: 0f99ccf
     guarded_by: tests/test_local_blocks_found.py::test_a_global_block_made_in_another_tab_with_a_local_blocks_name_is_named_by_validate_and_run_now_refuses
+  - what: After Promote to global reusable block, then Undo, the flow did not run (its Local block and the Global block's file left by the Undo had one name), and nothing had said so beforehand; Promote's question now says that after an Undo the flow does not run until Redo, or Delete block… on the global block (RB-4, RB-8).
+    found_by: the reviewer
+    fixed_in: df7655f
+    guarded_by: tests/test_local_blocks_found.py::test_promotes_question_says_that_after_an_undo_the_flow_runs_again_only_after_redo_or_delete_block
+  - what: A copy pasted into a flow whose Local block of that name had the same code was kept under a new name when one definition held use_environment false and the other left it out (after Run in my Python environment was ticked and unticked), which runs the same (RB-6).
+    found_by: the reviewer
+    fixed_in: df7655f
+    guarded_by: tests/test_local_blocks_found.py::test_a_copy_pasted_after_its_environment_choice_was_ticked_and_unticked_joins_its_local_block
 lighter:
   - "No test reads what Properties says of a copy whose definition is missing from the flow file or has a problem."
   - "No test runs a Local copy alone or from it on in the editor, or opens its input's menu or the with inputs I choose… window on it."
