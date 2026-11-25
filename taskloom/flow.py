@@ -30,8 +30,10 @@ FLOW_KEYS = {"taskloom", "name", "description", "params", "calendar", "timezone"
              "local_blocks", "blocks", "edges", "notes"}
 OVERLAP_POLICIES = ("skip", "queue", "allow")
 # inside: the Loop (logic.loop) a block is inside, which runs it once per item, or the Session (servers.api_session);
-# ui: where the canvas draws it (a Loop's or a Session's box: also its width and height, once you resized it).
-BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui", "inside"}
+# ui: where the canvas draws it (a Loop's or a Session's box: also its width and height, once you resized it);
+# inputs: its typed values, by the input each is for: {input: {type: one of params.TYPES, value: ...}}, each standing in
+# for a line into that input (engine._typed).
+BLOCK_KEYS = {"type", "version", "config", "retry", "timeout", "ui", "inside", "inputs"}
 ERROR_PORT = "error"
 _EDGE = re.compile(r"^\s*(\w+)\.(\w+)\s*->\s*(\w+)\.(\w+)\s*$")
 _DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$")
@@ -134,6 +136,7 @@ class BlockSpec:
     ui: dict = field(default_factory=dict)
     inside: str | None = None  # the Loop it is inside
     session: str | None = None  # the Session it is inside (also through a Loop inside it), see flow_from_data
+    inputs: dict = field(default_factory=dict)  # its typed values: {input: {"type": ..., "value": ...}}
 
 
 @dataclass
@@ -281,13 +284,17 @@ def flow_from_data(data, path: Path) -> Flow:
         if inside is not None and not (isinstance(inside, str) and IDENTIFIER.match(inside)):
             errors.append(f"{where}: inside must be the name of the Loop or Session it is inside, got {inside!r}")
             continue
+        typed = _mapping(spec.get("inputs"), f"{where}.inputs", errors)
+        errors += [f"{where}.inputs.{hole}: write a typed value as {{type: int, value: 42}}, its type one of "
+                   f"{', '.join(P.TYPES)}" for hole, value in typed.items()
+                   if not isinstance(value, dict) or set(value) != {"type", "value"} or value["type"] not in P.TYPES]
         try:
             blocks[block_id] = BlockSpec(
                 id=block_id, type=str(spec["type"]), version=spec.get("version"),
                 config=dict(_mapping(spec.get("config"), f"{where}.config", errors)),
                 retry=Retry.parse(spec.get("retry")),
                 timeout=parse_duration(spec["timeout"]) if spec.get("timeout") is not None else None,
-                ui=dict(_mapping(spec.get("ui"), f"{where}.ui", errors)), inside=inside,
+                ui=dict(_mapping(spec.get("ui"), f"{where}.ui", errors)), inside=inside, inputs=dict(typed),
             )
         except (ValueError, TypeError) as e:
             errors.append(f"{where}: {e}")
@@ -398,10 +405,11 @@ def block_config(cls, spec: BlockSpec) -> dict:
     return result
 
 
-def placeholder_problems(f: fields.Field, text: str, params, inputs) -> list[str]:
-    """What is wrong with the {{name}} placeholders in `text`, the value (or an item) of the templated setting `f` of a
-    block with the input ports `inputs`: each must name a flow parameter (`params`: their names) or, but in SQL code,
-    one of the block's data inputs (not its run after), and not both."""
+def placeholder_problems(f: fields.Field | None, text: str, params, inputs, typed=()) -> list[str]:
+    """What is wrong with the {{name}} placeholders in `text`, the value (or an item) of the templated setting `f`
+    (None: of a typed value) of a block with the input ports `inputs`: each must name a flow parameter (`params`: their
+    names) or, but in SQL code, one of the block's data inputs (not its run after), and not both; in a typed value, not
+    an input with a typed value (`typed`: those inputs), which comes by no line."""
     try:
         names = P.template_names(text)
     except ValueError as e:
@@ -409,9 +417,40 @@ def placeholder_problems(f: fields.Field, text: str, params, inputs) -> list[str
     if isinstance(f, fields.Code) and f.language == "sql":  # flow parameters only
         return [f"unknown parameter {{{{{n}}}}}" for n in sorted(names - set(params))]
     data = set(inputs) - {AFTER}
-    return [f"{{{{{n}}}}} could be the parameter {n} or the input {n}: rename one" if n in params
+    return [f"{{{{{n}}}}} is the value typed for the input {n}, which no line brings: name a flow parameter or an "
+            "input a line comes into" if n in typed
+            else f"{{{{{n}}}}} could be the parameter {n} or the input {n}: rename one" if n in params
             else f"{{{{{n}}}}} is neither a flow parameter nor an input of this block"
-            for n in sorted(names) if (n in params) == (n in data)]
+            for n in sorted(names) if n in typed or (n in params) == (n in data)]
+
+
+def _typed_value_problems(block_id: str, spec: BlockSpec, inputs: dict, sources: dict, params,
+                          named: set) -> tuple[list[str], list[str]]:
+    """(what is wrong with the block's typed values: one for an input it does not have or that takes none, one with a
+    line into its input too, one that does not fit its type, a {{name}} in a text or a list's item that cannot be
+    filled; the single-brace {name} in those that are likely slips). `inputs`: its input ports; `sources`: the lines
+    into them; `named`: what a {{name}} can name."""
+    problems, slips = [], []
+    for hole, typed in spec.inputs.items():
+        port, where = inputs.get(hole), f"{block_id}: the value typed for the input {hole}"
+        if port is None or hole == AFTER or port.kind == "table" or port.many:
+            problems.append(f"{where}: " + (f"{block_id} has no such input" if port is None else "it takes none (a "
+                                             "table input, one that collects many lines, or run after)"))
+            continue
+        if hole in sources:
+            problems.append(f"{where}: a line comes into {hole} too: keep the value or the line")
+            continue
+        try:
+            value = P.coerce(typed["type"], typed["value"])
+        except (ValueError, TypeError) as e:
+            problems.append(f"{where}, {typed['value']!r} as {typed['type']}: {e}")
+            continue
+        for text in [t for t in (value if isinstance(value, list) else [value]) if isinstance(t, str)]:
+            problems += [f"{where}: {problem}"
+                         for problem in placeholder_problems(None, text, params, inputs, spec.inputs)]
+            slips += [f"{where}: {{{n}}} is plain text: did you mean {{{{{n}}}}}?" for n in P.single_braced(text)
+                      if n in named]
+    return problems, slips
 
 
 def only_comments(f: fields.Field, value) -> bool:
@@ -518,7 +557,8 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         for edge in flow.edges:
             if edge.dst == block_id:
                 sources.setdefault(edge.dst_port, []).append(f"{edge.src}.{edge.src_port}")
-        found += [f"{block_id}: {problem}" for problem in cls.problems(config, sources, set(flow.params))]
+        supplied = {**{hole: ["typed value"] for hole in spec.inputs}, **sources}  # (a typed value counts as a line)
+        found += [f"{block_id}: {problem}" for problem in cls.problems(config, supplied, set(flow.params))]
         loops = [c for c in containers(flow, block_id) if flow.blocks[c].type == LOOP]
         if loops:
             found += [f"{block_id}: {problem}" for problem in cls.loop_problems(config, loops[0])]
@@ -528,6 +568,9 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         for key, f in cls.config.items():
             if isinstance(f, fields.SourceNames):  # (e.g. an HTML Template's inputs go by these names, not the port's)
                 named = named - {f.port} | set(f.in_effect(config[key], sources.get(f.port, []), flow.params).values())
+        typed_problems, slips = _typed_value_problems(block_id, spec, inputs, sources, flow.params, named)
+        found += typed_problems
+        warnings += slips
         for name, f in cls.config.items():
             value = config.get(name)
             setting = f"{block_id}: {setting_label(name, f)}"
@@ -568,6 +611,7 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         if (edge.dst, edge.dst_port) in connected and not many:
             errors.append(f"edge {edge}: input '{edge.dst}.{edge.dst_port}' is already connected")
         connected.add((edge.dst, edge.dst_port))
+    connected |= {(block_id, hole) for block_id, spec in flow.blocks.items() for hole in spec.inputs}  # (typed values)
     for block_id, (inputs, _) in ports.items():
         for name, port in inputs.items():
             if port.required and (block_id, name) not in connected:

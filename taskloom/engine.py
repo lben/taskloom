@@ -347,7 +347,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     takes_before = bool(run_from or (only and part - {only}))
     if start is not None:  # refuse before a run is recorded
         given = _evaluate_inputs(texts, values)
-        _only_inputs(flow, registry, home, start, inputs_from, given, texts)
+        _only_inputs(flow, registry, home, start, inputs_from, given, texts, values)
         if takes_before:
             _from_before(flow, registry, home, part, inputs_from, start)
     started_by = (f"only {only}" if only else f"from {run_from}" if run_from
@@ -410,7 +410,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
                 runner.only, runner.run_from = only, run_from
                 source = run_id if inputs_from is not None else None
                 runner.only_inputs, runner.only_typed, runner.only_came = _only_inputs(
-                    flow, registry, home, start, source, given, texts)
+                    flow, registry, home, start, source, given, texts, values)
                 if takes_before:
                     runner.outputs, runner.blocked, runner.before_unhandled, runner.outside = _from_before(
                         flow, registry, home, part, source, start)
@@ -1147,7 +1147,11 @@ class _Runner:
                 if merger and first == LINES else f"nothing reached its '{first}' input")
             self.emit({"event": "block_finished", "block": block_id, "status": "skipped", "summary": why})
             return None
-        return inputs
+        try:  # its typed values, as if a line brought each
+            return {**inputs, **_typed(self.flow.blocks[block_id].inputs, self.values, inputs, set(in_ports) - {AFTER},
+                                       {e.dst_port for e in incoming})}
+        except Failed as e:
+            return e
 
     def _failed_lines(self, merger: str, incoming: list) -> list[str]:
         """For a Merger: the failures, which no error output handles, of the lines it waits for that delivered nothing
@@ -1344,7 +1348,9 @@ class _Runner:
             getattr(error, "details", None) or "".join(traceback.format_exception(error)))
         report = [f"{block_id} ({cls.title if cls else spec.type}) failed: {message}"]
         incoming = [e for e in self.flow.edges if e.dst == block_id and not from_inside(self.flow, e)]
-        if incoming:
+        chosen = self.only_typed if block_id in (self.only, self.run_from) else {}  # (values you chose: by no line)
+        typed = {hole: t for hole, t in spec.inputs.items() if hole not in chosen}
+        if incoming or typed:
             report.append("Inputs:")
             for e in incoming:
                 if block_id in (self.only, self.run_from):  # its inputs were worked out for this run (only_inputs)
@@ -1354,6 +1360,10 @@ class _Runner:
                     value = self.outputs.get((e.src, e.src_port), NO_VALUE)
                 value = "(nothing arrived)" if value is NO_VALUE else inline(value)
                 report.append(f"  {e.dst_port} ← {e.src}.{e.src_port}: {value}")
+            for hole, t in typed.items():
+                value = inputs.get(hole, NO_VALUE)
+                report.append(f"  {hole} ← typed {t['type']}: "
+                              + ("(nothing arrived)" if value is NO_VALUE else inline(value)))
         if tb:
             report.append(tb)
         self.errors[block_id] = message
@@ -1433,21 +1443,7 @@ def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, con
     flow parameter, or what arrived at the block's data input of that name (not in SQL code); a number setting written
     with placeholders is then read as its number. Raises Failed, naming the setting, for one it cannot fill."""
     def fill(label: str, text: str, own: set) -> str:
-        values = dict(params)
-        for name in sorted(P.template_names(text) & own):
-            if name not in inputs:
-                why = "nothing arrived at" if name in connected else "nothing is connected to"
-                raise Failed(f"{label}: {{{{{name}}}}}: {why} the input {name}")
-            value = values[name] = inputs[name]
-            if not isinstance(value, SINGLE_VALUES):
-                got = ("a table" if isinstance(value, Table) or Table.is_frame(value) else
-                       "None" if value is None else f"a {type(value).__name__}")
-                raise Failed(f"{label}: {{{{{name}}}}}: the input {name} got {got}, but only a single value (text, a "
-                             "number, a date or time, yes/no) can be written into a setting")
-        try:
-            return P.render(text, values)
-        except ValueError as e:
-            raise Failed(f"{label}: {e}") from None
+        return _fill(label, text, params, inputs, own, connected)
 
     filled = dict(config)
     for key, f in cls.config.items():
@@ -1464,6 +1460,48 @@ def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, con
             if isinstance(f, (fields.Int, fields.Float)):  # (one written without placeholders is a number already)
                 filled[key] = _number(f, label, value, filled[key])
     return filled
+
+
+def _fill(label: str, text: str, params: dict, inputs: dict, own: set, connected: set) -> str:
+    """`text` (of what `label` names) with its {{name}} filled in once: a flow parameter, or what arrived at the
+    block's data input of that name (`own`: those it can name; `inputs`: what arrived; `connected`: those with a line).
+    Raises Failed, naming `label`, for one it cannot fill."""
+    values = dict(params)
+    for name in sorted(P.template_names(text) & own):
+        if name not in inputs:
+            why = "nothing arrived at" if name in connected else "nothing is connected to"
+            raise Failed(f"{label}: {{{{{name}}}}}: {why} the input {name}")
+        value = values[name] = inputs[name]
+        if not isinstance(value, SINGLE_VALUES):
+            got = ("a table" if isinstance(value, Table) or Table.is_frame(value) else
+                   "None" if value is None else f"a {type(value).__name__}")
+            raise Failed(f"{label}: {{{{{name}}}}}: the input {name} got {got}, but only a single value (text, a "
+                         "number, a date or time, yes/no) can be written into a setting")
+    try:
+        return P.render(text, values)
+    except ValueError as e:
+        raise Failed(f"{label}: {e}") from None
+
+
+def _typed(typed: dict, params: dict, inputs: dict, own: set, connected: set) -> dict:
+    """What a block's typed values (`typed`: {input: {type, value}}, see flow.BLOCK_KEYS) give it, as if a line brought
+    each: its value converted to its type as a flow parameter's value is, then {{name}} in a text, or in each item of a
+    list, filled once as in a setting (_fill: `inputs` are what the lines into the block brought). Raises Failed naming
+    the input (Validate refuses most of these before a run)."""
+    found = {}
+    for hole, t in typed.items():
+        label = f"the value typed for the input {hole}"
+        try:
+            value = P.coerce(t["type"], t["value"])
+        except (ValueError, TypeError) as e:
+            raise Failed(f"{label}, {t['value']!r} as {t['type']}: {e}") from None
+        if isinstance(value, str):
+            value = _fill(label, value, params, inputs, own, connected)
+        elif isinstance(value, list):
+            value = [_fill(label, item, params, inputs, own, connected) if isinstance(item, str) else item
+                     for item in value]
+        found[hole] = value
+    return found
 
 
 def _number(f, label: str, written: str, text: str):
@@ -1818,12 +1856,14 @@ def _unhandled_failures(flow: Flow, now: "_Now", block: str) -> set[str]:
     return found
 
 
-def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict,
-                 texts: dict) -> tuple[dict, dict, dict]:
-    """The inputs for running just `only`: the ones you give, the rest as they reached it in run `run_id`;
-    the ones you typed (now, or for the inputs it keeps from that run), as you typed them; and the connections
-    the others came by ({input: see _came})."""
+def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, given: dict, texts: dict,
+                 params: dict) -> tuple[dict, dict, dict]:
+    """The inputs for running just `only`: the ones you give, its typed values as they are now (filled in with the
+    flow parameters `params`), the rest as they reached it in run `run_id`; the ones you typed (now, or for the
+    inputs it keeps from that run), as you typed them; and the connections the others came by ({input: see _came})."""
     in_ports = input_ports(flow, registry, only)
+    now = {hole: t for hole, t in flow.blocks[only].inputs.items() if hole not in given}  # (one you give wins)
+    fresh = set(given) | set(now)  # the inputs it does not take from that run
     unknown = sorted(set(given) - set(in_ports))
     if unknown:
         raise ValueError(f"{only} has no input named '{unknown[0]}'")
@@ -1836,16 +1876,21 @@ def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, give
         raise ValueError("say which run's inputs to use (--inputs-from), or give them (--input)")
     # Inputs it cannot have as they were then (and you did not give) are refused. With values you
     # give, a block that did not run then may still lack its `after` (it only sets the order).
-    unresolved = [why for port, why in missing.items() if port not in given and not (given and port == AFTER)]
+    unresolved = [why for port, why in missing.items() if port not in fresh and not (given and port == AFTER)]
     if unresolved:
         instead = "run the whole flow instead"  # (a block before it that did not run: its reason ends so already)
         raise ValueError(f"{unresolved[0].removesuffix(': ' + instead)}: {instead}, or choose its inputs")
     values = {k: v for k, v in {**values, **given}.items() if v is not NO_VALUE}
+    try:
+        values |= _typed(now, params, values, set(in_ports) - {AFTER},
+                         {e.dst_port for e in flow.edges if e.dst == only})
+    except Failed as e:
+        raise ValueError(f"{only}: {e}") from None
     needed = [name for name, port in in_ports.items() if port.required and name not in values]
     if needed:
         raise ValueError(f"{only}.{needed[0]} needs a value")
-    typed = {k: t for k, t in typed.items() if k not in given} | {k: texts[k] for k in given if texts[k].strip()}
-    return values, typed, {k: c for k, c in came.items() if k in values and k not in given}
+    typed = {k: t for k, t in typed.items() if k not in fresh} | {k: texts[k] for k in given if texts[k].strip()}
+    return values, typed, {k: c for k, c in came.items() if k in values and k not in fresh}
 
 
 def _table_file(path) -> "pl.DataFrame | pl.LazyFrame":

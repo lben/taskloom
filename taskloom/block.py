@@ -311,7 +311,8 @@ class Block:
     def problems(cls, config: dict, sources: dict, params: set) -> list[str]:
         """What stops the block from running as it is set up and connected, beyond a setting it cannot take: shown in
         Properties, and Validate and runs refuse the flow. `config`: its config as block_config gives it; `sources`:
-        {input port: ["block.port", ...] connected there, in edge order}; `params`: the flow parameters' names."""
+        {input port: ["block.port", ...] connected there, in edge order; a typed value there: ["typed value"]};
+        `params`: the flow parameters' names."""
         return []
 
     @classmethod
