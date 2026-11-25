@@ -96,6 +96,23 @@ taskloom editor examples/daily-sales-report.yaml
   which fires when the block succeeded, even if it produced none of its other outputs. A
   block with data inputs also waits for its data. You can use both lines between two blocks;
   each has its own purpose.
+- **A value typed into an input:** an input circle with no line can hold a value of its own.
+  Double-click it, or right-click it → **Set value…**: a small box beside it takes the type
+  (text, int, float, bool, date, datetime or list, as for flow parameters) and the value.
+  Enter keeps it, Esc leaves everything as it was, and a value that does not fit its type
+  (`1,5` as an int) is not kept: the box says why. A list is its items with commas between
+  them (`a, b`). The block shows the value right of the input's name (shortened with "…"
+  when it does not fit, whole on hover), and Properties shows the same value under
+  **Input values**, where you can change it too. Right-click the input → **Clear value**
+  removes it; an empty text is a value. Connecting a line to the input removes its value in
+  one step, which one Undo takes back. Inputs that take a table, that collect many lines
+  (Send Email's body and attachments, HTML Template's data, Merger's lines) or that expect a
+  dictionary (Run Query's params, Statistics' extra), the Loop's result and run after
+  diamonds take no value, and their menu says why. At a run the block gets the value as
+  if a line brought it, with its type (an int arrives as a number), and `{{name}}` in a text
+  or in a list item is filled once, like in any setting (see *Flows*). A value does not make
+  a block run: in a flow with start blocks, a line from one still has to lead to it. The box
+  takes one line: a text with line breaks is written in the flow file.
 - **Start blocks** say how a flow starts. Connect their `start` output to the **run
   after** diamond of the first block:
   - **Manual Start**: the flow runs when you press **Run now** (F5), or right-click the
@@ -284,7 +301,8 @@ taskloom editor examples/daily-sales-report.yaml
   `[1, 2]`, `{'a': 1}`, `None`; tables as `table('data.csv')`, `table('data.parquet')` or
   `pl.DataFrame({'a': [1, 2]})`. An empty field means no value. Next time the window shows
   what you typed and works it out again, so after editing `data.csv` just press Run.
-  (`--input NAME=VALUE` with `--only` from a terminal.)
+  An input with a typed value starts from that value, and "with the same inputs" gives it
+  the value it has now. (`--input NAME=VALUE` with `--only` from a terminal.)
 - **Load a run's state:** to carry on from where a run was, like a saved game, right-click
   it in Run history → **Load run state**. Every block shows its result from that run; for a
   re-run, the blocks it did not run show theirs from the run it carried on from. A bar above
@@ -314,7 +332,7 @@ taskloom editor examples/daily-sales-report.yaml
     today's flow if the flow has changed since; nothing is asked). If that run was cleaned
     up meanwhile, the bar says so and the tab shows the newest results.
 - **When a block fails**, the Log says which block, what came into each input (from which
-  block and with what value) and, for Python Code, the code around the failing line and
+  block and with what value, or the value typed into it) and, for Python Code, the code around the failing line and
   the values of your variables (each input and variable on one line; one too long for it
   ends with how many characters it has, e.g. `… (33,412 characters)`). A failure Ask User expects (you chose **Don't answer**;
   nobody can be asked, e.g. in a scheduled run, and it has no Default, or for a password no
@@ -576,6 +594,29 @@ edges:
   (`⏱ 00:01:29 left`), as a Schedule block's line counts down to its next run.
 - Every block has an `error` output; connect it to handle failures.
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
+- **Typed values** (double-click an input with no line, see *The editor*): a block's
+  `inputs:` holds a value of its own for an input, with its type (those of flow parameters):
+
+  ```yaml
+  blocks:
+    filter:
+      type: logic.python
+      config:
+        inputs: [rows, threshold]
+        outputs: [output]
+        code: "output = rows.filter(pl.col('amount') > threshold)"
+      inputs: {threshold: {type: int, value: 10}}
+  ```
+
+  At every run (a whole run, inside a Loop and on a Splitter's line, a block run alone or
+  from a block on, `taskloom run` and on schedule) the block gets it as if a line brought it,
+  converted to its type as a parameter's value is (a list from a YAML list or from text,
+  `a, b`). `{{name}}` in a text or in an item of a list is filled once, from a flow parameter
+  or an input that comes by a line; naming another typed value is an error. Validate counts
+  it as a supplied input, and names the block and the input of a value that also has a line,
+  one that does not fit its type, or one on an input the block does not have; a run refuses
+  to start with the same words. `--input NAME=VALUE` (with `--only` or `--from`) gives the
+  input another value for that run.
 - **Local blocks** (right-click a Python Code block → Create reusable block…, Local): the flow
   file keeps each one's definition under `local_blocks:` (its title, what it does, what its
   inputs expect, and the Python Code settings it runs with), and each copy is a block of type
