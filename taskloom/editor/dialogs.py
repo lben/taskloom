@@ -965,7 +965,7 @@ class ChooseInputsDialog(QDialog):
         intro = QLabel("Write each value as Python: <code>42</code>, <code>'text'</code>, <code>[1, 2]</code>, "
                        "<code>{'a': 1}</code>, <code>None</code>; a table: <code>table('data.csv')</code> or "
                        "<code>pl.DataFrame({'a': [1, 2]})</code>. Leave a field empty for no value."
-                       + (f" Filled in: what reached the block in {run}." if values else "")
+                       + (f" Filled in: what reached the block in {run}." if values and run else "")
                        + (" What you typed last time is shown as you typed it and worked out again when you "
                           "press Run (so <code>table('data.csv')</code> reads the file again)." if self.typed else ""))
         intro.setWordWrap(True)

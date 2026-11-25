@@ -319,7 +319,8 @@ class FlowDocument(QObject):
 
     def connect(self, src, src_port, dst, dst_port, many: bool = False):
         """Connect an output to an input. Most inputs take one edge, so an older one is replaced;
-        a `many` input (e.g. email attachments) keeps them all."""
+        a `many` input (e.g. email attachments) keeps them all. The line replaces the input's typed value, in the same
+        step."""
         if src == dst or (src, src_port, dst, dst_port) in self.edges():
             return
         self._change()
@@ -327,8 +328,18 @@ class FlowDocument(QObject):
             self.data["edges"] = [t for t in self.data["edges"]
                                   if not ((e := parse_edge(t)) and e[2] == dst and e[3] == dst_port)]
         self.data["edges"].append(edge_text(src, src_port, dst, dst_port))
+        typed = (self.blocks.get(dst) or {}).get("inputs") or {}
+        if dst_port in typed:
+            self._set_typed_values(dst, {hole: t for hole, t in typed.items() if hole != dst_port})
         self._keep_names()
         self._done()
+
+    def _set_typed_values(self, block_id: str, typed: dict):
+        """A block's typed values ({input: {type, value}}): none leaves no `inputs:` behind."""
+        if typed:
+            self.blocks[block_id]["inputs"] = typed
+        else:
+            self.blocks[block_id].pop("inputs", None)
 
     def move_blocks(self, positions: dict, inside: dict | None = None):
         """Move blocks ({block: (x, y)}) and, in the same step, put some inside a Loop or in none ({block: the Loop,
@@ -380,12 +391,17 @@ class FlowDocument(QObject):
         self._done()
 
     def set_block_value(self, block_id: str, key: str, value, section: str | None = "config"):
-        """Set config[key] (section="config"), or a top-level block key like retry/timeout (section=None).
+        """Set config[key] (section="config"), the typed value of the input `key` (section="inputs": {type, value}, see
+        flow.BLOCK_KEYS; the canvas and Properties both set it here), or a top-level block key like retry/timeout
+        (section=None).
 
-        None or "" removes the key so the block's default applies.
+        None or "" removes the key so the block's default applies (an input: it has no value).
         """
         spec = self.blocks[block_id]
-        target = spec.setdefault(section, {}) if section else spec
+        if section == "inputs":
+            target = spec.get("inputs") or {}  # (put in place by _set_typed_values, only if a value is left)
+        else:
+            target = spec.setdefault(section, {}) if section else spec
         if target.get(key) == value or (value in (None, "") and key not in target):
             return
         self._change()
@@ -393,12 +409,14 @@ class FlowDocument(QObject):
             target.pop(key, None)
         else:
             target[key] = value
+        if section == "inputs":
+            self._set_typed_values(block_id, target)
         self._done()
 
     def set_port_names(self, block_id: str, key: str, value, old: list, new: list, outputs: bool):
         """Set a list of a block's input or output names (e.g. a Python Code block's outputs) and
-        update their connections: a renamed one (another name in the same place) keeps them, a
-        removed one loses them. `old` and `new` are the names in effect before and after."""
+        update their connections, and an input's typed value: a renamed one (another name in the same place) keeps
+        them, a removed one loses them. `old` and `new` are the names in effect before and after."""
         renamed = ({o: n for o, n in zip(old, new) if o != n and o not in new and n not in old}
                    if len(old) == len(new) else {})
         removed = set(old) - set(new) - set(renamed)
@@ -422,6 +440,10 @@ class FlowDocument(QObject):
                     text = edge_text(src, sp, dst, dp)
             edges.append(text)
         self.data["edges"] = edges
+        if not outputs:
+            typed = self.blocks[block_id].get("inputs") or {}
+            self._set_typed_values(block_id, {renamed.get(hole, hole): t for hole, t in typed.items()
+                                              if hole not in removed})
         self._keep_names({f"{block_id}.{o}": f"{block_id}.{n}" for o, n in renamed.items()} if outputs else None)
         self._done()
 

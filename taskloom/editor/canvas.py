@@ -8,14 +8,15 @@ import math
 from functools import cache
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSizeF, Qt, QTimer, Signal
-from PySide6.QtGui import (QColor, QCursor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
-                           QTransform)
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSizeF, Qt, QTimer, Signal
+from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetricsF, QPainter, QPainterPath, QPainterPathStroker, QPen,
+                           QPixmap, QTransform)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsItem, QGraphicsPathItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit,
-                               QSpinBox, QStyle, QStyleFactory, QToolButton)
+                               QListWidget, QSpinBox, QStyle, QStyleFactory, QToolButton, QVBoxLayout)
 
+from .. import params as P
 from ..block import AFTER, DONE, all_ports
 from ..blocks.logic import written_seconds
 from ..engine import _label
@@ -151,6 +152,96 @@ class PortItem(QGraphicsItem):
         return self.scenePos()
 
 
+# --- typed values: a value of its own for an input hole (flow.BLOCK_KEYS `inputs`) ----------------------------------
+
+DICT_INPUTS = {("db.run_query", "params"), ("data.statistics", "extra")}  # inputs that expect a dictionary
+
+
+def takes_no_value(registry, spec: dict, hole: str) -> str | None:
+    """Why the input `hole` of a block (`spec`: as in the flow file) can never hold a typed value; None: it can."""
+    port = block_ports(registry, spec)[0].get(hole)
+    if hole == AFTER:
+        return "Run after only says when the block runs: no value goes in."
+    if port is None:
+        return f"The block has no input {hole}."
+    if spec.get("type") == LOOP and hole == RESULT:
+        return "The Loop's result comes from the blocks inside the Loop: connect the one that gives it."
+    if port.kind == "table":
+        return "A table input takes a table from a line: no typed value is a table."
+    if port.many:
+        return "This input collects many lines into a list: connect lines to it."
+    if (spec.get("type"), hole) in DICT_INPUTS:
+        return "This input expects a dictionary, and no type of value is one: connect a line that brings one."
+    return None
+
+
+def why_no_value(doc: FlowDocument, registry, block_id: str, hole: str) -> str | None:
+    """Why the input `hole` of the block offers no typed value now (takes_no_value, or a line comes into it); None: it
+    offers one."""
+    why = takes_no_value(registry, doc.blocks.get(block_id) or {}, hole)
+    if why is None and any(dst == block_id and dst_port == hole for _, _, dst, dst_port in doc.edges()):
+        why = "A line comes into it: remove the line to type a value instead."
+    return why
+
+
+def typed_text(value) -> str:
+    """A typed value's value as you type it (the editor stores that text; a list written by hand: its items)."""
+    return ", ".join(map(str, value)) if isinstance(value, list) else "" if value is None else str(value)
+
+
+def set_typed_value(doc: FlowDocument, block_id: str, hole: str, type_: str, text: str):
+    """Keep `text` as the value of the type `type_` of the input `hole` (the canvas's box and Properties both keep it
+    so). Raises ValueError, saying why, when it does not fit its type."""
+    try:
+        P.coerce(type_, text)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"{text!r} does not fit the type {type_}: {e}") from None
+    doc.set_block_value(block_id, hole, {"type": type_, "value": text}, section="inputs")
+
+
+def port_font() -> QFont:
+    """The font a block writes its holes' names in (NodeItem.paint)."""
+    font = QFont(QApplication.font())
+    font.setPointSizeF(max(font.pointSizeF(), 9) * 0.95 * 0.92)
+    return font
+
+
+class ValueChip(QGraphicsItem):
+    """A typed value in its block, on its hole's row (a child of the hole): right of the hole's name, at most as wide
+    as the room up to that row's output name (`output`; a Loop's row has none: as wide as a block's), shortened with
+    "…" to fit, on one line; resting the mouse on it shows it whole."""
+
+    def __init__(self, port: PortItem, output: str | None, typed: dict):
+        super().__init__(port)
+        self.font = port_font()
+        metrics = QFontMetricsF(self.font)
+        text = typed_text(typed.get("value"))
+        line = " ".join(text.splitlines())
+        left = 10 + metrics.horizontalAdvance("run after" if port.name == AFTER else port.name) + 6
+        right = NODE_W - 10 - (metrics.horizontalAdvance(output) + 12 if output else 0)
+        room = max(right - left, 0)
+        self.rect = QRectF(left, -8, min(max(metrics.horizontalAdvance(line) + 10, 16), room), 16)
+        self.shown = metrics.elidedText(line, Qt.ElideRight, self.rect.width() - 10)
+        self.setToolTip(f"<b>{html.escape(port.name)}</b>: {html.escape(str(typed.get('type')))}"
+                        f"<p style='white-space:pre-wrap'>{value_html(text)}</p>")
+        self.setAcceptedMouseButtons(Qt.NoButton)
+
+    def boundingRect(self):
+        return self.rect.adjusted(-1, -1, 1, 1)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        hole = QColor("#8a9bb0")  # (the holes' colour)
+        fill = QColor(hole)
+        fill.setAlpha(60 if is_dark() else 40)
+        painter.setPen(QPen(hole, 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(self.rect, 4, 4)
+        painter.setFont(self.font)
+        painter.setPen(QApplication.palette().text().color())
+        painter.drawText(self.rect.adjusted(5, 0, -5, 0), Qt.AlignVCenter | Qt.AlignLeft, self.shown)
+
+
 class NodeItem(QGraphicsItem):
     has_ports = True  # (a Session's box has none: nothing is connected to it)
 
@@ -191,6 +282,7 @@ class NodeItem(QGraphicsItem):
             self.ports[(name, False)] = PortItem(self, name, False, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
         for i, name in enumerate(self.outputs):
             self.ports[(name, True)] = PortItem(self, name, True, HEADER_H + 6 + i * ROW_H + ROW_H / 2)
+        self._show_values(spec.get("inputs"))
         # Over the message at the bottom: hovering it shows all of the message (it is cut to fit).
         self.footer = QGraphicsRectItem(0, self.height - FOOTER_H, NODE_W, FOOTER_H, self)
         self.footer.setPen(Qt.NoPen)
@@ -210,6 +302,18 @@ class NodeItem(QGraphicsItem):
     def drawn_rect(self) -> QRectF:
         """Where it is drawn on the canvas (without the room for its selection's outline)."""
         return QRectF(self.pos(), QSizeF(NODE_W, self.height))
+
+    def _show_values(self, typed: dict | None):
+        """Its typed values (as the flow file has them), each in its hole's row."""
+        for hole, value in (typed or {}).items():
+            if (hole, False) in self.ports and isinstance(value, dict):
+                ValueChip(self.ports[(hole, False)], self.row_output(hole), value)
+
+    def row_output(self, hole: str) -> str | None:
+        """The output name written on the row of the input `hole` (None: none)."""
+        row = self.inputs.index(hole)
+        output = self.outputs[row] if row < len(self.outputs) else None
+        return "done" if output == DONE else output
 
     def set_status(self, status: str | None, text: str = "", tip: str = "", old: bool = False):
         """The run's result under the block: `text` (short), and `tip` (HTML) when hovering it. `old`: it was made
@@ -363,6 +467,9 @@ class LoopItem(NodeItem):
 
     def drawn_rect(self) -> QRectF:
         return self.rect.translated(self.pos())
+
+    def row_output(self, hole: str) -> str | None:
+        return None  # (its outputs are on its right side)
 
     def boundingRect(self):
         return self.rect.adjusted(-4, -4, SHADOW + 4, SHADOW + 4)
@@ -799,7 +906,7 @@ class FlowScene(QGraphicsScene):
     block_selected = Signal(object, bool)  # block id or None
     block_clicked = Signal(str)  # a left click on the block that alone is selected already (no block_selected then)
     note_selected = Signal(str, bool)  # a text on the canvas, when it alone is selected
-    block_menu = Signal(str, object)  # block id, screen position (right-click on a block)
+    block_menu = Signal(str, object, str)  # block id, screen position, the input hole right-clicked ("": none)
     canvas_menu = Signal(object, object)  # scene position, screen position (right-click on empty canvas)
 
     def __init__(self, doc: FlowDocument, registry):
@@ -1180,11 +1287,23 @@ class FlowScene(QGraphicsScene):
         if moved_notes:
             self.doc.move_notes(moved_notes)
 
+    @_mouse
+    def mouseDoubleClickEvent(self, event):
+        port = self._port_at(event.scenePos()) if event.button() == Qt.LeftButton else None
+        if port is not None and not port.is_output:  # an input hole: the box for its typed value
+            block_id, hole = port.node.block_id, port.name
+            # (once this event is over: Qt is still using the canvas's items, which drawing it again deletes)
+            QTimer.singleShot(0, self, lambda: self.views() and self.views()[0].open_value_box(block_id, hole))
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def contextMenuEvent(self, event):
         for item in self.items(event.scenePos()):
             node = item if isinstance(item, NodeItem) else item.parentItem()
             if isinstance(node, NodeItem):
-                self.block_menu.emit(node.block_id, event.screenPos())
+                hole = item.name if isinstance(item, PortItem) and not item.is_output else ""
+                self.block_menu.emit(node.block_id, event.screenPos(), hole)
                 event.accept()
                 return
         if not self.items(event.scenePos()):
@@ -1274,6 +1393,89 @@ class ZoomBar(QFrame):
             view.zoom_to(percent)
 
 
+class TypedValueBox(QFrame):
+    """The box a double-click on an input hole (or Set value… in its menu) opens over the canvas, beside the hole: the
+    value's type (as flow parameters have them) and the value. Enter keeps it (one that does not fit its type: the box
+    says why and stays), Esc closes it, changing nothing. It holds the block's and the hole's names, never the canvas's
+    items (drawn again on every change)."""
+
+    def __init__(self, view: "FlowView", block_id: str, hole: str):
+        super().__init__(view.viewport())
+        self.setObjectName("typedValueBox")
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setAutoFillBackground(True)
+        self.view, self.block_id, self.hole = view, block_id, hole
+        stored = (view.scene().doc.blocks[block_id].get("inputs") or {}).get(hole)
+        stored = stored if isinstance(stored, dict) else {}  # (none, or one written wrong by hand)
+        self.field = QLineEdit(typed_text(stored.get("value")), objectName="typedValueField", minimumWidth=170)
+        self.field.returnPressed.connect(self.keep)
+        self.types = QListWidget(objectName="typedValueType")
+        self.types.addItems(P.TYPES)
+        self.types.setCurrentRow(P.TYPES.index(stored["type"]) if stored.get("type") in P.TYPES else 0)
+        self.types.setFocusPolicy(Qt.NoFocus)  # (choosing a type leaves the typing in the value)
+        for policy in (self.types.setHorizontalScrollBarPolicy, self.types.setVerticalScrollBarPolicy):
+            policy(Qt.ScrollBarAlwaysOff)
+        frame = 2 * self.types.frameWidth()
+        self.types.setFixedSize(self.types.sizeHintForColumn(0) + frame + 16,
+                                self.types.sizeHintForRow(0) * len(P.TYPES) + frame)  # every type shown
+        hint = QLabel("Enter keeps it, Esc cancels")
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        self.error = QLabel(objectName="typedValueError", wordWrap=True, textFormat=Qt.PlainText)
+        self.error.setFixedWidth(self.field.minimumWidth())
+        self.error.setStyleSheet(f"color: {STATUS_COLORS['failed']};")
+        self.error.hide()
+        column = QVBoxLayout()
+        for widget in (QLabel(f"<b>{html.escape(block_id)}.{html.escape(hole)}</b>"), self.field, hint, self.error):
+            column.addWidget(widget)
+        column.addStretch()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 8, 10, 8)
+        row.addLayout(column)
+        row.addWidget(self.types, 0, Qt.AlignTop)
+        self.adjustSize()
+
+    def place(self):
+        """Beside its hole, wholly in the visible canvas: left of it (as the lines come in), else right of it, level
+        with it; else below or above it."""
+        node = self.view.scene().nodes.get(self.block_id)
+        port = node.ports.get((self.hole, False)) if node is not None else None
+        if port is None:
+            return
+        at, canvas = self.view.mapFromScene(port.scenePos()), self.view.viewport().rect()
+        gap = math.ceil(PORT_R * self.view.transform().m11()) + 6  # (clear of the hole as it is drawn)
+        w, h = self.width(), self.height()
+        level = min(max(at.y() - h // 2, 0), canvas.height() - h)
+        across = min(max(at.x() - w // 2, 0), canvas.width() - w)
+        for x, y in ((at.x() - gap - w, level), (at.x() + gap, level), (across, at.y() + gap),
+                     (across, at.y() - gap - h)):
+            if canvas.contains(QRect(x, y, w, h)):
+                break
+        else:
+            x, y = max(at.x() - gap - w, 0), level
+        self.move(x, y)
+
+    def keep(self):
+        """Enter: the value typed, of the type chosen, kept (unless the hole no longer offers one: the flow changed)."""
+        scene = self.view.scene()
+        if why_no_value(scene.doc, scene.registry, self.block_id, self.hole) is None:
+            try:
+                set_typed_value(scene.doc, self.block_id, self.hole, self.types.currentItem().text(), self.field.text())
+            except ValueError as e:
+                self.error.setText(str(e))
+                self.error.show()
+                self.adjustSize()
+                self.place()
+                return
+        self.close()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+        elif event.key() not in (Qt.Key_Return, Qt.Key_Enter):  # (Enter: the value field's, not the canvas's)
+            super().keyPressEvent(event)
+
+
 class FlowView(QGraphicsView):
     def __init__(self, scene: FlowScene):
         super().__init__(scene)
@@ -1292,6 +1494,19 @@ class FlowView(QGraphicsView):
         super().resizeEvent(event)
         canvas = self.viewport().geometry()
         self.zoom_bar.move(canvas.right() - 8 - self.zoom_bar.width(), canvas.top() + 8)
+
+    def open_value_box(self, block_id: str, hole: str):
+        """The box for the typed value of the input `hole` of the block, beside it, if the hole offers one (see
+        why_no_value); one box at a time."""
+        scene = self.scene()
+        if block_id not in scene.nodes or why_no_value(scene.doc, scene.registry, block_id, hole) is not None:
+            return
+        for box in self.viewport().findChildren(TypedValueBox):
+            box.close()
+        box = TypedValueBox(self, block_id, hole)
+        box.place()
+        box.show()
+        box.field.setFocus()
 
     def zoom_percent(self) -> float:
         return 100 * self.transform().m11()

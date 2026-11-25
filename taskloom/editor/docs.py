@@ -82,6 +82,9 @@ ROWS = {
                   ("100", "30", "1000")),
     "keep.for": ("For", "How long its runs are kept, in days, months or years: as a run ends, older ones are deleted.",
                  ("90 days", "18 months", "2 years")),
+    "inputs.value": ("Input value", "A value of its own for this input, of the type chosen beside it (as a flow "
+                                    "parameter's): the block gets it as if a line brought it. Empty: none. A line "
+                                    "connected to the input replaces it.", ("10", "2026-12-01", "north, south")),
     "wrap": ("Wrap lines", "Wrap long lines in every Python and SQL code box (only on the screen)", TICKED),
     "text.text": ("Text", "What the text on the canvas says: a title or a remark, to explain the flow. It does not "
                           "run.", ("Daily sales report", "Runs at 07:00 on weekdays")),
@@ -98,7 +101,7 @@ ROWS = {
 }
 # The groups of the Properties panel page, by the first part of a row's id.
 GROUPS = {"Every block": ("name", "retry", "timeout"), "Schedule: When": ("when",), "Keep runs": ("keep",),
-          "Code boxes": ("wrap",), "Text on the canvas": ("text",)}
+          "Input values": ("inputs",), "Code boxes": ("wrap",), "Text on the canvas": ("text",)}
 # Schedule's settings that the When box sets (they are no rows): the rows that set them.
 WHEN_SET_BY = {"cron": ("when.how_often", "when.cron"), "every": ("when.every",), "at": ("when.at",)}
 
@@ -247,6 +250,9 @@ def _properties_page() -> str:
         "Keep runs": 'The Keep runs box of <a href="blocks-start.html#trigger.manual">Manual Start</a> and '
                      '<a href="blocks-start.html#trigger.schedule">Schedule</a>: its Keep runs choice and Always keep '
                      "failed runs are those blocks' settings; these rows show for The last N and For a time.",
+        "Input values": "The Input values box of a block with inputs: a row for each input that can take a value of "
+                        "its own, named after the input (the block on the canvas shows the value beside it; "
+                        "double-click the input there to type it).",
         "Code boxes": "Under each Python and SQL code box.",
         "Text on the canvas": "The rows of a text on the canvas (Edit > Add text).",
     }

@@ -45,7 +45,8 @@ from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
 from . import docs
 from .canvas import (BLOCK_ICONS, BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ICON,
-                     TEXT_ITEM, USER_COLOR, USER_ICON, is_dark, paint_icon)
+                     TEXT_ITEM, USER_COLOR, USER_ICON, block_ports, is_dark, paint_icon, set_typed_value,
+                     takes_no_value, typed_text)
 from .zoom import mark
 
 # A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
@@ -921,6 +922,7 @@ class PropertiesPanel(QScrollArea):
         keeps = cls.type_id in ("trigger.manual", "trigger.schedule")
         if when:
             layout.addWidget(self._when_box(config))
+        values = self._input_values_box(spec)  # (before the code, if any)
         for key, f in cls.config.items():
             if when and key in ("cron", "every", "at") or keeps and key in ("keep", "keep_failed"):
                 continue  # in the When box, or the Keep runs box
@@ -937,6 +939,9 @@ class PropertiesPanel(QScrollArea):
             widget.setToolTip(_as_written(docs.field_card(f)[0]))  # (also its buttons': …, Edit…, New…)
             self._field_help(cls, key, label, *_inputs(widget))
             if isinstance(f, fields.Code):
+                if values is not None:
+                    layout.addWidget(values)
+                    values = None
                 layout.addWidget(label)
                 layout.addWidget(widget)
             else:
@@ -951,6 +956,8 @@ class PropertiesPanel(QScrollArea):
                 note = QLabel(note, wordWrap=True, textFormat=Qt.PlainText)
                 note.setStyleSheet("color: palette(placeholder-text);")
                 layout.addWidget(note)
+        if values is not None:
+            layout.addWidget(values)
         if keeps:
             layout.addWidget(self._keep_box(config, cls))
         if cls.type_id not in (LOOP, SESSION):  # (the blocks inside them have their own retry and timeout)
@@ -1218,6 +1225,50 @@ class PropertiesPanel(QScrollArea):
         f.coerce(new)  # a bad name is reported before anything changes
         outputs = f.reserved == RESERVED_OUTPUTS
         self._commit(lambda: self.doc.set_port_names(self.block_id, key, value, list(old), list(new), outputs))
+
+    def _input_values_box(self, spec: dict) -> QGroupBox | None:
+        """Input values: the typed value of each input hole that can take one (the same one the canvas shows in the
+        block), to type or change; a hole a line comes into says where from. None: no hole can take one."""
+        box = QGroupBox("Input values", objectName="inputValues")
+        form = QFormLayout(box)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        sources, typed = self._sources(), spec.get("inputs") or {}
+        for hole in block_ports(self.registry, spec)[0]:
+            if takes_no_value(self.registry, spec, hole) is not None:
+                continue
+            if hole in sources:
+                line = QLabel(("line from " if len(sources[hole]) == 1 else "lines from ") + ", ".join(sources[hole]))
+                line.setStyleSheet("color: palette(placeholder-text);")
+                form.addRow(hole, line)
+                continue
+            stored = typed.get(hole) if isinstance(typed.get(hole), dict) else {}
+            field = QWidget()
+            row = QHBoxLayout(field)
+            row.setContentsMargins(0, 0, 0, 0)
+            edit = QLineEdit(typed_text(stored.get("value")), placeholderText="no value: type one, or connect a line")
+            kinds = QComboBox()
+            kinds.addItems(P.TYPES)
+            kinds.setCurrentText(stored.get("type", "text"))
+            edit.editingFinished.connect(lambda h=hole, e=edit, k=kinds: self._set_typed(h, k.currentText(), e.text()))
+            kinds.currentTextChanged.connect(lambda t, h=hole, e=edit: self._set_typed(h, t, e.text()))
+            row.addWidget(edit, 1)
+            row.addWidget(kinds)
+            form.addRow(hole, field)
+            self._help(form.labelForField(field), [edit, kinds], hole, *docs.row_card("inputs.value")[1:],
+                       docs.row_href("inputs.value"))
+        return box if form.rowCount() else None
+
+    def _set_typed(self, hole: str, type_: str, text: str):
+        """The value typed in the Input values row of `hole`, of the type shown there; an empty field: no value (but a
+        value that is an empty text stays one)."""
+        if self.doc is None or self.block_id not in self.doc.blocks:
+            return
+        stored = (self.doc.blocks[self.block_id].get("inputs") or {}).get(hole)
+        empty_text = isinstance(stored, dict) and typed_text(stored.get("value")) == ""
+        if text or empty_text:
+            self._commit(lambda: set_typed_value(self.doc, self.block_id, hole, type_, text))
+        else:
+            self._commit(lambda: self.doc.set_block_value(self.block_id, hole, None, "inputs"))
 
     def _sources(self) -> dict[str, list[str]]:
         """{input: ["block.port", ...] connected into it, in edge order} of the block shown."""
@@ -1724,7 +1775,8 @@ class PropertiesPanel(QScrollArea):
             self.error.setText(str(e))
             self.error.show()
             return
-        problems = cls.problems(config, self._sources(), set(self.doc.data["params"]))
+        supplied = {**{hole: ["typed value"] for hole in spec.get("inputs") or {}}, **self._sources()}  # (as Validate)
+        problems = cls.problems(config, supplied, set(self.doc.data["params"]))
         loops = [c for c in self.doc.containers(self.block_id) if self.doc.blocks[c].get("type") == LOOP]
         if loops:
             problems = [*problems, *cls.loop_problems(config, loops[0])]

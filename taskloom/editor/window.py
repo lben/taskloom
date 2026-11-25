@@ -44,7 +44,7 @@ from ..launch import frozen, run_alive, runner_command
 from ..scheduler import (counted_from, forget_schedules, paused, request_turn_off, running_scheduler_version,
                          runs_going, service_running, set_paused, tell_crashed, version_tuple)
 from ..registry import discover
-from .canvas import FlowScene, FlowView
+from .canvas import FlowScene, FlowView, why_no_value
 from . import dialogs, docs, git, theme
 from .commits import CommitHistory
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
@@ -659,7 +659,7 @@ class MainWindow(QMainWindow):
         tab = FlowTab(doc, self.registry)
         tab.scene.block_selected.connect(lambda block_id, chosen, t=tab: self._on_block_selected(t, block_id, chosen))
         tab.scene.block_clicked.connect(lambda block_id, t=tab: self._on_block_clicked(t, block_id))
-        tab.scene.block_menu.connect(lambda block_id, pos, t=tab: self._block_menu(t, block_id, pos))
+        tab.scene.block_menu.connect(lambda block_id, pos, hole, t=tab: self._block_menu(t, block_id, pos, hole))
         tab.scene.note_selected.connect(lambda note_id, chosen, t=tab: self._on_note_selected(t, note_id, chosen))
         tab.scene.canvas_menu.connect(lambda at, pos, t=tab: self._canvas_menu_for(t, at).exec(pos))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
@@ -1241,11 +1241,14 @@ class MainWindow(QMainWindow):
             if chosen:
                 self.right_tabs.setCurrentWidget(self.properties)
 
-    def _block_menu(self, tab: FlowTab, block_id: str, pos):
-        self._block_menu_for(tab, block_id).exec(pos)
+    def _block_menu(self, tab: FlowTab, block_id: str, pos, hole: str = ""):
+        self._block_menu_for(tab, block_id, hole).exec(pos)
 
-    def _block_menu_for(self, tab: FlowTab, block_id: str) -> QMenu:
+    def _block_menu_for(self, tab: FlowTab, block_id: str, hole: str = "") -> QMenu:
+        """The block's menu; right-clicked on its input `hole`: first, that hole's typed value."""
         menu = QMenu(self)
+        if hole:
+            self._value_items(menu, tab, block_id, hole)
         cls = self.registry.get((tab.doc.blocks.get(block_id) or {}).get("type"))
         if cls is not None and cls.is_trigger:  # a start block: the flow starts from it (nothing to retry in it)
             label = ("Run the flow now, as if its time had come" if cls.type_id == "trigger.schedule"
@@ -1301,6 +1304,21 @@ class MainWindow(QMainWindow):
             menu.addAction("Copy as cURL", lambda: self.copy_as_curl(tab, block_id))
         return menu
 
+    def _value_items(self, menu: QMenu, tab: FlowTab, block_id: str, hole: str):
+        """Set value… (the box beside the hole; greyed out, its tooltip says why, where the hole offers none) and,
+        while it has one, Clear value. Each acts once the menu and the right-click are over (it draws the canvas
+        again)."""
+        why = why_no_value(tab.doc, self.registry, block_id, hole)
+        menu.setToolTipsVisible(True)
+        set_value = menu.addAction("Set value…", lambda: QTimer.singleShot(
+            0, lambda: tab.view.open_value_box(block_id, hole)))
+        set_value.setEnabled(why is None)
+        set_value.setToolTip(why or "A value of its own for this input, as if a line brought it")
+        if hole in (tab.doc.blocks[block_id].get("inputs") or {}):
+            menu.addAction("Clear value", lambda: QTimer.singleShot(
+                0, lambda: block_id in tab.doc.blocks and tab.doc.set_block_value(block_id, hole, None, "inputs")))
+        menu.addSeparator()
+
     def copy_as_curl(self, tab: FlowTab, block_id: str):
         """Copy an API Request's request as a curl command (bash), as it would send it now: its placeholders filled in
         with the flow's parameters, its connection's base URL, auth and headers, each stored secret shown as <hidden:
@@ -1312,6 +1330,7 @@ class MainWindow(QMainWindow):
             _, funcs = run_clock(flow, self.home)
             connected = {e.dst_port for e in flow.edges if e.dst == block_id}
             config = _filled(cls, block_config(cls, spec), P.resolve(flow.params, {}, funcs), {}, set(), connected)
+            connected |= set(spec.inputs)  # (a typed body: it comes from the body input too)
             command = curl_command(config, api_connection(self.home, config["connection"]), "body" in connected)
         except (FlowError, Failed, ValueError) as e:
             QMessageBox.warning(self, "Copy as cURL", f"{block_id} cannot be copied as a curl command: {e}")
@@ -1465,6 +1484,10 @@ class MainWindow(QMainWindow):
                 values, missing, typed = block_inputs(flow, self.registry, self.home, block_id, run_id)
             except Exception:  # e.g. that run's files were cleaned up: start from nothing
                 run_id = None
+        for hole, t in flow.blocks[block_id].inputs.items():  # its typed values, as they are now
+            values[hole] = P.coerce(t["type"], t["value"])  # (Validate has checked them)
+            missing.pop(hole, None)
+            typed.pop(hole, None)
         dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing,
                                             self._run_label(run_id) if run_id is not None else None, self, typed)
         if not dialogs.answered(dialog):
