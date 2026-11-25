@@ -913,9 +913,12 @@ class PropertiesPanel(QScrollArea):
         spec = self.doc.blocks[self.block_id]
         cls = self.registry.get(spec.get("type"))
         local = self.doc.local_name(self.block_id)  # the Local block it is a copy of (None: none)
+        note = LOCAL_NOTE if local is not None and cls else ""
+        # Only the note makes the line too long to fit; a wrapped label would also let other blocks' Properties
+        # scroll down where today their fields shrink to fit.
         head = QLabel(f"<b>{html.escape(cls.title if cls else spec.get('type'))}</b>"
-                      f"<br><span style='color: gray'>{html.escape(spec.get('type'))}"
-                      f"{LOCAL_NOTE if local is not None and cls else ''}</span>")
+                      f"<br><span style='color: gray'>{html.escape(spec.get('type'))}{note}</span>",
+                      wordWrap=bool(note))
         layout.addWidget(head)
         self.error = QLabel()
         self.error.setWordWrap(True)
