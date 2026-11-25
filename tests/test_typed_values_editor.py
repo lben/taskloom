@@ -60,8 +60,10 @@ from taskloom.editor.canvas import HEADER_H, NODE_W, PORT_R, ROW_H  # noqa: E402
 from tests.test_parallel_lines import drawn_texts  # noqa: E402
 from tests.test_paths_editor_editing import field, flow_file, menu, mouse_drag  # noqa: E402
 from tests.test_paths_editor_running import gated, right_click  # noqa: E402
-from tests.test_theme import as_found, choose  # noqa: E402,F401 (as_found: each test leaves the look as it found it)
+from tests.test_theme import as_found, choose  # noqa: E402
 from tests.test_typed_values import HAND_EDITS, as_recorded, python, recorded, recorder, typed  # noqa: E402
+
+pytestmark = pytest.mark.usefixtures(as_found.__name__)  # each test leaves the look as it found it
 
 BOX, TYPE_LIST, VALUE_FIELD, ERROR_TEXT, INPUT_VALUES = (
     "typedValueBox", "typedValueType", "typedValueField", "typedValueError", "inputValues")
