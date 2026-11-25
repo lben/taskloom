@@ -1493,7 +1493,7 @@ def test_run_from_a_block_on_from_the_canvas(win, qtbot, tmp_path):
                                                    "Run only this block, with inputs I choose…",
                                                    "Run from this block on, with the same inputs",
                                                    "Run from this block on, with inputs I choose…",
-                                                   "Results of this block…", "Create Reusable block…"]
+                                                   "Results of this block…", "Create reusable block…"]
     next(a for a in win._block_menu_for(tab, "compute").actions() if a.text().startswith("Run from")).trigger()
     qtbot.waitUntil(lambda: not tab.running and tab.runs[-1].status is not None, timeout=60_000)
 

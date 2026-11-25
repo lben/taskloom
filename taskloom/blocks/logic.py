@@ -227,7 +227,7 @@ class _TablesAside(pickle.Pickler):
 
 
 class ReusableBlock(PythonCode):
-    """A Python Code block saved as a block of its own (in the editor: right-click it → Create Reusable block…), as
+    """A Python Code block saved as a block of its own (in the editor: right-click it → Create reusable block…), as
     a file in your blocks folder (write_reusable_block). It runs the code it was saved with and has no settings."""
 
     type_id = ""  # (each saved one has its own)
@@ -257,7 +257,7 @@ def write_reusable_block(folder: Path, title: str, description: str, inputs_help
     name = reusable_name(title)
     code = "".join(f"            {line!r},\n" for line in python_code["code"].split("\n"))
     text = f'''\
-# A block of your own, made from a Python Code block (in the editor: right-click it → Create Reusable block…).
+# A block of your own, made from a Python Code block (in the editor: right-click it → Create reusable block…).
 # It runs the code below: to change what it does, edit this file.
 from taskloom.blocks.logic import ReusableBlock
 

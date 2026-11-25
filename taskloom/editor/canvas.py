@@ -909,9 +909,9 @@ class FlowScene(QGraphicsScene):
     block_menu = Signal(str, object, str)  # block id, screen position, the input hole right-clicked ("": none)
     canvas_menu = Signal(object, object)  # scene position, screen position (right-click on empty canvas)
 
-    def __init__(self, doc: FlowDocument, registry):
+    def __init__(self, doc: FlowDocument):
         super().__init__()
-        self.doc, self.registry = doc, registry
+        self.doc = doc
         self.nodes: dict[str, NodeItem] = {}
         self.note_items: dict[str, NoteItem] = {}
         self.countdowns: dict[str, tuple[str, str]] = {}  # Schedule or Wait block -> (text, tip)
@@ -935,6 +935,11 @@ class FlowScene(QGraphicsScene):
         self.selectionChanged.connect(self._on_selection)
         doc.changed.connect(self.rebuild)
         self.rebuild()
+
+    @property
+    def registry(self):
+        """The block types of the flow (its document's: those of the blocks folder and its own Local blocks)."""
+        return self.doc.registry
 
     # --- building from the document ---------------------------------------------
 

@@ -41,6 +41,7 @@ from ..calendars import load_calendar
 from ..config import SECRET_PREFIX, kept_runs
 from ..expr import functions
 from ..flow import API_REQUEST, LOOP, SESSION, BlockSpec, Retry, block_config, parse_duration, schedules_of
+from ..registry import LOCAL
 from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
 from . import docs
@@ -787,6 +788,20 @@ class _DateTimeBox(QDateTimeEdit):
         super().keyPressEvent(event)
 
 
+LOCAL_NOTE = " · Local reusable block: kept in this flow's file, not in the blocks tree"  # under a copy's title
+SHARED_STYLE = "background: palette(alternate-base); border-left: 3px solid #d4a017; padding: 6px;"  # "Shared by N"
+
+
+def _unknown_type(type_id: str, problems: dict) -> str:
+    """What Properties says of a block whose type the flow cannot use (`problems`: of its Local blocks' definitions,
+    registry.for_flow)."""
+    if type_id in problems:
+        return f"The definition of its Local block {type_id[len(LOCAL):]} has a problem: {problems[type_id]}"
+    if type_id.startswith(LOCAL):
+        return f"The definition of its Local block {type_id[len(LOCAL):]} is missing from the flow file."
+    return "This block type is not installed."
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -796,7 +811,7 @@ class PropertiesPanel(QScrollArea):
         self.settings = settings  # (the editor's preferences)
         self.toggles = toggles  # (of the code boxes' find bars)
         self.setWidgetResizable(True)
-        self.doc = self.registry = self.block_id = self.note_id = None
+        self.doc = self.block_id = self.note_id = None
         self._committing = False
         self._custom_when = None  # (flow, block) whose schedule you chose to write as a cron line
         self.card = HelpCard(self)
@@ -828,7 +843,12 @@ class PropertiesPanel(QScrollArea):
         if focused is not None and self.isAncestorOf(focused):
             focused.clearFocus()
 
-    def show_block(self, doc, registry, block_id):
+    @property
+    def registry(self):
+        """The block types of the flow shown (its own Local blocks too)."""
+        return self.doc.registry
+
+    def show_block(self, doc, block_id):
         shown = (self.doc, self.block_id)
         if self._committing and (doc, block_id) == shown and any(bar.isVisible() for bar in self.findChildren(FindBar)):
             # The canvas drawn again after an edit here, e.g. a code box saved as the focus went into its find bar:
@@ -837,7 +857,7 @@ class PropertiesPanel(QScrollArea):
         self._finish_editing()
         if (doc, block_id) == shown and self.block_id != block_id:
             block_id = self.block_id  # finishing renamed it: show it under its new name
-        self.doc, self.registry, self.block_id, self.note_id = doc, registry, block_id, None
+        self.doc, self.block_id, self.note_id = doc, block_id, None
         self.refresh()
 
     def show_note(self, doc, note_id):
@@ -892,8 +912,10 @@ class PropertiesPanel(QScrollArea):
             return
         spec = self.doc.blocks[self.block_id]
         cls = self.registry.get(spec.get("type"))
+        local = self.doc.local_name(self.block_id)  # the Local block it is a copy of (None: none)
         head = QLabel(f"<b>{html.escape(cls.title if cls else spec.get('type'))}</b>"
-                      f"<br><span style='color: gray'>{html.escape(spec.get('type'))}</span>")
+                      f"<br><span style='color: gray'>{html.escape(spec.get('type'))}"
+                      f"{LOCAL_NOTE if local is not None and cls else ''}</span>")
         layout.addWidget(head)
         self.error = QLabel()
         self.error.setWordWrap(True)
@@ -908,14 +930,17 @@ class PropertiesPanel(QScrollArea):
         self._add_row(form, "name", name)
         layout.addLayout(form)
         if cls is None:
-            layout.addWidget(QLabel("This block type is not installed."))
+            layout.addWidget(QLabel(_unknown_type(str(spec.get("type")), self.registry.problems), wordWrap=True,
+                                    textFormat=Qt.PlainText))
             return
         if issubclass(cls, ReusableBlock):  # it has no settings: what it does and what its inputs expect instead
             for heading, text in (("What it does", cls.description), ("What its inputs expect", cls.inputs_help)):
                 if text:
                     layout.addWidget(QLabel(f"<b>{heading}</b>"))
                     layout.addWidget(QLabel(text, wordWrap=True, textFormat=Qt.PlainText))
-        config = spec.get("config") or {}
+        config = self.doc.settings(self.block_id)
+        if local is not None:  # a Python Code block's settings, its Local block's, which all its copies share
+            cls = self.registry.get("logic.python")
         if cls.type_id == API_REQUEST:
             layout.addWidget(self._curl_box())
         when = cls.type_id == "trigger.schedule"
@@ -942,6 +967,11 @@ class PropertiesPanel(QScrollArea):
                 if values is not None:
                     layout.addWidget(values)
                     values = None
+                if local is not None:
+                    widget.findChild(CodeEdit).setObjectName("local_code")
+                    if (shared := len(self.doc.copies(local))) > 1:
+                        layout.addWidget(QLabel(f"Shared by {shared} blocks: an edit changes all {shared}",
+                                                objectName="shared_note", wordWrap=True, styleSheet=SHARED_STYLE))
                 layout.addWidget(label)
                 layout.addWidget(widget)
             else:
@@ -1218,7 +1248,7 @@ class PropertiesPanel(QScrollArea):
         """A list of input or output names: renaming or removing one updates its connections too."""
         if self.doc is None or self.block_id not in self.doc.blocks:
             return
-        old = self.doc.blocks[self.block_id].get("config", {}).get(key)
+        old = self.doc.settings(self.block_id).get(key)
         old, new = (old if old is not None else f.default or []), (value if value is not None else f.default or [])
         if old == new:
             return self._set(key, value)

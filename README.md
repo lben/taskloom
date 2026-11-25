@@ -69,7 +69,7 @@ edges:
 | Email | Send Email (made for desktop Outlook, with a plain-text version and attachments) |
 | Debug | Inspect: shows the data passing through, also as Markdown, pictures and Mermaid diagrams |
 
-Need something else? A block of your own is one Python file, or right-click a Python Code block → **Create Reusable
+Need something else? A block of your own is one Python file, or right-click a Python Code block → **Create reusable
 block…**. Python Code can use packages you install with pip into your own environment (Tools → Python environment).
 
 **The editor**

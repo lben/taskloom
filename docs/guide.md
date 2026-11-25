@@ -402,17 +402,34 @@ taskloom editor examples/daily-sales-report.yaml
   than 0 (e.g. `sys.exit("no data")`) the block fails.
   The screen shows the environment in use; **Use an existing environment…** picks one you
   already have (the `python_env` setting).
-- **A Python Code block as a block of your own:** right-click it → **Create Reusable
-  block…**, give it a name (its title in the blocks tree), say what it does and what its
-  inputs expect, and press OK. It is saved as a Python file in your blocks folder (e.g.
-  *Tidy names* → `blocks/tidy_names.py`, block type `user.tidy_names`) and listed at once
+- **A Python Code block as a block of your own:** right-click it →
+  **Create reusable block…**, choose **Global** or **Local**, give it a name (its title),
+  say what it does and what its inputs expect, and press OK. A name another block already
+  has (as its title or block type, Global or Local) is refused.
+  **Global** (chosen as the window opens) saves it as a Python file in your blocks folder (e.g.
+  *Tidy names* → `blocks/tidy_names.py`, block type `user.tidy_names`) and lists it at once
   under **User Created**, its hover text saying what it does and what its inputs expect.
   Added to any flow, it runs that block's code on what is connected to its inputs, with the
   same inputs, outputs and **Run in my Python environment** choice, in the editor, with
   `taskloom run` and on schedule. It has no Code field (its Properties say what it does and
-  what its inputs expect): to change its code, edit its file or make a new one. A name
-  another block already has (as its title or block type) is refused. The block it was made
-  from stays as it is. To delete a block of your own, right-click it under **User Created**
+  what its inputs expect): to change its code, edit its file or make a new one. The block it
+  was made from stays as it is.
+  **Local** keeps it in this flow only: its definition is kept in the flow file (see
+  *Flows*), not in the blocks tree, and the block itself becomes its first copy, its name,
+  place, lines and typed values kept. **Copy** and **Paste** make more copies, also in
+  another flow's tab: the definition comes with them, even after the last copy was deleted.
+  Pasted into a flow whose Local block of that name has other code, or where a Global block
+  has its name, it is kept under a new name (`shout_2`) and the status bar says so; with the
+  same code, the copy joins that flow's. Properties of any copy show its Inputs, Outputs and
+  Code under "Shared by N blocks: an edit changes all N": an edit there changes every copy
+  (each keeps its own typed values), and renaming an input moves every copy's lines and
+  typed values. An input that a copy still has a line or a typed value on cannot be removed:
+  the message names each such copy and what it has there. Deleting the last copy removes the
+  definition, and one Undo brings back both. Right-click a copy →
+  **Promote to global reusable block…** makes it Global: it asks first (Undo cannot remove
+  the global block's file), saves it in your blocks folder named with its title (another name
+  you give, if that is taken), and every copy in the flow then uses it; the flow file no
+  longer holds the definition. To delete a block of your own, right-click it under **User Created**
   in the blocks tree (or select it and press Delete) → **Delete block…**: once you say yes
   to a question naming its file, any other blocks that file defines (deleted with it) and
   the blocks of open flows that use it (shown as unknown blocks from then on), the file is
@@ -559,6 +576,30 @@ edges:
   (`⏱ 00:01:29 left`), as a Schedule block's line counts down to its next run.
 - Every block has an `error` output; connect it to handle failures.
 - Results stream to Parquet on disk, so millions of rows never sit in memory.
+- **Local blocks** (right-click a Python Code block → Create reusable block…, Local): the flow
+  file keeps each one's definition under `local_blocks:` (its title, what it does, what its
+  inputs expect, and the Python Code settings it runs with), and each copy is a block of type
+  `local.<name>` with no `config` of its own, here with a typed value:
+
+  ```yaml
+  local_blocks:
+    shout:
+      title: Shout
+      description: Says a word louder.
+      inputs_help: "word: a word, as text. tail: what to add after it."
+      inputs: [word, tail]
+      outputs: [loud]
+      use_environment: false
+      code: "loud = word.upper() + (tail or '!')"
+  blocks:
+    greet_ana:
+      type: local.shout
+      inputs: {tail: {type: text, value: "?!"}}
+  ```
+
+  Every copy runs the definition's code, the same in the editor, with `taskloom run` and on
+  schedule, with no file besides the flow. Validate names a problem in a definition once,
+  with its copies, and a copy whose definition is missing from the flow file.
 
 Built-in blocks: `logic.python`, `logic.if`, `logic.wait`, `logic.ask_user`,
 `logic.loop`, `logic.splitter`, `logic.merger`, `data.duckdb_sql`, `data.polars`, `data.read_file`,

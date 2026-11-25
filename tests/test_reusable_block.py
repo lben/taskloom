@@ -29,7 +29,7 @@ from tests.test_paths_editor_editing import (GREET_BLOCK, clean, field, flow_fil
 from tests.test_paths_editor_running import right_click  # noqa: E402
 from tests.test_scheduler_start_at import runs, start_service, stop_service, wait_until_finished  # noqa: E402
 
-CREATE = "Create Reusable block"  # the menu item, followed by an ellipsis: it opens a window
+CREATE = "Create reusable block"  # the menu item, followed by an ellipsis: it opens a window
 # The code of the block it is made from: a comment with a character outside Windows' ANSI code page, and a print
 # (what a Python Code block prints goes to its Log).
 CODE = ("# names → tidy names, sorted\n"
