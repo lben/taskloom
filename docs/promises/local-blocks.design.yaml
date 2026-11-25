@@ -8,15 +8,15 @@
   revisit_if: making it again on every change gets slow (a flow with very many definitions), or Local blocks of other kinds than Python Code are wanted.
 - chosen: A definition with a problem is not made into a block; Validate says its problem once, naming its copies, and does not check those copies one by one. A copy whose definition is missing is named as such.
   revisit_if: a definition's problem should still let the copies' other problems be seen, e.g. their connections.
-- chosen: 'A pasted definition joins this flow''s Local block of the same name only when the two definitions are the same in everything; one that differs, or whose name or title a Global block has, is kept as <name>_2 (the first free of _2, _3, …) titled "<title> 2", and the status bar says so (your answer of 24 November: keep both).'
-  revisit_if: copies whose definitions differ only in their description or title should join, or you want to choose at each paste.
+- chosen: 'A pasted definition joins this flow''s Local block of the same name when the two have the same code (the same inputs, outputs, Run in my Python environment and code), the flow''s own title and texts kept; one with other code, or whose name or title a Global block has, is kept as <name>_2 (the first free of _2, _3, …) titled "<title> 2", and the status bar says so (your answer of 24 November: keep both).'
+  revisit_if: a pasted copy should bring its own title and texts when it joins, or you want to choose at each paste.
 - chosen: Removing an input of a definition while copies have a line or a typed value on it is refused, naming each such copy and what it has there (your answer of 24 November, a); renaming an input or output moves every copy's lines and typed values with it.
   revisit_if: removing an input should clear what the copies had on it, with a warning, instead of asking you to clear it first.
 - chosen: Promote to global reusable block asks first, because undo cannot remove the file it writes (your answer of 24 November, a); undo makes the copies Local again and leaves the file and the block in the tree.
   revisit_if: undo can remove files too, e.g. the blocks folder gets a history of its own.
 - chosen: A definition goes with its last copy, in the same undo step, and the flow file never keeps a definition no copy uses.
   revisit_if: a definition should be kept with no copy, e.g. a flow used as a library of Local blocks.
-- chosen: 'A Local and a Global block may not share a name: Create reusable block and Promote check the name against your blocks folder and this flow''s Local blocks, and a pasted definition is renamed. Other flows'' Local blocks are not looked at.'
-  revisit_if: a Global block is made with the name of a Local block of another flow, which then has both (nothing tells you).
+- chosen: 'A Local and a Global block may not share a name: Create reusable block and Promote check the name against your blocks folder and this flow''s Local blocks, and a pasted definition is renamed. A Global block made later with a Local block''s name or title (from another flow, or as a file) is not refused then; the flow that has both is refused by Validate and by every run, naming both, until one is renamed.'
+  revisit_if: making the Global block should be refused already, which would need every flow's Local blocks to be known when it is made.
 - chosen: '"Shared by N blocks: an edit changes all N" shows in Properties when two or more copies share the definition, between their Outputs and Code, as in the approved picture; one copy alone shows none.'
   revisit_if: the note should also say that a single copy's code lives in the flow file and not in the block.

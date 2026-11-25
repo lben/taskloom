@@ -40,8 +40,8 @@ TV-3:
   not_green: >-
     Tests give each type to Python Code, a Global reusable block, If, Splitter, Inspect and a Loop's items, inside a
     Loop, on a Splitter's lines, with --only and --from, on the command line and under the scheduler service, try the
-    brace cases of the stage's table, and fill {{p}} in each hole of each built-in block that takes a value (the BR-5
-    walk); no test runs a block alone (--only, --from) with {{name}} in its typed text, and no check tries every text.
+    brace cases of the stage's table, fill {{p}} in each hole of each built-in block that takes a value (the BR-5
+    walk), and fill and refuse {{name}} in a typed text and list with --only and --from; no check tries every text.
 TV-4:
   enforced: >-
     FlowDocument.connect (taskloom/editor/document.py) removes the input's typed value in the same change that adds the
@@ -54,16 +54,17 @@ TV-4:
     double-click on holes with a line; no check tries every kind of hole or every order of edits.
 TV-5:
   enforced: >-
-    takes_no_value (taskloom/editor/canvas.py) refuses run after, a table input, an input that collects many lines, the
-    Loop's result and the two inputs listed in DICT_INPUTS (Run Query's params, Statistics' extra), each with its
-    reason, which MainWindow._value_items (taskloom/editor/window.py) puts in the greyed Set value…'s hover text;
-    FlowView.open_value_box opens no box there and Properties' Input values box has no row for them. Python Code's and
-    Inspect's inputs are none of these, so they offer one.
+    no_value_reason (taskloom/flow.py) is the one place that says which inputs take no typed value, and why: run after,
+    a table input, an input that collects many lines, the Loop's result and the two inputs listed in DICT_INPUTS (Run
+    Query's params, Statistics' extra). In the editor takes_no_value (taskloom/editor/canvas.py) asks it, and
+    MainWindow._value_items (taskloom/editor/window.py) puts its reason in the greyed Set value…'s hover text;
+    FlowView.open_value_box opens no box there and Properties' Input values box has no row for them. Validate refuses
+    a value written by hand there with the same reason (_typed_value_problems). Python Code's and Inspect's inputs are
+    none of these, so they offer one.
   not_green: >-
-    Tests open the menu of, and double-click, the ten kinds of hole the row names and seven that take a value; no check
-    walks every hole of every block, so a block added later with an input that expects a dictionary would offer a
-    value until it is listed. Validate refuses a value written by hand on a table input, one that collects many lines
-    or run after, but not on the two dictionary inputs or the Loop's result.
+    Tests open the menu of, and double-click, the ten kinds of hole the row names and seven that take a value, and
+    write a value by hand on six of them; no check walks every hole of every block, so a block added later with an
+    input that expects a dictionary would offer a value until it is listed in DICT_INPUTS.
 TV-6:
   enforced: >-
     validate (taskloom/flow.py) counts each typed value as a connected input when it looks for required inputs, and
@@ -102,14 +103,17 @@ TV-8:
 TV-9:
   enforced: >-
     _typed_value_problems (taskloom/flow.py), which validate calls for each block, gives an error naming the block and
-    the input for a value on an input the block does not have or that takes none, one with a line into the same input,
+    the input for a value on an input the block does not have or that takes none (with no_value_reason's reason, the
+    one the editor's menu gives), one with a line into the same input,
     one params.coerce cannot convert to its type, and a {{name}} in it that cannot be filled; flow_from_data refuses an
     inputs entry not written as {type, value} with a known type. run_flow (taskloom/engine.py) runs Validate before
     anything is recorded and refuses with its errors, so with the same words; the editor's Validate and Run now show
     them.
   not_green: >-
     Tests write the four cases the row names by hand and run taskloom validate, taskloom run, and the editor's Validate
-    and Run now; no test writes a value on an input that takes none, or an inputs entry of another form or type.
+    and Run now; they also write values by hand on Run Query's params, Statistics' extra and table, the Loop's result,
+    a Merger's lines and run after, for taskloom validate and taskloom run; no test writes an inputs entry of another
+    form or type.
 
 # The checker of this feature: mutation testing of the functions the change touched, which are the scope in
 # typed-values.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).

@@ -1,11 +1,11 @@
 # Mutation testing of typed values for inputs (read by packaging/mutants.py --explained). scope: what the bugs are
 # planted in, the functions the change touched (dcb12e9: the engine, the flow file and Validate; b57e6ec: the canvas,
-# Properties and the menus), in groups: each group's bugs run the tests that can see them (each line of tests: is one
+# Properties and the menus; 0f99ccf: why an input takes no typed value, one reason for the menu and Validate), in groups: each group's bugs run the tests that can see them (each line of tests: is one
 # pytest run, a file or several, with -k words or without). The functions that are new or mostly rewritten are tested
 # whole. A function in which the change touched a few lines, among much that was there before, is under not_tested: its
 # bugs are planted and counted, not run, and its reason names the tests that fail when the changed lines are taken out
 # by hand, or says that none does. The change's other lines are not functions of their own, or changed only a
-# docstring, so nothing is planted in them: flow.BLOCK_KEYS and BlockSpec.inputs, canvas.DICT_INPUTS, docs.ROWS' Input
+# docstring, so nothing is planted in them: flow.BLOCK_KEYS and BlockSpec.inputs, flow.DICT_INPUTS, docs.ROWS' Input
 # value row and docs.GROUPS, the imports, and Block.problems' docstring. mutmut plants nothing in a function with a
 # decorator other than staticmethod or classmethod, so FlowScene.mouseDoubleClickEvent (decorated with _mouse), which
 # opens the box on a double-click, is not in the scope:
@@ -27,7 +27,9 @@ scope:
       tests:
         - tests/test_typed_values_editor.py -k validate_and_run_now_in_the_editor
         - tests/test_typed_values.py -k "naming_nothing_or_another or single_brace_parameter"
+        - tests/test_typed_values_found.py -k "takes_none and (Query or Merger)"
     - mutate:
+        - taskloom/flow.py no_value_reason
         - taskloom/editor/canvas.py takes_no_value
         - taskloom/editor/canvas.py why_no_value
         - taskloom/editor/canvas.py typed_text
@@ -87,8 +89,9 @@ scope:
 not_tested:
   taskloom/engine.py run_flow: >-
     The whole of a run, in which this change touched two calls: they give _only_inputs the flow parameters, which fill
-    {{name}} in the typed values of a block run alone. No test fails with none given there: no test runs a block alone
-    (--only, --from) with {{name}} in its typed text (TV-3 says so).
+    {{name}} in the typed values of a block run alone. With none given there,
+    test_run_only_this_block_fills_double_braces_in_its_typed_text_and_list_once and both cases of
+    test_run_from_this_block_on_fills_double_braces_with_parameters_and_inputs_that_come_by_lines fail.
   taskloom/engine.py _Runner._gather: >-
     The inputs of a block in a full run, inside a Loop or on a Splitter's line, to which this change added five lines
     (its typed values, as if a line brought each): without them, test_python_code_gets_each_typed_value_converted_to_its_type,

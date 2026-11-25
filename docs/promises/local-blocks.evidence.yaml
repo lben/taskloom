@@ -18,8 +18,9 @@ RB-2:
     (taskloom/blocks/logic.py): a reusable block that runs the definition's Python Code settings, so every block of
     type local.<name> runs the same code. PropertiesPanel.refresh (taskloom/editor/panels.py) shows a copy's settings
     from FlowDocument.settings, its definition, as a Python Code block's, with "Shared by N blocks: an edit changes all
-    N" over the code when two or more copies share it; FlowDocument.set_block_value and set_port_names write an edit
-    there into the definition (_settings_to_edit), so every copy has it, and the editor saves the flow before each run.
+    N" over the code when two or more copies share it, and the line under its title wrapped to fit the panel;
+    FlowDocument.set_block_value and set_port_names write an edit there into the definition (_settings_to_edit), so
+    every copy has it, and the editor saves the flow before each run.
   not_green: >-
     Tests run two and three copies and a copy inside a Loop, edit the code and the names from one copy and read the
     others, the file and the next run, edit while a run waits, and read a copy's Properties at three text sizes in two
@@ -56,13 +57,14 @@ RB-6:
     MainWindow.copy_blocks (taskloom/editor/window.py) puts the definitions of the copies copied on the clipboard with
     them, so they are there in any tab and after the copies are deleted. FlowDocument._add_definitions
     (taskloom/editor/document.py), called by paste_blocks, lets a pasted copy join this flow's Local block of that
-    name when the two definitions are the same, and otherwise keeps the pasted one as the first free <name>_2,
-    <name>_3, … (also when a Global block has that name or title), and paste_blocks gives the pasted copies its type;
-    MainWindow.paste_blocks names it in the status bar.
+    name when the two have the same code (SAME_CODE: the same inputs, outputs, Run in my Python environment and code;
+    the title, what it does and what its inputs expect may differ, the flow's own kept), and otherwise keeps the pasted
+    one as the first free <name>_2, <name>_3, … (also when a Global block has that name or title), and paste_blocks
+    gives the pasted copies its type; MainWindow.paste_blocks names it in the status bar.
   not_green: >-
-    Tests paste the only copy, deleted, into a new tab and back, and into flows with the same definition, with other
-    code and with a Global block of that name; a definition with the same code but another title or description is
-    kept renamed too, and no check tries every pair of definitions.
+    Tests paste the only copy, deleted, into a new tab and back, and into flows whose Local block of that name has the
+    same definition, the same code with another title, description or inputs help, other code, other inputs or another
+    environment choice, and with a Global block of that name; no check tries every pair of definitions.
 RB-7:
   enforced: >-
     run_flow (taskloom/engine.py) and validate (taskloom/flow.py) make the flow's block types from the flow itself
@@ -79,11 +81,14 @@ RB-8:
     MainWindow._reusable_name_problem (taskloom/editor/window.py) refuses, for Create reusable block (Global or Local)
     and for Promote, a name or title that a block of the tree or a Local block of this flow has (one whose definition
     has a problem too), or a file of the blocks folder; FlowDocument._add_definitions (taskloom/editor/document.py)
-    renames a pasted definition whose name or title a Global block has.
+    renames a pasted definition whose name or title a Global block has. When a Global block with a Local block's name
+    (user.<name>) or title is made later, from another flow or as a file, for_flow (taskloom/registry.py) keeps the
+    Local block as it is and puts the clash in .problems, which validate (taskloom/flow.py) reports once, naming both
+    blocks and the copies, so taskloom validate, taskloom run and the editor's Validate and Run now refuse the flow.
   not_green: >-
-    Tests refuse a Local block named as a Global one and the other way round, and paste a Local block named as a
-    Global one; other flows' Local blocks are not looked at, so a Global block made with the name of another flow's
-    Local block leaves that flow with both, and nothing checks a flow file written by hand.
+    Tests refuse a Local block named as a Global one and the other way round, paste a Local block named as a Global
+    one, and run and validate flows whose Local block has a Global block's name and title, only its name or only its
+    title, also with the Global block made in another tab; no check tries every name.
 RB-9:
   enforced: >-
     for_flow (taskloom/registry.py) keeps the problem of each definition PythonCode.local_block refuses in .problems,

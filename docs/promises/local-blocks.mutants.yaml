@@ -1,12 +1,13 @@
 # Mutation testing of Local and Global reusable blocks (read by packaging/mutants.py --explained). scope: what the bugs
 # are planted in, the functions the change touched (494dbef: the flow file, a flow's block types, the command line and
-# Check flows; 111e271 and 77de9df: the editor), in groups: each group's bugs run the tests that can see them (each
+# Check flows; 111e271, 77de9df and 80c0d6c: the editor; 0f99ccf: a paste joins on the same code, and a Local block
+# with a Global block's name is a problem), in groups: each group's bugs run the tests that can see them (each
 # line of tests: is one pytest run, a file or several, with -k words or without). The functions that are new or mostly
 # rewritten are tested whole. A function in which the change touched a few lines, among much that was there before, is
 # under not_tested: its bugs are planted and counted, not run, and its reason names the tests that fail when the
 # changed lines are taken out by hand, or says that none does. The change's other lines are not functions of their own,
 # or changed only a docstring or a comment, so nothing is planted in them: registry.LOCAL, flow.FLOW_KEYS and
-# Flow.local_blocks, panels.LOCAL_NOTE and SHARED_STYLE, the imports, ReusableBlock's docstring and a comment in
+# Flow.local_blocks, document.SAME_CODE, panels.LOCAL_NOTE and SHARED_STYLE, the imports, ReusableBlock's docstring and a comment in
 # MainWindow.delete_user_block. mutmut plants nothing in a function with a decorator other than staticmethod or
 # classmethod, so the three registry properties are not in the scope: FlowDocument.registry, which makes a flow's
 # block types again after each change of its definitions or of the blocks folder, and FlowScene.registry and
@@ -27,6 +28,7 @@ scope:
         - taskloom/editor/panels.py _unknown_type
       tests:
         - tests/test_local_blocks.py tests/test_local_blocks_editor.py -k "(every_copy_runs and two_copies) or definition_is_missing or problem_in_a_definition or check_flows_finds or (however_it_is_run and engine) or create_local_turns"
+        - tests/test_local_blocks_found.py -k local_block_has_the_name_of_a_global
     - mutate:
         - taskloom/editor/document.py _port_changes
         - taskloom/editor/document.py FlowDocument.set_port_names
@@ -36,7 +38,7 @@ scope:
     - mutate:
         - taskloom/editor/document.py FlowDocument._add_definitions
       tests:
-        - tests/test_local_blocks_editor.py -k "last_copy_copied or same_code_joins or other_code_is_kept or global_block_has_its_name_is_kept"
+        - tests/test_local_blocks_editor.py tests/test_local_blocks_found.py -k "last_copy_copied or same_code_joins or other_code_is_kept or global_block_has_its_name_is_kept or (same_code_but_other_words and all) or other_code_is_still_kept"
     - mutate:
         - taskloom/editor/document.py FlowDocument.local_name
         - taskloom/editor/document.py FlowDocument.copies
@@ -100,7 +102,7 @@ scope:
         - tests/test_local_blocks.py -k problem_in_a_definition
 not_tested:
   taskloom/registry.py Registry.__init__: >-
-    This change added one line to it, the problems of a flow's definitions (.problems), which for_flow fills and
+    This change added one line to it, the problems of a flow's Local blocks (.problems), which for_flow fills and
     validate reads: without it every run of a flow fails, e.g.
     test_every_copy_runs_its_definitions_code_on_what_is_connected_to_it.
   taskloom/flow.py flow_from_data: >-

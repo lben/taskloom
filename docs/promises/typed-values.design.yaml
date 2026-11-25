@@ -12,7 +12,7 @@
   revisit_if: a block fed only by typed values should start a line of its own, e.g. a flow of independent blocks.
 - chosen: 'Connecting a line to an input removes its typed value in the same undo step, and a hole with a line offers none: a hole has a line or a value, never both.'
   revisit_if: a value is wanted as a fallback for when the line brings nothing.
-- chosen: Holes that take no typed value say why in their menu - table inputs, holes that collect many lines, run after, the Loop's result, and the two inputs that expect a dictionary, Run Query's params and Statistics' extra, which the editor lists by name.
+- chosen: One function (flow.no_value_reason) says which holes take no typed value and why - table inputs, holes that collect many lines, run after, the Loop's result, and the two inputs that expect a dictionary, Run Query's params and Statistics' extra, listed by name; the editor's menu says its reason, and Validate refuses a value written by hand there with the same words.
   revisit_if: another block gets an input that expects a dictionary (it must be added to that list) or a dictionary type is added.
 - chosen: The box is laid over the canvas, not drawn as part of it, keeps its size at any zoom, opens once the double-click or the menu is over, and holds only the block's and the hole's names, because the canvas draws itself anew on every change.
   revisit_if: the canvas stops drawing itself anew on every change, so the box could be part of the drawing and zoom with it.
