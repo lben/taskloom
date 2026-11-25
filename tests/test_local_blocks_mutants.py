@@ -29,6 +29,7 @@ import yaml
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt, QTimer  # noqa: E402
+from PySide6.QtGui import QColor, QPalette  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFormLayout, QLabel, QMessageBox, QRadioButton  # noqa: E402
 
@@ -43,7 +44,8 @@ from tests.test_paths_editor_editing import (clean, error_shown, field, menu, pr
                                              type_in)
 from tests.test_paths_editor_running import right_click  # noqa: E402
 from tests.test_reusable_block import block_files, fill, text_box, user_created  # noqa: E402
-from tests.test_theme import in_place, strongest  # noqa: E402
+from tests.test_inspect_mermaid import contrast  # noqa: E402
+from tests.test_theme import in_place, most_common, strongest  # noqa: E402
 
 # Qt's own message boxes (the win fixture records them in their place; these tests show them, to read them).
 REAL_QUESTION, REAL_WARNING = QMessageBox.question, QMessageBox.warning
@@ -146,6 +148,16 @@ def reddest(widget) -> int:
     image = in_place(widget)
     return max(c.red() - max(c.green(), c.blue())
                for c in (image.pixelColor(x, y) for y in range(image.height()) for x in range(image.width())))
+
+
+def in_placeholder_grey(label) -> bool:
+    """Whether the label's text is painted no stronger than the window's placeholder colour (the grey of a hint) as
+    painted over what is behind it, not in the text colour."""
+    image = in_place(label)
+    behind, grey = most_common(image), label.window().palette().color(QPalette.PlaceholderText)
+    over = QColor.fromRgbF(*(g * grey.alphaF() + b * (1 - grey.alphaF())
+                             for g, b in zip(grey.getRgbF()[:3], behind.getRgbF()[:3])))
+    return strongest(image, behind) <= contrast(over, behind) * 1.15
 
 
 def for_a_while(win) -> str:
@@ -491,10 +503,10 @@ def test_create_local_on_a_hand_written_block_with_a_version_keeps_the_definitio
 def test_create_reusable_blocks_window_over_the_editor_shows_its_choices_and_says_why_a_name_is_refused(win, qtbot,
                                                                                                          tmp_path):
     """Right-click filter → Create reusable block…: a window over the editor, titled so, says what it makes of filter
-    and asks where it is kept: Global (chosen) and Local, in bold, each with a fainter, indented line about it (Local's
-    naming the flow file), then Name, What it does, What its inputs expect. Its texts wrap in it. A name whose file is
-    in the blocks folder is refused, in red, in words that wrap.
-    Then Local, Shout, OK, and Global, Say, OK, on say: the status bar says what each did, for a while."""
+    and asks where it is kept: Global (chosen) and Local, in bold, each with an indented line about it in a hint's grey
+    (Local's naming the flow file), then Name, What it does, What its inputs expect. Its texts wrap in it. A name whose
+    file is in the blocks folder is refused, in red, in words that wrap. Then Local, Shout, OK, and Global, Say, OK,
+    on say: the status bar says what each did, for a while."""
     flow, _ = source_flow(tmp_path / "flows")
     tab = win.open_flow(flow)
     settle()
@@ -513,8 +525,8 @@ def test_create_reusable_blocks_window_over_the_editor_shows_its_choices_and_say
             "Saved in the blocks tree, under User Created, for every flow (a file in your blocks folder).",
             "Only this flow, kept in the flow file (shouting.yaml); not in the blocks tree. Copy and paste the block "
             "to make more copies."]
-        for radio, about in ((global_, about_global), (local, about_local)):
-            assert strongest(in_place(about)) < strongest(in_place(radio)), f"{about.text()!r} is not fainter"
+        for about in (about_global, about_local):
+            assert in_placeholder_grey(about), f"{about.text()!r} is not in the grey of a placeholder"
             assert about.contentsRect().left() >= 15, f"{about.text()!r} is not under its choice's name"
         assert row_names(dialog) == ["Name", "What it does", "What its inputs expect"]
         assert dialog.width() < 530, f"a text does not wrap: the window is {dialog.width()} pixels wide"
