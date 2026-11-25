@@ -76,7 +76,7 @@ FLOW = """
       - start_by_hand.start -> load_sales.after
       - load_sales.amounts -> round_sales.amounts
 """
-NEW_NAME, NEW_FILE = "Daily sales", "daily_sales.py"  # made again, from load_sales, with Create Reusable block…
+NEW_NAME, NEW_FILE = "Daily sales", "daily_sales.py"  # made again, from load_sales, with Create reusable block…
 NEW_SAYS = "Gives the day's sales amounts."
 
 
@@ -338,7 +338,7 @@ def test_a_block_of_your_own_deleted_from_the_blocks_list(proof, win, qtbot, tmp
            "nothing. When no block of your own is left, the User Created group is gone; it comes back with the "
            "next one you make.")
     p.why_simplest("A block of your own is one Python file in the blocks folder of your Taskloom folder: you wrote "
-                   "it there, or Create Reusable block… did. Deleting the block is deleting that file. Taskloom then "
+                   "it there, or Create reusable block… did. Deleting the block is deleting that file. Taskloom then "
                    "forgets the blocks that file gave it, and draws the Blocks list, the Documentation and the open "
                    "canvases again from what it still knows. No list of deleted blocks is kept anywhere.")
     p.why_simplest("Taskloom already knows where each block comes from: with Taskloom, or from a file of yours. Delete "
@@ -362,7 +362,7 @@ def test_a_block_of_your_own_deleted_from_the_blocks_list(proof, win, qtbot, tmp
     p.alternative("A separate window to manage your blocks",
                   "One more window to find. The Blocks list already lists every block of your own, and a "
                   "right-click menu is where Taskloom puts what you can do with a thing, as on the canvas.")
-    p.fits("It is the reverse of Create Reusable block…: that writes a file and adds its block to the Blocks list "
+    p.fits("It is the reverse of Create reusable block…: that writes a file and adds its block to the Blocks list "
            "and the Documentation at once; Delete block… deletes the file and takes its blocks away at once. "
            "Neither needs the editor started again.")
     p.fits("An unknown block is what Taskloom already shows for a block whose type it does not know, as in a flow "
@@ -564,7 +564,7 @@ def test_a_block_of_your_own_deleted_from_the_blocks_list(proof, win, qtbot, tmp
     p.shot(win, "① At the end of the Blocks list, Debug is now followed by Notes: the User Created group is gone, as "
                 "no block of your own is left.", highlight=[end], badges=True, zoom=end)
 
-    p.step(f"Make a block of your own again: right-click load_sales on the canvas, choose Create Reusable block…, name "
+    p.step(f"Make a block of your own again: right-click load_sales on the canvas, choose Create reusable block…, name "
            f"it {NEW_NAME}, say what it does, and press OK.")
 
     def fill_in(dialog):
@@ -573,7 +573,7 @@ def test_a_block_of_your_own_deleted_from_the_blocks_list(proof, win, qtbot, tmp
         QTest.mouseClick(dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Ok), Qt.LeftButton)
 
     p.while_open(lambda: right_click(tab, "load_sales"),
-                 lambda menu: p.while_open(lambda: choose(menu, "Create Reusable block…"), fill_in))
+                 lambda menu: p.while_open(lambda: choose(menu, "Create reusable block…"), fill_in))
     QApplication.processEvents()
     new_file = blocks_dir / NEW_FILE
     p.check(f"The group User Created is back, with {NEW_NAME}",

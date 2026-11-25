@@ -1,0 +1,127 @@
+# How each agreed row of docs/promises/typed-values.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A small feature has no model to check: its
+# rows are amber, checked by tests only, and not_green says what the tests leave out.
+TV-1:
+  enforced: >-
+    FlowScene.mouseDoubleClickEvent (taskloom/editor/canvas.py), on an input hole, and the hole's Set value… item
+    (MainWindow._value_items, taskloom/editor/window.py) open the box through FlowView.open_value_box once the event or
+    the menu is over, only where why_no_value finds nothing against it. TypedValueBox.__init__ lists the seven types
+    of params.TYPES and starts from the value stored; TypedValueBox.place puts it beside the hole, wholly inside the
+    visible canvas. Enter (TypedValueBox.keep) keeps the value through set_typed_value, which first converts it with
+    params.coerce and refuses, saying why, a value that does not fit its type: the box then shows the reason and stays
+    open. Esc (TypedValueBox.keyPressEvent) closes it, nothing kept.
+  not_green: >-
+    Tests keep a value of each of the seven types, refuse "1,5" as an int and as a float and 2026-02-30 as a date, and
+    open the box at 20 %, 100 % and 300 % zoom, at the canvas's edge, inside a Loop, in the dark theme and while the
+    canvas is drawn again; no check tries every value of every type or every place of a hole on the screen.
+TV-2:
+  enforced: >-
+    NodeItem._show_values (taskloom/editor/canvas.py) draws each value the flow file holds on its hole's row as a
+    ValueChip, made again with the block after every change. ValueChip.__init__ starts it right of the hole's name and
+    ends it before that row's output name (NodeItem.row_output; LoopItem.row_output gives none), shortens it with "…"
+    to one line, and gives it the whole value as its hover text. PropertiesPanel._input_values_box
+    (taskloom/editor/panels.py) shows the same stored value in a row for each hole that can take one, and
+    PropertiesPanel._set_typed keeps an edit there through set_typed_value, the one the box uses; the canvas and
+    Properties are both drawn again from the flow after each change, so each shows the other's edit.
+  not_green: >-
+    Tests read the value in the block and on hover for a short value, one of 500 characters and one with line breaks,
+    inside a Loop and in the dark theme, and change it in the box and in Properties; no check tries every length of a
+    hole's name and of its row's output name, or every zoom.
+TV-3:
+  enforced: >-
+    _typed (taskloom/engine.py) converts each typed value with params.coerce, then fills {{name}} in a text, or in
+    each item of a list, once with _fill, the filling every setting gets (_filled), from the flow parameters and what
+    the lines into the block brought. _Runner._gather adds what _typed gives to what the lines brought, as if a line
+    brought each, for every block of a full run, inside a Loop and on a Splitter's line; _only_inputs does the same for
+    Run only this block and Run from this block on; taskloom run and the scheduler service both run the flow through
+    run_flow. Validate refuses a {{name}} naming nothing or another typed value (placeholder_problems, called with the
+    block's typed inputs by _typed_value_problems, taskloom/flow.py). Which blocks run is worked out from the lines
+    alone (run_part, engine.py), as before.
+  not_green: >-
+    Tests give each type to Python Code, a Global reusable block, If, Splitter, Inspect and a Loop's items, inside a
+    Loop, on a Splitter's lines, with --only and --from, on the command line and under the scheduler service, try the
+    brace cases of the stage's table, fill {{p}} in each hole of each built-in block that takes a value (the BR-5
+    walk), and fill and refuse {{name}} in a typed text and list with --only and --from; no check tries every text.
+TV-4:
+  enforced: >-
+    FlowDocument.connect (taskloom/editor/document.py) removes the input's typed value in the same change that adds the
+    line (_set_typed_values), so one undo brings the value back and takes the line away. For a hole with a line,
+    why_no_value (taskloom/editor/canvas.py) says "A line comes into it", so the hole's Set value… is greyed
+    (MainWindow._value_items), a double-click opens no box (FlowView.open_value_box), and Properties shows where the
+    line comes from instead of a field (PropertiesPanel._input_values_box).
+  not_green: >-
+    Tests connect a line to a Python Code input and to an If's value, undo and redo, and try the menu and a
+    double-click on holes with a line; no check tries every kind of hole or every order of edits.
+TV-5:
+  enforced: >-
+    no_value_reason (taskloom/flow.py) is the one place that says which inputs take no typed value, and why: run after,
+    a table input, an input that collects many lines, the Loop's result and the two inputs listed in DICT_INPUTS (Run
+    Query's params, Statistics' extra). In the editor takes_no_value (taskloom/editor/canvas.py) asks it, and
+    MainWindow._value_items (taskloom/editor/window.py) puts its reason in the greyed Set value…'s hover text;
+    FlowView.open_value_box opens no box there and Properties' Input values box has no row for them. Validate refuses
+    a value written by hand there with the same reason (_typed_value_problems). Python Code's and Inspect's inputs are
+    none of these, so they offer one.
+  not_green: >-
+    Tests open the menu of, and double-click, the ten kinds of hole the row names and seven that take a value, and
+    write a value by hand on six of them; no check walks every hole of every block, so a block added later with an
+    input that expects a dictionary would offer a value until it is listed in DICT_INPUTS.
+TV-6:
+  enforced: >-
+    validate (taskloom/flow.py) counts each typed value as a connected input when it looks for required inputs, and
+    gives it to the block's own checks as a line called "typed value" (as PropertiesPanel._show_problems does in the
+    editor). _Runner._fail (taskloom/engine.py) lists each typed value under "Inputs:" as "<input> ← typed <type>:
+    <value>". MainWindow.run_block_with_inputs (taskloom/editor/window.py) fills both "with inputs I choose…" windows
+    with today's typed values. For "…with the same inputs" (--inputs-from), _only_inputs takes today's typed values
+    and only the other inputs from the run named; no run keeps a typed value for it: a full run keeps what each block
+    gave, and a block run on its own (_Runner._run_one) keeps what it got but the values typed for its inputs (values
+    you chose stay), so a value cleared since gives none.
+  not_green: >-
+    Tests validate a Loop's items and an API Request's body given a typed value, fail a block in a full run, with
+    --only and with --from, open both "with inputs I choose…" windows before and after a run, change a value between
+    three runs, and change or clear one after a re-run with the same inputs, on the command line and in the editor;
+    no check tries every block's own checks with a typed value.
+TV-7:
+  enforced: >-
+    Clear value (MainWindow._value_items, taskloom/editor/window.py) removes the input's value with
+    FlowDocument.set_block_value(…, None, "inputs"), and _set_typed_values leaves no inputs key once none is left.
+    A typed text that is empty is the value {type: text, value: ""}, which set_block_value keeps (only no value at all
+    removes one); PropertiesPanel._set_typed keeps an empty field as an empty text when the hole held one. At a run,
+    _typed (taskloom/engine.py) gives the block "" for it, and a hole with neither a value nor a line gets nothing, as
+    before.
+  not_green: >-
+    Tests keep an empty text from the box, run it, clear it from the menu and run again, and empty a value's field in
+    Properties (the value is removed; an empty text there stays one); no check tries every order of edits.
+TV-8:
+  enforced: >-
+    FlowDocument.set_port_names (taskloom/editor/document.py) moves each typed value to its input's new name and drops
+    that of a removed input, in the same change as the lines (for the copies of a Local block, every copy's: see
+    local-blocks RB-10). MainWindow.copy_blocks (taskloom/editor/window.py) puts each block as the flow holds it, its
+    inputs key too, on the clipboard, and FlowDocument.paste_blocks adds it whole. Typed values belong to each block
+    (BlockSpec.inputs), so each copy of a Global or Local reusable block has its own; make_local and promote change only
+    the copies' type.
+  not_green: >-
+    Tests rename and remove a Python Code input, copy and paste a block with values, give copies of a Global and of a
+    Local reusable block values of their own, and create, promote and undo with values; no check tries every order of
+    edits.
+TV-9:
+  enforced: >-
+    _typed_value_problems (taskloom/flow.py), which validate calls for each block, gives an error naming the block and
+    the input for a value on an input the block does not have or that takes none (with no_value_reason's reason, the
+    one the editor's menu gives), one with a line into the same input,
+    one params.coerce cannot convert to its type, and a {{name}} in it that cannot be filled; flow_from_data refuses an
+    inputs entry not written as {type, value} with a known type. run_flow (taskloom/engine.py) runs Validate before
+    anything is recorded and refuses with its errors, so with the same words; the editor's Validate and Run now show
+    them.
+  not_green: >-
+    Tests write the four cases the row names by hand and run taskloom validate, taskloom run, and the editor's Validate
+    and Run now; they also write values by hand on Run Query's params, Statistics' extra and table, the Loop's result,
+    a Merger's lines and run after, for taskloom validate and taskloom run; no test writes an inputs entry of another
+    form or type.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# typed-values.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/typed-values.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

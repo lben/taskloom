@@ -136,7 +136,7 @@ def test_the_done_diamond_only_where_a_blocks_output_may_not_arrive(proof, env, 
            "run a next step after one of them, connect its output (Run Query's result, Chart's image) to the next "
            "block's run after diamond: the next block waits for it and does not use its value.")
     p.idea("The done diamond stays where it has a job: on If, on Python Code and the blocks you saved from a Python "
-           "Code block (Create Reusable block), and on a block that has no outputs at all. If gives true or false, "
+           "Code block (Create reusable block), and on a block that has no outputs at all. If gives true or false, "
            "never both, and Python Code may set none of its outputs: done fires whenever they succeed, so a next "
            "step can come after them whatever they gave.")
     p.idea("22 blocks lose it. Among them are Write File and Send Email: they too always give their output (the "

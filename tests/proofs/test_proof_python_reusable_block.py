@@ -1,4 +1,4 @@
-"""Proof: right-click a Python Code block to save it as a reusable block of your own (Create Reusable block…)."""
+"""Proof: right-click a Python Code block to save it as a reusable block of your own (Create reusable block…)."""
 
 import textwrap
 
@@ -166,7 +166,7 @@ def test_a_python_code_block_saved_as_a_reusable_block(proof, env, win, qtbot, m
               "open a window asking for the new User Block name (which will live under a new \"User Created\" "
               "category on the blocks tree), a help description for 1. what the block does overall and 2. what do "
               "the input(s) expect to receive")
-    p.idea("Right-click a Python Code block and choose Create Reusable block…: it becomes a block of your own, "
+    p.idea("Right-click a Python Code block and choose Create reusable block…: it becomes a block of your own, "
            "listed at once under User Created in the blocks tree, to add to any flow.")
     p.idea("A window asks for its name (its title in the blocks tree), what it does, and what its inputs expect. "
            "Resting the mouse on it in the blocks tree shows both texts, and so do its Properties in a flow. A name "
@@ -233,7 +233,7 @@ def test_a_python_code_block_saved_as_a_reusable_block(proof, env, win, qtbot, m
                highlight=[dialog.name, dialog.what, dialog.expects], badges=True)
         p.check("The window asks for the Name, What it does and What its inputs expect, and holds what was typed",
                 (dialog.windowTitle(), dialog.name.text(), dialog.what.toPlainText(), dialog.expects.toPlainText())
-                == ("Create Reusable block", NAME, WHAT_IT_DOES, INPUTS_EXPECT))
+                == ("Create reusable block", NAME, WHAT_IT_DOES, INPUTS_EXPECT))
 
         p.step(f"To see a name already used refused, change Name to {TAKEN} and press OK. {TAKEN} is a block that "
                "comes with Taskloom.")
@@ -257,13 +257,13 @@ def test_a_python_code_block_saved_as_a_reusable_block(proof, env, win, qtbot, m
         seen["closed"] = not dialog.isVisible()
 
     def the_menu(menu):
-        p.check("tidy's menu has Create Reusable block…",
-                any(a.text() == "Create Reusable block…" and a.isEnabled() for a in menu.actions()))
-        p.shot(menu, "Its menu: ① Create Reusable block… is the last item. Its … says it opens a window.", over=win,
-               highlight=[menu_item(menu, "Create Reusable block…")], badges=True, zoom=[menu, "tidy"])
-        p.step("Choose Create Reusable block…, and fill in the window that opens: Name, What it does, and What its "
+        p.check("tidy's menu has Create reusable block…",
+                any(a.text() == "Create reusable block…" and a.isEnabled() for a in menu.actions()))
+        p.shot(menu, "Its menu: ① Create reusable block… is the last item. Its … says it opens a window.", over=win,
+               highlight=[menu_item(menu, "Create reusable block…")], badges=True, zoom=[menu, "tidy"])
+        p.step("Choose Create reusable block…, and fill in the window that opens: Name, What it does, and What its "
                "inputs expect.")
-        p.while_open(lambda: choose(menu, "Create Reusable block…"), fill_in)
+        p.while_open(lambda: choose(menu, "Create reusable block…"), fill_in)
 
     p.while_open(lambda: right_click(tab, "tidy"), the_menu)
     QApplication.processEvents()

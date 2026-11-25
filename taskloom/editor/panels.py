@@ -41,11 +41,13 @@ from ..calendars import load_calendar
 from ..config import SECRET_PREFIX, kept_runs
 from ..expr import functions
 from ..flow import API_REQUEST, LOOP, SESSION, BlockSpec, Retry, block_config, parse_duration, schedules_of
+from ..registry import LOCAL
 from ..report import MAX_IMAGE_WIDTH
 from ..scheduler import counted_from
 from . import docs
 from .canvas import (BLOCK_ICONS, BLOCK_MIME, CATEGORY_COLORS, NOTE_SIZES, NOTE_STYLES, STATUS_COLORS, TEXT_ICON,
-                     TEXT_ITEM, USER_COLOR, USER_ICON, is_dark, paint_icon)
+                     TEXT_ITEM, USER_COLOR, USER_ICON, block_ports, is_dark, paint_icon, set_typed_value,
+                     takes_no_value, typed_text)
 from .zoom import mark
 
 # A fixed-width font, so a table's columns line up. "monospace" names no font on Windows or macOS, and it is also what
@@ -786,6 +788,20 @@ class _DateTimeBox(QDateTimeEdit):
         super().keyPressEvent(event)
 
 
+LOCAL_NOTE = " · Local reusable block: kept in this flow's file, not in the blocks tree"  # under a copy's title
+SHARED_STYLE = "background: palette(alternate-base); border-left: 3px solid #d4a017; padding: 6px;"  # "Shared by N"
+
+
+def _unknown_type(type_id: str, problems: dict) -> str:
+    """What Properties says of a block whose type the flow cannot use (`problems`: of its Local blocks' definitions,
+    registry.for_flow)."""
+    if type_id in problems:
+        return f"The definition of its Local block {type_id[len(LOCAL):]} has a problem: {problems[type_id]}"
+    if type_id.startswith(LOCAL):
+        return f"The definition of its Local block {type_id[len(LOCAL):]} is missing from the flow file."
+    return "This block type is not installed."
+
+
 class PropertiesPanel(QScrollArea):
     """Properties of the selected block, generated from its config fields."""
 
@@ -795,7 +811,7 @@ class PropertiesPanel(QScrollArea):
         self.settings = settings  # (the editor's preferences)
         self.toggles = toggles  # (of the code boxes' find bars)
         self.setWidgetResizable(True)
-        self.doc = self.registry = self.block_id = self.note_id = None
+        self.doc = self.block_id = self.note_id = None
         self._committing = False
         self._custom_when = None  # (flow, block) whose schedule you chose to write as a cron line
         self.card = HelpCard(self)
@@ -827,7 +843,12 @@ class PropertiesPanel(QScrollArea):
         if focused is not None and self.isAncestorOf(focused):
             focused.clearFocus()
 
-    def show_block(self, doc, registry, block_id):
+    @property
+    def registry(self):
+        """The block types of the flow shown (its own Local blocks too)."""
+        return self.doc.registry
+
+    def show_block(self, doc, block_id):
         shown = (self.doc, self.block_id)
         if self._committing and (doc, block_id) == shown and any(bar.isVisible() for bar in self.findChildren(FindBar)):
             # The canvas drawn again after an edit here, e.g. a code box saved as the focus went into its find bar:
@@ -836,7 +857,7 @@ class PropertiesPanel(QScrollArea):
         self._finish_editing()
         if (doc, block_id) == shown and self.block_id != block_id:
             block_id = self.block_id  # finishing renamed it: show it under its new name
-        self.doc, self.registry, self.block_id, self.note_id = doc, registry, block_id, None
+        self.doc, self.block_id, self.note_id = doc, block_id, None
         self.refresh()
 
     def show_note(self, doc, note_id):
@@ -891,8 +912,13 @@ class PropertiesPanel(QScrollArea):
             return
         spec = self.doc.blocks[self.block_id]
         cls = self.registry.get(spec.get("type"))
+        local = self.doc.local_name(self.block_id)  # the Local block it is a copy of (None: none)
+        note = LOCAL_NOTE if local is not None and cls else ""
+        # Only the note makes the line too long to fit; a wrapped label would also let other blocks' Properties
+        # scroll down where today their fields shrink to fit.
         head = QLabel(f"<b>{html.escape(cls.title if cls else spec.get('type'))}</b>"
-                      f"<br><span style='color: gray'>{html.escape(spec.get('type'))}</span>")
+                      f"<br><span style='color: gray'>{html.escape(spec.get('type'))}{note}</span>",
+                      wordWrap=bool(note))
         layout.addWidget(head)
         self.error = QLabel()
         self.error.setWordWrap(True)
@@ -907,20 +933,24 @@ class PropertiesPanel(QScrollArea):
         self._add_row(form, "name", name)
         layout.addLayout(form)
         if cls is None:
-            layout.addWidget(QLabel("This block type is not installed."))
+            layout.addWidget(QLabel(_unknown_type(str(spec.get("type")), self.registry.problems), wordWrap=True,
+                                    textFormat=Qt.PlainText))
             return
         if issubclass(cls, ReusableBlock):  # it has no settings: what it does and what its inputs expect instead
             for heading, text in (("What it does", cls.description), ("What its inputs expect", cls.inputs_help)):
                 if text:
                     layout.addWidget(QLabel(f"<b>{heading}</b>"))
                     layout.addWidget(QLabel(text, wordWrap=True, textFormat=Qt.PlainText))
-        config = spec.get("config") or {}
+        config = self.doc.settings(self.block_id)
+        if local is not None:  # a Python Code block's settings, its Local block's, which all its copies share
+            cls = self.registry.get("logic.python")
         if cls.type_id == API_REQUEST:
             layout.addWidget(self._curl_box())
         when = cls.type_id == "trigger.schedule"
         keeps = cls.type_id in ("trigger.manual", "trigger.schedule")
         if when:
             layout.addWidget(self._when_box(config))
+        values = self._input_values_box(spec)  # (before the code, if any)
         for key, f in cls.config.items():
             if when and key in ("cron", "every", "at") or keeps and key in ("keep", "keep_failed"):
                 continue  # in the When box, or the Keep runs box
@@ -937,6 +967,14 @@ class PropertiesPanel(QScrollArea):
             widget.setToolTip(_as_written(docs.field_card(f)[0]))  # (also its buttons': …, Edit…, New…)
             self._field_help(cls, key, label, *_inputs(widget))
             if isinstance(f, fields.Code):
+                if values is not None:
+                    layout.addWidget(values)
+                    values = None
+                if local is not None:
+                    widget.findChild(CodeEdit).setObjectName("local_code")
+                    if (shared := len(self.doc.copies(local))) > 1:
+                        layout.addWidget(QLabel(f"Shared by {shared} blocks: an edit changes all {shared}",
+                                                objectName="shared_note", wordWrap=True, styleSheet=SHARED_STYLE))
                 layout.addWidget(label)
                 layout.addWidget(widget)
             else:
@@ -951,6 +989,8 @@ class PropertiesPanel(QScrollArea):
                 note = QLabel(note, wordWrap=True, textFormat=Qt.PlainText)
                 note.setStyleSheet("color: palette(placeholder-text);")
                 layout.addWidget(note)
+        if values is not None:
+            layout.addWidget(values)
         if keeps:
             layout.addWidget(self._keep_box(config, cls))
         if cls.type_id not in (LOOP, SESSION):  # (the blocks inside them have their own retry and timeout)
@@ -1211,13 +1251,57 @@ class PropertiesPanel(QScrollArea):
         """A list of input or output names: renaming or removing one updates its connections too."""
         if self.doc is None or self.block_id not in self.doc.blocks:
             return
-        old = self.doc.blocks[self.block_id].get("config", {}).get(key)
+        old = self.doc.settings(self.block_id).get(key)
         old, new = (old if old is not None else f.default or []), (value if value is not None else f.default or [])
         if old == new:
             return self._set(key, value)
         f.coerce(new)  # a bad name is reported before anything changes
         outputs = f.reserved == RESERVED_OUTPUTS
         self._commit(lambda: self.doc.set_port_names(self.block_id, key, value, list(old), list(new), outputs))
+
+    def _input_values_box(self, spec: dict) -> QGroupBox | None:
+        """Input values: the typed value of each input hole that can take one (the same one the canvas shows in the
+        block), to type or change; a hole a line comes into says where from. None: no hole can take one."""
+        box = QGroupBox("Input values", objectName="inputValues")
+        form = QFormLayout(box)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        sources, typed = self._sources(), spec.get("inputs") or {}
+        for hole in block_ports(self.registry, spec)[0]:
+            if takes_no_value(self.registry, spec, hole) is not None:
+                continue
+            if hole in sources:
+                line = QLabel(("line from " if len(sources[hole]) == 1 else "lines from ") + ", ".join(sources[hole]))
+                line.setStyleSheet("color: palette(placeholder-text);")
+                form.addRow(hole, line)
+                continue
+            stored = typed.get(hole) if isinstance(typed.get(hole), dict) else {}
+            field = QWidget()
+            row = QHBoxLayout(field)
+            row.setContentsMargins(0, 0, 0, 0)
+            edit = QLineEdit(typed_text(stored.get("value")), placeholderText="no value: type one, or connect a line")
+            kinds = QComboBox()
+            kinds.addItems(P.TYPES)
+            kinds.setCurrentText(stored.get("type", "text"))
+            edit.editingFinished.connect(lambda h=hole, e=edit, k=kinds: self._set_typed(h, k.currentText(), e.text()))
+            kinds.currentTextChanged.connect(lambda t, h=hole, e=edit: self._set_typed(h, t, e.text()))
+            row.addWidget(edit, 1)
+            row.addWidget(kinds)
+            form.addRow(hole, field)
+            self._help(form.labelForField(field), [edit, kinds], hole, *docs.row_card("inputs.value")[1:],
+                       docs.row_href("inputs.value"))
+        return box if form.rowCount() else None
+
+    def _set_typed(self, hole: str, type_: str, text: str):
+        """The value typed in the Input values row of `hole`, of the type shown there; an empty field: no value (but a
+        value that is an empty text stays one)."""
+        if self.doc is None or self.block_id not in self.doc.blocks:
+            return
+        stored = (self.doc.blocks[self.block_id].get("inputs") or {}).get(hole)
+        empty_text = isinstance(stored, dict) and typed_text(stored.get("value")) == ""
+        if text or empty_text:
+            self._commit(lambda: set_typed_value(self.doc, self.block_id, hole, type_, text))
+        else:
+            self._commit(lambda: self.doc.set_block_value(self.block_id, hole, None, "inputs"))
 
     def _sources(self) -> dict[str, list[str]]:
         """{input: ["block.port", ...] connected into it, in edge order} of the block shown."""
@@ -1724,7 +1808,8 @@ class PropertiesPanel(QScrollArea):
             self.error.setText(str(e))
             self.error.show()
             return
-        problems = cls.problems(config, self._sources(), set(self.doc.data["params"]))
+        supplied = {**{hole: ["typed value"] for hole in spec.get("inputs") or {}}, **self._sources()}  # (as Validate)
+        problems = cls.problems(config, supplied, set(self.doc.data["params"]))
         loops = [c for c in self.doc.containers(self.block_id) if self.doc.blocks[c].get("type") == LOOP]
         if loops:
             problems = [*problems, *cls.loop_problems(config, loops[0])]

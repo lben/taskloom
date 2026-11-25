@@ -1202,7 +1202,7 @@ def test_nothing_in_the_preview_can_be_changed_moved_deleted_connected_pasted_in
     finally:
         watch.stop()
         close_menus()
-    editing = ("Run", "Delete", "Paste", "Add text", "Create Reusable block", "Results of this block")
+    editing = ("Run", "Delete", "Paste", "Add text", "Create reusable block", "Results of this block")
     assert not [items for items in menus if any(i.startswith(editing) for i in items)], menus
     assert window.drawn() == drawn
     assert tab.doc.data == tab_before and not tab.doc.dirty

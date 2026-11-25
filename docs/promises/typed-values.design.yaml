@@ -1,0 +1,24 @@
+# The design decisions of typed values for inputs, one line each (read by packaging/proof_pdf.py): what was chosen,
+# and when to look at it again.
+- chosen: 'One stored value with one edit path: a block''s typed values are its inputs key in the flow file, {hole: {type, value}}, and the box on the canvas and Properties'' Input values box both keep a value through the same call (set_typed_value, then FlowDocument.set_block_value with section inputs), so they cannot disagree.'
+  revisit_if: a typed value must also be set somewhere that does not go through the flow file, e.g. a run's own dialog that should keep what you typed for the next runs.
+- chosen: The types are those of flow parameters (text, int, float, bool, date, datetime, list); the editor stores the value as the text you typed and the engine converts it at each run as a flow parameter's value is converted, so a value written by hand as a YAML number or date works the same.
+  revisit_if: a value of another kind is needed, e.g. a dictionary for Run Query's params, which would need a type and a way to type it.
+- chosen: '{{name}} in a typed text, or in each item of a typed list, is filled once like any field (BR-1 to BR-9), with a flow parameter or an input that comes by a line; naming another typed value is an error (your answer of 24 November, b).'
+  revisit_if: a typed text must reach the block with its braces as typed, e.g. a template another block fills, more often than {{{{ can be written for each {{.
+- chosen: '"…with the same inputs" gives the typed value as it is today, while each line brings what it brought in that run (your answer of 24 November, a); no run records its typed values.'
+  revisit_if: a run must be repeated exactly as it was, typed values included, e.g. to reproduce a failure after the value was changed.
+- chosen: A typed value stands in for a line into its input only; it does not make the block run. In a flow with start blocks, a block runs only when a line leads to it from one, typed values or not.
+  revisit_if: a block fed only by typed values should start a line of its own, e.g. a flow of independent blocks.
+- chosen: 'Connecting a line to an input removes its typed value in the same undo step, and a hole with a line offers none: a hole has a line or a value, never both.'
+  revisit_if: a value is wanted as a fallback for when the line brings nothing.
+- chosen: One function (flow.no_value_reason) says which holes take no typed value and why - table inputs, holes that collect many lines, run after, the Loop's result, and the two inputs that expect a dictionary, Run Query's params and Statistics' extra, listed by name; the editor's menu says its reason, and Validate refuses a value written by hand there with the same words.
+  revisit_if: another block gets an input that expects a dictionary (it must be added to that list) or a dictionary type is added.
+- chosen: The box is laid over the canvas, not drawn as part of it, keeps its size at any zoom, opens once the double-click or the menu is over, and holds only the block's and the hole's names, because the canvas draws itself anew on every change.
+  revisit_if: the canvas stops drawing itself anew on every change, so the box could be part of the drawing and zoom with it.
+- chosen: The value is shown inside the block on its hole's row, right of the hole's name and up to 8 px before that row's output name, on one line and shortened with "…"; hovering shows it whole.
+  revisit_if: values are often too long to tell apart in that room, e.g. several paths that differ only at their end.
+- chosen: The box's value field is one line, so a text with line breaks can only be written in the flow file; the block shows such a text on one line.
+  revisit_if: typed texts with line breaks are needed often, e.g. an email body typed on the canvas.
+- chosen: 'A flow file edited by hand is opened as it is: Validate names the block and the hole of a typed value that cannot be (a line on the same hole, a value that does not fit its type, a hole the block does not have or that takes none), and a run refuses to start with the same words.'
+  revisit_if: such files should be refused, or fixed, as they are opened, e.g. by Check flows.

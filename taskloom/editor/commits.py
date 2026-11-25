@@ -91,8 +91,8 @@ def _found(pattern: re.Pattern, value) -> bool:
 
 def where_found(version: Version, pattern: re.Pattern, registry) -> tuple[int, str] | None:
     """Where `pattern` is found in `version`, the first of: (0) its message, (1) the outputs of its run (each block's
-    result summary and previews), (2) the code of its blocks (the value of each code setting), (3) anything else in its
-    flow file. None: nowhere."""
+    result summary and previews), (2) the code of its blocks (the value of each code setting; a Local block's code, in
+    its definition), (3) anything else in its flow file. None: nowhere."""
     if _found(pattern, version.message):
         return 0, "in the message"
     for block, result in version.results.items():
@@ -105,6 +105,10 @@ def where_found(version: Version, pattern: re.Pattern, registry) -> tuple[int, s
         if isinstance(config, dict) and any(isinstance(f, fields.Code) and _found(pattern, config.get(key))
                                             for key, f in cls.config.items()):
             return 2, f"in the code of {block}"
+    local = (version.flow or {}).get("local_blocks")  # (the code its Local blocks' copies run)
+    for name, definition in (local.items() if isinstance(local, dict) else ()):
+        if isinstance(definition, dict) and _found(pattern, definition.get("code")):
+            return 2, f"in the code of the Local block {name}"
     if _found(pattern, version.data.decode("utf-8", "replace")):
         return 3, "in the flow file"
     return None
@@ -291,7 +295,9 @@ class CommitHistory(QWidget):
         """The selected version in the preview, with the outputs of its run; Restore for it."""
         version = self.selected()
         flow = copy.deepcopy(version.flow) if version and version.flow else None
-        scene = FlowScene(FlowDocument(flow, self.path), self.registry)
+        doc = FlowDocument(flow, self.path)
+        doc.block_types = self.registry  # (with that version's own Local blocks: FlowDocument.registry)
+        scene = FlowScene(doc)
         for block, info in (version.results if flow else {}).items():
             scene.show_result(block, info)
         self.preview.setScene(scene)

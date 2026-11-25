@@ -1,0 +1,54 @@
+# What must always be true of Local and Global reusable blocks, as agreed with the maintainer in chat on 2026-11-24.
+# Each row is checked by the tests marked @pytest.mark.invariant("RB-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: Local and Global reusable blocks
+agreed: 2026-11-24
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    words: "Create reusable block offers Global (saved in the tree on the left) or Local (only this flow, not in the tree; copy and paste make more; right-click \"Promote to global reusable block\")"
+  - date: 2026-11-24
+    # The source block becomes the first copy (RB-1); Promote asks first (RB-4).
+    words: "1. a"
+  - date: 2026-11-24
+    # A pasted definition whose name is taken with other code (RB-6).
+    words: "4. Keep both (the pasted one renamed)"
+  - date: 2026-11-24
+    # Removing an input that copies still use (RB-10): asked to explain, then approved (a), refused.
+    words: "5. Explain better"
+  - date: 2026-11-24
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_local_blocks]
+rows:
+  RB-1: >-
+    "Create reusable block…" asks Global or Local. Global is today's behaviour: a file in your blocks folder, shown in
+    the blocks tree, for every flow; the source block stays as it is. Local turns the source block into the first
+    copy; its lines and values stay.
+  RB-2: >-
+    Local: the definition (its inputs, outputs and code) is kept in the flow file, and every copy in the flow runs the
+    same code. Properties of any copy shows the inputs, outputs and code under a note "Shared by N blocks: an edit
+    changes all N", and after an edit every copy has it.
+  RB-3: >-
+    Local blocks are not in the blocks tree. More copies are made with Copy and Paste.
+  RB-4: >-
+    Right-click a copy, "Promote to global reusable block": it first asks, saying that undo cannot remove the global
+    block's file. Then the block appears in the blocks tree, every copy in this flow uses the global one, and the flow
+    file no longer holds the definition. A name that is taken asks for another.
+  RB-5: >-
+    Deleting the last copy removes the definition from the flow file; one undo brings back both.
+  RB-6: >-
+    Copy and Paste carry the definition with them, also into another flow tab and after the copied block was deleted,
+    even the last copy. Pasted into a flow whose Local block of that name has the same code, the copy joins it; with
+    other code, the pasted definition is kept under a new name, and the status bar names it.
+  RB-7: >-
+    A flow with Local blocks runs the same in the editor, on the command line and under the scheduler (also on a
+    server), with no file needed besides the flow.
+  RB-8: >-
+    A Local and a Global block cannot have the same name.
+  RB-9: >-
+    When Validate finds a problem in a Local definition, it reports it once and names its copies, not once per copy.
+    A copy whose definition is missing from the flow file is named as such.
+  RB-10: >-
+    Removing an input from a Local definition while copies have lines or typed values on it is refused: the message
+    names each copy and what it has on that input. Nothing changes until they are cleared.

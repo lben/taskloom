@@ -1,0 +1,125 @@
+# How each agreed row of docs/promises/local-blocks.yaml is kept, and why a row is not green (read by
+# packaging/ledger.py; the reviewer checks these words against the code). A small feature has no model to check: its
+# rows are amber, checked by tests only, and not_green says what the tests leave out.
+RB-1:
+  enforced: >-
+    MainWindow.create_reusable_block (taskloom/editor/window.py) asks through ReusableBlockDialog
+    (taskloom/editor/dialogs.py), Global chosen as it opens, Local beside it. Global writes the block file
+    (write_reusable_block) and adds it to the window's block types, the blocks tree and the guide's pages
+    (MainWindow._add_block_file), leaving the block as it was. Local calls FlowDocument.make_local
+    (taskloom/editor/document.py), which keeps the definition under local_blocks and changes only the block's type, to
+    local.<name>, dropping its own settings, in one undo step: its name, place, lines and typed values stay.
+  not_green: >-
+    Tests make a Local and a Global block from one Python Code block with a line and a typed value, undo the Local
+    one and run the flow; no check tries every Python Code block's settings.
+RB-2:
+  enforced: >-
+    for_flow (taskloom/registry.py) makes one block per definition with PythonCode.local_block
+    (taskloom/blocks/logic.py): a reusable block that runs the definition's Python Code settings, so every block of
+    type local.<name> runs the same code. PropertiesPanel.refresh (taskloom/editor/panels.py) shows a copy's settings
+    from FlowDocument.settings, its definition, as a Python Code block's, with "Shared by N blocks: an edit changes all
+    N" over the code when two or more copies share it, and the line under its title wrapped to fit the panel;
+    FlowDocument.set_block_value and set_port_names write an edit there into the definition (_settings_to_edit), so
+    every copy has it, and the editor saves the flow before each run.
+  not_green: >-
+    Tests run two and three copies and a copy inside a Loop, edit the code and the names from one copy and read the
+    others, the file and the next run, edit while a run waits, and read a copy's Properties at three text sizes in two
+    window sizes; no check tries every definition, and one copy alone shows no note.
+RB-3:
+  enforced: >-
+    The blocks tree is filled from the window's block types, those of the blocks folder (MainWindow.registry, made by
+    discover), which hold no Local block; the flow's own come only from FlowDocument.registry. MainWindow.copy_blocks
+    (taskloom/editor/window.py) puts the definitions of the copies copied on the clipboard, and MainWindow.paste_blocks
+    hands them to FlowDocument.paste_blocks, which adds them with the new copies (_add_definitions).
+  not_green: >-
+    Tests look for the block in the tree after Create reusable block and after Paste, and paste a third copy; no check
+    tries every way a block can be added.
+RB-4:
+  enforced: >-
+    MainWindow.promote_local_block (taskloom/editor/window.py) first asks, saying "Undo cannot remove the global
+    block's file", and does nothing on No. On Yes, when MainWindow._reusable_name_problem finds the title taken (by a
+    block of the tree or of this flow, or a file of the blocks folder), ReusableBlockDialog asks for another name before
+    anything is written; then it writes the block file from the definition, adds it to the tree (_add_block_file), and
+    FlowDocument.promote (taskloom/editor/document.py) gives every copy the type of the global block and drops the
+    definition (_drop_unused_definitions), in one undo step. Its question also says that after an Undo the flow does
+    not run (the file stays, and a Local and a Global block cannot have the same name, RB-8) until you Redo, or delete
+    the global block (Delete block… in the blocks tree); No is the answer Enter gives.
+  not_green: >-
+    Tests say No (also with Enter), then Yes, with one and two copies, some holding typed values, run the flow, undo,
+    then Redo or Delete block… and run it again, and promote with a name a Global block or another Local block has;
+    no check tries every name.
+RB-5:
+  enforced: >-
+    FlowDocument.remove (taskloom/editor/document.py) drops, in the same change, each definition no copy uses any more
+    (_drop_unused_definitions), and one undo brings back the flow as it was before that change, copy and definition.
+  not_green: >-
+    Tests delete three copies one by one with the Delete key and undo; no check tries every way of removing blocks,
+    e.g. several copies selected at once.
+RB-6:
+  enforced: >-
+    MainWindow.copy_blocks (taskloom/editor/window.py) puts the definitions of the copies copied on the clipboard with
+    them, so they are there in any tab and after the copies are deleted. FlowDocument._add_definitions
+    (taskloom/editor/document.py), called by paste_blocks, lets a pasted copy join this flow's Local block of that
+    name when the two have the same code (same_code: the same Python Code settings as their copies run them, inputs,
+    outputs, Run in my Python environment and code, one left out taking its default, so use_environment false and
+    left out are the same; the title, what it does and what its inputs expect may differ, the flow's own kept), and
+    otherwise keeps the pasted one as the first free <name>_2, <name>_3, …, titled with that number too (also when a
+    Global block has that name or title), and paste_blocks gives the pasted copies its type;
+    MainWindow.paste_blocks names it in the status bar.
+  not_green: >-
+    Tests paste the only copy, deleted, into a new tab and back, and into flows whose Local block of that name has the
+    same definition, the same code with another title, description or inputs help, the same code after its
+    environment choice was ticked and unticked, other code, other inputs or another environment choice, and with a
+    Global block of that name or title; no check tries every pair of definitions.
+RB-7:
+  enforced: >-
+    run_flow (taskloom/engine.py) and validate (taskloom/flow.py) make the flow's block types from the flow itself
+    (for_flow), so taskloom run (cmd_run, taskloom/cli.py), the scheduler service and the editor, which run flows with
+    taskloom run, find the copies in the flow file alone; Check flows does the same (_check, taskloom/upgrade.py).
+    FlowDocument.registry makes the editor's from the flow as it is now; Commit History's preview and search take each
+    version's own definitions (CommitHistory._show_selected, where_found, taskloom/editor/commits.py).
+  not_green: >-
+    Tests run copies with taskloom run, in the engine and under the scheduler service, after Save as and after
+    restoring an older commit, and check flows with them; no test runs one on a server, which runs the same taskloom
+    run.
+RB-8:
+  enforced: >-
+    MainWindow._reusable_name_problem (taskloom/editor/window.py) refuses, for Create reusable block (Global or Local)
+    and for Promote, a name or title that a block of the tree or a Local block of this flow has (one whose definition
+    has a problem too), or a file of the blocks folder; FlowDocument._add_definitions (taskloom/editor/document.py)
+    renames a pasted definition whose name or title a Global block has. When a Global block with a Local block's name
+    (user.<name>) or title is made later, from another flow or as a file, for_flow (taskloom/registry.py) keeps the
+    Local block as it is and puts the clash in .problems, which validate (taskloom/flow.py) reports once, naming both
+    blocks and the copies, so taskloom validate, taskloom run and the editor's Validate and Run now refuse the flow.
+  not_green: >-
+    Tests refuse a Local block named as a Global one and the other way round, paste a Local block named as a Global
+    one, and run and validate flows whose Local block has a Global block's name and title, only its name or only its
+    title, also with the Global block made in another tab; no check tries every name.
+RB-9:
+  enforced: >-
+    for_flow (taskloom/registry.py) keeps the problem of each definition PythonCode.local_block refuses in .problems,
+    making no block of it; validate (taskloom/flow.py) says each such problem once, naming the definition and every
+    copy, and does not check those copies one by one; a copy of type local.<name> with no definition is said to have
+    its definition missing from the flow file. Properties says the same of such a copy (_unknown_type,
+    taskloom/editor/panels.py).
+  not_green: >-
+    Tests give a definition Inputs that are not names, with three copies, and write a copy with no definition, with
+    and without other definitions, with taskloom validate and the editor's Validate; no check tries every way a
+    definition can be wrong.
+RB-10:
+  enforced: >-
+    FlowDocument.set_port_names (taskloom/editor/document.py), for the inputs of a copy, first calls _refuse_removing,
+    which raises before anything changes, naming each copy that has a line or a typed value on an input being removed
+    and what it has there; Properties shows the refusal on its problem line (PropertiesPanel._commit). Once they are
+    cleared, the same edit removes the input from the definition.
+  not_green: >-
+    Tests remove an input of three copies, one with a line on it, one with a typed value and one with neither, then
+    clear both and remove it; no check tries every edit of the names, e.g. renaming and removing at once.
+
+# The checker of this feature: mutation testing of the functions the change touched, which are the scope in
+# local-blocks.mutants.yaml. CI runs it in the checkers-features job (.github/workflows/build.yml).
+checkers:
+  - name: Mutation testing
+    kind: mutation
+    command: python packaging/mutants.py . --run --explained docs/promises/local-blocks.mutants.yaml --out {out}/mutants.json
+    key: '^(PASSED|FAILED): mutation score'

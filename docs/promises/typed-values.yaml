@@ -1,0 +1,58 @@
+# What must always be true of typed values for inputs, as agreed with the maintainer in chat on 2026-11-24.
+# Each row is checked by the tests marked @pytest.mark.invariant("TV-<n>"); the proof's ledger is built from their
+# results. Changing a row's words needs the maintainer's approval first.
+feature: Typed values for inputs
+agreed: 2026-11-24
+# The maintainer's own words that led to these rows, with the date they were said.
+asked:
+  - date: 2026-11-11
+    words: "I want the value to be typed on the canvas view to the side of the input (probably a small dialog shows up)"
+  - date: 2026-11-24
+    # Braces in a typed text (TV-3): first asked to be reminded of BR-6; then approved (b), filled once like any field.
+    words: "Don't remember what BR-6 was, b makes sense to me but I don't want to be inconsistent either, help me remember and decide"
+  - date: 2026-11-24
+    # "...with the same inputs" gives today's typed value (TV-6).
+    words: "6. a"
+  - date: 2026-11-24
+    words: "Approve all"
+# The proofs on screen of this feature: the modules in tests/proofs whose names start so.
+proofs: [test_proof_typed_values]
+rows:
+  TV-1: >-
+    An input hole with no line can hold a typed value. Double-click the hole, or right-click it and choose "Set
+    value…": a small box opens beside the hole with the type (text, int, float, bool, date, datetime or list, the same
+    types as flow parameters) and the value. Enter keeps it; Esc leaves everything as it was. A value that does not
+    fit its type (such as "1,5" as an int) is not kept, and the box says why.
+  TV-2: >-
+    The value is shown inside the block, right of the hole's name, shortened with "…" when it does not fit and shown
+    whole on hover. Properties shows the same value in an "Input values" box. There is one value: a change in either
+    place shows in the other.
+  TV-3: >-
+    At a run, {{name}} in a typed text or in an item of a typed list is filled once, like any field (BR-1 to BR-9):
+    with a flow parameter or an input of the block that comes by a line; naming another typed value is an error. Then
+    the block gets the value exactly as if another block had sent it, with its type (an int arrives as a number). This
+    holds in every way of running: Run, Run only this block, Run from this block on, inside a Loop and on a Splitter
+    line, on the command line and under the scheduler. Typed values do not change which blocks run: in a flow with
+    Start blocks, a block still runs only when a line leads to it from one.
+  TV-4: >-
+    Connecting a line to the hole removes its typed value in one step: one undo brings the value back and removes the
+    line. A hole with a line offers no "Set value".
+  TV-5: >-
+    These holes offer no typed value, and their menu says why: table inputs; holes that collect many lines into a
+    list (Send Email's body and attachments, HTML Template's data, Merger's lines); "run after" holes; holes that
+    expect a dictionary (Run Query's params, Statistics' extra), since no type is a dictionary; the Loop's result
+    hole, which is fed from inside the Loop. Python Code's and Inspect's inputs, which also accept several lines, do
+    offer one.
+  TV-6: >-
+    Validate counts a typed value as a supplied input. A failure report's "Inputs:" lists it. Both "with inputs I
+    choose…" items start from it, and both "…with the same inputs" items give today's typed value (lines bring what
+    they brought in that run).
+  TV-7: >-
+    "Clear value" removes it. An empty text is a value; no value is not.
+  TV-8: >-
+    Renaming a Python Code input keeps its typed value; removing the input removes it. Copy and Paste keep it. Each
+    copy of a reusable block has its own typed values.
+  TV-9: >-
+    A flow file (edited by hand) with a typed value and a line on the same hole, a value that does not fit its type,
+    or a value on a hole the block does not have: Validate names the block and the hole, and a run refuses to start
+    with the same message.

@@ -246,7 +246,7 @@ def test_a_block_of_your_own_waits_for_what_arrives_and_says_when_nothing_reache
 
 def test_blocks_that_keep_done_fire_it_even_when_they_produce_no_output(env):
     """Spec §2 (T3) and the edge path “Python Code with outputs [] or with code that leaves its outputs unset: done
-    still fires”: a block saved with Create Reusable block keeps done first and it fires, like Python Code's."""
+    still fires”: a block saved with Create reusable block keeps done first and it fires, like Python Code's."""
     write_reusable_block(env.home / "blocks", "Quiet step", "Does nothing to its input.", "anything",
                          {"inputs": ["value"], "outputs": ["result"], "use_environment": False, "code": "pass"})
     registry = discover(env.home / "blocks")

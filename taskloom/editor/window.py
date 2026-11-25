@@ -43,8 +43,8 @@ from ..history import History, run_label
 from ..launch import frozen, run_alive, runner_command
 from ..scheduler import (counted_from, forget_schedules, paused, request_turn_off, running_scheduler_version,
                          runs_going, service_running, set_paused, tell_crashed, version_tuple)
-from ..registry import discover
-from .canvas import FlowScene, FlowView
+from ..registry import LOCAL, discover
+from .canvas import FlowScene, FlowView, why_no_value
 from . import dialogs, docs, git, theme
 from .commits import CommitHistory
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
@@ -358,8 +358,8 @@ class FlowTab(QWidget):
     def __init__(self, doc: FlowDocument, registry):
         super().__init__()
         self.doc = doc
-        doc.registry = registry
-        self.scene = FlowScene(doc, registry)
+        doc.block_types = registry  # (the flow's own Local blocks too: doc.registry)
+        self.scene = FlowScene(doc)
         self.view = FlowView(self.scene)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -659,7 +659,7 @@ class MainWindow(QMainWindow):
         tab = FlowTab(doc, self.registry)
         tab.scene.block_selected.connect(lambda block_id, chosen, t=tab: self._on_block_selected(t, block_id, chosen))
         tab.scene.block_clicked.connect(lambda block_id, t=tab: self._on_block_clicked(t, block_id))
-        tab.scene.block_menu.connect(lambda block_id, pos, t=tab: self._block_menu(t, block_id, pos))
+        tab.scene.block_menu.connect(lambda block_id, pos, hole, t=tab: self._block_menu(t, block_id, pos, hole))
         tab.scene.note_selected.connect(lambda note_id, chosen, t=tab: self._on_note_selected(t, note_id, chosen))
         tab.scene.canvas_menu.connect(lambda at, pos, t=tab: self._canvas_menu_for(t, at).exec(pos))
         doc.changed.connect(lambda t=tab: self._on_doc_changed(t))
@@ -925,7 +925,7 @@ class MainWindow(QMainWindow):
         self._update_history_action()
         tab = self.current
         if tab is None:
-            self.properties.show_block(None, self.registry, None)
+            self.properties.show_block(None, None)
             return
         self.parameters.show_doc(tab.doc)
         self.flow_settings.show_doc(tab.doc)
@@ -957,7 +957,7 @@ class MainWindow(QMainWindow):
     def _on_block_selected(self, tab: FlowTab, block_id, chosen=True):
         if tab is not self.current:
             return
-        self.properties.show_block(tab.doc, self.registry, block_id)
+        self.properties.show_block(tab.doc, block_id)
         if block_id is not None and chosen:  # (an edit on Parameters or Flow stays on that tab)
             self.right_tabs.setCurrentWidget(self.properties)
         self.log.set_filter(block_id)
@@ -987,15 +987,19 @@ class MainWindow(QMainWindow):
             return
         edges = [t for t in tab.doc.data["edges"] if any(t.startswith(f"{i}.") for i in ids)]
         flow = deepcopy(tab.doc.data)
-        keep_source_names(flow, self.registry)  # each copy takes the names its inputs have, stored or not
+        keep_source_names(flow, tab.doc.registry)  # each copy takes the names its inputs have, stored or not
+        local = flow.get("local_blocks") if isinstance(flow.get("local_blocks"), dict) else {}
+        defined = {n: d for n, d in local.items() if any(flow["blocks"][i].get("type") == f"{LOCAL}{n}" for i in ids)}
         data = {CLIPBOARD_KEY: {i: flow["blocks"][i] for i in ids}, "edges": edges,
-                "notes": {n: tab.doc.notes[n] for n in notes}}
+                "notes": {n: tab.doc.notes[n] for n in notes},
+                **({"local_blocks": defined} if defined else {})}  # (the Local blocks copied blocks are copies of)
         QApplication.clipboard().setText(yaml.safe_dump(data, sort_keys=False))
 
     def paste_blocks(self, at=None):
         """The copied blocks and texts, in their layout and selected, with their top-left corner at `at` (the spot
         right-clicked), else at the mouse pointer on the canvas, else in the middle of the visible canvas (moved right
-        and down while one would be hidden: FlowView.paste_corner; then the canvas scrolls to show them)."""
+        and down while one would be hidden: FlowView.paste_corner; then the canvas scrolls to show them). Copies of
+        Local blocks come with their definitions; the status bar names one kept under another name."""
         tab = self.current
         if tab is None:
             return
@@ -1008,8 +1012,13 @@ class MainWindow(QMainWindow):
         notes = data.get("notes") if isinstance(data.get("notes"), dict) else {}
         if data[CLIPBOARD_KEY] or notes:
             at, for_text = tab.view.paste_corner(data[CLIPBOARD_KEY], notes, at)
-            new_ids, new_notes = tab.doc.paste_blocks(data[CLIPBOARD_KEY], data.get("edges") or [], notes,
-                                                      at.x(), at.y())
+            local = data.get("local_blocks") if isinstance(data.get("local_blocks"), dict) else {}
+            new_ids, new_notes, kept_as = tab.doc.paste_blocks(data[CLIPBOARD_KEY], data.get("edges") or [], notes,
+                                                               at.x(), at.y(), local)
+            if kept_as:
+                self.statusBar().showMessage("; ".join(
+                    f"The pasted Local block {old} is kept as {new}" for old, new in kept_as.items()) +
+                    ": this flow or the blocks tree has another block of that name", 15000)
             tab.scene.clearSelection()
             for block_id in new_ids:
                 tab.scene.nodes[block_id].setSelected(True)
@@ -1047,7 +1056,7 @@ class MainWindow(QMainWindow):
                 return None
         try:
             flow = load_flow(tab.doc.path)
-            part = None if run is None else run_part(flow, self.registry, **run)
+            part = None if run is None else run_part(flow, tab.doc.registry, **run)
             errors, warnings = validate(flow, self.registry, self.home, part) if check else ([], [])
         except (FlowError, ValueError) as e:
             errors, warnings, flow = getattr(e, "errors", [str(e)]), [], None
@@ -1074,11 +1083,11 @@ class MainWindow(QMainWindow):
         had come)."""
         if tab is None:
             return
-        if start is None and not upgrade.start_blocks(tab.doc.data, self.registry):
+        if start is None and not upgrade.start_blocks(tab.doc.data, tab.doc.registry):
             # A flow starts from a start block: offer the one that runs it as before (every block).
             if not dialogs.offer_manual_start(self, tab.doc.title):
                 return
-            tab.doc.add_manual_start(self.registry)
+            tab.doc.add_manual_start(tab.doc.registry)
         flow = self._ready_to_run(tab, check=False)
         if flow is None:
             return
@@ -1090,7 +1099,7 @@ class MainWindow(QMainWindow):
             # Several Manual Starts: which one to start, asked whatever "Don't ask me again" said, remembered per flow.
             chosen_key = _flow_key("run_now", tab.doc.path)
             which = {"starts": manual, "chosen": self.settings.value(chosen_key)} if len(manual) > 1 else {}
-            go, never = dialogs.confirm_run_now(self, flow.name, self._run_now_says(flow), **which)
+            go, never = dialogs.confirm_run_now(self, flow.name, self._run_now_says(flow, tab.doc.registry), **which)
             if never:
                 self.settings.setValue("ask_before_run_now", "no")
             if not go:
@@ -1133,10 +1142,10 @@ class MainWindow(QMainWindow):
                 return
         self.start_run(tab, overrides, extra)
 
-    def _run_now_says(self, flow) -> str:
-        """What Run now runs in this flow."""
+    def _run_now_says(self, flow, registry) -> str:
+        """What Run now runs in this flow (`registry`: its block types)."""
         starts = [b for b, spec in flow.blocks.items()
-                  if (cls := self.registry.get(spec.type)) is not None and cls.is_trigger]
+                  if (cls := registry.get(spec.type)) is not None and cls.is_trigger]
         manual = [b for b in starts if flow.blocks[b].type == "trigger.manual"]
         if len(manual) > 1:
             return (f"It has several Manual Start blocks ({', '.join(manual)}): choose the one to run it from. The "
@@ -1241,12 +1250,15 @@ class MainWindow(QMainWindow):
             if chosen:
                 self.right_tabs.setCurrentWidget(self.properties)
 
-    def _block_menu(self, tab: FlowTab, block_id: str, pos):
-        self._block_menu_for(tab, block_id).exec(pos)
+    def _block_menu(self, tab: FlowTab, block_id: str, pos, hole: str = ""):
+        self._block_menu_for(tab, block_id, hole).exec(pos)
 
-    def _block_menu_for(self, tab: FlowTab, block_id: str) -> QMenu:
+    def _block_menu_for(self, tab: FlowTab, block_id: str, hole: str = "") -> QMenu:
+        """The block's menu; right-clicked on its input `hole`: first, that hole's typed value."""
         menu = QMenu(self)
-        cls = self.registry.get((tab.doc.blocks.get(block_id) or {}).get("type"))
+        if hole:
+            self._value_items(menu, tab, block_id, hole)
+        cls = tab.doc.registry.get((tab.doc.blocks.get(block_id) or {}).get("type"))
         if cls is not None and cls.is_trigger:  # a start block: the flow starts from it (nothing to retry in it)
             label = ("Run the flow now, as if its time had come" if cls.type_id == "trigger.schedule"
                      else "Run the flow from here")
@@ -1254,7 +1266,7 @@ class MainWindow(QMainWindow):
             return menu
         if cls is not None and cls.type_id == SESSION:  # a box that does not run (its blocks run as anywhere)
             return menu
-        sections = tab.doc.per_line(self.registry)
+        sections = tab.doc.per_line(tab.doc.registry)
         around = [c for c in tab.doc.containers(block_id) if tab.doc.blocks[c].get("type") == LOOP]
         merger = per_line_of(sections, block_id)
         if around or merger:  # not offered yet: what to do instead, in each entry's tooltip
@@ -1296,10 +1308,27 @@ class MainWindow(QMainWindow):
         results.setEnabled(tab.doc.path is not None)
         results.triggered.connect(lambda: self.show_block_results(tab, block_id))
         if cls is not None and cls.type_id == "logic.python":
-            menu.addAction("Create Reusable block…", lambda: self.create_reusable_block(tab, block_id))
+            menu.addAction("Create reusable block…", lambda: self.create_reusable_block(tab, block_id))
+        if cls is not None and tab.doc.local_name(block_id) is not None:
+            menu.addAction("Promote to global reusable block…", lambda: self.promote_local_block(tab, block_id))
         if cls is not None and cls.type_id == API_REQUEST:
             menu.addAction("Copy as cURL", lambda: self.copy_as_curl(tab, block_id))
         return menu
+
+    def _value_items(self, menu: QMenu, tab: FlowTab, block_id: str, hole: str):
+        """Set value… (the box beside the hole; greyed out, its tooltip says why, where the hole offers none) and,
+        while it has one, Clear value. Each acts once the menu and the right-click are over (it draws the canvas
+        again)."""
+        why = why_no_value(tab.doc, tab.doc.registry, block_id, hole)
+        menu.setToolTipsVisible(True)
+        set_value = menu.addAction("Set value…", lambda: QTimer.singleShot(
+            0, lambda: tab.view.open_value_box(block_id, hole)))
+        set_value.setEnabled(why is None)
+        set_value.setToolTip(why or "A value of its own for this input, as if a line brought it")
+        if hole in (tab.doc.blocks[block_id].get("inputs") or {}):
+            menu.addAction("Clear value", lambda: QTimer.singleShot(
+                0, lambda: block_id in tab.doc.blocks and tab.doc.set_block_value(block_id, hole, None, "inputs")))
+        menu.addSeparator()
 
     def copy_as_curl(self, tab: FlowTab, block_id: str):
         """Copy an API Request's request as a curl command (bash), as it would send it now: its placeholders filled in
@@ -1308,10 +1337,11 @@ class MainWindow(QMainWindow):
         self._finish_editing(tab)
         try:
             flow = flow_from_data(deepcopy(tab.doc.data), tab.doc.path or Path("flow.yaml"))
-            spec, cls = flow.blocks[block_id], self.registry.get(API_REQUEST)
+            spec, cls = flow.blocks[block_id], tab.doc.registry.get(API_REQUEST)
             _, funcs = run_clock(flow, self.home)
             connected = {e.dst_port for e in flow.edges if e.dst == block_id}
             config = _filled(cls, block_config(cls, spec), P.resolve(flow.params, {}, funcs), {}, set(), connected)
+            connected |= set(spec.inputs)  # (a typed body: it comes from the body input too)
             command = curl_command(config, api_connection(self.home, config["connection"]), "body" in connected)
         except (FlowError, Failed, ValueError) as e:
             QMessageBox.warning(self, "Copy as cURL", f"{block_id} cannot be copied as a curl command: {e}")
@@ -1322,39 +1352,93 @@ class MainWindow(QMainWindow):
                                         else ""), 10000)
 
     def create_reusable_block(self, tab: FlowTab, block_id: str):
-        """Save a Python Code block as a block of your own: a file in your blocks folder that runs its code, listed
-        at once under User Created in the blocks tree, for every open flow. The block itself stays as it is."""
+        """Save a Python Code block as a block of your own, as you choose: Global, a file in your blocks folder that runs
+        its code, listed at once under User Created in the blocks tree, for every open flow (the block itself stays as
+        it is); or Local, its definition kept in the flow file (not in the tree), the block itself its first copy."""
         self._finish_editing(tab)
         spec = tab.doc.blocks[block_id]
-        cls = self.registry.get(spec["type"])
+        cls = tab.doc.registry.get(spec["type"])
         config = dict(spec.get("config") or {})
         try:  # its inputs, outputs, code and Run in my Python environment, the defaults for those it leaves out
             python_code = block_config(cls, BlockSpec(id=block_id, type=cls.type_id, config=config))
         except ValueError as e:
-            QMessageBox.warning(self, "Create Reusable block", f"{block_id} cannot be saved as a block yet: {e}")
+            QMessageBox.warning(self, "Create reusable block", f"{block_id} cannot be saved as a block yet: {e}")
             return
-        dialog = dialogs.ReusableBlockDialog(self._reusable_name_problem, self)
+        dialog = dialogs.ReusableBlockDialog(lambda title: self._reusable_name_problem(title, tab.doc.registry), self,
+                                             block=block_id, flow=tab.doc.title)
         if not dialogs.answered(dialog):
             return
-        title = dialog.name.text().strip()
-        path = write_reusable_block(self.home.blocks_dir, title, dialog.what.toPlainText().strip(),
-                                    dialog.expects.toPlainText().strip(), python_code)
-        self.registry.add_file(path)  # (the registry the open flows use)
-        self.palette_panel.show_blocks(self.registry)
-        self.docs.browser.rebuild()  # in Contents and on the User Created page
+        title, what, expects = (dialog.name.text().strip(), dialog.what.toPlainText().strip(),
+                                dialog.expects.toPlainText().strip())
+        if dialog.local.isChecked():
+            tab.doc.make_local(block_id, reusable_name(title),
+                               {"title": title, "description": what, "inputs_help": expects, **python_code})
+            self.statusBar().showMessage(f"{block_id} is the first copy of the Local block {title}, kept in this flow's "
+                                         "file: Copy and Paste it to make more", 15000)
+            return
+        path = write_reusable_block(self.home.blocks_dir, title, what, expects, python_code)
+        self._add_block_file(path)
         self.statusBar().showMessage(f"{title} saved in {path}: it is under User Created in the blocks tree", 15000)
 
-    def _reusable_name_problem(self, title: str) -> str:
-        """Why a new reusable block cannot be called `title` ("": it can). Each block in the tree has its own title
-        and type, and no file in your blocks folder is written over."""
+    def _add_block_file(self, path: Path):
+        """A block file just written in your blocks folder: its blocks in the registry the open flows use, the blocks
+        tree, Contents and the User Created page."""
+        self.registry.add_file(path)
+        self.palette_panel.show_blocks(self.registry)
+        self.docs.browser.rebuild()
+
+    def promote_local_block(self, tab: FlowTab, block_id: str):
+        """Promote to global reusable block…: once you say yes (undo cannot remove the file it writes), the Local block
+        the block is a copy of is saved as a block of your own (a file in your blocks folder, in the blocks tree), named
+        with its title or, when that is taken, the name you give; every copy in the flow then uses it, and the flow
+        file no longer holds the definition, in one step."""
+        self._finish_editing(tab)
+        name = tab.doc.local_name(block_id)
+        cls = tab.doc.registry.get(f"{LOCAL}{name}")
+        copies = len(tab.doc.copies(name))
+        if QMessageBox.question(
+                self, "Promote to global reusable block",
+                f"Save the Local block {cls.title} as a global reusable block: a file in your blocks folder "
+                f"({self.home.blocks_dir}), under User Created in the blocks tree, for every flow. The "
+                f"{copies} {'copy' if copies == 1 else 'copies'} in this flow then use it, and the flow file no longer "
+                "holds its definition.\n\nUndo cannot remove the global block's file: Undo makes them Local again, "
+                "the file stays, and the flow does not run (a Local and a Global block cannot have the same name) "
+                "until you Redo, or delete the global block (Delete block… in the blocks tree).",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        title, what, expects = cls.title, cls.description, cls.inputs_help
+
+        def problem(wanted: str) -> str:
+            return self._reusable_name_problem(wanted, tab.doc.registry, own=cls.type_id)
+
+        if problem(title):
+            dialog = dialogs.ReusableBlockDialog(problem, self, taken=(title, what, expects))
+            if not dialogs.answered(dialog):
+                return
+            title, what, expects = (dialog.name.text().strip(), dialog.what.toPlainText().strip(),
+                                    dialog.expects.toPlainText().strip())
+        path = write_reusable_block(self.home.blocks_dir, title, what, expects, cls.python_code)
+        self._add_block_file(path)
+        tab.doc.promote(name, f"user.{reusable_name(title)}")
+        self.statusBar().showMessage(f"{title} saved in {path}: it is under User Created in the blocks tree, and the "
+                                     "copies in this flow use it", 15000)
+
+    def _reusable_name_problem(self, title: str, registry, own: str = "") -> str:
+        """Why a new reusable block, Global or Local, cannot be called `title` ("": it can). Each block in the tree
+        and each Local block of the flow (`registry`: its block types; but `own`, the Local block promoted) has its own
+        title and type, and no file in your blocks folder is written over."""
         name = reusable_name(title)
         if not name:
             return "Give it a name, with letters or digits."
-        for type_id, cls in self.registry.blocks.items():
+        for type_id, cls in registry.blocks.items():
+            if type_id == own:
+                continue
             if title in (cls.title, type_id):
                 return f"There is already a block called {title}: choose another name."
-            if type_id == f"user.{name}":
-                return f"Its block type would be {type_id}, which {cls.title} already has: choose another name."
+            if type_id in (f"user.{name}", f"{LOCAL}{name}"):
+                return f"Its name would be {name}, which {cls.title} ({type_id}) already has: choose another name."
+        if f"{LOCAL}{name}" in registry.problems and f"{LOCAL}{name}" != own:
+            return f"This flow already has a Local block {name}: choose another name."
         if (self.home.blocks_dir / f"{name}.py").exists():
             return f"{name}.py is already in your blocks folder ({self.home.blocks_dir}): choose another name."
         return ""
@@ -1362,7 +1446,7 @@ class MainWindow(QMainWindow):
     def _user_block_file(self, item) -> Path | None:
         """The file of the User Created block on that row of the Blocks list (None: a built-in block, a group…)."""
         source = item and self.registry.sources.get(item.data(0, Qt.UserRole))
-        return None if source in (None, "built-in", "plugin") else Path(source)
+        return None if source in (None, "built-in", "plugin", "local") else Path(source)
 
     def _blocks_list_menu(self, pos):
         """The Blocks list's menu for the User Created block you right-clicked: Delete block…"""
@@ -1405,7 +1489,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Delete block", f"{path} could not be deleted: {e.strerror or e}. Nothing was "
                                                       "changed.")
             return
-        self.registry.remove_file(path)  # (the registry the open flows use)
+        self.registry.remove_file(path)  # (the registry the open flows use: their own follow, FlowDocument.registry)
         self.palette_panel.show_blocks(self.registry)
         self.docs.browser.rebuild()  # in Contents and on its page
         for tab in self.tabs_list():
@@ -1456,15 +1540,19 @@ class MainWindow(QMainWindow):
         flow = self._ready_to_run(tab, {"run_from" if on else "only": block_id})
         if flow is None:
             return
-        names = [name for name in input_ports(flow, self.registry, block_id)  # (a Loop's result: from inside it)
+        names = [name for name in input_ports(flow, tab.doc.registry, block_id)  # (a Loop's result: from inside it)
                  if name != AFTER and not (name == RESULT and flow.blocks[block_id].type == LOOP)]
         run_id = self.inputs_run(tab, block_id)
         values, missing, typed = {}, {}, {}
         if run_id is not None:
             try:
-                values, missing, typed = block_inputs(flow, self.registry, self.home, block_id, run_id)
+                values, missing, typed = block_inputs(flow, tab.doc.registry, self.home, block_id, run_id)
             except Exception:  # e.g. that run's files were cleaned up: start from nothing
                 run_id = None
+        for hole, t in flow.blocks[block_id].inputs.items():  # its typed values, as they are now
+            values[hole] = P.coerce(t["type"], t["value"])  # (Validate has checked them)
+            missing.pop(hole, None)
+            typed.pop(hole, None)
         dialog = dialogs.ChooseInputsDialog(block_id, names, values, missing,
                                             self._run_label(run_id) if run_id is not None else None, self, typed)
         if not dialogs.answered(dialog):
@@ -1646,7 +1734,7 @@ class MainWindow(QMainWindow):
     def _load_last_run(self, tab: FlowTab):
         if tab.doc.path is None:
             return
-        lines = tab.doc.lines(self.registry)
+        lines = tab.doc.lines(tab.doc.registry)
         runs, going, tab.line_results = [], set(), [(start, None) for start in lines]
         if self.home.history_db.exists():
             history = self._history()

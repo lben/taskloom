@@ -28,7 +28,8 @@ from ..expr import evaluate, functions
 from ..engine import Failed, SecretStr, _masked, inline, line_names, preview
 from ..flow import (ALL_LINES, AS_FINISHED, AT_MOST, AT_ONCE, EACH_LINE, INDEX, ITEM, ITEMS, LINE_ORDER, LINES,
                     LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, PASSES_ON, RESULT, RESULTS, RUNS_AGAIN, SAME_TIME,
-                    SPLITTER)
+                    SPLITTER, BlockSpec, block_config)
+from ..registry import LOCAL
 from ..table import Table
 
 
@@ -190,6 +191,26 @@ class PythonCode(Block):
                     left_out[name] = str(error) or type(error).__name__
         return produced, left_out
 
+    @staticmethod
+    def local_block(name: str, definition) -> type[ReusableBlock]:
+        """The block of the flow's Local block `name`, from its definition in the flow file (local_blocks): its
+        copies, blocks of type local.<name>, run the definition's code as a Python Code block with its settings
+        (inputs, outputs, use_environment and code) does. Raises ValueError saying what is wrong with the definition.
+        (registry.for_flow calls it on the Python Code block it found: the registry is below the blocks, charter C1.)"""
+        about = ("title", "description", "inputs_help")
+        if not isinstance(definition, dict):
+            raise ValueError(f"expected a mapping: {', '.join([*about, *PythonCode.config])}")
+        unknown = set(definition) - set(about) - set(PythonCode.config)
+        if unknown:
+            raise ValueError(f"unknown key(s) {sorted(unknown)}")
+        settings = {key: value for key, value in definition.items() if key not in about}
+        return type(f"Local_{name}", (ReusableBlock,), {
+            "type_id": f"{LOCAL}{name}", "title": str(definition.get("title") or name),
+            "description": str(definition.get("description") or ""),
+            "inputs_help": str(definition.get("inputs_help") or ""),
+            "python_code": block_config(PythonCode, BlockSpec(id=str(name), type=PythonCode.type_id, config=settings)),
+        })
+
 
 def _created(name: str, value) -> bool:
     """Whether a variable of your code's goes into its default output: not a module it imported, a function or class
@@ -206,7 +227,7 @@ class _TablesAside(pickle.Pickler):
 
 
 class ReusableBlock(PythonCode):
-    """A Python Code block saved as a block of its own (in the editor: right-click it → Create Reusable block…), as
+    """A Python Code block saved as a block of its own (in the editor: right-click it → Create reusable block…), as
     a file in your blocks folder (write_reusable_block). It runs the code it was saved with and has no settings."""
 
     type_id = ""  # (each saved one has its own)
@@ -236,7 +257,7 @@ def write_reusable_block(folder: Path, title: str, description: str, inputs_help
     name = reusable_name(title)
     code = "".join(f"            {line!r},\n" for line in python_code["code"].split("\n"))
     text = f'''\
-# A block of your own, made from a Python Code block (in the editor: right-click it → Create Reusable block…).
+# A block of your own, made from a Python Code block (in the editor: right-click it → Create reusable block…).
 # It runs the code below: to change what it does, edit this file.
 from taskloom.blocks.logic import ReusableBlock
 

@@ -10,9 +10,11 @@ import yaml
 from PySide6.QtCore import QObject, Signal
 
 from ..block import IDENTIFIER
+from ..blocks.logic import PythonCode
 from ..engine import lines as start_lines
 from ..flow import (_EDGE, ONE_AFTER_ANOTHER, FlowError, flow_from_data, keep_source_names, lines_run, per_line,
                     read_flow_file, splitter_lines)
+from ..registry import LOCAL, for_flow
 
 UNDO_LIMIT = 200
 
@@ -29,6 +31,16 @@ def flow_text(data: dict) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
+def same_code(definition, other) -> bool:
+    """Whether two Local block definitions run the same code: their Python Code settings (inputs, outputs,
+    use_environment and code) as their copies run them, one left out taking its default; not their title or help. One
+    that cannot run (a problem in it) has no code."""
+    try:
+        return PythonCode.local_block("x", definition).python_code == PythonCode.local_block("x", other).python_code
+    except ValueError:
+        return False
+
+
 def parse_edge(text: str) -> tuple[str, str, str, str] | None:
     match = _EDGE.match(text)
     return match.groups() if match else None
@@ -36,6 +48,14 @@ def parse_edge(text: str) -> tuple[str, str, str, str] | None:
 
 def edge_text(src, src_port, dst, dst_port) -> str:
     return f"{src}.{src_port} -> {dst}.{dst_port}"
+
+
+def _port_changes(old: list, new: list) -> tuple[dict, set]:
+    """How a list of port names changed: {old name: new name} of those renamed (another name in the same place), and
+    the names removed."""
+    renamed = ({o: n for o, n in zip(old, new) if o != n and o not in new and n not in old}
+               if len(old) == len(new) else {})
+    return renamed, set(old) - set(new) - set(renamed)
 
 
 class FlowDocument(QObject):
@@ -50,9 +70,11 @@ class FlowDocument(QObject):
         self.path = path
         self.dirty = False
         self.renamed: dict[str, str] = {}  # old block name -> new, until the canvas has followed it
-        # The block types, once a tab shows the flow: then connecting, removing, renaming and pasting also keep the
-        # names a block gives what is connected into it (fields.SourceNames) in step, in the same step.
-        self.registry = None
+        # The blocks folder's block types (registry.discover), once a tab shows the flow: then `registry` holds them and
+        # the flow's own Local blocks, and connecting, removing, renaming and pasting also keep the names a block gives
+        # what is connected into it (fields.SourceNames) in step, in the same step.
+        self.block_types = None
+        self._registry = None  # (the local_blocks and block types it was made from, and the registry: see registry)
         self._place_unpositioned()
         self._undo: list[dict] = []
         self._redo: list[dict] = []
@@ -94,6 +116,17 @@ class FlowDocument(QObject):
         self.data, self.path = data, path  # only once written: a file that cannot be written leaves the flow as it was
         self.dirty = False
         self.changed.emit()
+
+    @property
+    def registry(self):
+        """The block types of the flow as it is now (None until a tab shows it): the blocks folder's and the flow's own
+        Local blocks (registry.for_flow), made again after any change to either (an edit, undo, a version restored)."""
+        if self.block_types is None:
+            return None
+        local, known = self.data.get("local_blocks"), self.block_types.blocks
+        if self._registry is None or self._registry[:2] != (local, known):
+            self._registry = copy.deepcopy(local), dict(known), for_flow(self.block_types, local)
+        return self._registry[2]
 
     @property
     def title(self) -> str:
@@ -150,6 +183,94 @@ class FlowDocument(QObject):
     def within(self, loop: str) -> list[str]:
         """The blocks inside a Loop, also those inside a Loop inside it."""
         return [b for b in self.blocks if loop in self.containers(b)]
+
+    # --- Local blocks: definitions in the flow file (local_blocks), each shared by its copies, blocks of type
+    # local.<name> (registry.for_flow) ---------------------------------------------------------------------------
+
+    def local_name(self, block_id: str) -> str | None:
+        """The name of the Local block the block is a copy of (None: it is no copy, or the flow file has no definition
+        of it)."""
+        type_id, local = (self.blocks.get(block_id) or {}).get("type"), self.data.get("local_blocks")
+        name = type_id[len(LOCAL):] if isinstance(type_id, str) and type_id.startswith(LOCAL) else None
+        return name if isinstance(local, dict) and isinstance(local.get(name), dict) else None
+
+    def copies(self, name: str) -> list[str]:
+        """The copies of the Local block `name`."""
+        return [b for b, spec in self.blocks.items() if spec.get("type") == f"{LOCAL}{name}"]
+
+    def settings(self, block_id: str) -> dict:
+        """The block's settings as the flow file holds them: its config, or a copy's Local block's definition, which
+        all its copies share (an edit there changes every copy)."""
+        name = self.local_name(block_id)
+        return self.data["local_blocks"][name] if name is not None else self.blocks[block_id].get("config") or {}
+
+    def _settings_to_edit(self, block_id: str) -> dict:
+        """settings, its config put in place when it has none."""
+        name = self.local_name(block_id)
+        return self.data["local_blocks"][name] if name is not None else self.blocks[block_id].setdefault("config", {})
+
+    def _definitions(self) -> dict:
+        """The flow file's local_blocks, put in place (before its blocks) when it has none."""
+        if not isinstance(self.data.get("local_blocks"), dict):
+            items = [(k, v) for k, v in self.data.items() if k != "local_blocks"]
+            at = [k for k, _ in items].index("blocks")
+            self.data = dict(items[:at] + [("local_blocks", {})] + items[at:])
+        return self.data["local_blocks"]
+
+    def _drop_unused_definitions(self):
+        """Only the definitions of Local blocks that have a copy stay in the flow file."""
+        local = self.data.get("local_blocks")
+        if isinstance(local, dict):
+            for name in [n for n in local if not self.copies(n)]:
+                del local[name]
+            if not local:
+                del self.data["local_blocks"]
+
+    def make_local(self, block_id: str, name: str, definition: dict):
+        """Keep `definition` in the flow file as its Local block `name`, the block its first copy (of type local.<name>,
+        with no config of its own; its name, place, lines and typed values stay), in one step."""
+        self._change()
+        self._keep_names()
+        self._definitions()[name] = definition
+        spec = self.blocks[block_id]
+        spec["type"] = f"{LOCAL}{name}"
+        spec.pop("config", None)
+        spec.pop("version", None)
+        self._done()
+
+    def promote(self, name: str, type_id: str):
+        """Every copy of the Local block `name` becomes a block of type `type_id` (the global block made from it), and
+        its definition leaves the flow file, in one step."""
+        self._change()
+        for block_id in self.copies(name):
+            self.blocks[block_id]["type"] = type_id
+        self._drop_unused_definitions()
+        self._done()
+
+    def _add_definitions(self, blocks: dict, local_blocks: dict) -> dict[str, str]:
+        """Pasting `blocks`: the definitions (`local_blocks`, as copied) of the Local blocks they are copies of. One the
+        flow has under that name with the same code (same_code; its title and help may differ) joins it, the flow's
+        definition kept as it is; one it has with other code, or whose name or title a Global block has (block_types),
+        is kept under the first free name <name>_2, <name>_3, ..., titled so too. Returns {name: the name it is kept
+        as} of those renamed."""
+        names = {spec["type"][len(LOCAL):] for spec in blocks.values()
+                 if isinstance(spec, dict) and str(spec.get("type")).startswith(LOCAL)}
+        known = self.block_types.blocks if self.block_types is not None else {}
+        renamed = {}
+        for name in sorted(n for n in names if isinstance(local_blocks.get(n), dict)):
+            mine = self.data.get("local_blocks") if isinstance(self.data.get("local_blocks"), dict) else {}
+            n, new, wanted = 1, name, copy.deepcopy(local_blocks[name])
+            while not same_code(mine.get(new), wanted):
+                if new not in mine and f"user.{new}" not in known and wanted.get("title") not in {
+                        cls.title for cls in known.values() if cls.title}:
+                    self._definitions()[new] = wanted
+                    break
+                n += 1
+                new = f"{name}_{n}"
+                wanted = {**copy.deepcopy(local_blocks[name]), "title": f"{local_blocks[name].get('title') or name} {n}"}
+            if new != name:
+                renamed[name] = new
+        return renamed
 
     def lines(self, registry) -> dict[str, set[str]]:
         """Each start block's line as the flow is now: the blocks its runs take part in ({} while it cannot be read)."""
@@ -249,17 +370,22 @@ class FlowDocument(QObject):
         self._done()
         return block_id
 
-    def paste_blocks(self, blocks: dict, edges: list[str], notes: dict, x: float,
-                     y: float) -> tuple[list[str], list[str]]:
+    def paste_blocks(self, blocks: dict, edges: list[str], notes: dict, x: float, y: float,
+                     local_blocks: dict | None = None) -> tuple[list[str], list[str], dict[str, str]]:
         """Add copies of blocks (new ids) and the edges between them, and of texts (new ids), in one step, in their
         layout, with the group's top-left corner (its smallest x and y) at x, y; a copy is inside the copy of the Loop
-        it was inside (copied with it), or in none. Returns the new block ids and note ids."""
+        it was inside (copied with it), or in none. Copies of Local blocks come with their definitions (`local_blocks`,
+        as copied: see _add_definitions). Returns the new block ids and note ids, and {name: the name it is kept as} of
+        the Local blocks pasted under another name."""
         spots = [(spec.get("ui") or {}) for spec in blocks.values()] + list(notes.values())
         dx, dy = x - min(s.get("x", 0) for s in spots), y - min(s.get("y", 0) for s in spots)
         self._change()
+        kept_as = self._add_definitions(blocks, local_blocks or {})
         renamed = {}
         for old_id, spec in blocks.items():
             spec = copy.deepcopy(spec)
+            if str(spec.get("type")).startswith(LOCAL) and spec["type"][len(LOCAL):] in kept_as:
+                spec["type"] = f"{LOCAL}{kept_as[spec['type'][len(LOCAL):]]}"
             new_id = self.new_block_id(old_id)
             ui = spec.setdefault("ui", {})
             ui["x"], ui["y"] = round(ui.get("x", 0) + dx), round(ui.get("y", 0) + dy)
@@ -289,11 +415,11 @@ class FlowDocument(QObject):
             self.data["notes"][note_id] = note
             new_notes.append(note_id)
         self._done()
-        return list(renamed.values()), new_notes
+        return list(renamed.values()), new_notes, kept_as
 
     def remove(self, block_ids=(), edges=(), notes=()):
         """Remove blocks (with their connections), connections and texts, in one step. The blocks inside a Loop
-        removed stay, inside the Loop it was inside, or in none."""
+        removed stay, inside the Loop it was inside, or in none; a Local block's definition goes with its last copy."""
         self._change()
         self._keep_names()
         gone = set(block_ids)
@@ -314,12 +440,14 @@ class FlowDocument(QObject):
         drop = {parse_edge(t) for t in edges}  # compare parsed, so spacing in the file doesn't matter
         self.data["edges"] = [t for t in self.data["edges"]
                               if not ((e := parse_edge(t)) and (e in drop or e[0] in gone or e[2] in gone))]
+        self._drop_unused_definitions()  # (the last copy of a Local block removed: its definition with it)
         self._keep_names()
         self._done()
 
     def connect(self, src, src_port, dst, dst_port, many: bool = False):
         """Connect an output to an input. Most inputs take one edge, so an older one is replaced;
-        a `many` input (e.g. email attachments) keeps them all."""
+        a `many` input (e.g. email attachments) keeps them all. The line replaces the input's typed value, in the same
+        step."""
         if src == dst or (src, src_port, dst, dst_port) in self.edges():
             return
         self._change()
@@ -327,8 +455,18 @@ class FlowDocument(QObject):
             self.data["edges"] = [t for t in self.data["edges"]
                                   if not ((e := parse_edge(t)) and e[2] == dst and e[3] == dst_port)]
         self.data["edges"].append(edge_text(src, src_port, dst, dst_port))
+        typed = (self.blocks.get(dst) or {}).get("inputs") or {}
+        if dst_port in typed:
+            self._set_typed_values(dst, {hole: t for hole, t in typed.items() if hole != dst_port})
         self._keep_names()
         self._done()
+
+    def _set_typed_values(self, block_id: str, typed: dict):
+        """A block's typed values ({input: {type, value}}): none leaves no `inputs:` behind."""
+        if typed:
+            self.blocks[block_id]["inputs"] = typed
+        else:
+            self.blocks[block_id].pop("inputs", None)
 
     def move_blocks(self, positions: dict, inside: dict | None = None):
         """Move blocks ({block: (x, y)}) and, in the same step, put some inside a Loop or in none ({block: the Loop,
@@ -380,12 +518,19 @@ class FlowDocument(QObject):
         self._done()
 
     def set_block_value(self, block_id: str, key: str, value, section: str | None = "config"):
-        """Set config[key] (section="config"), or a top-level block key like retry/timeout (section=None).
+        """Set config[key] (section="config"; a copy's: in its Local block's definition, see settings), the typed value
+        of the input `key` (section="inputs": {type, value}, see flow.BLOCK_KEYS; the canvas and Properties both set it
+        here), or a top-level block key like retry/timeout (section=None).
 
-        None or "" removes the key so the block's default applies.
+        None or "" removes the key so the block's default applies (an input: it has no value).
         """
         spec = self.blocks[block_id]
-        target = spec.setdefault(section, {}) if section else spec
+        if section == "inputs":
+            target = spec.get("inputs") or {}  # (put in place by _set_typed_values, only if a value is left)
+        elif section == "config":
+            target = self._settings_to_edit(block_id)
+        else:
+            target = spec.setdefault(section, {}) if section else spec
         if target.get(key) == value or (value in (None, "") and key not in target):
             return
         self._change()
@@ -393,18 +538,24 @@ class FlowDocument(QObject):
             target.pop(key, None)
         else:
             target[key] = value
+        if section == "inputs":
+            self._set_typed_values(block_id, target)
         self._done()
 
     def set_port_names(self, block_id: str, key: str, value, old: list, new: list, outputs: bool):
         """Set a list of a block's input or output names (e.g. a Python Code block's outputs) and
-        update their connections: a renamed one (another name in the same place) keeps them, a
-        removed one loses them. `old` and `new` are the names in effect before and after."""
-        renamed = ({o: n for o, n in zip(old, new) if o != n and o not in new and n not in old}
-                   if len(old) == len(new) else {})
-        removed = set(old) - set(new) - set(renamed)
+        update their connections, and an input's typed value: a renamed one (another name in the same place) keeps
+        them, a removed one loses them. `old` and `new` are the names in effect before and after. A copy's are its
+        Local block's (settings): every copy's follow, and removing an input a copy has a line or a typed value on is
+        refused (ValueError naming each such copy and what it has there), nothing changed."""
+        renamed, removed = _port_changes(old, new)
+        name = self.local_name(block_id)
+        blocks = self.copies(name) if name is not None else [block_id]
+        if name is not None and not outputs:
+            self._refuse_removing(blocks, [hole for hole in old if hole in removed])
         self._change()
         self._keep_names()
-        spec = self.blocks[block_id].setdefault("config", {})
+        spec = self._settings_to_edit(block_id)
         if value in (None, ""):
             spec.pop(key, None)
         else:
@@ -415,15 +566,34 @@ class FlowDocument(QObject):
             if e:
                 src, sp, dst, dp = e
                 block, port = (src, sp) if outputs else (dst, dp)
-                if block == block_id and port in removed:
+                if block in blocks and port in removed:
                     continue
-                if block == block_id and port in renamed:
+                if block in blocks and port in renamed:
                     sp, dp = (renamed[sp], dp) if outputs else (sp, renamed[dp])
                     text = edge_text(src, sp, dst, dp)
             edges.append(text)
         self.data["edges"] = edges
-        self._keep_names({f"{block_id}.{o}": f"{block_id}.{n}" for o, n in renamed.items()} if outputs else None)
+        for block in blocks if not outputs else ():
+            typed = self.blocks[block].get("inputs") or {}
+            self._set_typed_values(block, {renamed.get(hole, hole): t for hole, t in typed.items()
+                                           if hole not in removed})
+        self._keep_names({f"{block}.{o}": f"{block}.{n}" for block in blocks for o, n in renamed.items()}
+                         if outputs else None)
         self._done()
+
+    def _refuse_removing(self, copies: list[str], holes: list[str]):
+        """Raises ValueError when one of the `copies` has a line or a typed value on one of its input `holes`, saying
+        which and what it has."""
+        why = []
+        for hole in holes:
+            has = [f"{dst} has a line from {src}.{sp}" for src, sp, dst, dp in self.edges()
+                   if dst in copies and dp == hole]
+            has += [f"{block} has a typed value" for block in copies if hole in (self.blocks[block].get("inputs") or {})]
+            if has:
+                why.append(f"Cannot remove the input {hole}: {'; '.join(has)}.")
+        if why:
+            raise ValueError(" ".join(why) + " Delete those lines and clear those values (right-click the input → "
+                                             "Clear value) first: every copy of a Local block has its inputs.")
 
     def add_manual_start(self, registry) -> str:
         """Add a Manual Start, connected to the flow's first blocks (it then runs as before: every block)."""

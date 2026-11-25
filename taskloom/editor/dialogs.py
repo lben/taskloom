@@ -965,7 +965,7 @@ class ChooseInputsDialog(QDialog):
         intro = QLabel("Write each value as Python: <code>42</code>, <code>'text'</code>, <code>[1, 2]</code>, "
                        "<code>{'a': 1}</code>, <code>None</code>; a table: <code>table('data.csv')</code> or "
                        "<code>pl.DataFrame({'a': [1, 2]})</code>. Leave a field empty for no value."
-                       + (f" Filled in: what reached the block in {run}." if values else "")
+                       + (f" Filled in: what reached the block in {run}." if values and run else "")
                        + (" What you typed last time is shown as you typed it and worked out again when you "
                           "press Run (so <code>table('data.csv')</code> reads the file again)." if self.typed else ""))
         intro.setWordWrap(True)
@@ -1015,21 +1015,42 @@ class ChooseInputsDialog(QDialog):
 
 
 class ReusableBlockDialog(QDialog):
-    """Create Reusable block: the new block's name (its title in the blocks tree), what it does and what its inputs
-    expect. OK takes a name only when `problem(name)` has nothing against it; else the window says why."""
+    """Create reusable block: Global (a file in your blocks folder, in the blocks tree; chosen as it opens) or Local
+    (kept in the flow file), the new block's name (its title), what it does and what its inputs expect. OK takes a name
+    only when `problem(name)` has nothing against it; else the window says why. With `taken` (Promote to global
+    reusable block: the Local block's title, what it does and what its inputs expect, its title taken) it asks for
+    another name, with no choice."""
 
-    def __init__(self, problem, parent=None):
+    def __init__(self, problem, parent=None, block: str = "", flow: str = "", taken: tuple | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Create Reusable block")
+        self.setWindowTitle("Promote to global reusable block" if taken else "Create reusable block")
         self.resize(520, 0)
         self.problem = problem
         layout = QVBoxLayout(self)
-        intro = QLabel("Saves this block as a block of your own, under <b>User Created</b> in the blocks tree, to use "
-                       "in any flow: it runs this block's code on what is connected to its inputs.")
+        intro = QLabel(f"A block called <b>{html.escape(taken[0])}</b> is already in the blocks tree or this flow: "
+                       "give the global block another name." if taken else
+                       f"Makes <b>{html.escape(block)}</b> a block of your own that runs its code on what is connected "
+                       "to its inputs. Where is it kept?")
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        self.local = None if taken else QRadioButton("Local", objectName="reusable_local")  # (else: Global)
+        if not taken:
+            chosen = QRadioButton("Global", objectName="reusable_global", checked=True)
+            for radio, about in ((chosen, "Saved in the blocks tree, under User Created, for every flow (a file in "
+                                          "your blocks folder)."),
+                                 (self.local, f"Only this flow, kept in the flow file ({flow}); not in the blocks "
+                                              "tree. Copy and paste the block to make more copies.")):
+                radio.setStyleSheet("font-weight: bold;")
+                note = QLabel(about, wordWrap=True)
+                note.setStyleSheet("color: palette(placeholder-text); margin-left: 22px;")
+                layout.addWidget(radio, 0, Qt.AlignLeft)  # (only its circle and name take a click)
+                layout.addWidget(note)
         form = QFormLayout()
         self.name, self.what, self.expects = QLineEdit(), QPlainTextEdit(), QPlainTextEdit()
+        if taken:
+            self.name.setText(taken[0])
+            self.what.setPlainText(taken[1])
+            self.expects.setPlainText(taken[2])
         form.addRow("Name", self.name)
         form.addRow("What it does", self.what)
         form.addRow("What its inputs expect", self.expects)

@@ -41,7 +41,7 @@ from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTextEdit, QWid
 
 from conftest import REPO  # noqa: E402
 from taskloom import engine  # noqa: E402
-from taskloom.block import fields  # noqa: E402
+from taskloom.block import AFTER, fields  # noqa: E402
 from taskloom.config import Home  # noqa: E402
 from taskloom.editor import docs  # noqa: E402
 from taskloom.flow import load_flow, validate  # noqa: E402
@@ -644,6 +644,76 @@ def test_python_code_is_not_filled(env):
 
     assert result.returncode == 0, said(result)
     assert (env.root / "code.txt").read_text(encoding="utf-8") == "{{p}} {p}"
+
+
+# A typed value of an input hole (docs/promises/typed-values.yaml, TV-3) is filled like any field: these blocks have the
+# input holes of a built-in block that take one (the same port objects), and write what arrived at them.
+ECHO_HOLES = '''
+import json
+
+from taskloom import Block
+from taskloom.registry import discover
+
+BUILT_IN = discover(None)
+
+
+def _run(self, ctx, **inputs):
+    with open(f"{ctx.block_id}.json", "w", encoding="utf-8") as f:
+        json.dump(inputs, f, default=repr)
+    return {}
+
+
+for _n, (_type, _holes) in enumerate(HOLES):
+    _cls = BUILT_IN.get(_type)
+    _inputs = _cls.ports({k: f.default for k, f in _cls.config.items()})[0]
+    globals()[f"Holes{_n}"] = type(f"Holes{_n}", (Block,), {
+        "__module__": __name__, "type_id": f"test.holes{_n}", "title": f"Holes {_n}",
+        "description": f"Writes what arrived at its inputs to <its name>.json: those of {_type}.",
+        "inputs": {h: _inputs[h] for h in _holes}, "run": _run})
+'''
+# Plain holes that take no typed value (TV-5): a dictionary is expected there (no type is one), or the Loop's result,
+# which is fed from inside the Loop.
+NO_TYPED_VALUE = {("db.run_query", "params"), ("data.statistics", "extra"), ("logic.loop", "result")}
+
+
+def typed_holes() -> list[tuple[str, list[str]]]:
+    """Every input hole of every built-in block that takes a typed value (TV-5), as its block has it set up as added:
+    (block type, its holes). Not a table input, a hole that collects many lines, run after, nor NO_TYPED_VALUE."""
+    registry, found = discover(None), []
+    for type_id, cls in sorted(registry.blocks.items()):
+        if registry.sources[type_id] != "built-in" or cls.is_trigger:
+            continue
+        inputs = cls.ports({k: f.default for k, f in cls.config.items()})[0]
+        holes = [h for h, port in inputs.items() if h != AFTER and port.kind != "table" and not port.many
+                 and (type_id, h) not in NO_TYPED_VALUE]
+        if holes:
+            found.append((type_id, holes))
+    return found
+
+
+@pytest.mark.invariant("BR-5")
+@pytest.mark.invariant("TV-3")
+def test_a_typed_text_in_every_hole_that_takes_one_gives_the_value_of_double_braces(env):
+    """BR-5 with TV-3: the typed text {{p}} (p = 7) in every input hole of every built-in block that takes a typed value
+    (a block of its own with that block's holes) arrives filled in, as the text 7."""
+    every = typed_holes()
+    (env.home / "blocks").mkdir(exist_ok=True)
+    (env.home / "blocks" / "holes.py").write_text(f"HOLES = {every!r}\n" + ECHO_HOLES, encoding="utf-8")
+    blocks, edges = {"start": {"type": "trigger.manual"}}, []
+    for n, (_, holes) in enumerate(every):
+        blocks[f"h{n}"] = {"type": f"test.holes{n}", "inputs": {h: {"type": "text", "value": "{{p}}"} for h in holes}}
+        edges.append(f"start.start -> h{n}.after")
+
+    result = env.taskloom("run", flow_file(env.root / "holes.yaml", blocks, edges,
+                                           params={"p": {"type": "int", "value": 7}}))
+
+    got = {}
+    for n, (type_id, holes) in enumerate(every):
+        written = env.root / f"h{n}.json"
+        arrived = json.loads(written.read_text(encoding="utf-8")) if written.exists() else {}
+        got.update({f"{type_id}.{h}": arrived.get(h) for h in holes})
+    wrong = {where: value for where, value in got.items() if value != "7"}
+    assert len(got) >= 9 and wrong == {}, listed(wrong) + "\n" + said(result)
 
 
 # --- what the run says when a {{name}} cannot be filled in; SQL code; a header's rows ---------------------------------
