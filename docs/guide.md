@@ -423,7 +423,9 @@ taskloom editor examples/daily-sales-report.yaml
 - **A Python Code block as a block of your own:** right-click it →
   **Create reusable block…**, choose **Global** or **Local**, give it a name (its title),
   say what it does and what its inputs expect, and press OK. A name another block already
-  has (as its title or block type, Global or Local) is refused.
+  has (as its title or block type, Global or Local) is refused. A Global block made later,
+  from another flow, with the name of a flow's Local block: Validate names both in that flow
+  (`have the same name: rename one of them`), and it does not run until one is renamed.
   **Global** (chosen as the window opens) saves it as a Python file in your blocks folder (e.g.
   *Tidy names* → `blocks/tidy_names.py`, block type `user.tidy_names`) and lists it at once
   under **User Created**, its hover text saying what it does and what its inputs expect.
@@ -614,8 +616,9 @@ edges:
   `a, b`). `{{name}}` in a text or in an item of a list is filled once, from a flow parameter
   or an input that comes by a line; naming another typed value is an error. Validate counts
   it as a supplied input, and names the block and the input of a value that also has a line,
-  one that does not fit its type, or one on an input the block does not have; a run refuses
-  to start with the same words. `--input NAME=VALUE` (with `--only` or `--from`) gives the
+  one that does not fit its type, one on an input the block does not have, or one on an
+  input that takes no typed value (saying why, as its menu in the editor does); a run
+  refuses to start with the same words. `--input NAME=VALUE` (with `--only` or `--from`) gives the
   input another value for that run.
 - **Local blocks** (right-click a Python Code block → Create reusable block…, Local): the flow
   file keeps each one's definition under `local_blocks:` (its title, what it does, what its
