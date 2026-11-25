@@ -6,8 +6,11 @@ found:
     found_by: the writer of the feature files (evidence)
     fixed_in: 0f99ccf
     guarded_by: tests/test_typed_values_found.py::test_a_typed_value_written_by_hand_on_an_input_that_takes_none_is_refused_by_validate_and_the_run
+  - what: "After Clear value, \"…with the same inputs\" from a run of the block on its own (Run only this block or Run from this block on, with the same inputs) gave the block the value it had then, not no value: that run kept what the block got, its typed values too, and an input without a value today was taken from it (TV-6). Checked on the command line, and in the editor by test_with_the_same_inputs_after_clear_value_gives_no_value_in_the_editor."
+    found_by: the reviewer
+    fixed_in: df7655f
+    guarded_by: tests/test_typed_values_found.py::test_the_same_inputs_after_a_rerun_give_todays_typed_value_and_no_value_once_it_is_cleared
 lighter:
-  - "No test clears a value from Properties' Input values box (emptying its field), only from the input's menu."
   - "No test writes an inputs entry of another form or of an unknown type by hand."
   - "No test copies as cURL an API Request whose body is a typed value, or reads Properties' problem line for a typed input."
   - "The box is one line: a text with line breaks can only be written in the flow file."

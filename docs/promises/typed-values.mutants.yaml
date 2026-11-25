@@ -1,12 +1,15 @@
 # Mutation testing of typed values for inputs (read by packaging/mutants.py --explained). scope: what the bugs are
 # planted in, the functions the change touched (dcb12e9: the engine, the flow file and Validate; b57e6ec: the canvas,
-# Properties and the menus; 0f99ccf: why an input takes no typed value, one reason for the menu and Validate), in groups: each group's bugs run the tests that can see them (each line of tests: is one
-# pytest run, a file or several, with -k words or without). The functions that are new or mostly rewritten are tested
+# Properties and the menus; 0f99ccf: why an input takes no typed value, one reason for the menu and Validate; df7655f: a
+# block run on its own keeps no typed value), in groups: each group's bugs run the tests that can see them (each line of
+# tests: is one pytest run, a file or several, with -k words or without; tests/test_typed_values_mutants.py holds those
+# written for the mutants the first run let through). The functions that are new or mostly rewritten are tested
 # whole. A function in which the change touched a few lines, among much that was there before, is under not_tested: its
 # bugs are planted and counted, not run, and its reason names the tests that fail when the changed lines are taken out
 # by hand, or says that none does. The change's other lines are not functions of their own, or changed only a
 # docstring, so nothing is planted in them: flow.BLOCK_KEYS and BlockSpec.inputs, flow.DICT_INPUTS, docs.ROWS' Input
-# value row and docs.GROUPS, the imports, and Block.problems' docstring. mutmut plants nothing in a function with a
+# value row and docs.GROUPS, the imports, and Block.problems' docstring. Nor is anything planted in LoopItem.row_output
+# (canvas.py), which only returns None (a Loop's row has no output name). mutmut plants nothing in a function with a
 # decorator other than staticmethod or classmethod, so FlowScene.mouseDoubleClickEvent (decorated with _mouse), which
 # opens the box on a double-click, is not in the scope:
 # test_double_clicking_a_hole_opens_the_box_beside_it_and_enter_keeps_the_typed_value and
@@ -22,12 +25,14 @@ scope:
       tests:
         - tests/test_typed_values.py -k "python_code_gets_each or each_kind_of_block or typed_list_of_two or empty_typed_text or filled_once_like_any_field or setting_naming_an_input or inside_a_loop_gets or splitters_lines"
         - tests/test_braces.py -k cannot_be_filled_fails
+        - tests/test_typed_values_mutants.py -k "cannot_fill or cannot_hold or written_by_hand_with_numbers"
     - mutate:
         - taskloom/flow.py _typed_value_problems
       tests:
         - tests/test_typed_values_editor.py -k validate_and_run_now_in_the_editor
         - tests/test_typed_values.py -k "naming_nothing_or_another or single_brace_parameter"
         - tests/test_typed_values_found.py -k "takes_none and (Query or Merger)"
+        - tests/test_typed_values_mutants.py -k "names_every_typed_value or each_slip"
     - mutate:
         - taskloom/flow.py no_value_reason
         - taskloom/editor/canvas.py takes_no_value
@@ -38,6 +43,7 @@ scope:
         - taskloom/editor/window.py MainWindow._value_items
       tests:
         - tests/test_typed_values_editor.py tests/test_local_blocks_editor.py -k "(takes_no_typed_value and (Write or Merger or after or Query or Loop)) or plain_hole_offers or reusable_blocks_input_offers or (with_a_line_offers_no and If) or does_not_fit or properties_input_values or removing_an_input_that_copies_use"
+        - tests/test_typed_values_mutants.py -k "words_of_its_reason or shows_its_items"
     - mutate:
         - taskloom/editor/canvas.py port_font
         - taskloom/editor/canvas.py ValueChip.__init__
@@ -45,9 +51,9 @@ scope:
         - taskloom/editor/canvas.py ValueChip.paint
         - taskloom/editor/canvas.py NodeItem._show_values
         - taskloom/editor/canvas.py NodeItem.row_output
-        - taskloom/editor/canvas.py LoopItem.row_output
       tests:
-        - tests/test_typed_values_editor.py -k "shows_in_the_block or long_value or in_a_loop_the_box or dark_theme"
+        - tests/test_typed_values_editor.py -k "shows_in_the_block or long_value or in_a_loop_the_box or dark_theme or validate_and_run_now_in_the_editor"
+        - tests/test_typed_values_mutants.py -k "names_font or holes_colour or names_its_type"
     - mutate:
         - taskloom/editor/canvas.py TypedValueBox.__init__
         - taskloom/editor/canvas.py TypedValueBox.place
@@ -55,17 +61,20 @@ scope:
         - taskloom/editor/canvas.py TypedValueBox.keyPressEvent
         - taskloom/editor/canvas.py FlowView.open_value_box
       tests:
-        - tests/test_typed_values_editor.py -k "double_clicking or esc_closes or does_not_fit or beside_the_hole_inside or drawn_again or holes_menu_opens or properties_input_values"
+        - tests/test_typed_values_editor.py -k "double_clicking or esc_closes or does_not_fit or beside_the_hole_inside or drawn_again or holes_menu_opens or properties_input_values or with_a_line_offers_no"
+        - tests/test_typed_values_mutants.py -k "starts_as_text or every_type_whole or explained_in_red or where_the_canvas_has_room or taller_than_the_canvas or no_use_for"
     - mutate:
         - taskloom/editor/panels.py PropertiesPanel._input_values_box
         - taskloom/editor/panels.py PropertiesPanel._set_typed
         - taskloom/editor/document.py FlowDocument._set_typed_values
       tests:
         - tests/test_typed_values_editor.py tests/test_docs_help.py -k "properties_input_values or connecting_a_line_removes or renaming_a_python_input or a_reusable_block_has_cards"
+        - tests/test_typed_values_mutants.py -k "emptying_a_value or without_typed_values or what_each_hole_has"
     - mutate:
         - taskloom/engine.py run_flow
         - taskloom/engine.py _Runner._gather
         - taskloom/engine.py _Runner._fail
+        - taskloom/engine.py _Runner._run_one
         - taskloom/engine.py _filled
         - taskloom/engine.py _only_inputs
         - taskloom/flow.py flow_from_data
@@ -100,6 +109,12 @@ not_tested:
   taskloom/engine.py _Runner._fail: >-
     A block's failure report, in which this change touched seven lines (its Inputs list each typed value): without
     them, the three cases of test_a_failure_reports_inputs_list_the_typed_value fail.
+  taskloom/engine.py _Runner._run_one: >-
+    The run of one block, about forty-five lines, in which df7655f made one line three: a block run on its own keeps
+    what it got for a later "…with the same inputs", but not the values typed for its inputs (values you chose stay),
+    so a value cleared since gives none. With that line as before, the "value cleared" cases (--only and --from) of
+    test_the_same_inputs_after_a_rerun_give_todays_typed_value_and_no_value_once_it_is_cleared and both cases of
+    test_with_the_same_inputs_after_clear_value_gives_no_value_in_the_editor fail.
   taskloom/engine.py _filled: >-
     The filling of a block's settings, whose inner function this change moved, as it was, into _fill (tested whole):
     one line is left, its call. braces.mutants.yaml tests _filled whole.
@@ -171,3 +186,167 @@ not_tested:
   taskloom/editor/window.py MainWindow.run_block_with_inputs: >-
     The "with inputs I choose…" runs, to which this change added four lines (the window starts from today's typed
     values): without them, the four cases of test_with_inputs_i_choose_starts_from_the_typed_values fail.
+kinds:
+  - kind: A pixel more or less, or half a pixel
+    why: >-
+      A size or a place one pixel off (or half a pixel, rounded the other way), which no one can tell from the other.
+      The box: 1 px wider or taller (its value field 171 px wide in place of 170; its type list 77 px wide, or 77 by 108
+      px, in place of 76 by 107; a margin of 11 or 9 px in place of 10 or 8: the box 275 px wide in place of 274); 1 px
+      further from the hole (a gap of 7 px in place of 6); at least 1 px in from the canvas's top or left edge in place
+      of 0; or centred on the hole with half its height or width rounded the other way (62.5 px for a box 125 px high: 1
+      px higher; nothing for one 274 px wide). In a block: the value 1 px further right of its hole's name, or 1 px
+      higher; its frame 1 px wider, narrower or taller (17 px high in place of 16; an empty value's 17 px wide in place
+      of 16; 1 px short of the room up to the output name or the block's edge), 1 px wide in place of none where a
+      hole's name leaves no room, or its corners rounder by 1 px; its text 1 px (or half a pixel) further right, up or
+      down in its frame, or its text area 1 px narrower. A row of Input values 1 px in from its edges. The tests read
+      where things are to within a pixel.
+    mutants:
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_34
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_58
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_67
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_110
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_111
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_112
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_113
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_16
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_28
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_30
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_42
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_44
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_69
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_16
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_23
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_27
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_32
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_33
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_40
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_51
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_62
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_63
+      - taskloom.editor.canvas.xǁValueChipǁ__init____mutmut_64
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_26
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_27
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_44
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_45
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_47
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_48
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_70
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_71
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_72
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_73
+  - kind: The type list 4 px narrower
+    why: >-
+      The box's type list 72 px wide in place of 76 (its frame taken from the room added for the names instead of added
+      to it): each type still shows whole, the longest, datetime, with room to spare, and the box is 4 px narrower, 270
+      px in place of 274. No one can tell which of the two widths it is. Where the box opens follows the same rule for
+      that width: left of the hole where the canvas has room for it, else below (so a canvas that is 4 px short of room
+      for the wider box has room for this one).
+    mutants:
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_64
+  - kind: The same number in the editor's look
+    why: >-
+      The type list's frame is 1 px wide in the Fusion style the editor sets for itself, so 2 / 1 is 2 * 1; and its rows
+      are each one line in one font, so the second row is as high as the first. The list is the same size, 76 by 107 px
+      (checked).
+    mutants:
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_57
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_71
+  - kind: A style sheet written in capitals
+    why: >-
+      Qt reads a style sheet's properties and functions in any case: COLOR: PALETTE(PLACEHOLDER-TEXT) draws the same
+      grey as color: palette(placeholder-text) (#777777 on white, checked).
+    mutants:
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_79
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_49
+  - kind: The same colour, pen or text area said another way
+    why: >-
+      "#8A9BB0" is the colour "#8a9bb0"; a pen made from a colour alone is 1 px wide, as QPen(colour, 1) is; and the
+      value's text, already shortened to fit 5 px inside its frame and written from its left, is drawn the same in an
+      area 5 px wider on the right.
+    mutants:
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_5
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_17
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_46
+  - kind: A type list that starts at text anyway
+    why: >-
+      For a hole without a value, Properties' type list is told to show text, and it starts at its first type, which is
+      text: told to show None, nothing, XXtextXX or TEXT (none of its types) it shows text all the same (checked).
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_89
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_91
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_94
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_95
+  - kind: Room that goes to the same part either way
+    why: >-
+      In a row of Input values the value field is the part that grows (a line edit does; the type list beside it does
+      not), so it takes all the room whether its stretch is 1, 0 or 2. The box is made exactly as large as its parts ask
+      (adjustSize), so no room is left over for the type list's stretch to give it. Each is drawn the same (checked).
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_115
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_input_values_box__mutmut_116
+      - taskloom.editor.canvas.xǁTypedValueBoxǁ__init____mutmut_121
+  - kind: A tint one 255th stronger
+    why: >-
+      The value's frame is filled with the holes' colour 61 or 41 parts in 255 opaque in place of 60 or 40 (Dark theme
+      or not): no one can tell the two apart.
+    mutants:
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_11
+      - taskloom.editor.canvas.xǁValueChipǁpaint__mutmut_12
+  - kind: The area that counts as the value's, a pixel or two off
+    why: >-
+      The value's frame is drawn whole either way: an item's drawing is not cut to that area, and the canvas draws all
+      of itself again each time (FullViewportUpdate). Only where resting the mouse starts to show the value whole moves
+      by a pixel or two at the frame's edge.
+    mutants:
+      - taskloom.editor.canvas.xǁValueChipǁboundingRect__mutmut_9
+      - taskloom.editor.canvas.xǁValueChipǁboundingRect__mutmut_10
+      - taskloom.editor.canvas.xǁValueChipǁboundingRect__mutmut_11
+      - taskloom.editor.canvas.xǁValueChipǁboundingRect__mutmut_12
+      - taskloom.editor.canvas.xǁValueChipǁboundingRect__mutmut_13
+      - taskloom.editor.canvas.xǁValueChipǁboundingRect__mutmut_14
+  - kind: A box always placed for a block on the canvas
+    why: >-
+      The box is placed only for a block on the canvas: open_value_box opens it only for one there, and keep places it
+      again only after why_no_value found the hole in the flow, every block of which is on the canvas (drawn again from
+      the flow after each change). So asking whether the block is there changes nothing.
+    mutants:
+      - taskloom.editor.canvas.xǁTypedValueBoxǁplace__mutmut_5
+  - kind: No edit for a block Properties no longer shows
+    why: >-
+      Properties has Input values fields only while it shows a block of the flow on screen: when the flow changes (the
+      block deleted, Undo...) or another block or flow is shown, refresh blocks the old fields' signals before it takes
+      them out, and with no flow shown there are none. So no edit reaches _set_typed without the flow and the block, and
+      `and` in place of `or` there changes nothing.
+    mutants:
+      - taskloom.editor.panels.xǁPropertiesPanelǁ_set_typed__mutmut_1
+  - kind: A default no caller leaves out
+    why: >-
+      The block's menu is opened only by a right-click on the canvas (FlowScene's block_menu signal), which always says
+      on which input hole it was ("" for none), so what the hole would be if left out is never used.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_block_menu__mutmut_1
+  - kind: A message of a conversion Validate makes first
+    why: >-
+      Every run (taskloom run, Run now and the re-runs in the editor, the scheduler service) starts with Validate, which
+      converts each typed value of the blocks that run with the same params.coerce and refuses to start, with its own
+      message naming the block and the input, when one does not fit
+      (test_a_hand_edited_typed_value_that_cannot_be_is_named_by_validate_and_the_run_refuses_with_its_words). So at the
+      run the conversion never fails, and this message, in whatever words, is never made.
+    mutants:
+      - taskloom.engine.x__typed__mutmut_12
+      - taskloom.engine.x__typed__mutmut_13
+      - taskloom.engine.x__typed__mutmut_14
+      - taskloom.engine.x__typed__mutmut_15
+      - taskloom.engine.x__typed__mutmut_16
+  - kind: A thousandth of a second later
+    why: >-
+      Set value... and Clear value act once the menu and the right-click are over (a timer of no time); with a timer of
+      1 ms they act a thousandth of a second later, when those are over too: the same box opens, the same value goes.
+    mutants:
+      - taskloom.editor.window.xǁMainWindowǁ_value_items__mutmut_25
+      - taskloom.editor.window.xǁMainWindowǁ_value_items__mutmut_55
+  - kind: The output done, written as it is
+    why: >-
+      DONE is "done": the output name a row shows for it is "done" either way.
+    mutants:
+      - taskloom.editor.canvas.xǁNodeItemǁrow_output__mutmut_8

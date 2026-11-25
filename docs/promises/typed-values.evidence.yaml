@@ -72,11 +72,14 @@ TV-6:
     editor). _Runner._fail (taskloom/engine.py) lists each typed value under "Inputs:" as "<input> ← typed <type>:
     <value>". MainWindow.run_block_with_inputs (taskloom/editor/window.py) fills both "with inputs I choose…" windows
     with today's typed values. For "…with the same inputs" (--inputs-from), _only_inputs takes today's typed values
-    and only the other inputs from the run named; no run records typed values.
+    and only the other inputs from the run named; no run keeps a typed value for it: a full run keeps what each block
+    gave, and a block run on its own (_Runner._run_one) keeps what it got but the values typed for its inputs (values
+    you chose stay), so a value cleared since gives none.
   not_green: >-
     Tests validate a Loop's items and an API Request's body given a typed value, fail a block in a full run, with
-    --only and with --from, open both "with inputs I choose…" windows before and after a run, and change a value
-    between three runs; no check tries every block's own checks with a typed value.
+    --only and with --from, open both "with inputs I choose…" windows before and after a run, change a value between
+    three runs, and change or clear one after a re-run with the same inputs, on the command line and in the editor;
+    no check tries every block's own checks with a typed value.
 TV-7:
   enforced: >-
     Clear value (MainWindow._value_items, taskloom/editor/window.py) removes the input's value with
@@ -86,8 +89,8 @@ TV-7:
     _typed (taskloom/engine.py) gives the block "" for it, and a hole with neither a value nor a line gets nothing, as
     before.
   not_green: >-
-    Tests keep an empty text from the box, run it, clear it from the menu and run again; no test clears a value from
-    Properties, where emptying the field removes a value that is not an empty text.
+    Tests keep an empty text from the box, run it, clear it from the menu and run again, and empty a value's field in
+    Properties (the value is removed; an empty text there stays one); no check tries every order of edits.
 TV-8:
   enforced: >-
     FlowDocument.set_port_names (taskloom/editor/document.py) moves each typed value to its input's new name and drops
