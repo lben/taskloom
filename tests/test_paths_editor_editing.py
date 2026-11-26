@@ -1673,7 +1673,14 @@ end = time.monotonic() + 30
 while not copied() and time.monotonic() < end:
     app.processEvents()
     time.sleep(0.05)
-os._exit(1 if copied() else 3)  # ends there and then, without closing: as a crash does
+code = 1 if copied() else 3  # ends there and then, without closing: as a crash does
+if sys.platform == "win32":  # (os._exit still runs every DLL's clean-up, Qt's with its app alive, which can crash)
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.TerminateProcess.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+    kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code)
+os._exit(code)
 """
 
 
