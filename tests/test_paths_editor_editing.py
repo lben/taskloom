@@ -1641,7 +1641,8 @@ def test_unsaved_changes_are_copied_to_the_recovery_folder_until_saved_or_discar
 
 
 ENDED_EDITOR = """
-import os, sys, time
+import faulthandler, os, sys, time
+faulthandler.enable()  # (a crash prints where it happened, to the stderr the test shows)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
