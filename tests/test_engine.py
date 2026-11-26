@@ -65,14 +65,17 @@ def test_flaky_block_succeeds_after_retries_with_exponential_backoff(env):
 
     assert result.returncode == 0, result.stderr
     assert len([e for e in events(result.stdout) if e["event"] == "block_started"]) == 3
+    # The waits grow as the Log says: 0.3 s, then 0.6 s.
+    assert [e["message"] for e in events(result.stdout) if e.get("level") == "RETRY"] == [
+        "waiting 0.3 s before attempt 2/3", "waiting 0.6 s before attempt 3/3"]
     attempts = [tuple(map(float, line.split()))
                 for line in (env.root / "counter.txt.times").read_text(encoding="utf-8").splitlines()]
     assert len(attempts) == 3
-    # The waits between one attempt's end and the next one's start: 0.3 s then 0.6 s. Measured from each attempt's
-    # end, not its start, so a slower first attempt (a cold start on a busy CI machine) does not shrink the growth.
+    # And the engine waits at least that long between one attempt's end and the next one's start. Only lower bounds:
+    # a pause of the machine (Windows CI pauses runs up to about 0.6 s) can only make a wait longer.
     waits = [b[0] - a[1] for a, b in zip(attempts, attempts[1:])]
     tick = 0.016  # a clock tick on Windows
-    assert waits[0] >= 0.3 - tick and waits[1] >= 0.6 - tick and waits[1] - waits[0] >= 0.2, waits
+    assert waits[0] >= 0.3 - tick and waits[1] >= 0.6 - tick, waits
     run_id, status = env.last_run()
     assert status == "success"
     assert env.query("SELECT attempts, summary FROM blocks WHERE run_id=?", run_id) == [(3, "value: 3")]
