@@ -67,10 +67,10 @@ def look(**config) -> dict:
 
 
 def secret(env, value: str) -> dict:
-    """An Ask User block for a password: in a run nobody can answer, the stored secret `key`, saved holding `value`."""
-    (env.home / "secrets.yaml").write_text(yaml.safe_dump({"key": value}), encoding="utf-8")
-    (env.home / "secrets.yaml").chmod(0o600)
-    return {"type": "logic.ask_user", "config": {"prompt": "Key?", "kind": "password", "secret": "key"}}
+    """An Ask User block for a password: in a run nobody can answer, the stored secret `api.key`, saved holding
+    `value`."""
+    env.set_secret("api.key", value)
+    return {"type": "logic.ask_user", "config": {"prompt": "Key?", "kind": "password", "secret": "api.key"}}
 
 
 def chart_flow(folder: Path, **look_config) -> Path:

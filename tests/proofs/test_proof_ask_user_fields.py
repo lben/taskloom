@@ -1,10 +1,9 @@
 """Proof: Ask User shows only the settings its Kind uses; a new Number kind; only a password answer is hidden; an
 unattended run takes a password only from its stored secret, or fails saying what is missing. See README.md here."""
 
+import os
 from pathlib import Path
 
-import keyring
-from keyring.backends import fail
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
@@ -93,9 +92,9 @@ edges:
   - ask_password.answer -> show_password.value
 """
 PASSWORD_LINE = ["ask_user_name", "ask_password", "show_password"]  # what a close-up of a run in a terminal shows
-SECRET_NAME = "warehouse_password"
+SECRET_NAME = "warehouse.password"
 TYPED_PASSWORD = "Blue-Heron-58"  # what you type in ask_password's box
-STORED_PASSWORD = "Quiet-Lake-31"  # what the proof saves as warehouse_password, in its temporary Taskloom folder
+STORED_PASSWORD = "Quiet-Lake-31"  # what the proof saves as warehouse.password, in the tests' credential store
 STORED = "Stored secret (name)"
 NO_SECRET = ("nobody can answer in this run; a password needs a stored secret for unattended runs: set Stored secret "
              "(name)")
@@ -261,8 +260,7 @@ def test_ask_user_shows_only_the_settings_of_its_kind_and_has_a_number_kind(proo
     p.fits("“Only for some choices of another setting” is a rule any block's setting can use; Ask User is the first. "
            "Properties, the card, Help > Documentation and the run all read it from the block.")
     p.fits("The stored secret lives in Taskloom's secret store, where connections keep their passwords too: taskloom "
-           "secret set NAME saves one, in the system's credential store or, where there is none, in a file only you "
-           "can read.")
+           "secret set CARD.key saves one, in the system's credential store.")
     p.fits("The runs nobody can answer are those of taskloom run, without the editor: the scheduler service starts "
            "each scheduled run with that same command. That is why this proof runs them in a terminal. The editor "
            "shows such a run on the canvas of the open flow, as it shows a scheduled one.")
@@ -595,13 +593,14 @@ def test_ask_user_shows_only_the_settings_of_its_kind_and_has_a_number_kind(proo
     p.step(f"Save a password named {SECRET_NAME}, as taskloom secret set {SECRET_NAME} does, and run the flow in "
            f"the terminal once more: taskloom run {LOGIN}.")
     p.note("taskloom secret set reads the password from the keyboard, which a proof cannot type into. So the proof "
-           "saves it with the same code that command runs, in this proof's own temporary Taskloom folder: never in "
-           "your system's credential store.")
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # no credential store: secrets.yaml
+           "saves it with the same code that command runs, in the tests' stand-in for the system's credential "
+           "store, a file in this proof's temporary folder: never in your system's credential store.")
     where = Home(env.home).set_secret(SECRET_NAME, STORED_PASSWORD)
-    secrets = env.home / "secrets.yaml"
-    p.check(f"{SECRET_NAME} is saved in the proof's temporary Taskloom folder, not in the system's credential store",
-            Path(where).resolve() == secrets.resolve() and f"{SECRET_NAME}:" in secrets.read_text(encoding="utf-8"))
+    store = Path(os.environ["TEST_CREDENTIAL_STORE"])
+    p.check(f"{SECRET_NAME} is saved in the credential store, here the tests' stand-in in the proof's temporary "
+            "folder, not in the system's credential store",
+            where == "the system credential store" and store.parent == env.root
+            and STORED_PASSWORD in store.read_text(encoding="utf-8"))
     printed, code, sixth, status = unattended(env, qtbot, tab, LOGIN, "show_password")
     p.text(f"taskloom run {LOGIN} printed", printed)
     p.shot(win, f"The canvas shows run #{sixth}: ① ask_password answered with the stored {SECRET_NAME}, shown as "

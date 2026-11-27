@@ -82,4 +82,4 @@ class SSHTestServer:
     def connection(self) -> str:
         """connections.yaml entry for this server (the password is stored as a secret)."""
         return (f"appserver:\n  kind: ssh\n  host: 127.0.0.1\n  port: {self.port}\n"
-                f"  username: {USER}\n  password: 'secret:appserver_password'\n")
+                f"  username: {USER}\n  password: 'secret:appserver.password'\n")

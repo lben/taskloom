@@ -144,8 +144,8 @@ def login_mail_server(env, security="none", stored_password=PASSWORD):
                             auth_require_tls=security == "starttls", **tls)
     controller.start()
     add_connection(env, "secure", kind="smtp", host="127.0.0.1", port=port, security=security, username="reporter",
-                   password="secret:secure_password", sender="reports@example.com")
-    env.write("home/secrets.yaml", f"secure_password: {stored_password}\n").chmod(0o600)
+                   password="secret:secure.password", sender="reports@example.com")
+    env.set_secret("secure.password", stored_password)
     try:
         yield logins, messages
     finally:
@@ -1191,13 +1191,10 @@ def test_a_message_the_mail_server_rejects_fails_the_block_with_its_reason(env):
 
 
 def test_an_smtp_connection_made_in_the_connections_window_logs_in_and_sends(env, win, qtbot, monkeypatch):
-    import keyring.core
-    from keyring.backends import fail
     from PySide6.QtWidgets import QDialogButtonBox, QInputDialog
 
     from taskloom.editor.dialogs import ConnectionsDialog
 
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("relay", True)))
     with login_mail_server(env, "starttls") as (logins, messages):
         monkeypatch.setenv("SSL_CERT_FILE", env.env["SSL_CERT_FILE"])  # the window's test trusts the server too
@@ -1223,7 +1220,7 @@ def test_an_smtp_connection_made_in_the_connections_window_logs_in_and_sends(env
     assert PASSWORD not in text
     assert yaml.safe_load(text)["relay"] == {"kind": "smtp", "host": "127.0.0.1", "port": port, "security": "starttls",
                                              "username": "reporter", "sender": "reports@example.com",
-                                             "password": "secret:relay_password"}
+                                             "password": "secret:relay.password"}
     assert result.returncode == 0, result.stderr
     assert [m["Subject"] for m in messages] == ["Via the relay"] and logins == [("reporter", PASSWORD)] * 2
 
@@ -1377,7 +1374,7 @@ def test_a_notification_reaches_every_address_it_names(env):
 
 def test_the_failure_email_names_the_block_and_its_error_but_never_a_password(env, smtp):
     secret = "Hunter2-db-secret-77"
-    env.write("home/secrets.yaml", f"db_password: {secret}\n").chmod(0o600)
+    env.set_secret("db.password", secret)
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
     result = run(env, """
     name: loader
@@ -1389,7 +1386,7 @@ def test_the_failure_email_names_the_block_and_its_error_but_never_a_password(en
         config:
           inputs: []
           code: |
-            password = ctx.home.get_secret("db_password")
+            password = ctx.home.get_secret("db.password")
             raise RuntimeError(f"login refused for {password}")
     """, "--notify")
 

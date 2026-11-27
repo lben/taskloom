@@ -590,12 +590,12 @@ def test_rerun_accepts_inputs_that_had_nothing_in_that_run(env):
 
 
 def test_rerun_refuses_inputs_that_held_a_password(env):
-    env.write("home/secrets.yaml", "pw: hunter2SECRET\n").chmod(0o600)
+    env.set_secret("app.pw", "hunter2SECRET")
     flow = env.write("flow.yaml", """
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "Password?", kind: password, secret: pw}
+            config: {prompt: "Password?", kind: password, secret: app.pw}
           use:
             type: logic.python
             config: {inputs: [pw], outputs: [], code: "pass"}
@@ -880,12 +880,12 @@ def test_retries_of_a_block_that_takes_several_tables_survive_cleanup(env):
 
 
 def test_giving_one_input_does_not_drop_one_that_held_a_password(env):
-    env.write("home/secrets.yaml", "pw: hunter2SECRET\n").chmod(0o600)
+    env.set_secret("app.pw", "hunter2SECRET")
     flow = env.write("flow.yaml", """
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "Password?", kind: password, secret: pw}
+            config: {prompt: "Password?", kind: password, secret: app.pw}
           use:
             type: logic.python
             config: {inputs: [pw, n], outputs: [], code: "pass"}

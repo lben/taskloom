@@ -12,7 +12,6 @@ import os
 import re
 
 import pytest
-import yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -325,12 +324,10 @@ PASSWORD = "p4$$w0rd+(orders)"  # with punctuation that means something in a reg
 def test_a_password_with_punctuation_in_a_tables_cell_shows_as_stars_with_the_rest_of_the_cell_as_it_is(env):
     """The cell has 68 characters with the password in it and 54 with *** in its place: the password is replaced
     first, so the cell is under the 60 characters at which a table's cells are cut, and shows whole."""
-    secrets = env.home / "secrets.yaml"
-    secrets.write_text(yaml.safe_dump({"orders_token": PASSWORD}), encoding="utf-8")
-    secrets.chmod(0o600)
+    env.set_secret("orders.token", PASSWORD)
     link = "/orders?status=open&sort=newest&per_page=100&token="
     assert len(link + PASSWORD) == 68 and len(link + "***") == 54
-    code = ('token = ctx.home.get_secret("orders_token")\n'
+    code = ('token = ctx.home.get_secret("orders.token")\n'
             'orders = pl.DataFrame({"id": [1, 2], "link": ["%s" + token, "/orders?page=3"]})' % link)
 
     done = env.taskloom("run", L.orders_flow(env.root, code))

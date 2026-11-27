@@ -318,9 +318,9 @@ def files_holding(root: Path, text: str) -> list[Path]:
 
 
 def write_secrets(env, **values: str):
-    path = env.home / "secrets.yaml"
-    path.write_text(yaml.safe_dump(values), encoding="utf-8")
-    path.chmod(0o600)
+    """Each CARD_key=value stored as the credential CARD.key (the first _ is the dot), as taskloom secret set does."""
+    for name, value in values.items():
+        env.set_secret(name.replace("_", ".", 1), value)
 
 
 def write_connections(env, **conns: dict):
@@ -637,11 +637,11 @@ def test_each_auth_kind_sends_its_stored_secret_which_is_never_written_anywhere(
         api.answers["/digest"] = digest_answer("report", values["digest_password"])
         blocks = {
             "none": request(f"{api.base}/none", y=0),
-            "basic": request(f"{api.base}/basic", basic("report", "api_password"), y=200),
-            "bearer": request(f"{api.base}/bearer", bearer("api_token"), y=400),
-            "in_header": request(f"{api.base}/in_header", key_in_header("X-Api-Key", "api_key"), y=600),
-            "in_query": request(f"{api.base}/in_query", key_in_query("api_key", "api_key"), y=800),
-            "digest": request(f"{api.base}/digest", digest("report", "digest_password"), y=1000),
+            "basic": request(f"{api.base}/basic", basic("report", "api.password"), y=200),
+            "bearer": request(f"{api.base}/bearer", bearer("api.token"), y=400),
+            "in_header": request(f"{api.base}/in_header", key_in_header("X-Api-Key", "api.key"), y=600),
+            "in_query": request(f"{api.base}/in_query", key_in_query("api_key", "api.key"), y=800),
+            "digest": request(f"{api.base}/digest", digest("report", "digest.password"), y=1000),
         }
         result, run_id, status = run(env, blocks)
 
@@ -663,13 +663,13 @@ def test_each_auth_kind_sends_its_stored_secret_which_is_never_written_anywhere(
 def test_a_secret_that_is_not_stored_fails_before_sending_and_says_how_to_store_it(env):
     """Spec 2 (secrets referenced by name) and the no-surprises rule (it fails clearly, nothing is sent without its
     credentials): the error names the secret and the command that stores it."""
-    write_secrets(env, other="x")
+    write_secrets(env, other_x="x")
     with serving() as api:
-        result, run_id, status = run(env, {"call": request(f"{api.base}/orders", bearer("orders_token"))})
+        result, run_id, status = run(env, {"call": request(f"{api.base}/orders", bearer("orders.token"))})
 
     assert status == {"call": "failed"}, result.stderr[-3000:]
     error = error_of(env, run_id, "call")
-    assert "orders_token" in error and "taskloom secret set orders_token" in error, error
+    assert "orders.token" in error and "taskloom secret set orders.token" in error, error
     assert api.requests == []
 
 
@@ -938,7 +938,7 @@ def test_a_redirect_to_another_host_gets_none_of_the_credentials_and_one_on_the_
     (Bearer, Basic), no API key header and no header carrying a stored secret, while a plain header still goes; a
     redirect on the same host keeps the credentials."""
     values = {"token": secret("tok"), "password": secret("pw"), "key": secret("key"), "header": secret("hdr")}
-    write_secrets(env, **values)
+    write_secrets(env, **{f"redirect_{name}": value for name, value in values.items()})
     names = ("bearer", "basic", "key", "header")
     with serving() as api, serving() as other:
         elsewhere = f"http://localhost:{other.httpd.server_address[1]}"  # (another host name for this same computer)
@@ -947,12 +947,12 @@ def test_a_redirect_to_another_host_gets_none_of_the_credentials_and_one_on_the_
                    headers={"Location": f"{elsewhere}/landed-{n}", "Content-Type": "text/plain"})
         api.on("/stay", status=302, headers={"Location": "/landed", "Content-Type": "text/plain"}, body_=b"moved")
         blocks = {
-            "bearer": request(f"{api.base}/away-bearer", bearer("token"), y=0),
-            "basic": request(f"{api.base}/away-basic", basic("ann", "password"), y=200),
-            "key": request(f"{api.base}/away-key", key_in_header("X-Api-Key", "key"), y=400),
+            "bearer": request(f"{api.base}/away-bearer", bearer("redirect.token"), y=0),
+            "basic": request(f"{api.base}/away-basic", basic("ann", "redirect.password"), y=200),
+            "key": request(f"{api.base}/away-key", key_in_header("X-Api-Key", "redirect.key"), y=400),
             "header": request(f"{api.base}/away-header", y=600,
-                              headers=rows(("X-Token", "secret:header"), ("X-Plain", "visible"))),
-            "stay": request(f"{api.base}/stay", bearer("token"), y=800),
+                              headers=rows(("X-Token", "secret:redirect.header"), ("X-Plain", "visible"))),
+            "stay": request(f"{api.base}/stay", bearer("redirect.token"), y=800),
         }
         result, run_id, status = run(env, blocks)
 
@@ -1083,7 +1083,7 @@ def test_a_connection_gives_its_base_url_auth_and_default_headers_and_the_blocks
     token = secret("tok")
     write_secrets(env, shop_token=token)
     with serving() as api:
-        write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop_token"),
+        write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop.token"),
                                                    headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
         blocks = {"order": request("/orders/{{id}}", connection="shop",
                                    headers=rows(("X-Version", "2"), ("X-Extra", "yes"))),
@@ -1110,7 +1110,7 @@ def test_the_log_says_what_was_sent_and_what_came_back_and_never_a_secret(env):
     assert len(answer) == 42
     with serving() as api:
         api.on("/report", body_=answer, headers={"Content-Type": "application/json"})
-        result, run_id, status = run(env, {"call": request(f"{api.base}/report", key_in_query("key", "report_key"))})
+        result, run_id, status = run(env, {"call": request(f"{api.base}/report", key_in_query("key", "report.key"))})
 
     assert status == {"call": "success"}, result.stderr[-3000:]
     messages = [m for _, m in logs_of(env, run_id, "call")]
@@ -1223,14 +1223,14 @@ def test_copy_as_curl_copies_the_request_filled_in_with_every_secret_hidden(env,
     filled in and every secret shown as <hidden: secret NAME>) and 6 (with a connection: its base URL, auth and
     headers, the block's header winning): the copied command holds no secret, and run with each secret put back where
     it says hidden, it sends the server the same request as the block does in a run."""
-    values = {"api_password": secret("pw"), "shop_token": secret("tok")}
+    values = {"api.password": secret("pw"), "shop.token": secret("tok")}
     write_secrets(env, **values)
     _env_for_runs(env)
     with serving() as api:
-        write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop_token"),
+        write_connections(env, shop=api_connection(f"{api.base}/api", bearer("secret:shop.token"),
                                                    headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
         blocks = {
-            "create": request("{{base}}/orders", basic("report", "api_password"), json_body('["{{region}}", 2]'),
+            "create": request("{{base}}/orders", basic("report", "api.password"), json_body('["{{region}}", 2]'),
                               method="POST", params=rows(("region", "{{region}}"), ("debug", "1"), off=("debug",)),
                               headers=rows(("Accept", "application/json"), ("X-Trace", "{{region}}-1"))),
             "fetch": request("/orders/{{region}}", connection="shop", headers=rows(("X-Version", "2")), y=300),
@@ -1261,8 +1261,8 @@ def test_copy_as_curl_copies_the_request_filled_in_with_every_secret_hidden(env,
             assert done.returncode == 0, (command, done.stderr)
         by_curl = {"create": api.got("/orders")[-1], "fetch": api.got("/api/orders/north")[-1]}
 
-    assert "<hidden: secret api_password>" in copied["create"], copied["create"]
-    assert "<hidden: secret shop_token>" in copied["fetch"], copied["fetch"]
+    assert "<hidden: secret api.password>" in copied["create"], copied["create"]
+    assert "<hidden: secret shop.token>" in copied["fetch"], copied["fetch"]
     for block in blocks:
         assert same_request(sent[block], by_curl[block]) == {}, (block, copied[block])
     clean(win)
@@ -1454,7 +1454,7 @@ def test_with_a_connection_chosen_its_values_show_read_only_and_the_blocks_heade
     token = secret("tok")
     write_secrets(env, shop_token=token)
     base = "http://127.0.0.1:9/api"
-    write_connections(env, shop=api_connection(base, bearer("secret:shop_token"),
+    write_connections(env, shop=api_connection(base, bearer("secret:shop.token"),
                                                headers=rows(("X-Client", "taskloom"), ("X-Version", "1"))))
     path = flow_file(env.root / "conn.yaml", {"call": request("/orders/7", connection="shop",
                                                               headers=rows(("X-Version", "2")))})
@@ -1466,7 +1466,7 @@ def test_with_a_connection_chosen_its_values_show_read_only_and_the_blocks_heade
     assert with_base and not any(editable for _, editable in with_base), with_base
     with_client = [(t, editable) for t, editable, _ in texts if "X-Client" in t]
     assert with_client and not any(editable for _, editable in with_client), with_client
-    assert any("shop_token" in t and not editable for t, editable, _ in texts), texts
+    assert any("shop.token" in t and not editable for t, editable, _ in texts), texts
     replaced = re.compile(r"replac|overrid|instead|wins|precedence", re.I)
     assert any("X-Version" in t and (replaced.search(t) or replaced.search(tip)) for t, _, tip in texts), [
         x for x in texts if "X-Version" in x[0]]
@@ -1498,12 +1498,9 @@ def test_an_api_connection_made_in_the_connections_window_keeps_its_token_secret
     """Spec 6 (an API connection: a new kind in the Connections window, with its base URL and auth with its stored
     secret): made there, it is saved as an api connection with the token in the secret store, never in
     connections.yaml, and a block using it calls its base URL with the token."""
-    import keyring.core
-    from keyring.backends import fail
 
     from taskloom.editor.dialogs import ConnectionsDialog
 
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("shop", True)))
     token = secret("tok")
     with serving() as api:
@@ -1540,12 +1537,9 @@ def test_an_api_connections_headers_and_certificate_settings_made_in_the_connect
     """Spec 6 (an API connection in the Connections window: default headers, certificate settings) and 2 (a "Don't
     verify certificates" switch, which warns in the Log): the headers, the CA certificate file and Don't verify set
     there are saved, kept when the connection is opened again and saved with no change, and used by the blocks."""
-    import keyring.core
-    from keyring.backends import fail
 
     from taskloom.editor.dialogs import ConnectionsDialog
 
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
     ca, cert, server_key = certificates(tmp_path / "tls")
     headers_key, ca_key, dont_verify = key("Headers"), labelled("ca"), labelled("verify")
 

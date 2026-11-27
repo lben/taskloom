@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import credentials
 from .config import Home
 from .engine import Cancelled, finished_text, run_flow
 from .flow import FlowError, load_flow, real_path, validate
@@ -297,9 +298,30 @@ def cmd_check(args, home: Home) -> int:
 
 
 def cmd_secret_set(args, home: Home) -> int:
-    value = getpass.getpass(f"Value for secret '{args.name}': ")
-    where = home.set_secret(args.name, value)
-    print(f"saved secret '{args.name}' in {where}")
+    if args.value:  # (on the command line, others could see it while the command runs, and it stays in history)
+        print("error: taskloom secret set never takes the value on the command line: it asks for it (hidden as you "
+              "type), or reads it from standard input with --stdin", file=sys.stderr)
+        return EXIT_INVALID
+    credentials.split(args.reference)  # (refused before its value is asked for)
+    if args.stdin:
+        value = sys.stdin.buffer.read().decode("utf-8")
+        value = value[:-2] if value.endswith("\r\n") else value.removesuffix("\n")
+    else:
+        value = getpass.getpass(f"Value for secret '{args.reference}': ")
+    where = home.set_secret(args.reference, value)
+    print(f"saved secret '{args.reference}' in {where}")
+    return EXIT_OK
+
+
+def cmd_secret_delete(args, home: Home) -> int:
+    credentials.remove(home.root, args.reference)
+    print(f"deleted {args.reference} and its values")
+    return EXIT_OK
+
+
+def cmd_secret_list(args, home: Home) -> int:
+    for line in credentials.listing(home.root):
+        print(line)
     return EXIT_OK
 
 
@@ -448,11 +470,20 @@ def main(argv=None) -> int:
     e.add_argument("pip_args", nargs=argparse.REMAINDER)
     env_sub.add_parser("info", help="where it is and whether it exists")
     p.set_defaults(func=cmd_env)
-    p = sub.add_parser("secret", help="manage secrets")
+    p = sub.add_parser("secret", help="manage credentials: cards of keys, their values in the system's credential "
+                                      "store")
     secret_sub = p.add_subparsers(dest="secret_command", required=True)
-    s = secret_sub.add_parser("set", help="store a secret (prompts for the value)")
-    s.add_argument("name")
+    s = secret_sub.add_parser("set", help="store the value of CARD.key, e.g. UAT.password (asks for it)")
+    s.add_argument("reference", metavar="CARD.key")
+    s.add_argument("value", nargs="*", help=argparse.SUPPRESS)  # (refused: never a value on the command line)
+    s.add_argument("--stdin", action="store_true",
+                   help="read the value from standard input (a line break at its end is left out)")
     s.set_defaults(func=cmd_secret_set)
+    s = secret_sub.add_parser("list", help="the cards and their keys, never a value")
+    s.set_defaults(func=cmd_secret_list)
+    s = secret_sub.add_parser("delete", help="delete a key (CARD.key) or a whole card (CARD), and their values")
+    s.add_argument("reference", metavar="CARD.key|CARD")
+    s.set_defaults(func=cmd_secret_delete)
 
     args = parser.parse_args(argv)
     if args.home:  # (as TASKLOOM_HOME: also for the runs and services this process starts)
@@ -468,6 +499,9 @@ def main(argv=None) -> int:
         for message in e.errors:
             print(f"error: {message}", file=sys.stderr)
         return EXIT_INVALID
+    except credentials.CredentialError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_FAILED
     except (ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_INVALID

@@ -107,12 +107,12 @@ def test_inspect_shows_what_passes_through(env):
 
 
 def test_secrets_inside_outputs_never_reach_previews_logs_or_output(env):
-    env.write("home/secrets.yaml", "db_pw: hunter2SECRET\n").chmod(0o600)
+    env.set_secret("db.pw", "hunter2SECRET")
     flow = env.write("flow.yaml", """
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "Password?", kind: password, secret: db_pw}
+            config: {prompt: "Password?", kind: password, secret: db.pw}
           wrap:
             type: logic.python
             config: {code: "output = {'user': 'bob', 'password': input, 'more': [input]}"}

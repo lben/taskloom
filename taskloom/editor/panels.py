@@ -1629,12 +1629,12 @@ class PropertiesPanel(QScrollArea):
         while True:
             name, ok = QInputDialog.getText(
                 window, "Import from cURL", f"{what[0].upper()}{what[1:]} goes into a stored secret, never into the "
-                "flow. Store it under the name (letters, digits, _ . and -; a stored secret of that name is "
-                "replaced):", QLineEdit.Normal, name)
+                "flow. Store it as CARD.key (a card and its key, each of letters, digits, _ and -; a value stored "
+                "there is replaced):", QLineEdit.Normal, name)
             if not ok:
                 return None
             name = name.strip()
-            if re.fullmatch(r"[\w.-]+", name) and name not in taken:
+            if re.fullmatch(r"[\w-]+\.[\w-]+", name) and name not in taken:
                 return name
 
     def _stored(self, name: str) -> str | None:

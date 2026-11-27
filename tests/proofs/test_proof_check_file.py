@@ -702,9 +702,7 @@ def test_check_file_on_the_server_of_an_ssh_connection(proof, win, qtbot, tmp_pa
     server = SSHTestServer(server_home).start()
     try:
         (win.home.root / "connections.yaml").write_text(server.connection(), encoding="utf-8")
-        secrets = win.home.root / "secrets.yaml"
-        secrets.write_text(f"appserver_password: {PASSWORD}\n", encoding="utf-8")
-        secrets.chmod(0o600)
+        win.home.set_secret("appserver.password", PASSWORD)
         exports = server_home / "exports"
         ago = three_days_ago()
         found = {"orders_1.csv": put(exports / "orders_1.csv", sales(150)),

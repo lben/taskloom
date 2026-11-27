@@ -344,8 +344,8 @@ def test_new_connection_from_a_block_is_created_selected_and_listed(win, monkeyp
     assert combo.currentData() == "appserver"
     conn = win.home.connections()["appserver"]
     assert conn == {"kind": "ssh", "host": "server01.example.com", "username": "me",
-                    "password": "secret:appserver_password"}
-    assert win.home.get_secret("appserver_password") == "s3cret"
+                    "password": "secret:appserver.password"}
+    assert win.home.get_secret("appserver.password") == "s3cret"
     tab.doc.dirty = False
 
 

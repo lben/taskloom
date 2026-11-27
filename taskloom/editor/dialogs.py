@@ -588,9 +588,9 @@ class ConnectionsDialog(QDialog):
             if name not in self.conns:
                 continue
             conn = self.conns[name]
-            # (an API connection's: named for what it is, e.g. shop_token)
-            secret = f"{name}_{self.SECRET_LABELS.get(conn.get('auth'), 'key').lower()}" if conn["kind"] == "api" \
-                else f"{name}_password"
+            # (the connection's card, its key named for what it is, e.g. shop.token)
+            secret = f"{name}.{self.SECRET_LABELS.get(conn.get('auth'), 'key').lower()}" if conn["kind"] == "api" \
+                else f"{name}.password"
             self.home.set_secret(secret, value)
             if conn["kind"] == "jdbc":
                 conn.setdefault("properties", {})["password"] = f"secret:{secret}"

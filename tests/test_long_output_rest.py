@@ -35,7 +35,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 SHOW_ALL = "show all"  # the words that end a long message's first 200 lines in the Log
-TOKEN = "tok-ORDERS-7f3a9c2e51b8"  # the API token of NC-7 (kept in the temporary Taskloom folder's secrets.yaml)
+TOKEN = "tok-ORDERS-7f3a9c2e51b8"  # the API token of NC-7 (kept in the tests' credential store)
 SHORTENED = re.compile(r"… \(\d{1,3}(,\d{3})* characters\)$")  # how a shortened one-line label ends
 
 
@@ -55,7 +55,7 @@ ORDERS_WITH_TOKEN = '''
 def order(i):
     return {"id": i, "customer": f"customer {i:06d}", "email": f"buyer{i}@example.com", "paid": i % 3 == 0,
             "total": round(i * 1.37, 2), "items": ["pen", "ink", "paper"]}
-token = ctx.home.get_secret("orders_token")
+token = ctx.home.get_secret("orders.token")
 result = {"token": token, "orders": [order(i) for i in range(1, COUNT + 1)],
           "next": f"/orders?page=2&token={token}"}
 '''
@@ -302,10 +302,7 @@ def test_an_api_token_in_a_long_response_shows_as_stars_in_the_log_data_preview_
     code = orders_code(1_500, ORDERS_WITH_TOKEN)
     whole = whole_text(made_by(code))  # with *** where the token is: on its second line and its last line but one
     assert 300_000 < len(whole) < 900_000 and whole.count("***") == 2 and whole.endswith('token=***"\n}'), len(whole)
-    win.home.root.mkdir(parents=True, exist_ok=True)
-    secrets = win.home.root / "secrets.yaml"
-    secrets.write_text(yaml.safe_dump({"orders_token": TOKEN}), encoding="utf-8")
-    secrets.chmod(0o600)
+    win.home.set_secret("orders.token", TOKEN)
     tab = win.open_flow(orders_flow(tmp_path, code))
     qtbot.waitExposed(win)
 

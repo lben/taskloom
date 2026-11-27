@@ -48,6 +48,13 @@ class Env:
         path.write_text(textwrap.dedent(text))
         return path
 
+    def set_secret(self, reference: str, value: str):
+        """Store `value` as the credential CARD.key `reference` (in the tests' credential store), as `taskloom secret
+        set` does."""
+        from taskloom.config import Home
+
+        Home(self.home).set_secret(reference, value)
+
     def taskloom(self, *args, **kw) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, "-m", "taskloom.cli", *map(str, args)],
@@ -98,12 +105,13 @@ def env(tmp_path, credential_store) -> Env:
 def server(env):
     """A local SSH server registered as the connection `appserver`; its home is env.root / "server"."""
     from sshserver import PASSWORD, SSHTestServer
+    from taskloom.config import Home
 
     home = env.root / "server"
     home.mkdir()
     srv = SSHTestServer(home).start()
     env.write("home/connections.yaml", srv.connection())
-    env.write("home/secrets.yaml", f"appserver_password: {PASSWORD}\n").chmod(0o600)
+    Home(env.home).set_secret("appserver.password", PASSWORD)
     srv.home_path = home
     yield srv
     srv.stop()
@@ -209,10 +217,11 @@ def jdbc_env(env, h2_server):
           driver: org.h2.Driver
           url: "jdbc:h2:tcp://localhost:{h2_server['port']}/mem:test"
           jars: ["{h2_server['jar'].as_posix()}"]
-          properties: {{user: sa, password: "secret:warehouse_password"}}
+          properties: {{user: sa, password: "secret:warehouse.password"}}
     """)
-    secrets = env.write("home/secrets.yaml", "warehouse_password: ''\n")
-    secrets.chmod(0o600)
+    from taskloom.config import Home
+
+    Home(env.home).set_secret("warehouse.password", "")
     return env
 
 

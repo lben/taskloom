@@ -9,6 +9,7 @@ import tarfile
 import pytest
 
 from conftest import REPO
+from taskloom.config import Home
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the test server runs commands in /bin/sh")
 
@@ -40,9 +41,9 @@ def _run_answering(env, flow, archive, answer):
 
 def test_deploy_installs_then_asks_before_replacing(env, server):
     env.write("home/connections.yaml", server.connection().replace("appserver:", "deploy_target:"))
-    env.write("home/secrets.yaml", "deploy_target_password: s3cret\n").chmod(0o600)
+    Home(env.home).set_secret("deploy_target.password", "s3cret")
     env.home.joinpath("connections.yaml").write_text(
-        env.home.joinpath("connections.yaml").read_text().replace("secret:appserver_password", "secret:deploy_target_password"))
+        env.home.joinpath("connections.yaml").read_text().replace("secret:appserver.password", "secret:deploy_target.password"))
     flow = env.root / "deploy.yaml"
     flow.write_text((REPO / "examples" / "deploy-runner.yaml").read_text())
     version_file, pid_file = server.home_path / "taskloom" / "VERSION", server.home_path / ".taskloom" / "scheduler.pid"

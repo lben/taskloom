@@ -36,17 +36,8 @@ from taskloom.scheduler import Scheduler, acquire_lock, paused, running_schedule
 from taskloom.scheduler import _unlock as unlock  # noqa: E402
 
 T0 = dt.datetime(2026, 1, 5, 6, 30)  # a Monday
-NO_KEYRING = "keyring.backends.fail.Keyring"
 REAL_START_SCHEDULER = MainWindow.start_scheduler  # (the win fixture replaces it: no real service by default)
-
-
-@pytest.fixture(autouse=True)
-def no_credential_store(monkeypatch):
-    """Never the real credential store: not for the runs the scheduler starts, nor in this process."""
-    from taskloom import config
-
-    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", NO_KEYRING)
-    monkeypatch.setattr(config, "_keyring", lambda: None)
+# (never the real credential store: this process and the runs the scheduler starts use the tests' own, see conftest)
 
 
 SERVICE_LOCKS = []  # the Taskloom folders' locks held by the services made here (see service)
@@ -164,7 +155,7 @@ def start_service(root: Path, *args, stdout=subprocess.DEVNULL) -> subprocess.Po
     """`taskloom scheduler --headless` for the Taskloom folder `root`, as from a terminal (it prints what it
     tells you on `stdout`)."""
     return subprocess.Popen([sys.executable, "-m", "taskloom.cli", "scheduler", "--headless", *args],
-                            env={**os.environ, "TASKLOOM_HOME": str(root), "PYTHON_KEYRING_BACKEND": NO_KEYRING},
+                            env={**os.environ, "TASKLOOM_HOME": str(root)},
                             stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.DEVNULL)
 
 
@@ -191,7 +182,7 @@ def start_tray_service(root: Path, messages: Path) -> subprocess.Popen:
     """`taskloom scheduler`, the tray service (as at login or started by the editor), for the Taskloom folder
     `root`; the messages its tray icon shows are written to `messages`."""
     return subprocess.Popen([sys.executable, "-c", TRAY_SERVICE],
-                            env={**os.environ, "TASKLOOM_HOME": str(root), "PYTHON_KEYRING_BACKEND": NO_KEYRING,
+                            env={**os.environ, "TASKLOOM_HOME": str(root),
                                  "QT_QPA_PLATFORM": "offscreen", "TRAY_MESSAGES": str(messages)},
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

@@ -267,14 +267,13 @@ TOKEN = "S3cr3t-T0ken-value"
 
 
 def test_a_secret_is_copied_as_hidden_with_its_parameters_name_and_its_text_is_never_recorded(jdbc_env, win, qtbot):
-    with (jdbc_env.home / "secrets.yaml").open("a", encoding="utf-8") as f:
-        f.write(yaml.safe_dump({"report_token": TOKEN}))
+    jdbc_env.set_secret("report.token", TOKEN)
     flow = write_flow(jdbc_env.root / "report.yaml", {
         "params": {"region": {"type": "text", "value": "north"}},
         "blocks": {
             "manual": {"type": "trigger.manual"},
             "ask_token": {"type": "logic.ask_user", "config": {
-                "prompt": "Report token", "kind": "password", "secret": "report_token"}},
+                "prompt": "Report token", "kind": "password", "secret": "report.token"}},
             "pack": {"type": "logic.python", "config": {"inputs": ["token"], "code": "output = {'token': token}"}},
             "load_sales": {"type": "db.run_query", "config": {
                 "connection": "warehouse", "sql": "select :region as region, :token as token"}}},

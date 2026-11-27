@@ -915,7 +915,7 @@ def from_curl(text: str) -> CurlImport:
     if bearer:
         headers = [h for h in headers if h not in bearer]
         config["auth"] = BEARER
-        secrets.append(("the Bearer token", bearer[-1][1].split(None, 1)[1], f"{host}_token", None))
+        secrets.append(("the Bearer token", bearer[-1][1].split(None, 1)[1], f"{host}.token", None))
         said.append("Auth: Bearer token")
         if user is not None:
             unused.append("-u (its Authorization header is replaced by the Bearer one, as curl does)")
@@ -926,12 +926,12 @@ def from_curl(text: str) -> CurlImport:
                                                                           "stored secret that holds it in Stored "
                                                                           "secret)"))
         if colon:
-            secrets.append((f"the password of -u {name}", password, f"{host}_password", None))
+            secrets.append((f"the password of -u {name}", password, f"{host}.password", None))
     config["headers"] = []
     for key, value in headers:
         if _SECRET_HEADER.search(key) and value:
             name = re.sub(r"\W+", "_", key).strip("_").lower()
-            secrets.append((f"the value of the header {key}", value, f"{host}_{name}", len(config["headers"])))
+            secrets.append((f"the value of the header {key}", value, f"{host}.{name}", len(config["headers"])))
             value = ""  # (secret:NAME, once named)
         config["headers"].append({"key": key, "value": value})
 

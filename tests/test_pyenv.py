@@ -75,13 +75,13 @@ def test_a_python_block_needing_the_environment_says_how_to_create_it(env):
 def test_secrets_never_reach_logs_or_files_through_inspect_or_the_environment(env):
     import sys as _sys
 
-    env.write("home/secrets.yaml", "db_pw: hunter2SECRET\n").chmod(0o600)
+    env.set_secret("db.pw", "hunter2SECRET")
     assert env.taskloom("env", "create", "--python", _sys.executable, timeout=180).returncode == 0
     flow = env.write("flow.yaml", """
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "Password?", kind: password, secret: db_pw}
+            config: {prompt: "Password?", kind: password, secret: db.pw}
           message:
             type: logic.inspect
             config: {message: "password is {{value}}"}

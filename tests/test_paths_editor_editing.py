@@ -2077,9 +2077,9 @@ def test_a_new_ssh_connection_is_saved_with_its_password_kept_out_of_the_file_an
     assert PASSWORD not in text and "not the password" not in text
     conns = win.home.connections()
     assert conns["backup"] == {"kind": "ssh", "host": "127.0.0.1", "port": server.port, "username": USER,
-                               "password": "secret:backup_password"}
+                               "password": "secret:backup.password"}
     assert conns["appserver"] == appserver  # the connection that was there is kept as it was
-    assert win.home.get_secret("backup_password") == PASSWORD
+    assert win.home.get_secret("backup.password") == PASSWORD
     assert taskloom(win, "connection", "test", "backup").returncode == 0
 
 
@@ -2249,7 +2249,7 @@ def test_a_new_database_connection_is_saved_for_jdbc_and_tested(jdbc_env, win, q
     assert str(timeout) == "600"  # (written as a number or as text: the driver gets 600 either way)
     assert other == {"kind": "jdbc", "driver": "com.example.jdbc.Driver", "url": "jdbc:example://db.example.com/x",
                      "jars": ["C:/drivers/a.jar", "C:/drivers/b.jar"],
-                     "properties": {"user": "me", "password": "secret:other_db_password"}}
+                     "properties": {"user": "me", "password": "secret:other_db.password"}}
     assert "pw for the example" not in (win.home.root / "connections.yaml").read_text(encoding="utf-8")
     assert "warehouse" in conns  # the one that was there is kept
 
