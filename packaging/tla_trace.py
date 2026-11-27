@@ -36,7 +36,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # (the scheduler tests' stand-in helpers)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # (those helpers' module imports Qt)
-os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # (never the real credential store)
+# Never the real credential store. Imported by a test (as pytest collects it), the tests' own store stays: every
+# program a test starts after that uses it (tests/conftest.py).
+if not os.environ.get("PYTHON_KEYRING_BACKEND", "").startswith("taskloom_test_store."):
+    os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 
 import pytest  # noqa: E402
 import yaml  # noqa: E402
