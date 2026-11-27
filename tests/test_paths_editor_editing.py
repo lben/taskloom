@@ -89,7 +89,7 @@ def save_as(monkeypatch, path):
 
 def taskloom(win, *args, cwd=None) -> subprocess.CompletedProcess:
     """The real command line, on the editor's Taskloom folder."""
-    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}  # (the tests' credential store, as the editor's)
     return subprocess.run([sys.executable, "-m", "taskloom.cli", *map(str, args)], env=env, cwd=cwd,
                           capture_output=True, text=True, errors="replace", timeout=120)
 
@@ -2042,12 +2042,12 @@ def test_saving_the_connections_keeps_a_connection_of_a_kind_of_your_own_blocks_
 def test_a_new_ssh_connection_is_saved_with_its_password_kept_out_of_the_file_and_tested(server, win, qtbot,
                                                                                           monkeypatch):
     import keyring
-    from keyring.backends import fail
 
     from sshserver import PASSWORD, USER
     from taskloom.editor.dialogs import ConnectionsDialog
+    from taskloom_test_store import FileStore
 
-    assert isinstance(keyring.get_keyring(), fail.Keyring)  # never the real credential store
+    assert isinstance(keyring.get_keyring(), FileStore)  # the tests' credential store, never the real one
     appserver = win.home.connections()["appserver"]
     names = iter(["backup", "wrong"])
     monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", staticmethod(lambda *a, **k: (next(names), True)))

@@ -597,7 +597,7 @@ def test_ask_user_shows_only_the_settings_of_its_kind_and_has_a_number_kind(proo
     p.note("taskloom secret set reads the password from the keyboard, which a proof cannot type into. So the proof "
            "saves it with the same code that command runs, in this proof's own temporary Taskloom folder: never in "
            "your system's credential store.")
-    assert isinstance(keyring.get_keyring(), fail.Keyring), "the tests never use the real credential store"
+    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # no credential store: secrets.yaml
     where = Home(env.home).set_secret(SECRET_NAME, STORED_PASSWORD)
     secrets = env.home / "secrets.yaml"
     p.check(f"{SECRET_NAME} is saved in the proof's temporary Taskloom folder, not in the system's credential store",

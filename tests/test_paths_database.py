@@ -10,7 +10,6 @@ import datetime as dt
 import decimal
 import gc
 import json
-import os
 import socket
 import stat
 import subprocess
@@ -109,53 +108,6 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("localhost", 0))
         return s.getsockname()[1]
-
-
-CREDENTIAL_STORE = '''
-"""A stand-in for the system credential store (Keychain, Credential Manager): a JSON file, $TEST_CREDENTIAL_STORE."""
-import json
-import os
-
-from keyring.backend import KeyringBackend
-
-
-class FileStore(KeyringBackend):
-    priority = 1
-
-    def _read(self):
-        path = os.environ["TEST_CREDENTIAL_STORE"]
-        if not os.path.exists(path):
-            return {}
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-
-    def get_password(self, service, username):
-        return self._read().get(service + "/" + username)
-
-    def set_password(self, service, username, password):
-        data = self._read()
-        data[service + "/" + username] = password
-        with open(os.environ["TEST_CREDENTIAL_STORE"], "w", encoding="utf-8") as f:
-            json.dump(data, f)
-'''
-
-
-def use_a_credential_store(env, monkeypatch=None) -> Path:
-    """Give the taskloom programs `env` runs (and, with monkeypatch, the programs this process starts) a system
-    credential store: a JSON file, never the developer's real one. Only the store is a stand-in; Taskloom finds
-    and uses it through keyring as it does the real one. Returns the store's file."""
-    folder = env.root / "credential-store"
-    folder.mkdir()
-    (folder / "taskloom_test_store.py").write_text(CREDENTIAL_STORE, encoding="utf-8")
-    store = folder / "store.json"
-    settings = {"PYTHON_KEYRING_BACKEND": "taskloom_test_store.FileStore", "TEST_CREDENTIAL_STORE": str(store),
-                "PYTHONPATH": os.pathsep.join(p for p in (str(folder), os.environ.get("PYTHONPATH")) if p)}
-    env.env.update(settings)
-    if monkeypatch is not None:
-        for name, value in settings.items():
-            monkeypatch.setenv(name, value)
-        monkeypatch.syspath_prepend(str(folder))
-    return store
 
 
 def stored(store: Path) -> dict:
@@ -644,6 +596,7 @@ def test_a_wrong_password_fails_clearly_and_no_password_reaches_logs_or_history(
 
 @pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin; POSIX file modes")
 def test_secret_set_stores_a_password_that_queries_then_use(jdbc_env, h2_server):
+    jdbc_env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     h2_sql(h2_server, "vault", "create table t (x int); insert into t values (7)", password=PASSWORD)
     add_connection(jdbc_env, h2_server, "vault", "vault")
     flow = query_flow(jdbc_env, "select x from t", connection="vault")
@@ -661,8 +614,9 @@ def test_secret_set_stores_a_password_that_queries_then_use(jdbc_env, h2_server)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin")
-def test_secret_set_saves_in_the_system_credential_store_and_queries_log_in_with_it(jdbc_env, h2_server):
-    store = use_a_credential_store(jdbc_env)
+def test_secret_set_saves_in_the_system_credential_store_and_queries_log_in_with_it(jdbc_env, h2_server,
+                                                                                       credential_store):
+    store = credential_store  # (every test's: tests/credential_store)
     h2_sql(h2_server, "keychain", "create table t (x int); insert into t values (7)", password=PASSWORD)
     add_connection(jdbc_env, h2_server, "vault", "keychain")
     secrets = jdbc_env.home / "secrets.yaml"  # an older value of the same name in secrets.yaml (e.g. copied over)
@@ -868,19 +822,13 @@ def test_a_database_connection_made_in_the_editor_is_tested_and_used_by_a_query(
 
 
 def test_a_password_typed_in_the_editor_goes_to_the_system_credential_store_and_queries_log_in_with_it(
-        jdbc_env, h2_server, win, qtbot, monkeypatch, request):
-    import importlib
-
-    import keyring
+        jdbc_env, h2_server, win, qtbot, monkeypatch, credential_store):
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import QDialogButtonBox, QPushButton
 
     from taskloom.editor.dialogs import ConnectionsDialog
 
-    before = keyring.get_keyring()  # the `win` fixture's: no store
-    store = use_a_credential_store(jdbc_env, monkeypatch)  # for the runs and tests the editor starts
-    keyring.set_keyring(importlib.import_module("taskloom_test_store").FileStore())  # for the editor itself
-    request.addfinalizer(lambda: keyring.set_keyring(before))
+    store = credential_store  # the editor's and that of the runs and tests it starts (every test's: tests/credential_store)
     h2_sql(h2_server, "editor_store", "create table t (x int); insert into t values (7)", password=PASSWORD)
     flow = jdbc_env.write("flow.yaml", """
         blocks:

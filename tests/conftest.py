@@ -14,10 +14,17 @@ from pathlib import Path
 
 import pytest
 
-# Never the real credential store (macOS Keychain, Windows Credential Manager): not in the runs the tests start, and
-# not in the test process either (a test that looks up a secret itself would otherwise pick the real one for the
-# rest of the session). A test that needs a store sets its own.
-os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+# Never the real credential store (macOS Keychain, Windows Credential Manager): not in the programs the tests start,
+# and not in the test process either. Every test uses the tests' stand-in instead, a keyring backend over a JSON file
+# in the test's own folder (credential_store/taskloom_test_store.py, found by the programs through PYTHONPATH; the
+# fixture credential_store gives its file). A test that needs no store sets keyring.backends.fail.Keyring itself.
+CREDENTIAL_STORE = Path(__file__).resolve().parent / "credential_store"
+sys.path.insert(0, str(CREDENTIAL_STORE))
+os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, [str(CREDENTIAL_STORE), os.environ.get("PYTHONPATH")]))
+os.environ["PYTHON_KEYRING_BACKEND"] = "taskloom_test_store.FileStore"
+# (outside a test, e.g. while a module's fixture starts: a file of this session's; each test has its own)
+os.environ["TEST_CREDENTIAL_STORE"] = os.path.join(tempfile.gettempdir(), f"taskloom-test-store-{os.getpid()}.json")
+os.environ.pop("TEST_CREDENTIAL_STORE_MODE", None)
 if sys.platform == "win32":  # Qt's offscreen platform finds no fonts there unless pointed at them: no text is drawn
     os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
@@ -33,12 +40,7 @@ class Env:
         self.root = root
         self.home = root / "home"
         self.home.mkdir()
-        self.env = {
-            **os.environ,
-            "TASKLOOM_HOME": str(self.home),
-            # Never touch the developer's real credential store from tests.
-            "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
-        }
+        self.env = {**os.environ, "TASKLOOM_HOME": str(self.home)}  # (with the test's own credential store)
 
     def write(self, relpath: str, text: str) -> Path:
         path = self.root / relpath
@@ -73,8 +75,22 @@ def events(stdout: str) -> list[dict]:
     return [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
 
 
+@pytest.fixture(autouse=True)
+def credential_store(tmp_path, monkeypatch) -> Path:
+    """The file of the tests' stand-in credential store that this test and every program it starts use (made when a
+    value is first stored), in the test's own folder; in this process too, whatever an earlier test chose."""
+    import keyring.core
+    from taskloom_test_store import FileStore
+
+    store = tmp_path / "credential-store.json"
+    monkeypatch.setenv("TEST_CREDENTIAL_STORE", str(store))
+    monkeypatch.delenv("TEST_CREDENTIAL_STORE_MODE", raising=False)
+    monkeypatch.setattr(keyring.core, "_keyring_backend", FileStore())
+    return store
+
+
 @pytest.fixture
-def env(tmp_path) -> Env:
+def env(tmp_path, credential_store) -> Env:
     return Env(tmp_path)
 
 
@@ -212,8 +228,6 @@ def win(qtbot, tmp_path, monkeypatch):
     from taskloom.editor import dialogs
     from taskloom.editor.window import MainWindow
 
-    # The runner processes inherit this; never touch the real credential store.
-    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     # A message box would wait forever for a click; record it instead and fail the test.
     shown = []
     for name in ("information", "warning", "question"):

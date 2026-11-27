@@ -574,6 +574,7 @@ SECRET_FLOW = """
 @pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin; POSIX file modes")
 def test_secret_set_makes_the_folder_and_a_new_value_replaces_the_old_one_keeping_the_others(env):
     env.env["TASKLOOM_HOME"] = str(env.root / "new home")  # not made yet
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     secrets = env.root / "new home" / "secrets.yaml"
     flow = write(env, SECRET_FLOW)
 
@@ -594,6 +595,7 @@ def test_secret_set_makes_the_folder_and_a_new_value_replaces_the_old_one_keepin
 
 @pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin; POSIX file modes")
 def test_secret_set_never_leaves_a_secret_in_a_file_others_can_read(env):
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     secrets = env.write("home/secrets.yaml", "old: x\n")
     secrets.chmod(0o644)  # e.g. made by hand
 
@@ -608,6 +610,7 @@ def test_secret_set_never_leaves_a_secret_in_a_file_others_can_read(env):
 def test_a_secrets_file_taskloom_cannot_read_is_an_error_naming_it_and_is_left_as_it_was(env, content):
     from sshserver import free_port
 
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     env.write("home/connections.yaml", f"appserver: {{kind: ssh, host: 127.0.0.1, port: {free_port()}, "
                                        "username: me, password: 'secret:appserver_password'}\n")
     secrets = env.home / "secrets.yaml"
