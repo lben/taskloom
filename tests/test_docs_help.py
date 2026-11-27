@@ -733,6 +733,12 @@ appserver: {kind: ssh, host: 127.0.0.1, user: report}
 shop: {kind: api, base_url: "https://api.example.com/v1"}
 """
 CONNECTION_OF_KIND = {"jdbc": "warehouse", "smtp": "mailer", "ssh": "appserver", "api": "shop"}
+CREDENTIALS = """\
+cards:
+  SHOP: {rows: {token: null, api_key: null}}
+  REPORTS: {rows: {password: null, token: null}}
+  WAREHOUSE: {rows: {password: null}}
+"""  # the cards and keys the examples of a stored secret name (CARD.key), listed as a user would first
 
 
 def params_used(f, examples) -> dict:
@@ -1585,6 +1591,7 @@ def test_every_built_in_example_is_accepted_by_its_properties_input_and_by_valid
     try:
         win.home.root.mkdir(parents=True, exist_ok=True)
         (win.home.root / "connections.yaml").write_text(CONNECTIONS, encoding="utf-8")
+        (win.home.root / "credentials.yaml").write_text(CREDENTIALS, encoding="utf-8")
         tab = win.new_flow()
         settle()
         problems, tried = [], 0

@@ -159,6 +159,21 @@ def circle(listed: dict) -> str | None:
     return None
 
 
+def references(listed: dict) -> list[str]:
+    """Every CARD.key that names a row in `listed` (as cards() gives it), in listed spelling: each card's own rows,
+    then the keys it takes from the card it uses (those holder follows to a row)."""
+    keys = list({key.casefold(): key for c in listed.values() for key in c["rows"]}.values())
+    found = []
+    for card, c in listed.items():
+        for key in [*c["rows"], *(k for k in keys if _find(c["rows"], k) is None)]:
+            try:
+                holder(listed, f"{card}.{key}")
+            except CredentialError:
+                continue
+            found.append(f"{card}.{key}")
+    return found
+
+
 def _not_set(reference: str, at: str) -> CredentialError:
     if at.casefold() == reference.casefold():
         return CredentialError(f"secret '{at}' is not set (run: taskloom secret set {at})")
@@ -301,17 +316,19 @@ def _file_write(root: Path, name: str, new: str | None):
 
 # --- taskloom secret set | delete | list --------------------------------------------------------------------------
 
-def store(root: Path, reference: str, new: str) -> str:
-    """`new` stored as CARD.key's value; the card and row are listed if they were not (a pointer there becomes the
-    row's own value). Returns where the value is."""
-    card, key = split(reference)
-    listed = cards(root)
-    here = _find(listed, card) or card
-    rows = listed.setdefault(here, {"uses": None, "rows": {}})["rows"]
-    row = _find(rows, key) or key
-    unlisted = row not in rows or rows[row] is not None
-    rows[row] = None
-    return save(root, listed if unlisted else None, {f"{here}.{row}": new})
+def store(root: Path, values: dict) -> str:
+    """Each of `values` ({CARD.key: value}) stored as that row's value, all or none (save); the cards and rows are
+    listed if they were not (a pointer there becomes the row's own value). Returns where the values are."""
+    listed, named, unlisted = cards(root), {}, False
+    for reference, new in values.items():
+        card, key = split(reference)
+        here = _find(listed, card) or card
+        rows = listed.setdefault(here, {"uses": None, "rows": {}})["rows"]
+        row = _find(rows, key) or key
+        unlisted = unlisted or row not in rows or rows[row] is not None
+        rows[row] = None
+        named[f"{here}.{row}"] = new
+    return save(root, listed if unlisted else None, named)
 
 
 def remove(root: Path, reference: str):

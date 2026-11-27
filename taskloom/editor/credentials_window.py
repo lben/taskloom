@@ -197,7 +197,7 @@ class CredentialsDialog(QDialog):
         self.card: Card | None = None
         self.lines: list[RowLine] = []
         self._filling = self._busy = False
-        self.refused = 0  # (refusals and renames called off: Save stops if what was being typed is one)
+        self.refused = False  # (a refusal or a renaming called off just now: _refused_now)
 
         self.setWindowTitle("Credentials")
         self.resize(760, 460)
@@ -265,8 +265,15 @@ class CredentialsDialog(QDialog):
         return new if new != reference else None
 
     def _refuse(self, text: str):
-        self.refused += 1
         QMessageBox.warning(self, "Not changed", text)
+        self._refused_now()
+
+    def _refused_now(self):
+        """A refusal, or a renaming called off: a Save asked for at this moment saves nothing and leaves the window
+        open, also when it is what made it (a click on Save takes the focus from the box being typed in, before the
+        click); a Save after it does."""
+        self.refused = True
+        QTimer.singleShot(0, self, lambda: setattr(self, "refused", False))
 
     def _name_problem(self, name: str, what: str, others: list[str]) -> str | None:
         try:
@@ -446,8 +453,8 @@ class CredentialsDialog(QDialog):
         finally:
             self._busy = False
         if rewrite is None:
-            self.refused += 1
             line.key.setText(row.key)
+            self._refused_now()
             return
         old, row.key, row.rewrite = row.key, new, rewrite
         for c in self.cards:  # (the rows pointing at it follow)
@@ -549,10 +556,10 @@ class CredentialsDialog(QDialog):
     # --- Save --------------------------------------------------------------------------------------------------------
 
     def _save(self):
-        focused, refused = self.focusWidget(), self.refused
+        focused = self.focusWidget()
         if isinstance(focused, QLineEdit):  # (what is being typed goes in first)
             focused.clearFocus()
-        if self.refused != refused:  # (it was refused, or its renaming called off: nothing saved, the window open)
+        if self.refused:  # (it was refused, or its renaming called off: nothing saved, the window open)
             return
         if C.version(self.root) != self.version:
             QMessageBox.warning(self, "Not saved", "The credentials were saved elsewhere since this window opened (in "

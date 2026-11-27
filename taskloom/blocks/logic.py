@@ -499,9 +499,9 @@ class AskUser(Block):
                                examples=["North", "yes", "12"]),
         "secret": fields.Text(required=False, label="Stored secret (name)", only_if={"kind": ["password"]},
                               help="The name of a password saved in Taskloom's secret store (taskloom secret set "
-                                   "NAME): runs nobody can answer (unattended, e.g. scheduled ones) use it as the "
+                                   "CARD.key): runs nobody can answer (unattended, e.g. scheduled ones) use it as the "
                                    "answer. A name never saved makes the run fail.",
-                              examples=["warehouse_password", "report_token"]),
+                              examples=["WAREHOUSE.password", "REPORTS.token"]),
     }
 
     @classmethod

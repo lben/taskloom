@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QSpinBox,
                                QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
+from .. import credentials
 from ..block import IDENTIFIER
 from ..blocks.logic import as_number, as_yes_no
 from ..blocks.servers import AUTH_NEEDS, AUTHS, BASIC, BEARER, DIGEST, NO_AUTH
@@ -177,7 +178,8 @@ class AskDialog(QDialog):
 
 
 class ConnectionsDialog(QDialog):
-    """Edit connections.yaml. Passwords go to the secret store, never into the file."""
+    """Edit connections.yaml. Passwords go to the credential store, never into the file; or a connection takes a row
+    of the cards (Tools > Credentials…) as its password, token or key, naming it secret:CARD.key."""
 
     KINDS = {"jdbc": "Database (JDBC)", "ssh": "Server (SSH)", "smtp": "Email server (SMTP)", "api": "Web API (HTTP)"}
     FIELDS = {"jdbc": ("driver", "url", "jars", "username"), "ssh": ("host", "port", "username", "key_file"),
@@ -272,8 +274,23 @@ class ConnectionsDialog(QDialog):
             if key == "ca_file":
                 self.form.addRow("", self.dont_verify)
         self.password = QLineEdit(echoMode=QLineEdit.Password)
+        self.credential = QComboBox(objectName="credential")  # (or a row of the cards: CARD.key)
+        self.credential.setToolTip("Or the value of a row of Tools > Credentials… (CARD.key): the connection names "
+                                   "it, and nothing is stored.")
+        self.credential.addItem("Type a new value", None)
+        try:
+            offered = credentials.references(credentials.cards(home.root))
+        except credentials.CredentialError:  # (a damaged list: Tools > Credentials… says why)
+            offered = []
+        for reference in offered:
+            self.credential.addItem(reference, reference)
+        self.password_row = QWidget()
+        password_layout = QHBoxLayout(self.password_row)
+        password_layout.setContentsMargins(0, 0, 0, 0)
+        password_layout.addWidget(self.password, 1)
+        password_layout.addWidget(self.credential)
         self.password_status = QLabel()
-        self.form.addRow("Password", self.password)
+        self.form.addRow("Password", self.password_row)
         self.form.addRow("", self.password_status)
         right.addLayout(self.form)
         self.props_label = QLabel("Extra driver settings (name and value)")
@@ -299,7 +316,8 @@ class ConnectionsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         right.addWidget(buttons)
         layout.addLayout(right, 5)
-        self.editor_widgets = [self.kind, *self.edits.values(), self.auth, self.dont_verify, self.password, self.props,
+        self.editor_widgets = [self.kind, *self.edits.values(), self.auth, self.dont_verify, self.password,
+                               self.credential, self.props,
                                self.add_prop, self.remove_prop, self.test_button, browse]
 
         self.names.addItems(list(self.conns))
@@ -315,6 +333,8 @@ class ConnectionsDialog(QDialog):
         self.add_prop.clicked.connect(lambda: self._add_prop("", ""))
         self.remove_prop.clicked.connect(lambda: self.props.removeRow(self.props.currentRow()))
         self.test_button.clicked.connect(self._test)
+        self.credential.activated.connect(self._credential_chosen)
+        self.password.textEdited.connect(lambda _: self.credential.setCurrentIndex(0))  # (a value of its own)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
 
@@ -356,8 +376,8 @@ class ConnectionsDialog(QDialog):
         self.props.setHorizontalHeaderLabels(["Header" if api else "Setting", "Value"])
         self.add_prop.setText("Add header" if api else "Add setting")
         self.remove_prop.setText("Remove header" if api else "Remove setting")
-        self.form.labelForField(self.password).setText(self.SECRET_LABELS.get(auth, "Key" if auth else "Password"))
-        self.form.setRowVisible(self.password, enabled and auth != NO_AUTH)
+        self.form.labelForField(self.password_row).setText(self.SECRET_LABELS.get(auth, "Key" if auth else "Password"))
+        self.form.setRowVisible(self.password_row, enabled and auth != NO_AUTH)
         self.form.setRowVisible(self.password_status, enabled and auth != NO_AUTH)
         self._show_password_status()
         self._show_borrowed()
@@ -380,13 +400,37 @@ class ConnectionsDialog(QDialog):
         return ((conn.get("properties") or {}).get("password") if conn.get("kind") == "jdbc" else
                 conn.get("secret") if conn.get("kind") == "api" else conn.get("password"))
 
+    def _set_password_ref(self, conn: dict, ref: str):
+        if conn["kind"] == "jdbc":
+            conn.setdefault("properties", {})["password"] = ref
+        else:
+            conn["secret" if conn["kind"] == "api" else "password"] = ref
+
+    def _credential_chosen(self, index: int):
+        """A row of the cards chosen for the password, token or key: the connection names it (secret:CARD.key), and
+        nothing is stored. The first item: a value typed in the box instead (stored on Save)."""
+        reference = self.credential.itemData(index)
+        if self.current is None:
+            return
+        if reference is None:
+            self.password.setFocus()
+            return
+        self.password.clear()
+        self._store_current()
+        self.passwords.pop(self.current, None)
+        self._set_password_ref(self.conns[self.current], f"secret:{reference}")
+        self._show_password_status()
+
     def _show_password_status(self):
         if self.current is None:
             return
+        ref = self._password_ref(self.conns.get(self.current, {}))
+        named = ref[len("secret:"):].casefold() if isinstance(ref, str) and ref.startswith("secret:") else None
+        self.credential.setCurrentIndex(0 if self.current in self.passwords else next(
+            (i for i in range(1, self.credential.count()) if self.credential.itemData(i).casefold() == named), 0))
         if self.current in self.passwords:
             text = "A new password will be saved when you click Save."
         else:
-            ref = self._password_ref(self.conns.get(self.current, {}))
             saved = False
             if isinstance(ref, str) and ref.startswith("secret:"):
                 try:
@@ -581,30 +625,31 @@ class ConnectionsDialog(QDialog):
         if ok:
             self.edits["driver"].setText(chosen)
 
-    def _write(self):
-        """Save connections.yaml and any new passwords (to the secret store)."""
+    def _write(self) -> bool:
+        """Save connections.yaml and any new passwords (to the credential store, all or none). False if they cannot
+        be stored (the store cannot be used, say): it says why, and nothing is saved."""
         self._store_current()
-        for name, value in self.passwords.items():
-            if name not in self.conns:
-                continue
-            conn = self.conns[name]
-            # (the connection's card, its key named for what it is, e.g. shop.token)
-            secret = f"{name}.{self.SECRET_LABELS.get(conn.get('auth'), 'key').lower()}" if conn["kind"] == "api" \
-                else f"{name}.password"
-            self.home.set_secret(secret, value)
-            if conn["kind"] == "jdbc":
-                conn.setdefault("properties", {})["password"] = f"secret:{secret}"
-            else:
-                conn["secret" if conn["kind"] == "api" else "password"] = f"secret:{secret}"
+        # (each connection's card, its key named for what it is, e.g. shop.token)
+        secrets = {name: f"{name}.{self.SECRET_LABELS.get(conn.get('auth'), 'key').lower()}" if conn["kind"] == "api"
+                   else f"{name}.password" for name, conn in self.conns.items() if name in self.passwords}
+        try:
+            if secrets:
+                credentials.store(self.home.root, {secrets[name]: self.passwords[name] for name in secrets})
+        except (credentials.CredentialError, OSError) as e:  # (the store, or the list of cards: put back as it was)
+            QMessageBox.warning(self, "Not saved", f"{e}\n\nNothing is saved: the connections and the credential "
+                                "store are as they were.")
+            return False
+        for name, secret in secrets.items():
+            self._set_password_ref(self.conns[name], f"secret:{secret}")
         self.passwords.clear()
         self.home.root.mkdir(parents=True, exist_ok=True)
         (self.home.root / "connections.yaml").write_text(yaml.safe_dump(self.conns, sort_keys=False), encoding="utf-8")
         self._show_password_status()
+        return True
 
     def _test(self):
-        if self.current is None:
+        if self.current is None or not self._write():
             return
-        self._write()
         self.test_result.setText("Testing…")
         self.test_button.setEnabled(False)
         proc = QProcess(self)
@@ -630,8 +675,8 @@ class ConnectionsDialog(QDialog):
         proc.start(program, args)
 
     def _save(self):
-        self._write()
-        self.accept()
+        if self._write():
+            self.accept()
 
 
 def _folder_size(folder) -> int:

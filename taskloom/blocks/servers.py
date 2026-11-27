@@ -1044,16 +1044,16 @@ class ApiRequest(Block):
                                      "carries the API key", examples=["X-Api-Key", "api_key"]),
         "secret": fields.Text(label="Stored secret (name)", only_if={"auth": list(AUTHS[1:]), **_NO_CONNECTION},
                               help="The name of the stored secret that holds the password, token or key (store it "
-                                   "with: taskloom secret set NAME). Its value is never written in the flow, the Log "
-                                   "or the run history.",
-                              examples=["orders_token", "report_password"]),
+                                   "with: taskloom secret set CARD.key). Its value is never written in the flow, the "
+                                   "Log or the run history.",
+                              examples=["SHOP.token", "REPORTS.password"]),
         "headers": fields.KeyValues(
             required=False, sep=": ",
             help="Request headers: only the ticked rows are sent. Type Name: value in the line under the table to add "
-                 "one; empty a name to remove its row. A value secret:NAME sends the stored secret NAME (taskloom "
-                 "secret set NAME), never written in the flow. A Content-Type here replaces the one Body sets; Auth's "
-                 "header replaces one of the same name here.",
-            examples=["Accept: application/json", "X-Region: {{region}}", "X-Api-Key: secret:orders_key"]),
+                 "one; empty a name to remove its row. A value secret:CARD.key sends the stored secret CARD.key "
+                 "(taskloom secret set CARD.key), never written in the flow. A Content-Type here replaces the one Body "
+                 "sets; Auth's header replaces one of the same name here.",
+            examples=["Accept: application/json", "X-Region: {{region}}", "X-Api-Key: secret:SHOP.api_key"]),
         "body": fields.Choice(
             BODIES, default=NO_BODY,
             help="What the request sends: nothing, JSON, text or XML (written in Content), a form url-encoded or "

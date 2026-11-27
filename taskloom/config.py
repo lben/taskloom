@@ -190,7 +190,7 @@ class Home:
         """Stores the credential CARD.key (listing its card and key if they are not); returns where it is."""
         from .credentials import store
 
-        return store(self.root, reference, value)
+        return store(self.root, {reference: value})
 
     def resolve_secrets(self, value):
         """Replace "secret:CARD.key" strings (also inside dicts and lists) with the credential's value."""
