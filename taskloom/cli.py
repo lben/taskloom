@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import getpass
+import io
 import json
 import os
 import queue
@@ -148,6 +149,109 @@ def _parse_overrides(items) -> dict:
 
 
 def cmd_run(args, home: Home) -> int:
+    settle = _hide_below_print()
+    try:
+        return _cmd_run(args, home)
+    finally:
+        settle()
+
+
+def _hide_below_print():
+    """What a run's blocks write below print (straight to file descriptors 1 and 2, to the bytes under sys.stdout and
+    sys.stderr) and what a program they start prints to the output it shares with the run, shows with every secret
+    this process has read as *** too (CR-5): file descriptors 1 and 2 become pipes, each read by a _Relay that writes
+    on to where they went before. Returns what puts them back once all written so far has been written on."""
+    relays = []
+    for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, _Hiding):  # (None: no console; main called on its own, as some tests do)
+            continue
+        shown = stream._stream
+        try:
+            raw = getattr(shown.buffer, "raw", shown.buffer)  # (unbuffered, as the editor starts a run: no raw)
+            fd, console = shown.fileno(), not isinstance(raw, io.FileIO)  # (a Windows console's)
+        except (AttributeError, OSError):  # not a file
+            continue
+        with stream._lock:
+            stream.flush()
+            before, (read, write) = os.dup(fd), os.pipe()
+            os.dup2(write, fd)  # (on Windows also the handle that programs started from here get)
+            os.close(write)
+            if console:  # (it writes to the console only): into the pipe as UTF-8, which the console's takes
+                stream._stream = open(fd, "w", encoding="utf-8", errors=shown.errors, buffering=1, closefd=False)
+            stream._relay = _Relay(fd, read, before, "utf-8" if console else shown.encoding)
+            stream._relay.start()
+        relays.append((stream, shown, fd, before))
+
+    def settle():
+        until = time.monotonic() + 3  # (a program started that still runs keeps a pipe open: what it writes is lost)
+        for stream, shown, fd, before in relays:
+            with stream._lock:
+                stream.flush()
+                relay, stream._relay = stream._relay, None
+                os.dup2(before, fd)
+            relay.join(max(0, until - time.monotonic()))
+            with stream._lock:
+                stream._stream = shown
+
+    return settle
+
+
+class _Relay(threading.Thread):
+    """Writes what comes through the pipe `read` (in place of the file descriptor `fd`) on to the file descriptor
+    `before`, whole lines at a time (the rest when the pipe closes) with every secret as *** (engine.redact, on the
+    text in `encoding` and in UTF-8). Reads to the end even once nothing takes what it writes, so that nothing writing
+    to the pipe waits. flushed() waits until all written to `fd` before it has been written on (as a flush does)."""
+
+    def __init__(self, fd: int, read: int, before: int, encoding: str):
+        super().__init__(name=f"relay of {fd}", daemon=True)
+        self.fd, self.read, self.before, self.encoding = fd, read, before, encoding
+        self.mark = b"\0" + os.urandom(16).hex().encode() + b"\0"  # (put through the pipe by flushed)
+        self.sent = self.seen = 0
+        self.done = threading.Condition()
+
+    def flushed(self):
+        with self.done:
+            if not self.is_alive():
+                return
+            self.sent += 1
+            n = self.sent
+        os.write(self.fd, self.mark)
+        with self.done:
+            self.done.wait_for(lambda: self.seen >= n)
+
+    def run(self):
+        out, held = open(self.before, "wb", buffering=0, closefd=False), b""  # (a Windows console's takes UTF-8)
+        try:
+            while chunk := os.read(self.read, 65536):
+                held += chunk
+                while (at := held.find(self.mark)) >= 0:  # all before it, a line begun too
+                    out, held = self._put(out, held[:at]), held[at + len(self.mark):]
+                    with self.done:
+                        self.seen += 1
+                        self.done.notify_all()
+                end = held.rfind(b"\n") + 1
+                out, held = self._put(out, held[:end]), held[end:]
+            self._put(out, held)
+        finally:
+            os.close(self.read)
+            with self.done:
+                self.seen = float("inf")  # (nobody waits for it any more)
+                self.done.notify_all()
+
+    def _put(self, out, data: bytes):
+        """`out` once `data` is written to it with every secret as ***; None once nothing reads it any more (as
+        _print): what is written from then on goes nowhere."""
+        for coding in dict.fromkeys((self.encoding, "utf-8")):
+            data = redact(data.decode(coding, "surrogateescape")).encode(coding, "surrogateescape")
+        try:
+            while out is not None and data:
+                data = data[out.write(data):]
+            return out
+        except OSError:
+            return None
+
+
+def _cmd_run(args, home: Home) -> int:
     start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None  # (local, or with a UTC offset)
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
@@ -519,6 +623,7 @@ class _Hiding:
     def __init__(self, stream):
         self._stream, self._held = stream, ""
         self._lock = threading.RLock()  # (re-entered by a Ctrl+C handler that prints while a line is written)
+        self._relay = None  # (a run's: see _hide_below_print)
 
     def write(self, text: str) -> int:
         with self._lock:
@@ -535,6 +640,8 @@ class _Hiding:
             if held:
                 self._stream.write(redact(held))
             self._stream.flush()
+            if self._relay is not None:
+                self._relay.flushed()
 
     def __getattr__(self, name):  # (fileno, encoding, isatty, …: the stream's own)
         return getattr(self._stream, name)

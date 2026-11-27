@@ -564,8 +564,9 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None,
              values: bool = False) -> tuple[list[str], list[str]]:
     """Return (errors, warnings). A flow with errors cannot run.
 
-    Each credential the blocks name ({{secret:CARD.key}}, secret("CARD.key"), a Stored secret) must be a listed card
-    and key; `values` (a run, before its first block): the blocks taking part need its stored value too.
+    Each credential the blocks name ({{secret:CARD.key}}, secret("CARD.key"), a Stored secret, a secret:CARD.key of the
+    connection a block uses) must be a listed card and key; `values` (a run, before its first block): the blocks taking
+    part need its stored value too.
 
     `part`: the blocks of the run it checks the flow for; None: the flow as a whole, whose blocks taking part in some
     run are those a start block's line reaches (all of them, without start blocks). A problem only blocks that do not
@@ -672,7 +673,7 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None,
                     found.append(f"{setting}: no connection named '{value}' in connections.yaml")
                 elif conn["kind"] != f.kind:
                     found.append(f"{setting}: connection '{value}' is {conn['kind']}, expected {f.kind}")
-                elif values:  # a run: what its connections name is needed too (CR-8)
+                else:  # what its connection names is needed too (CR-8)
                     needed += [(block_id, f"{setting}: the connection {value}", ref) for ref in _secret_refs(conn)]
 
     if needed:
