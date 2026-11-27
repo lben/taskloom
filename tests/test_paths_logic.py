@@ -966,8 +966,7 @@ def test_ask_users_prompt_and_default_fill_in_parameters(env):
 @pytest.mark.parametrize("config, problem", [
     ("{prompt: 'Region?', kind: choice, options: [EU, US], default: APAC}", "'APAC' is not one of ['EU', 'US']"),
     ("{prompt: 'Region?', kind: choice, default: EU}", "kind 'choice' needs options"),
-    ("{prompt: 'Token?', kind: password, secret: not.stored}", "secret 'not.stored' is not set (run: taskloom secret set not.stored)"),
-], ids=["choice-default-not-an-option", "choice-without-options", "secret-not-stored"])
+], ids=["choice-default-not-an-option", "choice-without-options"])
 def test_ask_user_without_a_usable_answer_fails_clearly_and_at_once(env, config, problem):
     started = time.monotonic()
     result = env.taskloom("run", ask_flow(env, config), "--json-events")
@@ -977,6 +976,18 @@ def test_ask_user_without_a_usable_answer_fails_clearly_and_at_once(env, config,
     assert time.monotonic() - started < 30
     assert problem in row(env, run_id, "ask")["error"]
     assert row(env, run_id, "save")["status"] == "skipped"
+
+
+def test_ask_user_whose_secret_is_not_stored_is_refused_before_the_run_starts(env):
+    """Credentials CR-8: a run stops before its first block naming the stored secret it needs and lacks."""
+    started = time.monotonic()
+    result = env.taskloom("run", ask_flow(env, "{prompt: 'Token?', kind: password, secret: not.stored}"),
+                          "--json-events")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    assert time.monotonic() - started < 30
+    assert "secret 'not.stored' is not set (run: taskloom secret set not.stored)" in result.stderr, result.stderr
 
 
 def test_ask_users_secret_is_used_unattended_and_never_shows(env):

@@ -580,15 +580,16 @@ def test_ask_user_shows_only_the_settings_of_its_kind_and_has_a_number_kind(proo
             f"secret: {SECRET_NAME}" in block_in_file(login, "ask_password"))
 
     p.step(f"Run it in the terminal again: taskloom run {LOGIN}. No password named {SECRET_NAME} has been saved yet.")
-    printed, code, fifth, status = unattended(env, qtbot, tab, LOGIN, "ask_password")
+    result = env.taskloom("run", LOGIN, encoding="utf-8", errors="replace")
+    printed = (result.stdout + result.stderr).strip()
     p.text(f"taskloom run {LOGIN} printed", printed)
-    p.shot(win, f"The canvas shows run #{fifth}: ① ask_password failed: the secret {SECRET_NAME} is not set, and the "
-                "message says how to set it.", highlight=["ask_password"], badges=True, zoom=PASSWORD_LINE)
-    p.check(f"① ask_password failed, saying the secret is not set and how to set it: “{NOT_SAVED}”",
-            f"[ask_password] failed · {NOT_SAVED}" in printed
-            and shown(tab, ["ask_password"])["ask_password"] == ("failed", fifth))
-    p.check("show_password was skipped, and the run failed (exit code 1), cleanly",
-            "[show_password] skipped" in printed and (code, status) == (1, "failed") and clean(printed))
+    p.shot(win, f"The canvas still shows run #{fourth}: ① the run was refused before ask_password, its first block, "
+                f"because the secret {SECRET_NAME} is not set; no run was recorded.", highlight=["ask_password"],
+           badges=True)
+    p.check(f"① The run was refused, saying the secret is not set and how to set it: “{NOT_SAVED}”",
+            f"ask_password: {STORED}: {NOT_SAVED}" in printed)
+    p.check("No run was recorded, and it ended with exit code 2 (refused), cleanly",
+            env.last_run()[0] == fourth and result.returncode == 2 and clean(printed))
 
     p.step(f"Save a password named {SECRET_NAME}, as taskloom secret set {SECRET_NAME} does, and run the flow in "
            f"the terminal once more: taskloom run {LOGIN}.")
@@ -601,15 +602,15 @@ def test_ask_user_shows_only_the_settings_of_its_kind_and_has_a_number_kind(proo
             "folder, not in the system's credential store",
             where == "the system credential store" and store.parent == env.root
             and STORED_PASSWORD in store.read_text(encoding="utf-8"))
-    printed, code, sixth, status = unattended(env, qtbot, tab, LOGIN, "show_password")
+    printed, code, fifth, status = unattended(env, qtbot, tab, LOGIN, "show_password")
     p.text(f"taskloom run {LOGIN} printed", printed)
-    p.shot(win, f"The canvas shows run #{sixth}: ① ask_password answered with the stored {SECRET_NAME}, shown as "
+    p.shot(win, f"The canvas shows run #{fifth}: ① ask_password answered with the stored {SECRET_NAME}, shown as "
                 "***, and ② show_password ran.", highlight=["ask_password", "show_password"], badges=True,
            zoom=PASSWORD_LINE)
-    _, kept = history(env.home, sixth)
+    _, kept = history(env.home, fifth)
     p.check(f"① ask_password answered with the stored {SECRET_NAME}: ② show_password says “password: ***”, and the "
             "run succeeded (exit code 0)",
             "[show_password] INFO: password: ***" in printed and (code, status) == (0, "success")
-            and shown(tab, ["show_password"])["show_password"] == ("success", sixth))
+            and shown(tab, ["show_password"])["show_password"] == ("success", fifth))
     p.check("The password is nowhere in what it printed, nor in the run history",
             STORED_PASSWORD not in printed and STORED_PASSWORD not in kept)

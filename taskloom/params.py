@@ -80,6 +80,8 @@ def resolve(specs: dict, overrides: dict, funcs: dict) -> dict:
 # placeholder is on one line.
 _BRACES = re.compile(r"\{\{\{\{|\{\{(?!\{)(?:(.*?)\}\})?")
 LITERAL_BRACES = "write {{{{ for a literal {{"
+# {{secret:CARD.key}} is always a reference to a credential (so no flow parameter or input is named secret).
+SECRET = "secret"
 
 
 def split(text: str) -> list[tuple[str, str | None]]:
@@ -101,9 +103,22 @@ def split(text: str) -> list[tuple[str, str | None]]:
     return parts + [(plain + text[start:], None)]
 
 
+def reference(inside: str | None) -> str | None:
+    """The CARD.key of a placeholder that is a reference to a credential, {{secret:CARD.key}} (`inside`: what split
+    found inside its braces); None for any other."""
+    name, _, card_key = (inside or "").partition(":")
+    return card_key.strip() if inside is not None and name.strip() == SECRET else None
+
+
+def references(text: str) -> list[str]:
+    """The CARD.key of each {{secret:CARD.key}} in `text`, in order. Raises ValueError as split does."""
+    return [found for _, inside in split(text) if (found := reference(inside)) is not None]
+
+
 def parse(text: str) -> list[tuple[str, str | None, str]]:
     """`text` cut at its placeholders {{name}} / {{name:format}}: [(plain text, name, format), ..., (plain text, None,
-    "")]. Raises ValueError as split does, or for a placeholder that is not a name."""
+    "")]; a reference {{secret:CARD.key}} has the name SECRET and its CARD.key as the format. Raises ValueError as
+    split does, or for a placeholder that is not a name."""
     parts = []
     for plain, inside in split(text):
         name, _, spec = (inside or "").partition(":")
@@ -113,12 +128,15 @@ def parse(text: str) -> list[tuple[str, str | None, str]]:
     return parts
 
 
-def render(template: str, values: dict) -> str:
-    """`template` with each {{name}} / {{name:format}} filled in once from `values`."""
+def render(template: str, values: dict, secret) -> str:
+    """`template` with each {{name}} / {{name:format}} filled in once from `values`, and each {{secret:CARD.key}} with
+    secret(CARD.key): what is filled in is never filled again."""
     filled = []
     for plain, name, spec in parse(template):
         filled.append(plain)
-        if name is not None:
+        if name == SECRET:
+            filled.append(secret(spec))
+        elif name is not None:
             if name not in values:
                 raise ValueError(f"unknown parameter {{{{{name}}}}}")
             filled.append(format(values[name], spec))
@@ -126,7 +144,8 @@ def render(template: str, values: dict) -> str:
 
 
 def template_names(template: str) -> set[str]:
-    return {name for _, name, _ in parse(template) if name is not None}
+    """The names of the placeholders of `template`, but references {{secret:CARD.key}}."""
+    return {name for _, name, _ in parse(template) if name not in (None, SECRET)}
 
 
 def single_braced(text: str) -> list[str]:

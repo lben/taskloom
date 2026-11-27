@@ -662,13 +662,14 @@ def test_each_auth_kind_sends_its_stored_secret_which_is_never_written_anywhere(
 
 def test_a_secret_that_is_not_stored_fails_before_sending_and_says_how_to_store_it(env):
     """Spec 2 (secrets referenced by name) and the no-surprises rule (it fails clearly, nothing is sent without its
-    credentials): the error names the secret and the command that stores it."""
+    credentials): the error names the secret and the command that stores it. Credentials CR-8: the run stops before
+    its first block, so no run starts."""
     write_secrets(env, other_x="x")
     with serving() as api:
         result, run_id, status = run(env, {"call": request(f"{api.base}/orders", bearer("orders.token"))})
 
-    assert status == {"call": "failed"}, result.stderr[-3000:]
-    error = error_of(env, run_id, "call")
+    assert result.returncode == 2 and run_id is None, result.stderr[-3000:]
+    error = result.stderr
     assert "orders.token" in error and "taskloom secret set orders.token" in error, error
     assert api.requests == []
 

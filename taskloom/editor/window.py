@@ -32,7 +32,7 @@ from .. import __version__, update, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
-from ..blocks.servers import api_connection, curl_command
+from ..blocks.servers import api_connection, curl_command, hidden
 from ..config import Home
 from ..engine import KEPT_OUTPUTS, Failed, _filled, block_inputs, finished_text, input_ports, not_kept, run_part
 from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, block_config, flow_file_data,
@@ -1340,7 +1340,8 @@ class MainWindow(QMainWindow):
             spec, cls = flow.blocks[block_id], tab.doc.registry.get(API_REQUEST)
             _, funcs = run_clock(flow, self.home)
             connected = {e.dst_port for e in flow.edges if e.dst == block_id}
-            config = _filled(cls, block_config(cls, spec), P.resolve(flow.params, {}, funcs), {}, set(), connected)
+            config = _filled(cls, block_config(cls, spec), P.resolve(flow.params, {}, funcs), {}, set(), connected,
+                             hidden)
             connected |= set(spec.inputs)  # (a typed body: it comes from the body input too)
             command = curl_command(config, api_connection(self.home, config["connection"]), "body" in connected)
         except (FlowError, Failed, ValueError) as e:

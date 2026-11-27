@@ -1110,6 +1110,12 @@ class ApiRequest(Block):
                     f"{config['body']}), or disconnect the input"]
         return []
 
+    @classmethod
+    def references(cls, config: dict) -> list[tuple[str, str]]:
+        own = [(setting_label("secret", cls.config["secret"]), config["secret"])] if config["secret"] else []
+        return own + [(setting_label("headers", cls.config["headers"]), r["value"][len(SECRET_PREFIX):])
+                      for r in ticked(config["headers"]) if str(r.get("value", "")).startswith(SECRET_PREFIX)]
+
     def run(self, ctx, **inputs):
         c = vars(self.config)
         conn = api_connection(ctx.home, c["connection"])

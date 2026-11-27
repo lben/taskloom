@@ -316,6 +316,13 @@ class Block:
         return []
 
     @classmethod
+    def references(cls, config: dict) -> list[tuple[str, str]]:
+        """The credentials the block's settings name beyond the {{secret:CARD.key}} in its templated ones, as (the
+        setting, CARD.key): Validate checks them and a run checks their values before its first block. Raises
+        ValueError for a text that cannot be read (problems names it)."""
+        return []
+
+    @classmethod
     def loop_problems(cls, config: dict, loop: str) -> list[str]:
         """What stops the block from running inside the Loop `loop` (once per item) as it is set up, as problems does:
         shown in Properties, and Validate and runs refuse the flow."""

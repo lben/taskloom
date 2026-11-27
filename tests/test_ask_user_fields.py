@@ -341,13 +341,29 @@ def test_a_password_ask_user_run_nobody_can_answer_uses_its_stored_secret_hidden
     assert SECRET not in logs + result.stdout + result.stderr
 
 
+def test_a_password_ask_user_run_with_a_stored_secret_never_saved_is_refused_before_it_starts(env):
+    """Spec 5, with credentials CR-8 (a run stops before its first block naming every missing card, key or stored
+    value it needs): Secret named but never saved: the run is refused before it starts, saying that secret is not
+    saved and how to save it, cleanly. Never the Default."""
+    flow = answer_flow(env.root / "flow.yaml",
+                       "{prompt: 'Password?', kind: password, default: fallback-pass, secret: never.saved}")
+
+    result = env.taskloom("run", flow)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    assert not (env.root / "answer.txt").exists()  # the Default was not used
+    for pattern in (r"never\.saved", r"not (saved|set|stored)", r"secret set never\.saved"):
+        assert re.search(pattern, result.stderr, re.IGNORECASE), (pattern, result.stderr)
+    assert python_internals(result.stdout + result.stderr) == [], result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("secret, says", [
     ("", [r"nobody can answer", r"secret"]),
-    (", secret: never.saved", [r"never\.saved", r"not (saved|set|stored)", r"secret set never\.saved"]),
-], ids=["no-secret", "secret-never-saved"])
+], ids=["no-secret"])
 def test_a_password_ask_user_run_without_its_stored_secret_fails_cleanly_and_never_uses_the_default(env, secret, says):
-    """Spec 5: Secret empty: a clean failure saying nobody can answer and a stored secret is needed; Secret named but
-    never saved: a clean failure saying that secret is not saved and how to save it. Never the Default."""
+    """Spec 5: Secret empty: a clean failure saying nobody can answer and a stored secret is needed. Never the
+    Default. (Secret named but never saved: refused before the run starts, the test above.)"""
     flow = answer_flow(env.root / "flow.yaml", f"{{prompt: 'Password?', kind: password, default: fallback-pass{secret}}}")
 
     result = env.taskloom("run", flow)

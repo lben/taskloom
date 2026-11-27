@@ -143,22 +143,41 @@ class PythonCode(Block):
         return ({n: ports.Any(required=False, any_of=True, by_source=True) for n in config["inputs"]},
                 {n: ports.Any() for n in config["outputs"]})
 
+    @classmethod
+    def problems(cls, config, sources, params):
+        return _secret_calls(config["code"])[1]
+
+    @classmethod
+    def references(cls, config):
+        return [("Code", name) for name in _secret_calls(config["code"])[0]]
+
     def run(self, ctx, **inputs):
         values = {name: inputs.get(name) for name in self.config.inputs}
+        try:  # each secret("CARD.key") its code names, before it runs
+            credentials = {name: ctx.home.get_secret(name) for name in _secret_calls(self.config.code)[0]}
+        except KeyError as e:
+            raise Failed(e.args[0]) from None
         if self.config.use_environment:
             from ..pyenv import run_code
 
-            produced, left_out = run_code(ctx, self.config.code, values, self.config.outputs)
+            produced, left_out = run_code(ctx, self.config.code, values, self.config.outputs, credentials)
         else:
-            produced, left_out = self._run_here(ctx, values)
+            produced, left_out = self._run_here(ctx, values, credentials)
         if left_out:  # never dropped silently
             ctx.warn("left out of output, as they cannot be passed on to the next blocks or kept with the run: "
                      + ", ".join(f"{name} ({' '.join(why.split())})" for name, why in left_out.items()))
         return produced
 
-    def _run_here(self, ctx, values: dict) -> tuple[dict, dict]:
-        """Run the code in Taskloom's own Python: (its outputs, {variable left out of output: why})."""
-        helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table,
+    def _run_here(self, ctx, values: dict, credentials: dict) -> tuple[dict, dict]:
+        """Run the code in Taskloom's own Python: (its outputs, {variable left out of output: why}). `credentials`:
+        {CARD.key: its value} for secret()."""
+        def secret(name):
+            if name not in credentials:
+                raise LookupError(f"secret({name!r}): write the name in the code as text, e.g. "
+                                  'secret("UAT.password")')
+            return credentials[name]
+
+        helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table, "secret": secret,
                    "print": _printer(ctx), "log": lambda *values: ctx.log(" ".join(map(str, values)))}
         namespace = {**helpers, **values}
         given = set(namespace)
@@ -212,6 +231,26 @@ class PythonCode(Block):
         })
 
 
+def _secret_calls(code: str) -> tuple[list[str], list[str]]:
+    """The names `code` gives secret() written as text, secret("CARD.key"), each once; and a problem for each call of
+    secret() with anything else (its name is needed before the code runs). Code that is not Python has none."""
+    try:
+        tree = ast.parse(code or "")
+    except (SyntaxError, ValueError):  # (it fails as it runs, saying where)
+        return [], []
+    names, problems = [], []
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == P.SECRET]
+    for call in sorted(calls, key=lambda n: (n.lineno, n.col_offset)):
+        if len(call.args) == 1 and not call.keywords and isinstance(call.args[0], ast.Constant) \
+                and isinstance(call.args[0].value, str):
+            names.append(call.args[0].value)
+        else:
+            problems.append(f"Code: secret() on line {call.lineno} needs the name written in the code as text, e.g. "
+                            'secret("UAT.password")')
+    return list(dict.fromkeys(names)), problems
+
+
 def _created(name: str, value) -> bool:
     """Whether a variable of your code's goes into its default output: not a module it imported, a function or class
     it defined, or a name starting with _."""
@@ -239,6 +278,14 @@ class ReusableBlock(PythonCode):
     @classmethod
     def ports(cls, config):
         return super().ports(cls.python_code)
+
+    @classmethod
+    def problems(cls, config, sources, params):
+        return super().problems(cls.python_code, sources, params)
+
+    @classmethod
+    def references(cls, config):
+        return super().references(cls.python_code)
 
     def __init__(self, config):
         super().__init__(self.python_code)
@@ -467,6 +514,10 @@ class AskUser(Block):
                         "e.g. 12 or 2.5"]
         return []
 
+    @classmethod
+    def references(cls, config):  # (empty but for kind password: block.applies)
+        return [(setting_label("secret", cls.config["secret"]), config["secret"])] if config["secret"] else []
+
     def run(self, ctx, value=None):
         c = self.config  # (a setting that is not for its kind is left empty: block.applies)
         if c.kind == "choice" and not c.options:
@@ -575,9 +626,11 @@ def _picture(value) -> Path | None:
 
 def _message_source(message: str) -> str:
     """Inspect's message as the Python f-string that fills it in: its plain text as typed, each {{expression}} (or
-    {{expression:format}}) as an f-string's {expression}. Raises ValueError as params.split does."""
+    {{expression:format}}) as an f-string's {expression}, a reference {{secret:CARD.key}} as ***. Raises ValueError as
+    params.split does."""
     text = "".join(plain.replace("{", "{{").replace("}", "}}")
-                   + ("" if inside is None else "{" + " " * inside.startswith("{") + inside + "}")  # ({ { is no {{)
+                   + ("" if inside is None else "***" if P.reference(inside) is not None  # (a secret shows so)
+                      else "{" + " " * inside.startswith("{") + inside + "}")  # ({ { is no {{)
                    for plain, inside in P.split(message))
     # As written between the quotes of rf"""...""" (rf'''...''' if the text has """ in it): both kinds of quote can
     # be in the text and in the {...} parts, backslashes stay as typed. {''} keeps a quote at the end from closing it
@@ -641,6 +694,10 @@ class Inspect(Block):
         known |= {n.arg for n in ast.walk(tree) if isinstance(n, ast.arg)}  # (a lambda's)
         return [f"Message: {name} is not value, params, a flow parameter or an expression function"
                 for name in sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} - known)]
+
+    @classmethod
+    def references(cls, config):
+        return [("Message", name) for name in P.references(config["message"] or "")]
 
     def run(self, ctx, value=None):
         markdown = "markdown" if self.config.markdown else None
