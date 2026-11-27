@@ -18,7 +18,7 @@ LAYERS = {
     2: ["blocks"],
     3: ["flow", "engine", "registry", "pyenv", "upgrade"],
     4: ["config", "credentials", "history", "jdbc", "ssh", "mail"],
-    5: ["__init__", "block", "table", "expr", "params", "calendars", "schedule", "report", "launch"],
+    5: ["__init__", "block", "table", "expr", "params", "calendars", "schedule", "report", "launch", "relay"],
 }
 LAYER_OF = {name: layer for layer, names in LAYERS.items() for name in names}
 # Calls to a database, a server, a mail server or the web, which foundations never make.

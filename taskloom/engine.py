@@ -26,7 +26,7 @@ from .flow import (API_REQUEST, AS_FINISHED, AT_ONCE, ERROR_PORT, INDEX, ITEM, I
                    RESULT, RESULTS, RUNS_AGAIN, SPLITTER, Flow, FlowError, _start_blocks, _taking_part, at_level, block_config, containers,
                    from_inside, line_runs, lines_run, order, per_line, per_line_of, run_clock, splitter_lines,
                    validate)
-from .config import REVEALED, before_now, kept_runs, runs_kept_since
+from .config import REVEALED, Seen, before_now, kept_runs, runs_kept_since
 from .credentials import CredentialError
 from .history import History
 from .registry import for_flow
@@ -76,7 +76,7 @@ class SecretStr(str):
         return "'***'"
 
 
-HIDDEN: set[str] = set()  # every HiddenStr's value this process has seen
+HIDDEN: set[str] = Seen()  # every HiddenStr's value this process has seen
 
 
 class HiddenStr(SecretStr):

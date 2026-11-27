@@ -10,16 +10,17 @@ import json
 import os
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
-from . import credentials
-from .config import Home
-from .engine import Cancelled, finished_text, redact, run_flow
+from . import credentials, relay
+from .config import REVEALED, Home
+from .engine import HIDDEN, Cancelled, finished_text, forms_of, redact, run_flow, secret_forms
 from .flow import FlowError, load_flow, real_path, validate
-from .launch import ARGS_VARIABLE, frozen
+from .launch import ARGS_VARIABLE, RELAY_ARGUMENT, frozen, runner_command
 from .registry import discover, for_flow
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -148,10 +149,11 @@ def _parse_overrides(items) -> dict:
     return overrides
 
 
-def cmd_run(args, home: Home) -> int:
+def _run_hiding_below_print(args, home: Home) -> int:
+    """taskloom run (cmd_run), with what code writes below print hidden too (_hide_below_print)."""
     settle = _hide_below_print()
     try:
-        return _cmd_run(args, home)
+        return cmd_run(args, home)
     finally:
         settle()
 
@@ -173,85 +175,115 @@ def _hide_below_print():
             continue
         with stream._lock:
             stream.flush()
-            before, (read, write) = os.dup(fd), os.pipe()
-            os.dup2(write, fd)  # (on Windows also the handle that programs started from here get)
-            os.close(write)
+            stream._relay = _Relay(fd, "utf-8" if console else shown.encoding, console)
             if console:  # (it writes to the console only): into the pipe as UTF-8, which the console's takes
                 stream._stream = open(fd, "w", encoding="utf-8", errors=shown.errors, buffering=1, closefd=False)
-            stream._relay = _Relay(fd, read, before, "utf-8" if console else shown.encoding)
-            stream._relay.start()
-        relays.append((stream, shown, fd, before))
+        relays.append((stream, shown, stream._relay))
+
+    def tell(value: str):  # (a secret read from now on: before code has it)
+        for _, _, each in relays:
+            each.learn(forms_of([value]))
+
+    for _, _, each in relays:
+        each.learn(secret_forms())
+    for seen in (REVEALED, HIDDEN):
+        seen.told.append(tell)
 
     def settle():
+        for seen in (REVEALED, HIDDEN):
+            seen.told.remove(tell)
         until = time.monotonic() + 3  # (a program started that still runs keeps a pipe open: what it writes is lost)
-        for stream, shown, fd, before in relays:
+        for stream, shown, each in relays:
             with stream._lock:
                 stream.flush()
-                relay, stream._relay = stream._relay, None
-                os.dup2(before, fd)
-            relay.join(max(0, until - time.monotonic()))
-            with stream._lock:
+                stream._relay = None
+                each.put_back()
                 stream._stream = shown
+            each.end(until)
 
     return settle
 
 
-class _Relay(threading.Thread):
-    """Writes what comes through the pipe `read` (in place of the file descriptor `fd`) on to the file descriptor
-    `before`, whole lines at a time (the rest when the pipe closes) with every secret as *** (engine.redact, on the
-    text in `encoding` and in UTF-8). Reads to the end even once nothing takes what it writes, so that nothing writing
-    to the pipe waits. flushed() waits until all written to `fd` before it has been written on (as a flush does)."""
+class _Relay:
+    """The relay process (taskloom/relay.py) of the file descriptor `fd`, which becomes a pipe it reads: it writes what
+    comes on to where `fd` went before, in `encoding`, with every secret it is told of (learn) as ***. A process of
+    its own, so what is written just before this process dies (a crash, os._exit) is written on too. flushed() waits
+    until all written to `fd` before it has been written on (as a flush does)."""
 
-    def __init__(self, fd: int, read: int, before: int, encoding: str):
-        super().__init__(name=f"relay of {fd}", daemon=True)
-        self.fd, self.read, self.before, self.encoding = fd, read, before, encoding
-        self.mark = b"\0" + os.urandom(16).hex().encode() + b"\0"  # (put through the pipe by flushed)
-        self.sent = self.seen = 0
-        self.done = threading.Condition()
+    def __init__(self, fd: int, encoding: str, console: bool):
+        token = os.urandom(16).hex()
+        self.fd, self.mark = fd, f"\0{token}\0".encode()
+        self.lock = threading.RLock()  # (re-entered by a Ctrl+C handler that prints while it waits)
+        self.before, (read, write), (self.acks, acked) = os.dup(fd), os.pipe(), os.pipe()
+        try:
+            self.process = subprocess.Popen(
+                [*relay_command(), encoding, token], stdin=read, stdout=self.before, stderr=acked,
+                creationflags=0 if console else getattr(subprocess, "CREATE_NO_WINDOW", 0))  # (a console's: shared)
+        finally:
+            os.close(read)
+            os.close(acked)
+        if sys.platform == "win32":  # (bytes as written, as to `fd` before: no \n made \r\n)
+            import msvcrt
+
+            msvcrt.setmode(write, os.O_BINARY)
+        os.dup2(write, fd)  # (on Windows also the handle that programs started from here get)
+        os.close(write)
+
+    def learn(self, forms: list[str]):
+        """From here on each of `forms` is written as ***; told in the pipe, so before anything written after it."""
+        with self.lock:
+            for form in forms:
+                data = form.encode("utf-8", "surrogatepass").hex().encode()
+                records = [self.mark + b"+" + data[i:i + 2 * relay.PART] + self.mark
+                           for i in range(0, len(data), 2 * relay.PART)]
+                self._send(*records, self.mark + b"=" + self.mark)
 
     def flushed(self):
-        with self.done:
-            if not self.is_alive():
-                return
-            self.sent += 1
-            n = self.sent
-        os.write(self.fd, self.mark)
-        with self.done:
-            self.done.wait_for(lambda: self.seen >= n)
+        with self.lock:
+            if self._send(self.mark + self.mark):
+                os.read(self.acks, 1)  # (nothing: the relay has ended)
 
-    def run(self):
-        out, held = open(self.before, "wb", buffering=0, closefd=False), b""  # (a Windows console's takes UTF-8)
+    def _send(self, *records: bytes) -> bool:
         try:
-            while chunk := os.read(self.read, 65536):
-                held += chunk
-                while (at := held.find(self.mark)) >= 0:  # all before it, a line begun too
-                    out, held = self._put(out, held[:at]), held[at + len(self.mark):]
-                    with self.done:
-                        self.seen += 1
-                        self.done.notify_all()
-                end = held.rfind(b"\n") + 1
-                out, held = self._put(out, held[:end]), held[end:]
-            self._put(out, held)
-        finally:
-            os.close(self.read)
-            with self.done:
-                self.seen = float("inf")  # (nobody waits for it any more)
-                self.done.notify_all()
+            for record in records:  # (each whole: no other writing comes inside it)
+                os.write(self.fd, record)
+            return True
+        except OSError:  # (the relay has ended)
+            return False
 
-    def _put(self, out, data: bytes):
-        """`out` once `data` is written to it with every secret as ***; None once nothing reads it any more (as
-        _print): what is written from then on goes nowhere."""
-        for coding in dict.fromkeys((self.encoding, "utf-8")):
-            data = redact(data.decode(coding, "surrogateescape")).encode(coding, "surrogateescape")
+    def put_back(self):
+        """`fd` goes where it went before."""
+        with self.lock:
+            os.dup2(self.before, self.fd)
+            os.close(self.before)
+
+    def end(self, until: float):
+        """Waits until `until` at most for the relay to write all on (a program started that still runs keeps the
+        pipe open); then ends it."""
         try:
-            while out is not None and data:
-                data = data[out.write(data):]
-            return out
-        except OSError:
-            return None
+            self.process.wait(max(0.0, until - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+        os.close(self.acks)
 
 
-def _cmd_run(args, home: Home) -> int:
+# (taskloom/relay.py by itself, as the module it is: not the package, whose start takes long)
+_RELAY_START = ("import importlib.util, sys; "
+                "spec = importlib.util.spec_from_file_location('taskloom.relay', sys.argv[1]); "
+                "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+                "sys.exit(module.main(*sys.argv[2:4]))")
+
+
+def relay_command() -> list[str]:
+    """How to start the relay: the packaged program with --relay, or taskloom/relay.py by itself (-I: not the folder
+    it starts in, nor PYTHONPATH; the installed packages, as a copy mutation testing makes of it imports one)."""
+    if frozen():
+        return [*runner_command(), RELAY_ARGUMENT]
+    return [sys.executable, "-I", "-c", _RELAY_START, relay.__file__]
+
+
+def cmd_run(args, home: Home) -> int:
     start_at = dt.datetime.fromisoformat(args.start_at) if args.start_at else None  # (local, or with a UTC offset)
     flow = load_flow(real_path(args.flow))
     # Relative paths in a flow are relative to the flow file, wherever it is run from.
@@ -544,7 +576,7 @@ def main(argv=None) -> int:
                    help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",
                    help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
-    p.set_defaults(func=cmd_run)
+    p.set_defaults(func=_run_hiding_below_print)
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
     p.set_defaults(func=cmd_validate)

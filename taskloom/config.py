@@ -20,8 +20,25 @@ SETTINGS_DEFAULTS = {
     "keep_runs_for": "5 years",  # runs (their history, logs and files) that started longer ago are deleted
 }
 SECRET_PREFIX = "secret:"
+
+
+class Seen(set):
+    """Values to hide (REVEALED, engine.HIDDEN) that tells each of its `told` (functions) of a value added, before
+    code gets that value: so a run's relays (cli._hide_below_print) hide it in what code writes below print too."""
+
+    def __init__(self):
+        super().__init__()
+        self.told = []
+
+    def add(self, value):
+        if value not in self:
+            super().add(value)
+            for tell in list(self.told):
+                tell(value)
+
+
 # Every secret value this process has seen; run output is scrubbed of them (see engine.redact).
-REVEALED: set[str] = set()
+REVEALED: set[str] = Seen()
 
 
 PERIOD = r"([1-9][0-9]*) *(day|month|year)s?"  # e.g. 18 months, 1 year, 90 days
