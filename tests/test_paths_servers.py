@@ -395,12 +395,14 @@ def test_a_wrong_password_fails_clearly_and_is_never_shown(env, server):
 
 
 def test_a_missing_secret_says_how_to_set_it(env, server):
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the connection's secret."""
     env.write("home/credentials.yaml", "cards:\n  other:\n    rows: {x: null}\n")  # (appserver's card is not listed)
-    result, run_id, _ = _run(env, {"cmd": _ssh("echo hi")})
+    result = env.taskloom("run", _write_flow(env, {"cmd": _ssh("echo hi")}, ()))
 
-    assert result.returncode == 1
-    error = _error(env, run_id, "cmd")
-    assert "secret 'appserver.password' is not set" in error
+    assert result.returncode == 2
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    error = result.stderr
+    assert "secret 'appserver.password' is not set" in error, error
     assert "taskloom secret set appserver.password" in error
 
 

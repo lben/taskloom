@@ -645,13 +645,15 @@ def test_secret_set_saves_in_the_system_credential_store_and_queries_log_in_with
 
 
 def test_a_password_secret_that_is_not_set_fails_with_how_to_set_it(jdbc_env):
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the connection's secret."""
     jdbc_env.write("home/credentials.yaml", "cards:\n  other:\n    rows: {x: null}\n")  # (warehouse's card is not listed)
     flow = query_flow(jdbc_env, "select 1 as one")
 
     run = jdbc_env.taskloom("run", flow)
     tested = jdbc_env.taskloom("connection", "test", "warehouse")
 
-    assert run.returncode == 1 and "taskloom secret set warehouse.password" in block_error(jdbc_env)
+    assert run.returncode == 2 and "taskloom secret set warehouse.password" in run.stderr, run.stderr
+    assert not (jdbc_env.home / "history.db").exists() or jdbc_env.query("SELECT id FROM runs") == []
     assert tested.returncode == 1 and "taskloom secret set warehouse.password" in tested.stderr
 
 

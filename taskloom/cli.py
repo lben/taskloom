@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import credentials
 from .config import Home
-from .engine import Cancelled, finished_text, run_flow
+from .engine import Cancelled, finished_text, redact, run_flow
 from .flow import FlowError, load_flow, real_path, validate
 from .launch import ARGS_VARIABLE, frozen
 from .registry import discover, for_flow
@@ -510,6 +510,36 @@ def main(argv=None) -> int:
         return EXIT_CANCELLED
 
 
+class _Hiding:
+    """A text stream that writes what it is given with every secret this process has read as *** (engine.redact):
+    what a run prints (also what a block's code or a library writes straight to it, or logs with Python's logging),
+    so what the editor's Log, the scheduler service and the terminal get; error lines; a connection's test. Whole
+    lines at a time (the rest when flushed), so a secret written in parts is found too."""
+
+    def __init__(self, stream):
+        self._stream, self._held = stream, ""
+        self._lock = threading.RLock()  # (re-entered by a Ctrl+C handler that prints while a line is written)
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            whole = self._held + text
+            end = whole.rfind("\n") + 1
+            self._held = whole[end:]
+            if end:
+                self._stream.write(redact(whole[:end]))
+        return len(text)
+
+    def flush(self):
+        with self._lock:
+            held, self._held = self._held, ""
+            if held:
+                self._stream.write(redact(held))
+            self._stream.flush()
+
+    def __getattr__(self, name):  # (fileno, encoding, isatty, …: the stream's own)
+        return getattr(self._stream, name)
+
+
 def run_cli(argv=None):
     """Entry point of the `taskloom` program."""
     # On Windows, printed into a pipe or a file, stdout is in the ANSI code page (e.g. cp1252): text it cannot
@@ -519,6 +549,7 @@ def run_cli(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if stream is not None:  # None under pythonw (no console)
             stream.reconfigure(encoding=encoding, errors="backslashreplace")
+    sys.stdout, sys.stderr = (None if stream is None else _Hiding(stream) for stream in (sys.stdout, sys.stderr))
     if ARGS_VARIABLE in os.environ:  # how the editor starts it (not passed on to the blocks of a run)
         argv = json.loads(os.environ.pop(ARGS_VARIABLE))
     code = main(argv)

@@ -89,21 +89,30 @@ class HiddenStr(SecretStr):
 
 
 _forms: tuple = ((0, 0), [])  # secret_forms' last list, and the sizes of REVEALED and HIDDEN it was made for
+URL_SAFE = "!#$%&'()*+,/:;=?@[]~"  # the characters a web address can hold as they are (or encoded)
+
+
+def forms_of(values) -> list[str]:
+    """Each of `values` of 4 characters or more (a shorter one cannot be hidden reliably inside text), also as repr()
+    and JSON write it inside a quoted text (a \\ or quote escaped, ä as \\u00e4) and URL-encoded as a web address
+    holds it (a space as %20 or +, a + or / as it is or encoded); longest first."""
+    import json
+    from urllib.parse import quote, quote_plus
+
+    forms = {form for s in values if len(s) >= 4
+             for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
+                          json.dumps(s, ensure_ascii=False)[1:-1], quote(s, safe=""), quote(s), quote_plus(s),
+                          quote(s, safe=URL_SAFE))}
+    return sorted(forms, key=len, reverse=True)
 
 
 def secret_forms() -> list[str]:
-    """Every secret and HiddenStr seen in this process (of 4 characters or more), also as repr() and JSON write it
-    inside a quoted text (a \\ or quote escaped, ä as \\u00e4); longest first. Made again only when one was added
-    (both sets only grow): a Loop whose calls each get a new cookie would otherwise make it for every text logged."""
-    import json
-
+    """forms_of every secret and HiddenStr seen in this process. Made again only when one was added (both sets only
+    grow): a Loop whose calls each get a new cookie would otherwise make it for every text logged."""
     global _forms
     sizes = (len(REVEALED), len(HIDDEN))  # before reading them: one added meanwhile makes it again next time
     if _forms[0] != sizes:
-        forms = {form for s in list(REVEALED | HIDDEN) if len(s) >= 4
-                 for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
-                              json.dumps(s, ensure_ascii=False)[1:-1])}
-        _forms = (sizes, sorted(forms, key=len, reverse=True))
+        _forms = (sizes, forms_of(list(REVEALED | HIDDEN)))
     return _forms[1]
 
 
@@ -364,8 +373,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         before_start()
 
     history = History(home.history_db)
-    run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps, flow.version,
-                               scheduled, claim, inputs_from)
+    run_id = history.start_run(flow.name, str(flow.path), redact(values), _now(), started_by, counts_for, keeps,
+                               flow.version, scheduled, claim, inputs_from)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
     # Lines run at the same time tell their events one at a time, each whole and in the order they happen.
@@ -1198,8 +1207,9 @@ class _Runner:
                       typed: dict | None = None, came: dict | None = None):
         """Save what the block produced and how it ended (or, with KEPT_INPUTS, what it got, which of
         those you typed and the connections the others came by), so it can later feed a re-run of a single
-        block. Values holding a password are never written to disk."""
+        block. Values holding a password, and texts you typed holding one, are never written to disk."""
         kept, withheld, passwords = {}, [], []
+        stored = [form.encode() for form in forms_of(list(REVEALED))]
         for port, value in produced.items():
             value = _tables_to_marks(value)
             try:
@@ -1207,8 +1217,9 @@ class _Runner:
             except Exception:
                 withheld.append(port)  # not something that can be saved (e.g. an open connection)
                 continue
-            # A password, or text built from one (e.g. "user:" + password), stays off the disk.
-            if _holds_secret(value) or any(len(s) >= 4 and s.encode() in data for s in REVEALED):
+            # A password, or text built from one (e.g. "user:" + password, or a web address holding it), stays off
+            # the disk.
+            if _holds_secret(value) or any(form in data for form in stored):
                 withheld.append(port)
                 passwords.append(port)
             else:
@@ -1216,6 +1227,8 @@ class _Runner:
         kept[WITHHELD], kept[PASSWORDS] = withheld, passwords
         if status is not None:
             kept[STATUS] = status
+        typed = {hole: text for hole, text in (typed or {}).items()
+                 if not any(form in str(text).encode() for form in stored)}
         if typed:
             kept[TYPED] = typed
         if came:
@@ -1271,6 +1284,7 @@ class _Runner:
                         self.emit({"event": "log", "block": spec.id, "level": "INFO",
                                    "message": f"session {spec.session}'s cookies: {_cookie_names(_held(jar))}"})
                 produced = self._check_outputs(result, out_ports, ctx)
+                _scrub_tables(produced, self.workspace)
                 previews = {p: preview(v) for p, v in produced.items()}
                 # A Splitter given no value passes None on to its lines: not a value to show as if it were one.
                 summary = ("its lines start with nothing: no value arrived" if spec.type == SPLITTER
@@ -1964,6 +1978,28 @@ def _table_files(value, name: str) -> dict:
     else:
         return {}
     return {where: path for part, v in parts for where, path in _table_files(v, part).items()}
+
+
+def _scrub_tables(produced: dict, workspace: Path):
+    """Each table among a block's outputs that the run keeps (in its folder `workspace`) whose text cells hold a
+    password (forms_of) is written again with *** in its place: no file keeps one. A file outside the run's folder
+    that a table was read from is not changed."""
+    forms = forms_of(list(REVEALED))
+    if not forms:
+        return
+    for name in produced:
+        for path in map(Path, _table_files(produced[name], name).values()):
+            if not path.is_relative_to(workspace):
+                continue
+            lazy = pl.scan_parquet(path)
+            texts = [column for column, kind in lazy.collect_schema().items() if kind == pl.String]
+            if not texts or not lazy.select(pl.any_horizontal(
+                    pl.col(texts).str.contains_any(forms)).any()).collect().item():
+                continue
+            scrubbed = path.with_name(f"{path.name}.scrubbed")
+            lazy.with_columns(pl.col(texts).str.replace_many(forms, ["***"] * len(forms), leftmost=True)
+                              ).sink_parquet(scrubbed)
+            os.replace(scrubbed, path)
 
 
 def _tables_to_marks(value):

@@ -18,7 +18,7 @@ import yaml
 from . import params as P
 from .block import AFTER, DONE, IDENTIFIER, all_ports, applies, fields, has_placeholders, setting_label
 from .calendars import load_calendar
-from .config import keep_runs_for
+from .config import SECRET_PREFIX, keep_runs_for
 from .credentials import CredentialError, cards, holder
 from .expr import functions
 from .registry import LOCAL, for_flow
@@ -448,6 +448,18 @@ def _references(texts: list[str]) -> list[str]:
     return found
 
 
+def _secret_refs(value) -> list[str]:
+    """The CARD.key of each secret:CARD.key in a connection (also inside its dicts and lists, as resolve_secrets reads
+    them)."""
+    if isinstance(value, str):
+        return [value[len(SECRET_PREFIX):]] if value.startswith(SECRET_PREFIX) else []
+    if isinstance(value, dict):
+        return [ref for v in value.values() for ref in _secret_refs(v)]
+    if isinstance(value, list):
+        return [ref for v in value for ref in _secret_refs(v)]
+    return []
+
+
 def no_value_reason(type_id: str, hole: str, port) -> str | None:
     """Why the input `hole` of a block of type `type_id` can never hold a typed value (`port`: that input's, None: the
     block has no such input), as the editor's menu says it and Validate refuses one there; None: it can."""
@@ -660,6 +672,8 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None,
                     found.append(f"{setting}: no connection named '{value}' in connections.yaml")
                 elif conn["kind"] != f.kind:
                     found.append(f"{setting}: connection '{value}' is {conn['kind']}, expected {f.kind}")
+                elif values:  # a run: what its connections name is needed too (CR-8)
+                    needed += [(block_id, f"{setting}: the connection {value}", ref) for ref in _secret_refs(conn)]
 
     if needed:
         try:
