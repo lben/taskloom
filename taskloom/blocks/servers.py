@@ -287,7 +287,8 @@ CONTENT_TYPES = {JSON_BODY: "application/json", TEXT_BODY: "text/plain; charset=
                  FILE_BODY: "application/octet-stream"}
 AUTOMATIC, AS_TEXT, AS_TABLE, AS_FILE = "automatic", "text", "table", "file"
 # What an API connection (kind: api in connections.yaml) gives the blocks that use it, besides its base_url, under the
-# block's own names (its stored secret as secret:NAME); with a connection chosen, the block has none of these of its own.
+# block's own names (its stored secret as secret:CARD.key); with a connection chosen, the block has none of these of
+# its own.
 FROM_CONNECTION = ("auth", "username", "key_name", "secret", "headers", "ca_file", "dont_verify")
 _NO_CONNECTION = {"connection": [None]}  # (only_if of the block's own: with a connection chosen, they come from it)
 NOTHING = object()  # (nothing came to the body input: it is not connected)
@@ -384,8 +385,8 @@ def api_connection(home, name: str | None) -> dict | None:
             raise Failed(f"{where}: {key}: {e}") from None
     if checked["secret"] is not None:
         if not checked["secret"].startswith(SECRET_PREFIX):
-            raise Failed(f"{where}: secret: write {SECRET_PREFIX}NAME, NAME a stored secret (taskloom secret set NAME), "
-                         f"not the secret itself")
+            raise Failed(f"{where}: secret: write {SECRET_PREFIX}CARD.key, a card and one of its keys (taskloom secret "
+                         f"set CARD.key), not the secret itself")
         checked["secret"] = checked["secret"][len(SECRET_PREFIX):]
     return checked
 
@@ -422,7 +423,7 @@ def _row_headers(c: dict, conn: dict | None, secret) -> tuple[dict, set]:
             mine.setdefault(r["key"].lower(), []).append(r)
         rows.update(mine)
 
-    def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
+    def value(text: str) -> str:  # (secret:CARD.key: the value of that card's key)
         return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
 
     return ({name: _sent_header(rs, value) for name, rs in rows.items()},
@@ -932,7 +933,7 @@ def from_curl(text: str) -> CurlImport:
         if _SECRET_HEADER.search(key) and value:
             name = re.sub(r"\W+", "_", key).strip("_").lower()
             secrets.append((f"the value of the header {key}", value, f"{host}.{name}", len(config["headers"])))
-            value = ""  # (secret:NAME, once named)
+            value = ""  # (secret:CARD.key, once named)
         config["headers"].append({"key": key, "value": value})
 
     filled = [f"Method: {method}", f"URL: {url}"]

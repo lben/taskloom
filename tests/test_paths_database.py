@@ -659,13 +659,19 @@ def test_a_password_secret_that_is_not_set_fails_with_how_to_set_it(jdbc_env):
 
 @pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
 def test_a_secrets_file_others_can_read_is_refused(jdbc_env):
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the file and why; the file is
+    left as it was."""
     jdbc_env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
-    jdbc_env.write("home/secrets.yaml", "warehouse.password: ''\n").chmod(0o644)
+    secrets = jdbc_env.write("home/secrets.yaml", "warehouse.password: ''\n")
+    secrets.chmod(0o644)
     flow = query_flow(jdbc_env, "select 1 as one")
 
     run = jdbc_env.taskloom("run", flow)
 
-    assert run.returncode == 1 and "chmod 600" in block_error(jdbc_env)
+    assert run.returncode == 2
+    assert not (jdbc_env.home / "history.db").exists() or jdbc_env.query("SELECT id FROM runs") == []  # no run
+    assert "secrets.yaml must be readable only by you (chmod 600)" in run.stderr, run.stderr
+    assert secrets.read_text() == "warehouse.password: ''\n" and secrets.stat().st_mode & 0o777 == 0o644
 
 
 def _missing_jar(env, h2, conn):
