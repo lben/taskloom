@@ -689,5 +689,7 @@ def run_cli(argv=None):
     sys.exit(code)
 
 
-if __name__ == "__main__":
-    run_cli()
+if __name__ == "__main__":  # python -m taskloom.cli: runs as the module taskloom.cli, as the taskloom program does
+    import taskloom.cli  # (not as a second copy of it named __main__)
+
+    taskloom.cli.run_cli()
