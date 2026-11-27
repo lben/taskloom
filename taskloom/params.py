@@ -115,6 +115,16 @@ def references(text: str) -> list[str]:
     return [found for _, inside in split(text) if (found := reference(inside)) is not None]
 
 
+def renamed(text: str, new) -> str:
+    """`text` with each {{secret:CARD.key}} naming new(CARD.key) instead, unless that is None."""
+    def one(m):
+        found = reference(m.group(1))
+        changed = found and new(found)
+        return f"{{{{{SECRET}:{changed}}}}}" if changed else m.group()
+
+    return _BRACES.sub(one, text)
+
+
 def parse(text: str) -> list[tuple[str, str | None, str]]:
     """`text` cut at its placeholders {{name}} / {{name:format}}: [(plain text, name, format), ..., (plain text, None,
     "")]; a reference {{secret:CARD.key}} has the name SECRET and its CARD.key as the format. Raises ValueError as

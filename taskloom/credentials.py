@@ -38,6 +38,10 @@ class CredentialError(KeyError):
         return str(self.args[0])
 
 
+class Circle(CredentialError):
+    """Cards that take their values from each other, or rows that point at each other, round to where they began."""
+
+
 def check_name(name, what: str) -> str:
     """`name`, if it can name a card or a key (`what`); CredentialError saying why not."""
     if not isinstance(name, str) or not name:
@@ -126,7 +130,7 @@ def holder(listed: dict, reference: str) -> str:
         at = f"{here or card}.{row or key}"
         if at.casefold() in seen:
             circle = path[seen[at.casefold()]:] + [path[seen[at.casefold()]]]
-            raise CredentialError(f"Circle in credentials: {' -> '.join(circle)}")
+            raise Circle(f"Circle in credentials: {' -> '.join(circle)}")
         seen[at.casefold()] = len(path)
         if row is not None and listed[here]["rows"][row] is None:
             return at
@@ -140,6 +144,21 @@ def holder(listed: dict, reference: str) -> str:
             raise _not_set(reference, at)
 
 
+def circle(listed: dict) -> str | None:
+    """What holder says of the first circle in `listed` (as cards() gives it), or None if there is none."""
+    keys = {key.casefold(): key for c in listed.values() for key in c["rows"]}
+    absent = next(f"k{n}" for n in range(len(keys) + 1) if f"k{n}" not in keys)  # (follows the cards used to the end)
+    for card in listed:
+        for key in [*keys.values(), absent]:
+            try:
+                holder(listed, f"{card}.{key}")
+            except Circle as e:
+                return str(e)
+            except CredentialError:
+                pass
+    return None
+
+
 def _not_set(reference: str, at: str) -> CredentialError:
     if at.casefold() == reference.casefold():
         return CredentialError(f"secret '{at}' is not set (run: taskloom secret set {at})")
@@ -150,7 +169,7 @@ def _not_set(reference: str, at: str) -> CredentialError:
 def value(root: Path, reference: str) -> str:
     """The value `reference` (CARD.key) names. CredentialError if there is none, or the store cannot be used."""
     at = holder(cards(root), reference)
-    found = _read(root, at)
+    found = stored(root, at)
     if found is None:
         raise _not_set(reference, at)
     return found
@@ -202,7 +221,16 @@ def _put(keyring, name: str, value: str | None):
         n += 1
 
 
-def _read(root: Path, name: str) -> str | None:
+def version(root: Path) -> tuple | None:
+    """Which writing of the list file is there now (each writing replaces the file: _write_whole); None: none."""
+    try:
+        found = (root / "credentials.yaml").stat()
+    except FileNotFoundError:
+        return None
+    return found.st_ino, found.st_mtime_ns, found.st_size
+
+
+def stored(root: Path, name: str) -> str | None:
     """The value stored under `name` (CARD.key as listed), or None."""
     keyring = _store()
     with _asking_the_store():
@@ -212,7 +240,7 @@ def _read(root: Path, name: str) -> str | None:
     return None if found is None else str(found)
 
 
-def _save(root: Path, listed: dict | None, values: dict) -> str:
+def save(root: Path, listed: dict | None, values: dict) -> str:
     """Each of `values` ({CARD.key: value, or None: removed}) stored, then the list file written as `listed` (None: as
     it is). All or nothing: if a step fails, the values already changed are put back and its error raised. Returns
     where the values are."""
@@ -283,7 +311,7 @@ def store(root: Path, reference: str, new: str) -> str:
     row = _find(rows, key) or key
     unlisted = row not in rows or rows[row] is not None
     rows[row] = None
-    return _save(root, listed if unlisted else None, {f"{here}.{row}": new})
+    return save(root, listed if unlisted else None, {f"{here}.{row}": new})
 
 
 def remove(root: Path, reference: str):
@@ -299,22 +327,30 @@ def remove(root: Path, reference: str):
     row = key and _find(rows, key)
     if key and row is None:
         raise CredentialError(f"the card {here} has no key {key} (taskloom secret list shows the cards and keys)")
+    found = users(listed, here, row)
+    if found:
+        raise CredentialError(f"{reference} is not deleted, it is used: {'; '.join(found)}")
     gone = [row] if row else list(rows)
-    users = [f"{name} takes its values from {here}" for name, c in listed.items()
-             if row is None and name != here and c["uses"] and c["uses"].casefold() == here.casefold()]
-    for name, c in listed.items():
-        for k, pointer in c["rows"].items():
-            if pointer is not None and not (name == here and k in gone):
-                to_card, to_key = split(pointer)
-                if to_card.casefold() == here.casefold() and (row is None or to_key.casefold() == row.casefold()):
-                    users.append(f"{name}.{k} points at {pointer}")
-    if users:
-        raise CredentialError(f"{reference} is not deleted, it is used: {'; '.join(users)}")
     if row:
         del rows[row]
     else:
         del listed[here]
-    _save(root, listed, {f"{here}.{k}": None for k in gone})
+    save(root, listed, {f"{here}.{k}": None for k in gone})
+
+
+def users(listed: dict, card: str, row: str | None = None) -> list[str]:
+    """Who uses the row `row` of `card` (None: the whole card), as listed spellings: the cards that take their values
+    from the card, and the rows (not its own that go with it) that point at it."""
+    gone = [row] if row else list(listed[card]["rows"])
+    found = [f"{name} takes its values from {card}" for name, c in listed.items()
+             if row is None and name != card and c["uses"] and c["uses"].casefold() == card.casefold()]
+    for name, c in listed.items():
+        for k, pointer in c["rows"].items():
+            if pointer is not None and not (name == card and k in gone):
+                to_card, to_key = split(pointer)
+                if to_card.casefold() == card.casefold() and (row is None or to_key.casefold() == row.casefold()):
+                    found.append(f"{name}.{k} points at {pointer}")
+    return found
 
 
 def listing(root: Path) -> list[str]:
@@ -328,5 +364,5 @@ def listing(root: Path) -> list[str]:
         lines.append(name + (f" (takes its values from {c['uses']})" if c["uses"] else ""))
         for key, pointer in c["rows"].items():
             lines.append(f"  {key} -> {pointer}" if pointer is not None else
-                         f"  {key}" + ("" if _read(root, f"{name}.{key}") is not None else "  (no value stored)"))
+                         f"  {key}" + ("" if stored(root, f"{name}.{key}") is not None else "  (no value stored)"))
     return lines

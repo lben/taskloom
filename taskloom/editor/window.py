@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QDockWidget, QFileDialog, 
                                QStyleOptionToolButton, QStylePainter, QTabBar, QTabWidget, QTextBrowser, QToolButton,
                                QVBoxLayout, QWidget)
 
-from .. import __version__, update, upgrade
+from .. import __version__, credentials, update, upgrade
 from .. import params as P
 from ..block import AFTER
 from ..blocks.logic import reusable_name, write_reusable_block
@@ -37,7 +37,7 @@ from ..config import Home
 from ..engine import KEPT_OUTPUTS, Failed, _filled, block_inputs, finished_text, input_ports, not_kept, run_part
 from ..flow import (API_REQUEST, LOOP, RESULT, SESSION, BlockSpec, FlowError, block_config, flow_file_data,
                    flow_from_data, keep_source_names, load_flow, per_line_of, read_flow_file, real_path, run_clock,
-                   schedules_of, validate, version_id)
+                   renamed_credentials, schedules_of, validate, version_id)
 from ..schedule import Trigger
 from ..history import History, run_label
 from ..launch import frozen, run_alive, runner_command
@@ -47,6 +47,7 @@ from ..registry import LOCAL, discover
 from .canvas import FlowScene, FlowView, why_no_value
 from . import dialogs, docs, git, theme
 from .commits import CommitHistory
+from .credentials_window import CredentialsDialog
 from .dialogs import AskDialog, ConnectionsDialog, OverlapDialog, PythonEnvDialog, RunDialog, SettingsDialog
 from .document import FlowDocument
 from .panels import (FindToggles, FlowSettingsPanel, FlowTabsStatus, HistoryPanel, LogPanel, Palette, ParametersPanel,
@@ -620,6 +621,7 @@ class MainWindow(QMainWindow):
         self.validate_action = act(m, "Validate", lambda: self.validate(self.current), "F7")
         m = bar.addMenu("&Tools")
         act(m, "Connections…", self.edit_connections)
+        act(m, "Credentials…", self.edit_credentials)
         act(m, "Settings…", self.edit_settings)
         act(m, "Python environment…", lambda: dialogs.open_dialog(self, PythonEnvDialog, self.home))
         act(m, "Check flows…", lambda: self.check_flows())
@@ -875,6 +877,25 @@ class MainWindow(QMainWindow):
     def edit_connections(self):
         dialogs.open_dialog(self, ConnectionsDialog, self.home)
         self.properties.refresh()  # new or renamed connections show up in the block's lists
+
+    def edit_credentials(self):
+        """Tools > Credentials: on Save, each open flow that uses a card or key renamed with "also rewrite the open
+        flows" names it so, as one unsaved change Undo takes back (CR-16); flows not open are not touched."""
+        tabs = self.tabs_list()
+        flows = [(tab.doc.title, tab.doc.data, tab.doc.registry or self.registry) for tab in tabs]
+        try:
+            dialog = CredentialsDialog(self.home, self, flows=flows)
+        except (credentials.CredentialError, OSError) as e:
+            QMessageBox.warning(self, "Credentials", f"{e}\n\nIt is in {self.home.root}: put it right, then try again.")
+            return
+        if not dialogs.answered(dialog):
+            return
+        for tab, (_, data, registry) in zip(tabs, flows):
+            new = renamed_credentials(data, registry, dialog.new_reference)
+            if new != data:
+                self._finish_editing(tab)
+                tab.doc.restore(new)
+        self.properties.refresh()
 
     def edit_settings(self):
         """Tools > Settings: its Theme is the editor's own preference (editor.ini), shown at once when saved."""
