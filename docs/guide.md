@@ -466,7 +466,11 @@ taskloom editor examples/daily-sales-report.yaml
   list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
-  secure store, never in a file) and click **Save and test connection**. A database
+  secure store as a row of a card named after the connection, e.g. `warehouse.password`, never
+  in a file), or choose
+  a row of your cards in the list beside it (e.g. `DEFAULT.password`, also the keys a card
+  takes from another): the connection then names `secret:DEFAULT.password` and stores nothing.
+  Click **Save and test connection**. A database
   connection asks for its driver .jar file(s) first, then the Driver class, URL, User name
   and Password. Choosing the jar(s) with **…**, or typing or pasting their paths (separate
   several with `;`) and then leaving the field or pressing Enter (there it does not save),
@@ -1811,11 +1815,33 @@ Store a value with `taskloom secret set UAT.password`: it asks for the value wit
 it (`--stdin` reads it from standard input instead), never takes it on the command line, and
 adds the card and the key if they are new. `taskloom secret list` shows the cards and keys,
 never a value; `taskloom secret delete UAT.password` removes a row and `taskloom secret delete
-UAT` a whole card, from the credential store too. The editor's **Tools → Credentials** window,
-coming in this version, does the same. Validate names each card or key that a flow names (also
-in a connection its blocks use) and that does not exist, with its block and setting. A run
-checks every card, key and value it needs before its first block, and stops naming each one
-missing.
+UAT` a whole card, from the credential store too. Validate names each card or key that a flow
+names (also in a connection its blocks use) and that does not exist, with its block and setting.
+A run checks every card, key and value it needs before its first block, and stops naming each
+one missing.
+
+The editor's **Tools → Credentials…** does the same in a window. The cards are on the left, with
+**Add…**, **Rename…** and **Delete**; the chosen card's rows are on the right, a key and its
+value each, and always one empty row last: type a key there to add a row. Every value shows as
+the same dots, whatever its length, also while you type it; a row's eye shows that value alone
+until you press it again, and the window opens again with dots. A value shorter than 4
+characters, or empty, has a note on its row: a run cannot hide so short a value in the Log. A
+key listed with no value in the credential store says *no value stored*.
+
+- **Takes its values from**: a card can take the rows it does not have from another card, e.g.
+  `DEFAULT` from `UAT`. Those rows show greyed, "from UAT"; a row of the card's own with the
+  same key wins. Switch `DEFAULT` to `PROD` and every flow that names `DEFAULT.password` gets
+  PROD's value at its next run, unchanged.
+- **Point at another row…** (right-click a row's key) makes a row hold no value of its own but
+  give another card's row, e.g. `archive_password → PROD.password`; **Delete row** removes it.
+- A choice that would make a circle (two cards taking from each other, or rows pointing at each
+  other), deleting a card or row that another uses, and a name with a dot or a space, or one
+  that differs from another only in upper and lower case, are refused, saying why. Renaming a
+  card or a key that open flows use names them and their blocks, and asks whether to rename
+  only or also rewrite those flows (one change each, which Undo takes back); flows that are not
+  open keep the old name, and Validate names it.
+- **Save** stores every change at once, the values and the list, or none if one cannot be
+  stored, and says why; **Cancel** stores nothing.
 
 **Secrets stored before version 0.42.0** are not read any more. Enter each again as a card's
 row, e.g. `taskloom secret set WAREHOUSE.password` (or in Tools → Credentials), and write the

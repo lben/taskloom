@@ -255,7 +255,8 @@ blocks on the canvas) and can be used by any block.
 - Windows / macOS: OS credential store via `keyring` (Windows Credential Manager —
   per user, no admin).
 - Linux headless: a per-user secrets file, `chmod 600`, optionally encrypted.
-- Flows and connections only hold references like `secret:warehouse_password`.
+- Flows and connections only hold references like `secret:WAREHOUSE.password` (CARD.key: a
+  row of a card in `credentials.yaml`, which lists the cards and keys, never a value).
 
 **Settings** (`settings.yaml`, per user):
 
