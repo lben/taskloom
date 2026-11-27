@@ -408,12 +408,14 @@ def test_a_missing_secret_says_how_to_set_it(env, server):
 
 @pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is read on Linux only (CR-13)")
 def test_a_secrets_file_others_can_read_is_refused(env, server):
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the file and why."""
     env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     env.write("home/secrets.yaml", f"appserver.password: {PASSWORD}\n").chmod(0o644)
-    result, run_id, _ = _run(env, {"cmd": _ssh("echo hi")})
+    result = env.taskloom("run", _write_flow(env, {"cmd": _ssh("echo hi")}))
 
-    assert result.returncode == 1
-    assert "must be readable only by you (chmod 600)" in _error(env, run_id, "cmd")
+    assert result.returncode == 2
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    assert "secrets.yaml must be readable only by you (chmod 600)" in result.stderr, result.stderr
 
 
 def test_every_server_block_refuses_a_missing_or_non_ssh_connection_before_running(env, server):

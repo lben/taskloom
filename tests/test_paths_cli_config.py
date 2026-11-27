@@ -620,17 +620,13 @@ def test_a_secrets_file_taskloom_cannot_read_is_an_error_naming_it_and_is_left_a
     secrets.chmod(0o600)
     flow = write(env, SECRET_FLOW)
 
-    ran = env.taskloom("run", flow)
-    told = {"connection test": (env.taskloom("connection", "test", "appserver", timeout=60), 1)}
+    told = {"run": (env.taskloom("run", flow), 2),  # (CR-8: it stops before its first block)
+            "connection test": (env.taskloom("connection", "test", "appserver", timeout=60), 1)}
     if sys.platform != "win32":  # getpass reads the Windows console, not stdin
         told["secret set"] = (secret_set(env, "api.token", "new-value"), None)
 
-    run_id, status = env.last_run()
-    [(error,)] = env.query("SELECT error FROM blocks WHERE run_id=? AND block='token'", run_id)
-    problems = told_clearly(told, "secrets.yaml")
-    if not (ran.returncode == 1 and status == "failed" and "secrets.yaml" in (error or "")):
-        problems.append(f"run: exit {ran.returncode}, Ask User's error does not name secrets.yaml: {error!r}")
-    assert problems == []
+    assert told_clearly(told, "secrets.yaml") == []
+    assert runs_recorded(env) == 0
     assert secrets.read_bytes() == content  # nothing in it is lost
 
 

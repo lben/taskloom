@@ -131,6 +131,24 @@ def test_what_code_writes_below_print_or_a_program_it_starts_prints_shows_as_sta
     assert stored_with(env, TOKEN) == []
 
 
+@pytest.mark.invariant("CR-5")
+def test_what_code_writes_below_print_shows_as_stars_also_in_a_run_started_unbuffered_as_the_editor_does(env):
+    """E (the Log, Taskloom's own Python; the terminal): the editor starts a run with PYTHONUNBUFFERED=1 (then the
+    bytes under sys.stdout and sys.stderr have no buffer of their own); what the code writes below print still shows
+    only as *** in what `taskloom run` prints, and no file the run keeps holds the value."""
+    env.env["PYTHONUNBUFFERED"] = "1"
+    path = write_flow(env, {"low": code(BELOW_PRINT)})
+
+    result = run(env, path)
+
+    said = told(env, result)
+    assert result.returncode == 0, said
+    assert shown(said, TOKEN) == [], said
+    for line in ("fd-out ***", "fd-err ***", "buffer-out ***", "buffer-err ***", "child-out ***", "child-err ***"):
+        assert line in terminal(result), terminal(result)
+    assert stored_with(env, TOKEN) == []
+
+
 @pytest.mark.invariant("CR-19")
 @pytest.mark.invariant("CR-5")
 @pytest.mark.skipif(sys.platform == "win32", reason="the test SSH server runs commands in /bin/sh")

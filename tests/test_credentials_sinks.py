@@ -22,6 +22,7 @@ tests/test_credentials_refs.py):
 
 import base64
 import datetime as dt
+import gc
 import http.server
 import json
 import socketserver
@@ -55,7 +56,9 @@ CARDS = {"UAT": {"rows": {"token": None, "four": None, "three": None, "unset": N
          "SHOP": {"rows": {"key": None}}}
 VALUES = {"UAT.token": TOKEN, "UAT.four": FOUR, "UAT.three": THREE, "MAIL.password": MAIL, "SHOP.key": KEY}
 URL_SAFE = "!#$%&'()*+,/:;=?@[]~"  # what a web address holds as it is (a space in it is written %20)
-NOT_SCANNED = {"credential-store.json"}  # the tests' credential store: it holds the values
+# The tests' credential store: it holds the values. And the folder's scheduler.lock, which the service holds while a
+# test runs (service): Taskloom never writes in it, and on Windows a file another handle has locked cannot be read.
+NOT_SCANNED = {"credential-store.json", "scheduler.lock"}
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +88,9 @@ def table_cells(path) -> list[str]:
 def stored_with(env, *values: str) -> list[str]:
     """Every file under the test's folder (the Taskloom home, its runs and history.db with its -wal, the flow's folder)
     that holds a form of one of `values`: in its bytes (UTF-8) or, for a table file, in a cell."""
+    # A connection to history.db this process no longer uses (env.query's) closes only once garbage is collected, and
+    # SQLite then removes history.db-wal and -shm: collected first, so that none goes while the files are read.
+    gc.collect()
     found = []
     for path in sorted(p for p in env.root.rglob("*") if p.is_file() and p.name not in NOT_SCANNED):
         data = path.read_bytes()
