@@ -37,8 +37,13 @@ from sshserver import free_port
 from taskloom.config import Home
 from taskloom.scheduler import Scheduler, acquire_lock
 from taskloom.scheduler import _unlock as unlock
-from test_credentials_refs import api, in_environment, lines_with, log_of, python_environment, write_flow  # noqa: F401
+import test_credentials_refs
+from test_credentials_refs import api, lines_with, log_of, write_flow
 from test_credentials_store import names, plant, refused_cleanly, run, taskloom, told, write_cards
+
+# The fixtures of the references' tests, used here by name.
+in_environment = test_credentials_refs.in_environment
+python_environment = test_credentials_refs.python_environment
 
 # Made-up values that cannot occur by chance: each has a space, a + and a /, so its URL-encoded forms differ from it.
 TOKEN = "Kv7 Lantern+q/9Z"  # UAT.token
