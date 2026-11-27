@@ -108,7 +108,7 @@ kinds:
       Python reads a string's prefix in either case: RF"""...""" is the same f-string as rf"""...""", so Inspect's
       message is filled in and shown the same, e.g. Day {{day}}: {{value}}.
     mutants:
-      - taskloom.blocks.logic.x__message_source__mutmut_43
+      - taskloom.blocks.logic.x__message_source__mutmut_48
   - kind: The moment the expression functions are made for
     why: >-
       Validate looks only at the names of the expression functions (today, now, days, len...), to tell a name an
@@ -123,7 +123,7 @@ kinds:
       run_flow), so asking whether it is such a frame changes no message: a table arriving is told "got a table" all
       the same.
     mutants:
-      - taskloom.engine.x__filled__mutmut_24
+      - taskloom.engine.x__filled__mutmut_26
   - kind: The stand-in split after the last placeholder
     why: >-
       parse splits what is inside each {{ }} into a name and a format. After the last placeholder there is nothing
