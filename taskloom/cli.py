@@ -20,7 +20,7 @@ from . import credentials, relay
 from .config import REVEALED, Home
 from .engine import HIDDEN, Cancelled, finished_text, forms_of, redact, run_flow, secret_forms
 from .flow import FlowError, load_flow, real_path, validate
-from .launch import ARGS_VARIABLE, RELAY_ARGUMENT, frozen, runner_command
+from .launch import ARGS_VARIABLE, frozen, relay_command
 from .registry import discover, for_flow
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -222,7 +222,9 @@ class _Relay:
         finally:
             os.close(read)
             os.close(acked)
-        if sys.platform == "win32":  # (bytes as written, as to `fd` before: no \n made \r\n)
+        # (bytes as written, as to `fd` before: no \n made \r\n). os.name: where this process runs, also when tests
+        # make this module's `sys` and `frozen` another program's (the packaged Windows Taskloom's, on any platform)
+        if os.name == "nt":
             import msvcrt
 
             msvcrt.setmode(write, os.O_BINARY)
@@ -266,21 +268,6 @@ class _Relay:
             self.process.kill()
             self.process.wait()
         os.close(self.acks)
-
-
-# (taskloom/relay.py by itself, as the module it is: not the package, whose start takes long)
-_RELAY_START = ("import importlib.util, sys; "
-                "spec = importlib.util.spec_from_file_location('taskloom.relay', sys.argv[1]); "
-                "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
-                "sys.exit(module.main(*sys.argv[2:4]))")
-
-
-def relay_command() -> list[str]:
-    """How to start the relay: the packaged program with --relay, or taskloom/relay.py by itself (-I: not the folder
-    it starts in, nor PYTHONPATH; the installed packages, as a copy mutation testing makes of it imports one)."""
-    if frozen():
-        return [*runner_command(), RELAY_ARGUMENT]
-    return [sys.executable, "-I", "-c", _RELAY_START, relay.__file__]
 
 
 def cmd_run(args, home: Home) -> int:

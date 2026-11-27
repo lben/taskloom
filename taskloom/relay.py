@@ -1,7 +1,7 @@
 """The relay of a run's output (see cli._hide_below_print): a process of its own, so what a run writes just before it
 dies (a crash, os._exit) is still written on. It reads what the run's file descriptor 1 or 2 carries on its stdin and
 writes it on to its stdout, whole lines at a time (the rest at a flush, or when the run's end closes the pipe), with
-every secret the run has told it of as ***. main(ENCODING, TOKEN) is all it runs (cli.relay_command): it imports
+every secret the run has told it of as ***. main(ENCODING, TOKEN) is all it runs (launch.relay_command): it imports
 nothing of Taskloom.
 
 The run tells it, in the stream itself, between two MARKs (TOKEN, a random text no output holds, between NULs):
