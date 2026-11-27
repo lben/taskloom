@@ -27,6 +27,7 @@ scope:
         - tests/test_braces.py -k "double_braces_give or inside_single_braces or closing_braces_alone or four_opening or never_filled_again or naming_nothing or single_brace_parameter or single_and_double or single_brace_name_of_nothing or capital_letter or loops_at_the_same_time"
         - tests/test_placeholders.py
         - tests/test_html_template_inputs.py -k a_problem_stops_validate
+        - tests/test_credentials_refs.py -k inside_a_settings_text_sends
     - mutate:
         - taskloom/engine.py _filled
         - taskloom/flow.py placeholder_problems
@@ -40,6 +41,7 @@ scope:
         - tests/test_paths_flow_format.py -k a_setting_of_the_wrong_kind
         - tests/test_braces_typed_names.py
         - tests/test_engine.py -k validate_reports_all_problems
+        - tests/test_credentials_refs.py -k inside_a_settings_text_sends
     - mutate:
         - taskloom/blocks/logic.py _message_source
         - taskloom/blocks/logic.py _message_tree
@@ -50,6 +52,7 @@ scope:
         - tests/test_paths_logic.py -k inspect
         - tests/test_inspect_log.py -k "values_that_are_not_pictures or message_line_comes_before or show_as_markdown_marks"
         - tests/test_pyenv.py -k secrets_never_reach_logs
+        - tests/test_credentials_refs.py -k inspects_message_shows_as_stars
     - mutate:
         - taskloom/blocks/reports.py _placed
         - taskloom/blocks/reports.py HtmlTemplate.problems
@@ -59,6 +62,7 @@ scope:
         - tests/test_html_template_inputs.py -k "not the_example_whose_file and not without_jinja2"
         - tests/test_template_styles.py
         - tests/test_paths_reports_email.py -k html_template_mistakes
+        - tests/test_credentials_refs.py -k html_template_puts_the_value
     - mutate:
         - taskloom/blocks/servers.py _literal
       tests:

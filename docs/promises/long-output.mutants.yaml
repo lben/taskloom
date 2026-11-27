@@ -54,6 +54,7 @@ scope:
         - tests/test_long_output_mutants.py -k "password_with_punctuation or polars_is_set or 21_columns or accented_word or exactly_200 or exactly_300"
         - tests/test_run_output_and_tables.py -k "ten_rows_or_fewer or hovering_a_long_tables or full_path_of_each_table"
         - tests/test_inspect_log.py -k "inspected_table or values_that_are_not_pictures"
+        - tests/test_credentials_in_other_features.py -k three_stars
     - mutate:
         - taskloom/editor/runs.py RunProcess._read_stdout
       tests:
