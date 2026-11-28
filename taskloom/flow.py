@@ -427,7 +427,11 @@ def placeholder_problems(f: fields.Field | None, text: str, params, inputs, type
 
 
 DICT_INPUTS = {("db.run_query", "params"), ("data.statistics", "extra")}  # inputs that expect a dictionary
-COMMANDS = {("servers.ssh_command", "command"), ("servers.start_process", "command")}  # seen by others as they run
+COMMANDS = {("servers.ssh_command", "command"), ("servers.stop_process", "pid_file"),  # seen by others as they run
+            ("servers.health_check", "pid_file"), ("servers.remote_extract", "archive"),
+            ("servers.remote_extract", "destination"),
+            *(("servers.start_process", name) for name in ("command", "workdir", "log_file", "pid_file",
+                                                           "check_after"))}
 
 
 def _texts(value) -> list[str]:

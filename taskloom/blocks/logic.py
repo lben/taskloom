@@ -13,6 +13,7 @@ import os
 import pickle
 import re
 import sys
+import threading
 import types
 import unicodedata
 from pathlib import Path
@@ -22,10 +23,10 @@ from rich.console import Console
 from rich import traceback as rich_traceback
 from rich.traceback import Traceback
 
-from .. import params as P
+from .. import params as P, relay
 from ..block import Block, fields, has_placeholders, ports, setting_label
 from ..expr import evaluate, functions
-from ..engine import Failed, SecretStr, _masked, inline, line_names, preview
+from ..engine import Failed, SecretStr, _masked, inline, line_names, preview, secret_forms
 from ..flow import (ALL_LINES, AS_FINISHED, AT_MOST, AT_ONCE, EACH_LINE, INDEX, ITEM, ITEMS, LINE_ORDER, LINES,
                     LINES_RUN, LOOP, MERGER, ONE_AFTER_ANOTHER, PASSES_ON, RESULT, RESULTS, RUNS_AGAIN, SAME_TIME,
                     SPLITTER, BlockSpec, block_config)
@@ -177,8 +178,9 @@ class PythonCode(Block):
                                   'secret("UAT.password")')
             return credentials[name]
 
+        printer, printed = _printer(ctx)
         helpers = {"ctx": ctx, "params": ctx.params, "pl": pl, "Table": Table, "secret": secret,
-                   "print": _printer(ctx), "log": lambda *values: ctx.log(" ".join(map(str, values)))}
+                   "print": printer, "log": lambda *values: printer(*values)}  # (one held text: in order)
         namespace = {**helpers, **values}
         given = set(namespace)
         # Registered with linecache under a short name, so error reports can show the code around the
@@ -194,6 +196,8 @@ class PythonCode(Block):
                 raise CodeError(e, filename, namespace, set(helpers)) from None
         except Exception as e:
             raise CodeError(e, filename, namespace, set(helpers)) from None
+        finally:
+            printed()
         # Outputs your code does not assign are not produced, so blocks after them are skipped; but output, unless
         # it assigns it, is a dict of the variables it created.
         produced = {name: namespace[name] for name in self.config.outputs if name in namespace}
@@ -330,15 +334,31 @@ class Reusable(ReusableBlock):
 
 
 def _printer(ctx):
-    """print() for your code: what it prints goes to the block's Log (and run history)."""
+    """print() for your code (and its log()): what it prints goes to the block's Log (and run history); and what logs
+    the lines it holds once the code has run. Printed lines that may begin a secret of several lines wait for the next
+    (relay.ready), then are logged with them, so that it shows as *** whole."""
+    held, lock = "", threading.Lock()  # (code can print from threads of its own)
 
     def print_to_log(*values, sep=" ", end="\n", file=None, flush=False):
+        nonlocal held
         if file is not None and file not in (sys.stdout, sys.stderr):
             print(*values, sep=sep, end=end, file=file, flush=flush)  # e.g. into a file you opened
-        else:
-            ctx.log(sep.join(map(str, values)).rstrip("\n"))
+            return
+        with lock:
+            held += sep.join(map(str, values)).rstrip("\n") + "\n"
+            logged = relay.ready(held, [form for form in secret_forms() if "\n" in form])
+            if logged:
+                ctx.log(held[:logged - 1])
+                held = held[logged:]
 
-    return print_to_log
+    def printed():
+        nonlocal held
+        with lock:
+            if held:
+                ctx.log(held[:-1])
+                held = ""
+
+    return print_to_log, printed
 
 
 class If(Block):

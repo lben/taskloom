@@ -172,6 +172,32 @@ def test_a_value_of_several_lines_printed_a_line_at_a_time_shows_only_as_stars(e
     assert runs_of(result.stdout.splitlines(), "out-start", "***", "out-end"), result.stdout
 
 
+LOGGED_LINE_BY_LINE = '''\
+k = secret("PEM.key")
+log("log2-start")
+for line in k.splitlines():
+    log(line)
+log("log2-end")
+print("mix-start")
+for i, line in enumerate(k.splitlines()):
+    (print if i % 2 == 0 else log)(line)
+log("mix-end")
+'''
+
+
+@pytest.mark.invariant("CR-5")
+def test_a_value_of_several_lines_logged_a_line_at_a_time_or_printed_and_logged_in_turn_shows_only_as_stars(env):
+    """E (the Log, the terminal): the code writes the key a line at a time with Python Code's log() between
+    `log2-start` and `log2-end`, and then with print and log() in turn (print the first line, log the second, ...)
+    between `mix-start` (printed) and `mix-end` (logged). Between each two there is one line, ***, in the order
+    written, and no line of the key shows anywhere."""
+    result = run_unbuffered(env, LOGGED_LINE_BY_LINE)
+
+    no_line_of_the_key(env, result)
+    assert runs_of(result.stderr.splitlines(), "log2-start", "***", "log2-end"), result.stderr
+    assert runs_of(result.stderr.splitlines(), "mix-start", "***", "mix-end"), result.stderr
+
+
 STARTS_LIKE_IT = '''\
 import builtins, os, sys, time
 k = secret("PEM.key")

@@ -637,7 +637,8 @@ class _Hiding:
     """A text stream that writes what it is given with every secret this process has read as *** (engine.redact):
     what a run prints (also what a block's code or a library writes straight to it, or logs with Python's logging),
     so what the editor's Log, the scheduler service and the terminal get; error lines; a connection's test. Whole
-    lines at a time (the rest when flushed), so a secret written in parts is found too."""
+    lines at a time (the rest when flushed), so a secret written in parts is found too; lines that may begin a secret
+    of several lines wait for the rest (relay.ready; at a flush in a run, in the relay below)."""
 
     def __init__(self, stream):
         self._stream, self._held = stream, ""
@@ -647,7 +648,7 @@ class _Hiding:
     def write(self, text: str) -> int:
         with self._lock:
             whole = self._held + text
-            end = whole.rfind("\n") + 1
+            end = relay.ready(whole, [form for form in secret_forms() if "\n" in form])
             self._held = whole[end:]
             if end:
                 self._stream.write(redact(whole[:end]))
