@@ -76,6 +76,9 @@ def main(encoding: str, token: str) -> int:
             else:
                 secret = part.decode("utf-8", "surrogatepass")
                 forms = dict.fromkeys((secret, secret.replace("\n", "\r\n")))  # (also as Python on Windows writes it)
+                # (and as put reads it in each coding, a character one has not as Python writes it: ż)
+                forms = dict.fromkeys(form.encode(coding, "backslashreplace").decode(coding, "surrogateescape")
+                                      for form in forms for coding in (encoding, "utf-8"))
                 secrets += forms
                 secrets.sort(key=len, reverse=True)  # (a longer one holding a shorter one first)
                 # (as bytes in each coding put reads, a character one has not as Python writes it)
