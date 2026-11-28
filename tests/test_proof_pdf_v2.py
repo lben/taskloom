@@ -500,3 +500,23 @@ def test_a_printed_text_that_fits_on_one_page_shrunk_is_not_cut_by_a_page_end(tm
     assert set(at) == set(printed), "words lost, or not as written"
     on = sorted({i for pages in at.values() for i in pages})
     assert len(on) == 1, f"the printed text is cut across a page's end: on pages {[i + 1 for i in on]} of {len(pdf)}"
+
+
+def test_the_ledger_prints_each_row_in_utf8_whatever_its_letters_also_where_python_writes_cp1252(tmp_path):
+    """CI's Evidence ledger step on Windows: ledger.py prints to a pipe, which Python there writes in cp1252, and
+    GitHub's log reads it as UTF-8. A row whose reason holds letters cp1252 has not (Cyrillic) and an em dash is
+    printed as written, in UTF-8, and with no red row the exit code is 0. (CI's run died on credentials' CR-14,
+    "Zürich_Ключ-1 and пароль", with UnicodeEncodeError, exit 1; its log showed each — as a broken character.)"""
+    promises, evidence = tmp_path / "promises", tmp_path / "evidence"
+    why = "Tests try Zürich_Ключ-1 and пароль — not every name of every alphabet."
+    feature(promises, evidence, "kappa", "Kappa names", {
+        "K-1": ("A name of any alphabet is kept.", {**AMBER, "not_green": why})}, [result("k1", "K-1")], [])
+    folder, out = evidence / "kappa", tmp_path / "printed" / "ledger.json"
+    out.parent.mkdir()
+    done = subprocess.run([sys.executable, str(LEDGER), str(promises / "kappa.yaml"), str(folder / "results.json"),
+                           "--checkers", str(folder / "checkers.json"), "--out", str(out)],
+                          env={**os.environ, "PYTHONIOENCODING": "cp1252"}, capture_output=True, timeout=120)
+    assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+    lines = done.stdout.decode("utf-8").splitlines()
+    assert any(line.startswith("K-1 ") and " AMBER " in line and line.endswith(f" — {why}") for line in lines), lines
+    assert json.loads(out.read_text(encoding="utf-8"))["rows"][0]["why"] == why
