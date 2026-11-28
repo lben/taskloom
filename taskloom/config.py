@@ -109,7 +109,8 @@ def _write_whole(path: Path, text: str):
 
 def _load_yaml(path: Path) -> dict:
     """The file's mapping; {} if there is no file. On Windows a file being replaced this instant (_write_whole) cannot
-    be read: it is read again for a second, as its writer tries again, then PermissionError."""
+    be read, or is not found though it is there: it is read again for a second, as its writer tries again, then
+    PermissionError (or FileNotFoundError)."""
     import time
 
     if not path.exists():
@@ -118,7 +119,7 @@ def _load_yaml(path: Path) -> dict:
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             break
-        except PermissionError:
+        except (PermissionError, FileNotFoundError):
             if attempt == 19:
                 raise
             time.sleep(0.05)
