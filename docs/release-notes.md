@@ -1,5 +1,12 @@
 # Release notes
 
+## 0.42.1
+
+On Windows, the scheduler service no longer tells you that the list of scheduled flows cannot be
+read when it reads the list just as the editor saves it: it reads the list again, as it already
+did when the list was held open for an instant. 0.42.0 was not published (its last check found
+this); what it brings is below, and 0.42.1 has all of it.
+
 ## 0.42.0
 
 Credentials are cards of keys. A password, token or key that a flow needs is a row of a card,

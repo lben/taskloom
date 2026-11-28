@@ -93,15 +93,18 @@ def test_a_run_whose_recorded_process_is_a_launchers_child_counts_once_for_max_c
 
 class ListInUse:
     """scheduled.yaml held open by another program, as Windows has it while the editor replaces it (os.replace): the
-    next `times` reads of it raise PermissionError."""
+    next `times` reads of it raise PermissionError. With gone=True they raise FileNotFoundError instead, though the
+    file is there, as Windows has it for an instant while the file is replaced."""
 
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch, gone=False):
         self.times = 0
         read = Path.read_text
 
         def read_text(path, *args, **kwargs):
             if path.name == "scheduled.yaml" and self.times > 0:
                 self.times -= 1
+                if gone:
+                    raise FileNotFoundError(2, "No such file or directory", str(path))  # (errno ENOENT)
                 raise PermissionError(13, "The process cannot access the file because it is being used by another "
                                           "process", str(path))
             return read(path, *args, **kwargs)
@@ -123,6 +126,25 @@ def test_the_list_held_open_for_a_moment_is_not_told_as_unreadable_and_the_flow_
 
     unreadable = [t for t in told_you if LIST_UNREADABLE in t]
     assert unreadable == [], f"the list was held open for a moment only, yet you were told: {unreadable}"
+    ran = begins(for_time(fake_runs.of("nightly"), clock("07:00:00")))
+    assert ran == utc([clock("07:00:00")]), f"nightly did not run at 07:00: {ran}; told: {told_you}"
+
+
+@pytest.mark.invariant("SCH-14")
+def test_the_list_being_replaced_this_instant_is_not_told_as_unreadable_and_the_flow_runs(env, fake_runs, monkeypatch):
+    """nightly runs at 07:00. As the service checks at 07:00, scheduled.yaml is being replaced: though it is there, its
+    next 3 reads find no file, then it reads as usual. You are not told the list cannot be read, and nightly runs at
+    07:00."""
+    schedule(env.home, env.root, {"nightly": flow_yaml({"cron": "0 7 * * *"})})
+    being_replaced = ListInUse(monkeypatch, gone=True)
+    told_you = []
+    service = fake_runs.service(env.home, lambda title, message: told_you.append(f"{title}: {message}"))
+    check(service, fake_runs, clock("06:59:50"))
+    being_replaced.times = 3
+    check(service, fake_runs, clock("07:00:00"))
+
+    unreadable = [t for t in told_you if LIST_UNREADABLE in t]
+    assert unreadable == [], f"the list was being replaced for an instant only, yet you were told: {unreadable}"
     ran = begins(for_time(fake_runs.of("nightly"), clock("07:00:00")))
     assert ran == utc([clock("07:00:00")]), f"nightly did not run at 07:00: {ran}; told: {told_you}"
 
