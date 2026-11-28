@@ -368,8 +368,7 @@ class CredentialsDialog(QDialog):
         index = self.cards.index(card)
         del self.cards[index]
         self.list.takeItem(index)
-        if not self.cards:
-            self._choose(-1)
+        self._choose(self.list.currentRow())  # (the row the list told during the take was one of the list before it)
 
     # --- the rows ---------------------------------------------------------------------------------------------------
 
