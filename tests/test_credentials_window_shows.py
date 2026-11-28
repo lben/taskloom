@@ -135,7 +135,8 @@ def lined_up(window):
         if eye is not None:
             at = box(eye, window)
             assert from_.right() < at.left() and near(at.center().y(), value.center().y(), 1), f"{said}, eye {at}"
-            assert near(at.right(), line.right(), 2), f"{said}, eye {at}"
+            # (its column is at least 28 pixels wide: an eye drawn narrower, 24 on Windows and Linux, is at its left)
+            assert near(at.right(), line.right(), 4), f"{said}, eye {at}"
         else:
             assert from_.right() <= line.right(), said
         note = short_note(row_)
