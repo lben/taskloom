@@ -467,7 +467,8 @@ _SECRET_CALL = re.compile(r"""(\bsecret\(\s*)(["'])([^"'\\\n]*)\2""")
 def renamed_credentials(data: dict, registry, new) -> dict:
     """A copy of the flow file's `data` whose blocks name new(block, CARD.key) instead of each credential they name,
     unless that is None: where Validate finds them, {{secret:CARD.key}} in a templated setting or a typed value, and in
-    a setting the block's references() name (there also secret:CARD.key, secret("CARD.key") and the whole setting)."""
+    a setting the block's references() name, in the form the block reads there: the whole setting CARD.key, each text
+    secret:CARD.key of a list or dict, secret("CARD.key") in Python code; never part of a sentence."""
     data = copy.deepcopy(data)
     for block_id, spec in (data.get("blocks") or {}).items():
         cls = registry.get(spec.get("type")) if isinstance(spec, dict) else None
@@ -475,15 +476,23 @@ def renamed_credentials(data: dict, registry, new) -> dict:
             continue
         config = spec.get("config") or {}
         try:
-            labels = {label for label, _ in cls.references(block_config(cls, BlockSpec(
-                id=block_id, type=cls.type_id, version=spec.get("version"), config=dict(config))))}
+            read = cls.references(block_config(cls, BlockSpec(
+                id=block_id, type=cls.type_id, version=spec.get("version"), config=dict(config))))
+            labels = {label for label, _ in read}
         except Exception:  # (a setting that cannot be read: Validate names it)
-            labels = set()
+            read, labels = [], set()
         given = lambda ref, b=block_id: new(b, ref)  # noqa: E731
         for key, value in config.items():
             f = cls.config.get(key)
-            if f is not None and (f.template or setting_label(key, f) in labels):
-                config[key] = _renamed(value, given, "whole" if setting_label(key, f) in labels else "text")
+            if f is None:
+                continue
+            label = setting_label(key, f)
+            if label in labels:
+                config[key] = _renamed(value, given, "whole" if (label, value) in read
+                                       else "code" if isinstance(f, fields.Code) and f.language == "python"
+                                       else "setting" if isinstance(value, (list, dict)) else "text")
+            elif f.template:
+                config[key] = _renamed(value, given)
         for typed in (spec.get("inputs") or {}).values():
             if isinstance(typed, dict):
                 typed["value"] = _renamed(typed.get("value"), given)
@@ -492,19 +501,18 @@ def renamed_credentials(data: dict, registry, new) -> dict:
 
 def _renamed(value, new, how: str = "text"):
     """`value` (a text, or a list or dict of them) with each {{secret:CARD.key}} naming new(CARD.key) instead (None:
-    as it is); `how` "setting": also a whole text secret:CARD.key and secret("CARD.key") in code; "whole": also the
-    whole text CARD.key (not inside a list or dict)."""
+    as it is); `how` "whole": also the text, a CARD.key; "setting": also each text secret:CARD.key in it, a list or
+    dict; "code": also each secret("CARD.key") in it."""
     if isinstance(value, (list, dict)):
-        inner = "text" if how == "text" else "setting"
-        found = {k: _renamed(v, new, inner) for k, v in (value.items() if isinstance(value, dict) else enumerate(value))}
+        found = {k: _renamed(v, new, how) for k, v in (value.items() if isinstance(value, dict) else enumerate(value))}
         return found if isinstance(value, dict) else list(found.values())
     if not isinstance(value, str):
         return value
     if how == "whole" and new(value):
         return new(value)
-    if how != "text":
-        if value.startswith(SECRET_PREFIX) and new(value[len(SECRET_PREFIX):]):
-            return SECRET_PREFIX + new(value[len(SECRET_PREFIX):])
+    if how == "setting" and value.startswith(SECRET_PREFIX) and new(value[len(SECRET_PREFIX):]):
+        return SECRET_PREFIX + new(value[len(SECRET_PREFIX):])
+    if how == "code":
         value = _SECRET_CALL.sub(lambda m: m.group(1) + m.group(2) + (new(m.group(3)) or m.group(3)) + m.group(2),
                                  value)
     return P.renamed(value, new)
