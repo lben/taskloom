@@ -1820,6 +1820,15 @@ names (also in a connection its blocks use) and that does not exist, with its bl
 A run checks every card, key and value it needs before its first block, and stops naming each
 one missing.
 
+A value shows as `***` wherever Taskloom shows or keeps what a run did: the Log and run history,
+the results, Data preview and the hovers, the terminal, emails and the scheduler's notices, also
+when a block's code, a library or a program it starts prints it, a value of several lines too.
+Programs on a server can see the command it runs while it runs, so Validate warns about a
+`{{secret:…}}` in the `command` of SSH Command or Start Remote Process and in every other setting
+put onto the server's command line (Start Remote Process's `workdir`, `log_file`, `pid_file` and
+`check_after`, the `pid_file` of Stop Remote Process and Health Check, Remote Extract's `archive`
+and `destination`); the Log shows `***` there too.
+
 The editor's **Tools → Credentials…** does the same in a window. The cards are on the left, with
 **Add…**, **Rename…** and **Delete**; the chosen card's rows are on the right, a key and its
 value each, and always one empty row last: type a key there to add a row. Every value shows as
