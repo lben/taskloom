@@ -5,9 +5,7 @@ step and the flow file holds what the list shows; a secret: value stays hidden w
 the same name in API Request's lists are both kept and both sent, in the list's order. How proofs are written:
 README.md here."""
 
-import keyring
 import yaml
-from keyring.backends import fail
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtTest import QTest
@@ -302,10 +300,10 @@ def test_a_row_is_changed_where_it_is_and_deleted_each_change_one_undo_step(proo
 def test_a_hidden_value_stays_hidden_while_its_row_is_edited(proof, win, qtbot, tmp_path, monkeypatch):
     p = proof("A hidden value (secret:) stays hidden while its row is edited", ASKED)
     p.idea("A header can take its value from a stored secret: its value is secret: and the secret's name, e.g. "
-           "secret:orders_key. The list shows that, and only that.")
-    p.idea("Double-click the value, and the text box in the cell holds secret:orders_key: the name, never the secret's "
-           "value. Change the row's name, and the value stays secret:orders_key. Saved, the flow file holds the name.")
-    p.why_simplest("A cell of the list holds the text the flow file holds, secret:orders_key, and the secret's value "
+           "secret:orders.key. The list shows that, and only that.")
+    p.idea("Double-click the value, and the text box in the cell holds secret:orders.key: the name, never the secret's "
+           "value. Change the row's name, and the value stays secret:orders.key. Saved, the flow file holds the name.")
+    p.why_simplest("A cell of the list holds the text the flow file holds, secret:orders.key, and the secret's value "
                    "is looked up only when the request is sent. So there is no value to hide while you edit: it is "
                    "never put in the list.")
     p.alternative("Show the secret's value in the cell as dots, to be edited there",
@@ -316,41 +314,41 @@ def test_a_hidden_value_stays_hidden_while_its_row_is_edited(proof, win, qtbot, 
            "and that an API connection's headers take. The Log, the run history and Copy as cURL show it hidden too.")
     for name in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
     hidden = secret("key")
 
-    p.step("Store the API's key as the stored secret orders_key, as taskloom secret set orders_key does.")
+    p.step("Store the API's key as the stored secret orders.key, as taskloom secret set orders.key does.")
     p.note("taskloom secret set reads the key from the keyboard, which a proof cannot type into. So the proof stores "
-           "it with the same code that command runs, in this proof's own temporary Taskloom folder: never in your "
-           "system's credential store. The key is made up for this proof.")
-    where = win.home.set_secret("orders_key", hidden)
-    assert str(where).endswith("secrets.yaml") and win.home.get_secret("orders_key") == hidden
+           "it with the same code that command runs, in the tests' stand-in for the system's credential store, a "
+           "file in this proof's temporary folder: never in your system's credential store. The key is made up "
+           "for this proof.")
+    where = win.home.set_secret("orders.key", hidden)
+    assert where == "the system credential store" and win.home.get_secret("orders.key") == hidden
 
-    rows = [("Accept", "application/json"), ("X-Api-Key", "secret:orders_key"), ("X-Trace", "nightly")]
+    rows = [("Accept", "application/json"), ("X-Api-Key", "secret:orders.key"), ("X-Trace", "nightly")]
     path = flow_file(tmp_path / "keyed-orders.yaml", {
         "start_by_hand": {"type": "trigger.manual", "ui": {"x": 0, "y": 40}},
         "get_orders": {"type": API, "config": {"url": URL, "headers": as_rows(rows)}, "ui": {"x": 260, "y": 0}},
     }, ["start_by_hand.start -> get_orders.after"])
     p.step("Open keyed-orders.yaml (File > Open…) and click get_orders. Its Headers have X-Api-Key, whose value is "
-           "secret:orders_key.")
+           "secret:orders.key.")
     tab = open_flow(win, monkeypatch, path)
     click(tab, "get_orders")
     activate(qtbot, win)
     scroll_to(win, "Auth")
-    p.shot(win, "① X-Api-Key's value shows as secret:orders_key: the stored secret's name.",
+    p.shot(win, "① X-Api-Key's value shows as secret:orders.key: the stored secret's name.",
            highlight=[(table(win, HEADERS), 1)], badges=True, zoom=[properties_row(win, "Headers")])
-    p.check("The row shows X-Api-Key secret:orders_key, and no window shows the secret's value (AP-4)",
+    p.check("The row shows X-Api-Key secret:orders.key, and no window shows the secret's value (AP-4)",
             shown(table(win, HEADERS)) == rows and hidden not in everything_shown(win))
 
-    p.step("Double-click secret:orders_key, look at the text box, and press Enter without changing it.")
+    p.step("Double-click secret:orders.key, look at the text box, and press Enter without changing it.")
     editor = open_cell(table(win, HEADERS), 1, "Value")
-    p.shot(win, "① The text box in the cell holds secret:orders_key, the name: the value is not there to edit.",
+    p.shot(win, "① The text box in the cell holds secret:orders.key, the name: the value is not there to edit.",
            highlight=[editor], badges=True, zoom=[properties_row(win, "Headers")])
-    p.check("While the value is edited, its text box holds secret:orders_key, and no window shows the secret's value "
-            "(AP-4)", editor.text() == "secret:orders_key" and hidden not in everything_shown(win))
+    p.check("While the value is edited, its text box holds secret:orders.key, and no window shows the secret's value "
+            "(AP-4)", editor.text() == "secret:orders.key" and hidden not in everything_shown(win))
     QTest.keyClick(editor, Qt.Key_Return)
     settle()
-    p.check("After Enter, the row is still X-Api-Key secret:orders_key, and no window shows the secret's value (AP-4)",
+    p.check("After Enter, the row is still X-Api-Key secret:orders.key, and no window shows the secret's value (AP-4)",
             shown(table(win, HEADERS)) == rows and hidden not in everything_shown(win))
 
     p.step("Double-click X-Api-Key, type X-Key and press Enter.")
@@ -360,18 +358,18 @@ def test_a_hidden_value_stays_hidden_while_its_row_is_edited(proof, win, qtbot, 
     QTest.keyClick(editor, Qt.Key_Return)
     settle()
     scroll_to(win, "Auth")
-    p.shot(win, "① The row is X-Key now, its value still secret:orders_key.", highlight=[(table(win, HEADERS), 1)],
+    p.shot(win, "① The row is X-Key now, its value still secret:orders.key.", highlight=[(table(win, HEADERS), 1)],
            badges=True, zoom=[properties_row(win, "Headers")])
     p.check("While its name was edited, and after, no window showed the secret's value; the row is X-Key "
-            "secret:orders_key (AP-4)",
+            "secret:orders.key (AP-4)",
             while_named and hidden not in everything_shown(win)
-            and shown(table(win, HEADERS)) == [rows[0], ("X-Key", "secret:orders_key"), rows[2]])
+            and shown(table(win, HEADERS)) == [rows[0], ("X-Key", "secret:orders.key"), rows[2]])
 
     p.step("Choose File > Save.")
     save(win)
     p.text("What the flow file holds of get_orders' Headers", the_file(path, "get_orders", "headers"))
-    p.check("The flow file holds X-Key: secret:orders_key, the secret's name, and nowhere its value (AP-3, AP-4)",
-            saved_rows(path, HEADERS, "get_orders") == as_rows([rows[0], ("X-Key", "secret:orders_key"), rows[2]])
+    p.check("The flow file holds X-Key: secret:orders.key, the secret's name, and nowhere its value (AP-3, AP-4)",
+            saved_rows(path, HEADERS, "get_orders") == as_rows([rows[0], ("X-Key", "secret:orders.key"), rows[2]])
             and hidden not in path.read_text(encoding="utf-8"))
     for each in win.tabs_list():
         each.doc.dirty = False
@@ -404,7 +402,6 @@ def test_two_rows_with_the_same_name_are_both_kept_and_both_sent(proof, win, qtb
         monkeypatch.delenv(name, raising=False)  # (the runs the editor starts inherit this process's)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
 
     with serving() as api:
         connections = win.home.root / "connections.yaml"

@@ -557,7 +557,7 @@ SECRET_FLOW = """
     blocks:
       token:
         type: logic.ask_user
-        config: {prompt: "API token?", kind: password, secret: api_token}
+        config: {prompt: "API token?", kind: password, secret: api.token}
       use:
         type: logic.python
         config:
@@ -571,61 +571,62 @@ SECRET_FLOW = """
 """
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin; POSIX file modes")
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
 def test_secret_set_makes_the_folder_and_a_new_value_replaces_the_old_one_keeping_the_others(env):
     env.env["TASKLOOM_HOME"] = str(env.root / "new home")  # not made yet
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     secrets = env.root / "new home" / "secrets.yaml"
     flow = write(env, SECRET_FLOW)
 
-    first = secret_set(env, "api_token", "first-Value 1")
-    other = secret_set(env, "other", "kept")
-    second = secret_set(env, "api_token", "second Välue: #2")
+    first = secret_set(env, "api.token", "first-Value 1")
+    other = secret_set(env, "other.key", "kept")
+    second = secret_set(env, "api.token", "second Välue: #2")
     ran = env.taskloom("run", flow, "--param", "expected=second Välue: #2")
 
     for result in (first, other, second):
         assert result.returncode == 0 and f"saved secret '{result.args[-1]}' in {secrets}" in result.stdout, result.stderr
     assert stat.S_IMODE(secrets.stat().st_mode) == 0o600
-    assert yaml.safe_load(secrets.read_text(encoding="utf-8")) == {"api_token": "second Välue: #2", "other": "kept"}
+    assert yaml.safe_load(secrets.read_text(encoding="utf-8")) == {"api.token": "second Välue: #2", "other.key": "kept"}
     for result, value in ((first, "first-Value 1"), (second, "second Välue: #2")):
         assert value not in result.stdout + result.stderr  # never shown
     assert ran.returncode == 0, ran.stderr
     assert (env.root / "same.txt").read_text() == "True"  # Ask User used the stored secret, the newest value
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin; POSIX file modes")
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
 def test_secret_set_never_leaves_a_secret_in_a_file_others_can_read(env):
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     secrets = env.write("home/secrets.yaml", "old: x\n")
     secrets.chmod(0o644)  # e.g. made by hand
 
-    result = secret_set(env, "api_token", "Tok3n-value-9")
+    result = secret_set(env, "api.token", "Tok3n-value-9")
 
     readable_by_others = stat.S_IMODE(secrets.stat().st_mode) & (stat.S_IRWXG | stat.S_IRWXO)
     assert not (readable_by_others and "Tok3n-value-9" in secrets.read_text(encoding="utf-8")), (
         result.returncode, oct(stat.S_IMODE(secrets.stat().st_mode)), result.stdout)
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
 @pytest.mark.parametrize("content", list(BROKEN_FILES.values()), ids=list(BROKEN_FILES))
 def test_a_secrets_file_taskloom_cannot_read_is_an_error_naming_it_and_is_left_as_it_was(env, content):
     from sshserver import free_port
 
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
     env.write("home/connections.yaml", f"appserver: {{kind: ssh, host: 127.0.0.1, port: {free_port()}, "
-                                       "username: me, password: 'secret:appserver_password'}\n")
+                                       "username: me, password: 'secret:appserver.password'}\n")
+    env.write("home/credentials.yaml", "cards:\n  appserver:\n    rows: {password: null}\n  api:\n    rows: {token: null}\n")
     secrets = env.home / "secrets.yaml"
     secrets.write_bytes(content)
     secrets.chmod(0o600)
     flow = write(env, SECRET_FLOW)
 
-    ran = env.taskloom("run", flow)
-    told = {"connection test": (env.taskloom("connection", "test", "appserver", timeout=60), 1)}
+    told = {"run": (env.taskloom("run", flow), 2),  # (CR-8: it stops before its first block)
+            "connection test": (env.taskloom("connection", "test", "appserver", timeout=60), 1)}
     if sys.platform != "win32":  # getpass reads the Windows console, not stdin
-        told["secret set"] = (secret_set(env, "api_token", "new-value"), None)
+        told["secret set"] = (secret_set(env, "api.token", "new-value"), None)
 
-    run_id, status = env.last_run()
-    [(error,)] = env.query("SELECT error FROM blocks WHERE run_id=? AND block='token'", run_id)
-    problems = told_clearly(told, "secrets.yaml")
-    if not (ran.returncode == 1 and status == "failed" and "secrets.yaml" in (error or "")):
-        problems.append(f"run: exit {ran.returncode}, Ask User's error does not name secrets.yaml: {error!r}")
-    assert problems == []
+    assert told_clearly(told, "secrets.yaml") == []
+    assert runs_recorded(env) == 0
     assert secrets.read_bytes() == content  # nothing in it is lost
 
 

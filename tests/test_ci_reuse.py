@@ -576,8 +576,9 @@ def test_on_a_tag_release_and_pages_run_also_when_a_long_check_was_taken_from_an
 
 # The jobs each feature's mutation testing runs in at once (`parts:` in its mutants yaml; without it, 1): the
 # scheduler's 3 as before, and the three that took longest whole in stage 3's full runs, updates (168-178 minutes),
-# braces (76-99) and rows (77 and 103). Every other feature: 1.
-SPLIT = {"scheduler": 3, "updates": 4, "braces": 2, "rows": 2}
+# braces (76-99) and rows (77 and 103), and credentials' 4, set from its size before its first full run. Every other
+# feature: 1.
+SPLIT = {"scheduler": 3, "updates": 4, "braces": 2, "rows": 2, "credentials": 4}
 LISTING = re.compile(r"^\S+ \d+ (mutation|feature:\S+)\s*$", re.M)
 
 

@@ -667,10 +667,10 @@ def test_l13_right_after_leave_the_status_bar_no_longer_says_it_shows_the_loaded
 # --- LS-4: values not kept -------------------------------------------------------------------------------------------
 
 def not_kept_flow(folder: Path) -> Path:
-    """manual -> ask (Ask User, a password: from the stored secret pw when nobody can answer) -> use_pw; manual ->
+    """manual -> ask (Ask User, a password: from the stored secret app.pw when nobody can answer) -> use_pw; manual ->
     connect (an open database connection) -> query; manual -> make (5) -> show."""
     return write_flow(folder, {
-        "ask": {"type": "logic.ask_user", "config": {"prompt": "Password?", "kind": "password", "secret": "pw"}},
+        "ask": {"type": "logic.ask_user", "config": {"prompt": "Password?", "kind": "password", "secret": "app.pw"}},
         "use_pw": python(noting("use_pw", "'got it'"), ("pw",), ()),
         # Each block runs in a thread of its own (engine _attempt), and sqlite3 refuses a connection used in a thread
         # other than its maker's unless told not to check (macOS and Linux often give the next thread the ended one's
@@ -691,10 +691,7 @@ def test_l9_a_password_and_an_open_connection_are_named_not_kept_and_reruns_need
     it: ask and connect each name their value as not kept, with the reason. use_pw and query, re-run alone, are
     refused with that reason (not the other one) before anything runs (no new run, they do not run); show, re-run
     alone, runs."""
-    win.home.root.mkdir(parents=True, exist_ok=True)
-    secrets = win.home.root / "secrets.yaml"
-    secrets.write_text("pw: hunter2SECRET\n", encoding="utf-8")
-    secrets.chmod(0o600)
+    win.home.set_secret("app.pw", "hunter2SECRET")
     path = not_kept_flow(tmp_path)
     first = run_cli(win, path)
     assert received(tmp_path, "use_pw") == ["got it"] and received(tmp_path, "query") == ["1"]

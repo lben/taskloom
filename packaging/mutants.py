@@ -37,8 +37,10 @@ mutmut does not judge a scope's mutants itself. It runs a mutant only on the tes
 the pytest process, and the tests of the command line and of the editor reach the code in child processes (each run
 of a flow is one), so it finds no test for any of them. For a scope, --run has mutmut plant the mutants (its copy of
 the code in mutants/, where an environment variable says which mutant is on; only in the functions the scope names,
-so the others in their files stay as written) and runs the tests itself: pytest -x -q in that copy, with the copy
-first on PYTHONPATH and the mutant's name in MUTANT_UNDER_TEST, so the tests and every process they start take it.
+so the others in their files stay as written), compiles that copy's code once (its bytecode, which every process
+then loads: with its mutants a file is many times as long, e.g. engine.py 220,000 lines, and the first runs, each
+compiling it at once, took minutes) and runs the tests itself: pytest -x -q in that copy, with the copy first on
+PYTHONPATH and the mutant's name in MUTANT_UNDER_TEST, so the tests and every process they start take it.
 --workers of these runs go at a time (default: this machine's cores), each with a temporary folder of its own. A run
 that fails (or whose process dies) catches the mutant and one that passes misses it; one still going at the time
 limit (mutmut's: the tests' time with no mutant plus timeout_constant, times timeout_multiplier) is ended with every
@@ -64,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import compileall
 import contextlib
 import json
 import os
@@ -231,6 +234,8 @@ def judge(project: Path, scope: dict, names: list[str], workers: int) -> int:
     subprocess.run([sys.executable, "-c", PLANT, json.dumps(lines)], cwd=project, check=True,
                    stdout=subprocess.DEVNULL)
     copy = (project / "mutants").resolve()
+    for source in settings["source_paths"]:  # (its bytecode, once: see the module's docstring)
+        compileall.compile_dir(copy / source, quiet=1, workers=workers)
     path = os.pathsep.join(filter(None, [str(copy), os.environ.get("PYTHONPATH")]))
     (project / "logs").mkdir()
 

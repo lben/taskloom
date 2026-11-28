@@ -203,10 +203,10 @@ def test_paths_after_an_if_meeting_in_an_input_that_takes_any_one_show_which_cam
 def test_a_password_in_an_input_of_a_rerun_block_stays_masked_in_its_report(env):
     """Spec 5: the value shown for an input holding a password the block reads shows *** in its place, and the
     password appears nowhere in the run's log or output."""
-    env.write("home/secrets.yaml", f"report_token: {TOKEN}\n").chmod(0o600)
+    env.set_secret("report.token", TOKEN)
     flow = write_flow(env.root / "flow.yaml", {
         "load": python(f"output = 'the token is {TOKEN}'"),
-        "check": python("token = ctx.home.get_secret('report_token')\nraise ValueError('the token was refused')",
+        "check": python("token = ctx.home.get_secret('report.token')\nraise ValueError('the token was refused')",
                         ("text",), ()),
     }, ["load.output -> check.text"])
     full = run(env, flow)

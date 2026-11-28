@@ -16,7 +16,7 @@ The rules every change to Taskloom keeps. Approved on 2026-11-07.
 | 2. Blocks | `taskloom/blocks/` |
 | 3. Core | reading, checking and upgrading flows; running them; the block registry; the Python environment |
 | 4. Outside world | settings files, run history, databases, servers, mail |
-| 5. Foundations | tables, expressions, parameters, calendars, schedules, reports, how Taskloom starts its own programs |
+| 5. Foundations | tables, expressions, parameters, calendars, schedules, reports, how Taskloom starts its own programs, the relay of a run's output |
 
 Foundations never call a database, a server, a mail server or the web.
 

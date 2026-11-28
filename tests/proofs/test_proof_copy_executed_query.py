@@ -283,7 +283,7 @@ def test_copy_executed_query_copies_the_sql_a_run_sent_with_its_values_written_i
           driver: org.h2.Driver
           url: "{URL.format(port=h2_server['port'])}"
           jars: ["{h2_server['jar'].as_posix()}"]
-          properties: {{user: sa, password: "secret:warehouse_password"}}
+          properties: {{user: sa, password: "secret:warehouse.password"}}
     """)
     h2_shell(h2_server, SALES)
     # daily_total runs after load_sales (it reads its rows), though it comes first by name and in the file.

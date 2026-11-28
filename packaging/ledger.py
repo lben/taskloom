@@ -99,4 +99,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    # (in UTF-8, as CI's log reads it: Python on Windows would write cp1252, and die on a row's letter it has not)
+    sys.stdout.reconfigure(encoding="utf-8")
     sys.exit(main())

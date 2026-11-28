@@ -26,7 +26,8 @@ from .flow import (API_REQUEST, AS_FINISHED, AT_ONCE, ERROR_PORT, INDEX, ITEM, I
                    RESULT, RESULTS, RUNS_AGAIN, SPLITTER, Flow, FlowError, _start_blocks, _taking_part, at_level, block_config, containers,
                    from_inside, line_runs, lines_run, order, per_line, per_line_of, run_clock, splitter_lines,
                    validate)
-from .config import REVEALED, before_now, kept_runs, runs_kept_since
+from .config import REVEALED, Seen, before_now, kept_runs, runs_kept_since
+from .credentials import CredentialError
 from .history import History
 from .registry import for_flow
 from .table import Table
@@ -75,7 +76,7 @@ class SecretStr(str):
         return "'***'"
 
 
-HIDDEN: set[str] = set()  # every HiddenStr's value this process has seen
+HIDDEN: set[str] = Seen()  # every HiddenStr's value this process has seen
 
 
 class HiddenStr(SecretStr):
@@ -88,21 +89,30 @@ class HiddenStr(SecretStr):
 
 
 _forms: tuple = ((0, 0), [])  # secret_forms' last list, and the sizes of REVEALED and HIDDEN it was made for
+URL_SAFE = "!#$%&'()*+,/:;=?@[]~"  # the characters a web address can hold as they are (or encoded)
+
+
+def forms_of(values) -> list[str]:
+    """Each of `values` of 4 characters or more (a shorter one cannot be hidden reliably inside text), also as repr()
+    and JSON write it inside a quoted text (a \\ or quote escaped, ä as \\u00e4) and URL-encoded as a web address
+    holds it (a space as %20 or +, a + or / as it is or encoded); longest first."""
+    import json
+    from urllib.parse import quote, quote_plus
+
+    forms = {form for s in values if len(s) >= 4
+             for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
+                          json.dumps(s, ensure_ascii=False)[1:-1], quote(s, safe=""), quote(s), quote_plus(s),
+                          quote(s, safe=URL_SAFE))}
+    return sorted(forms, key=len, reverse=True)
 
 
 def secret_forms() -> list[str]:
-    """Every secret and HiddenStr seen in this process (of 4 characters or more), also as repr() and JSON write it
-    inside a quoted text (a \\ or quote escaped, ä as \\u00e4); longest first. Made again only when one was added
-    (both sets only grow): a Loop whose calls each get a new cookie would otherwise make it for every text logged."""
-    import json
-
+    """forms_of every secret and HiddenStr seen in this process. Made again only when one was added (both sets only
+    grow): a Loop whose calls each get a new cookie would otherwise make it for every text logged."""
     global _forms
     sizes = (len(REVEALED), len(HIDDEN))  # before reading them: one added meanwhile makes it again next time
     if _forms[0] != sizes:
-        forms = {form for s in list(REVEALED | HIDDEN) if len(s) >= 4
-                 for form in (s, repr(s)[1:-1], repr(s + "'\"")[1:-4], json.dumps(s)[1:-1],
-                              json.dumps(s, ensure_ascii=False)[1:-1])}
-        _forms = (sizes, sorted(forms, key=len, reverse=True))
+        _forms = (sizes, forms_of(list(REVEALED | HIDDEN)))
     return _forms[1]
 
 
@@ -327,7 +337,7 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
     fired = _fired_triggers(flow, registry, trigger)
     part = run_part(flow, registry, trigger, only, run_from)
     # A problem of a block taking no part in it does not stop it: its Log warns about it.
-    errors, warnings = validate(flow, registry, home, part)
+    errors, warnings = validate(flow, registry, home, part, values=True)  # (names every stored value missing too)
     if errors:
         raise FlowError(errors)
     now, funcs = run_clock(flow, home, as_of)
@@ -363,8 +373,8 @@ def run_flow(flow: Flow, registry, home, overrides: dict | None = None, sinks=()
         before_start()
 
     history = History(home.history_db)
-    run_id = history.start_run(flow.name, str(flow.path), values, _now(), started_by, counts_for, keeps, flow.version,
-                               scheduled, claim, inputs_from)
+    run_id = history.start_run(flow.name, str(flow.path), redact(values), _now(), started_by, counts_for, keeps,
+                               flow.version, scheduled, claim, inputs_from)
     all_sinks = (history, *sinks)
     running: dict = {}  # block -> attempt, for the blocks started and not finished
     # Lines run at the same time tell their events one at a time, each whole and in the order they happen.
@@ -735,7 +745,8 @@ class _Runner:
         loop, cls = spec.id, self.registry.get(spec.type)
         try:
             connected = {e.dst_port for e in self.flow.edges if e.dst == loop and not from_inside(self.flow, e)}
-            at_once = _filled(cls, block_config(cls, spec), self.values, inputs, {ITEMS}, connected)[AT_ONCE]
+            at_once = _filled(cls, block_config(cls, spec), self.values, inputs, {ITEMS}, connected,
+                              self.home.get_secret)[AT_ONCE]
             items = _items_of(inputs.get(ITEMS))
         except Exception as e:
             return (*self._fail(spec, 0, e, inputs), None)
@@ -918,7 +929,8 @@ class _Runner:
                        "summary": "something before it failed"})
             return None, {}, None
         try:
-            at_once = _filled(cls, block_config(cls, spec), self.values, {}, set(), set())[AT_ONCE]
+            at_once = _filled(cls, block_config(cls, spec), self.values, {}, set(), set(),
+                              self.home.get_secret)[AT_ONCE]
             as_finished = block_config(cls, spec)[RUNS_AGAIN] == AS_FINISHED
         except Exception as e:
             return (*self._fail(spec, 0, e, given or {}), None)
@@ -1152,7 +1164,7 @@ class _Runner:
             return None
         try:  # its typed values, as if a line brought each
             return {**inputs, **_typed(self.flow.blocks[block_id].inputs, self.values, inputs, set(in_ports) - {AFTER},
-                                       {e.dst_port for e in incoming})}
+                                       {e.dst_port for e in incoming}, self.home.get_secret)}
         except Failed as e:
             return e
 
@@ -1195,8 +1207,9 @@ class _Runner:
                       typed: dict | None = None, came: dict | None = None):
         """Save what the block produced and how it ended (or, with KEPT_INPUTS, what it got, which of
         those you typed and the connections the others came by), so it can later feed a re-run of a single
-        block. Values holding a password are never written to disk."""
+        block. Values holding a password, and texts you typed holding one, are never written to disk."""
         kept, withheld, passwords = {}, [], []
+        stored = [form.encode() for form in forms_of(list(REVEALED))]
         for port, value in produced.items():
             value = _tables_to_marks(value)
             try:
@@ -1204,8 +1217,9 @@ class _Runner:
             except Exception:
                 withheld.append(port)  # not something that can be saved (e.g. an open connection)
                 continue
-            # A password, or text built from one (e.g. "user:" + password), stays off the disk.
-            if _holds_secret(value) or any(len(s) >= 4 and s.encode() in data for s in REVEALED):
+            # A password, or text built from one (e.g. "user:" + password, or a web address holding it), stays off
+            # the disk.
+            if _holds_secret(value) or any(form in data for form in stored):
                 withheld.append(port)
                 passwords.append(port)
             else:
@@ -1213,6 +1227,8 @@ class _Runner:
         kept[WITHHELD], kept[PASSWORDS] = withheld, passwords
         if status is not None:
             kept[STATUS] = status
+        typed = {hole: text for hole, text in (typed or {}).items()
+                 if not any(form in str(text).encode() for form in stored)}
         if typed:
             kept[TYPED] = typed
         if came:
@@ -1240,7 +1256,7 @@ class _Runner:
             config = block_config(cls, spec)
             in_ports, out_ports = cls.ports(config)
             connected = {e.dst_port for e in self.flow.edges if e.dst == spec.id}
-            config = _filled(cls, config, self.values, inputs, set(in_ports) - {AFTER}, connected)
+            config = _filled(cls, config, self.values, inputs, set(in_ports) - {AFTER}, connected, self.home.get_secret)
             for name, port in in_ports.items():
                 if port.kind == "table" and name in inputs and not isinstance(inputs[name], Table):
                     raise TypeError(f"input '{name}' expects a table, got {type(inputs[name]).__name__}")
@@ -1268,6 +1284,7 @@ class _Runner:
                         self.emit({"event": "log", "block": spec.id, "level": "INFO",
                                    "message": f"session {spec.session}'s cookies: {_cookie_names(_held(jar))}"})
                 produced = self._check_outputs(result, out_ports, ctx)
+                _scrub_tables(produced, self.workspace)
                 previews = {p: preview(v) for p, v in produced.items()}
                 # A Splitter given no value passes None on to its lines: not a value to show as if it were one.
                 summary = ("its lines start with nothing: no value arrived" if spec.type == SPLITTER
@@ -1441,12 +1458,13 @@ PASSWORDS = "__passwords__"  # of those, the ones not saved because they held a 
 SINGLE_VALUES = (str, int, float, decimal.Decimal, dt.date, dt.time)
 
 
-def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, connected: set) -> dict:
+def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, connected: set, secret) -> dict:
     """The block's config with the placeholders of its templated settings filled in (validate checked their names): a
-    flow parameter, or what arrived at the block's data input of that name (not in SQL code); a number setting written
-    with placeholders is then read as its number. Raises Failed, naming the setting, for one it cannot fill."""
+    flow parameter, or what arrived at the block's data input of that name (not in SQL code), and a reference
+    {{secret:CARD.key}} with secret(CARD.key); a number setting written with placeholders is then read as its number.
+    Raises Failed, naming the setting, for one it cannot fill."""
     def fill(label: str, text: str, own: set) -> str:
-        return _fill(label, text, params, inputs, own, connected)
+        return _fill(label, text, params, inputs, own, connected, secret)
 
     filled = dict(config)
     for key, f in cls.config.items():
@@ -1465,10 +1483,11 @@ def _filled(cls, config: dict, params: dict, inputs: dict, data_inputs: set, con
     return filled
 
 
-def _fill(label: str, text: str, params: dict, inputs: dict, own: set, connected: set) -> str:
+def _fill(label: str, text: str, params: dict, inputs: dict, own: set, connected: set, secret) -> str:
     """`text` (of what `label` names) with its {{name}} filled in once: a flow parameter, or what arrived at the
-    block's data input of that name (`own`: those it can name; `inputs`: what arrived; `connected`: those with a line).
-    Raises Failed, naming `label`, for one it cannot fill."""
+    block's data input of that name (`own`: those it can name; `inputs`: what arrived; `connected`: those with a line);
+    a reference {{secret:CARD.key}} with secret(CARD.key) (Home.get_secret). Raises Failed, naming `label`, for one it
+    cannot fill."""
     values = dict(params)
     for name in sorted(P.template_names(text) & own):
         if name not in inputs:
@@ -1481,12 +1500,12 @@ def _fill(label: str, text: str, params: dict, inputs: dict, own: set, connected
             raise Failed(f"{label}: {{{{{name}}}}}: the input {name} got {got}, but only a single value (text, a "
                          "number, a date or time, yes/no) can be written into a setting")
     try:
-        return P.render(text, values)
-    except ValueError as e:
+        return P.render(text, values, secret)
+    except (ValueError, CredentialError) as e:
         raise Failed(f"{label}: {e}") from None
 
 
-def _typed(typed: dict, params: dict, inputs: dict, own: set, connected: set) -> dict:
+def _typed(typed: dict, params: dict, inputs: dict, own: set, connected: set, secret) -> dict:
     """What a block's typed values (`typed`: {input: {type, value}}, see flow.BLOCK_KEYS) give it, as if a line brought
     each: its value converted to its type as a flow parameter's value is, then {{name}} in a text, or in each item of a
     list, filled once as in a setting (_fill: `inputs` are what the lines into the block brought). Raises Failed naming
@@ -1499,9 +1518,9 @@ def _typed(typed: dict, params: dict, inputs: dict, own: set, connected: set) ->
         except (ValueError, TypeError) as e:
             raise Failed(f"{label}, {t['value']!r} as {t['type']}: {e}") from None
         if isinstance(value, str):
-            value = _fill(label, value, params, inputs, own, connected)
+            value = _fill(label, value, params, inputs, own, connected, secret)
         elif isinstance(value, list):
-            value = [_fill(label, item, params, inputs, own, connected) if isinstance(item, str) else item
+            value = [_fill(label, item, params, inputs, own, connected, secret) if isinstance(item, str) else item
                      for item in value]
         found[hole] = value
     return found
@@ -1886,7 +1905,7 @@ def _only_inputs(flow: Flow, registry, home, only: str, run_id: int | None, give
     values = {k: v for k, v in {**values, **given}.items() if v is not NO_VALUE}
     try:
         values |= _typed(now, params, values, set(in_ports) - {AFTER},
-                         {e.dst_port for e in flow.edges if e.dst == only})
+                         {e.dst_port for e in flow.edges if e.dst == only}, home.get_secret)
     except Failed as e:
         raise ValueError(f"{only}: {e}") from None
     needed = [name for name, port in in_ports.items() if port.required and name not in values]
@@ -1959,6 +1978,28 @@ def _table_files(value, name: str) -> dict:
     else:
         return {}
     return {where: path for part, v in parts for where, path in _table_files(v, part).items()}
+
+
+def _scrub_tables(produced: dict, workspace: Path):
+    """Each table among a block's outputs that the run keeps (in its folder `workspace`) whose text cells hold a
+    password (forms_of) is written again with *** in its place: no file keeps one. A file outside the run's folder
+    that a table was read from is not changed."""
+    forms = forms_of(list(REVEALED))
+    if not forms:
+        return
+    for name in produced:
+        for path in map(Path, _table_files(produced[name], name).values()):
+            if not path.is_relative_to(workspace):
+                continue
+            lazy = pl.scan_parquet(path)
+            texts = [column for column, kind in lazy.collect_schema().items() if kind == pl.String]
+            if not texts or not lazy.select(pl.any_horizontal(
+                    pl.col(texts).str.contains_any(forms)).any()).collect().item():
+                continue
+            scrubbed = path.with_name(f"{path.name}.scrubbed")
+            lazy.with_columns(pl.col(texts).str.replace_many(forms, ["***"] * len(forms), leftmost=True)
+                              ).sink_parquet(scrubbed)
+            os.replace(scrubbed, path)
 
 
 def _tables_to_marks(value):

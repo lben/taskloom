@@ -452,6 +452,10 @@ def test_the_flow_schedule_notify_and_connection_snippets_of_the_guide_are_a_val
     [schedules] = [s for s in snippets if s.startswith("triggers:")]
     [connections] = [s for s in snippets if s.startswith("# connections.yaml")]
     write(env, connections, "home/connections.yaml")
+    # (the guide's next step: store the password it names; Validate then finds its card and key listed)
+    stored = re.search(r"`taskloom secret set (\S+)`", guide.split(connections + "```", 1)[1]).group(1)
+    done = env.taskloom("secret", "set", stored, "--stdin", input="made-up-password\n")
+    assert done.returncode == 0, done.stderr
     assert "overlap: skip" in schedules
 
     for overlap in ("skip", "queue", "allow"):  # "skip | queue | allow"

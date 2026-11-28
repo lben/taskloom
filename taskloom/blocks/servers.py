@@ -287,7 +287,8 @@ CONTENT_TYPES = {JSON_BODY: "application/json", TEXT_BODY: "text/plain; charset=
                  FILE_BODY: "application/octet-stream"}
 AUTOMATIC, AS_TEXT, AS_TABLE, AS_FILE = "automatic", "text", "table", "file"
 # What an API connection (kind: api in connections.yaml) gives the blocks that use it, besides its base_url, under the
-# block's own names (its stored secret as secret:NAME); with a connection chosen, the block has none of these of its own.
+# block's own names (its stored secret as secret:CARD.key); with a connection chosen, the block has none of these of
+# its own.
 FROM_CONNECTION = ("auth", "username", "key_name", "secret", "headers", "ca_file", "dont_verify")
 _NO_CONNECTION = {"connection": [None]}  # (only_if of the block's own: with a connection chosen, they come from it)
 NOTHING = object()  # (nothing came to the body input: it is not connected)
@@ -384,8 +385,8 @@ def api_connection(home, name: str | None) -> dict | None:
             raise Failed(f"{where}: {key}: {e}") from None
     if checked["secret"] is not None:
         if not checked["secret"].startswith(SECRET_PREFIX):
-            raise Failed(f"{where}: secret: write {SECRET_PREFIX}NAME, NAME a stored secret (taskloom secret set NAME), "
-                         f"not the secret itself")
+            raise Failed(f"{where}: secret: write {SECRET_PREFIX}CARD.key, a card and one of its keys (taskloom secret "
+                         f"set CARD.key), not the secret itself")
         checked["secret"] = checked["secret"][len(SECRET_PREFIX):]
     return checked
 
@@ -422,7 +423,7 @@ def _row_headers(c: dict, conn: dict | None, secret) -> tuple[dict, set]:
             mine.setdefault(r["key"].lower(), []).append(r)
         rows.update(mine)
 
-    def value(text: str) -> str:  # (secret:NAME: the stored secret NAME)
+    def value(text: str) -> str:  # (secret:CARD.key: the value of that card's key)
         return secret(text[len(SECRET_PREFIX):]) if text.startswith(SECRET_PREFIX) else text
 
     return ({name: _sent_header(rs, value) for name, rs in rows.items()},
@@ -915,7 +916,7 @@ def from_curl(text: str) -> CurlImport:
     if bearer:
         headers = [h for h in headers if h not in bearer]
         config["auth"] = BEARER
-        secrets.append(("the Bearer token", bearer[-1][1].split(None, 1)[1], f"{host}_token", None))
+        secrets.append(("the Bearer token", bearer[-1][1].split(None, 1)[1], f"{host}.token", None))
         said.append("Auth: Bearer token")
         if user is not None:
             unused.append("-u (its Authorization header is replaced by the Bearer one, as curl does)")
@@ -926,13 +927,13 @@ def from_curl(text: str) -> CurlImport:
                                                                           "stored secret that holds it in Stored "
                                                                           "secret)"))
         if colon:
-            secrets.append((f"the password of -u {name}", password, f"{host}_password", None))
+            secrets.append((f"the password of -u {name}", password, f"{host}.password", None))
     config["headers"] = []
     for key, value in headers:
         if _SECRET_HEADER.search(key) and value:
             name = re.sub(r"\W+", "_", key).strip("_").lower()
-            secrets.append((f"the value of the header {key}", value, f"{host}_{name}", len(config["headers"])))
-            value = ""  # (secret:NAME, once named)
+            secrets.append((f"the value of the header {key}", value, f"{host}.{name}", len(config["headers"])))
+            value = ""  # (secret:CARD.key, once named)
         config["headers"].append({"key": key, "value": value})
 
     filled = [f"Method: {method}", f"URL: {url}"]
@@ -1044,16 +1045,16 @@ class ApiRequest(Block):
                                      "carries the API key", examples=["X-Api-Key", "api_key"]),
         "secret": fields.Text(label="Stored secret (name)", only_if={"auth": list(AUTHS[1:]), **_NO_CONNECTION},
                               help="The name of the stored secret that holds the password, token or key (store it "
-                                   "with: taskloom secret set NAME). Its value is never written in the flow, the Log "
-                                   "or the run history.",
-                              examples=["orders_token", "report_password"]),
+                                   "with: taskloom secret set CARD.key). Its value is never written in the flow, the "
+                                   "Log or the run history.",
+                              examples=["SHOP.token", "REPORTS.password"]),
         "headers": fields.KeyValues(
             required=False, sep=": ",
             help="Request headers: only the ticked rows are sent. Type Name: value in the line under the table to add "
-                 "one; empty a name to remove its row. A value secret:NAME sends the stored secret NAME (taskloom "
-                 "secret set NAME), never written in the flow. A Content-Type here replaces the one Body sets; Auth's "
-                 "header replaces one of the same name here.",
-            examples=["Accept: application/json", "X-Region: {{region}}", "X-Api-Key: secret:orders_key"]),
+                 "one; empty a name to remove its row. A value secret:CARD.key sends the stored secret CARD.key "
+                 "(taskloom secret set CARD.key), never written in the flow. A Content-Type here replaces the one Body "
+                 "sets; Auth's header replaces one of the same name here.",
+            examples=["Accept: application/json", "X-Region: {{region}}", "X-Api-Key: secret:SHOP.api_key"]),
         "body": fields.Choice(
             BODIES, default=NO_BODY,
             help="What the request sends: nothing, JSON, text or XML (written in Content), a form url-encoded or "
@@ -1109,6 +1110,12 @@ class ApiRequest(Block):
             return [f"Body: the body input is connected, so the body comes from it: set Body to none (not "
                     f"{config['body']}), or disconnect the input"]
         return []
+
+    @classmethod
+    def references(cls, config: dict) -> list[tuple[str, str]]:
+        own = [(setting_label("secret", cls.config["secret"]), config["secret"])] if config["secret"] else []
+        return own + [(setting_label("headers", cls.config["headers"]), r["value"][len(SECRET_PREFIX):])
+                      for r in ticked(config["headers"]) if str(r.get("value", "")).startswith(SECRET_PREFIX)]
 
     def run(self, ctx, **inputs):
         c = vars(self.config)

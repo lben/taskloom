@@ -5,19 +5,22 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import getpass
+import io
 import json
 import os
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
-from .config import Home
-from .engine import Cancelled, finished_text, run_flow
+from . import credentials, relay
+from .config import REVEALED, Home
+from .engine import HIDDEN, Cancelled, finished_text, forms_of, redact, run_flow, secret_forms
 from .flow import FlowError, load_flow, real_path, validate
-from .launch import ARGS_VARIABLE, frozen
+from .launch import ARGS_VARIABLE, frozen, relay_command
 from .registry import discover, for_flow
 
 EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_CANCELLED = 0, 1, 2, 130
@@ -144,6 +147,127 @@ def _parse_overrides(items) -> dict:
             raise ValueError(f"--param expects name=value, got {item!r}")
         overrides[name.strip()] = value
     return overrides
+
+
+def _run_hiding_below_print(args, home: Home) -> int:
+    """taskloom run (cmd_run), with what code writes below print hidden too (_hide_below_print)."""
+    settle = _hide_below_print()
+    try:
+        return cmd_run(args, home)
+    finally:
+        settle()
+
+
+def _hide_below_print():
+    """What a run's blocks write below print (straight to file descriptors 1 and 2, to the bytes under sys.stdout and
+    sys.stderr) and what a program they start prints to the output it shares with the run, shows with every secret
+    this process has read as *** too (CR-5): file descriptors 1 and 2 become pipes, each read by a _Relay that writes
+    on to where they went before. Returns what puts them back once all written so far has been written on."""
+    relays = []
+    for stream in (sys.stdout, sys.stderr):
+        if not isinstance(stream, _Hiding):  # (None: no console; main called on its own, as some tests do)
+            continue
+        shown = stream._stream
+        try:
+            raw = getattr(shown.buffer, "raw", shown.buffer)  # (unbuffered, as the editor starts a run: no raw)
+            fd, console = shown.fileno(), not isinstance(raw, io.FileIO)  # (a Windows console's)
+        except (AttributeError, OSError):  # not a file
+            continue
+        with stream._lock:
+            stream.flush()
+            stream._relay = _Relay(fd, "utf-8" if console else shown.encoding, console)
+            if console:  # (it writes to the console only): into the pipe as UTF-8, which the console's takes
+                stream._stream = open(fd, "w", encoding="utf-8", errors=shown.errors, buffering=1, closefd=False)
+        relays.append((stream, shown, stream._relay))
+
+    def tell(value: str):  # (a secret read from now on: before code has it)
+        for _, _, each in relays:
+            each.learn(forms_of([value]))
+
+    for _, _, each in relays:
+        each.learn(secret_forms())
+    for seen in (REVEALED, HIDDEN):
+        seen.told.append(tell)
+
+    def settle():
+        for seen in (REVEALED, HIDDEN):
+            seen.told.remove(tell)
+        until = time.monotonic() + 3  # (a program started that still runs keeps a pipe open: what it writes is lost)
+        for stream, shown, each in relays:
+            with stream._lock:
+                stream.flush()
+                stream._relay = None
+                each.put_back()
+                stream._stream = shown
+            each.end(until)
+
+    return settle
+
+
+class _Relay:
+    """The relay process (taskloom/relay.py) of the file descriptor `fd`, which becomes a pipe it reads: it writes what
+    comes on to where `fd` went before, in `encoding`, with every secret it is told of (learn) as ***. A process of
+    its own, so what is written just before this process dies (a crash, os._exit) is written on too. flushed() waits
+    until all written to `fd` before it has been written on (as a flush does)."""
+
+    def __init__(self, fd: int, encoding: str, console: bool):
+        token = os.urandom(relay.TOKEN).hex()
+        self.fd, self.mark = fd, f"\0{token}\0".encode()
+        self.lock = threading.RLock()  # (re-entered by a Ctrl+C handler that prints while it waits)
+        self.before, (read, write), (self.acks, acked) = os.dup(fd), os.pipe(), os.pipe()
+        try:
+            self.process = subprocess.Popen(
+                [*relay_command(), encoding, token], stdin=read, stdout=self.before, stderr=acked,
+                creationflags=0 if console else getattr(subprocess, "CREATE_NO_WINDOW", 0))  # (a console's: shared)
+        finally:
+            os.close(read)
+            os.close(acked)
+        # (bytes as written, as to `fd` before: no \n made \r\n). os.name: where this process runs, also when tests
+        # make this module's `sys` and `frozen` another program's (the packaged Windows Taskloom's, on any platform)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.setmode(write, os.O_BINARY)
+        os.dup2(write, fd)  # (on Windows also the handle that programs started from here get)
+        os.close(write)
+
+    def learn(self, forms: list[str]):
+        """From here on each of `forms` is written as ***; told in the pipe, so before anything written after it."""
+        with self.lock:
+            for form in forms:
+                data = form.encode("utf-8", "surrogatepass").hex().encode()
+                records = [self.mark + b"+" + data[i:i + 2 * relay.PART] + self.mark
+                           for i in range(0, len(data), 2 * relay.PART)]
+                self._send(*records, self.mark + b"=" + self.mark)
+
+    def flushed(self):
+        with self.lock:
+            if self._send(self.mark + self.mark):
+                os.read(self.acks, 1)  # (nothing: the relay has ended)
+
+    def _send(self, *records: bytes) -> bool:
+        try:
+            for record in records:  # (each whole: no other writing comes inside it)
+                os.write(self.fd, record)
+            return True
+        except OSError:  # (the relay has ended)
+            return False
+
+    def put_back(self):
+        """`fd` goes where it went before."""
+        with self.lock:
+            os.dup2(self.before, self.fd)
+            os.close(self.before)
+
+    def end(self, until: float):
+        """Waits until `until` at most for the relay to write all on (a program started that still runs keeps the
+        pipe open); then ends it."""
+        try:
+            self.process.wait(max(0.0, until - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+        os.close(self.acks)
 
 
 def cmd_run(args, home: Home) -> int:
@@ -297,9 +421,30 @@ def cmd_check(args, home: Home) -> int:
 
 
 def cmd_secret_set(args, home: Home) -> int:
-    value = getpass.getpass(f"Value for secret '{args.name}': ")
-    where = home.set_secret(args.name, value)
-    print(f"saved secret '{args.name}' in {where}")
+    if args.value:  # (on the command line, others could see it while the command runs, and it stays in history)
+        print("error: taskloom secret set never takes the value on the command line: it asks for it (hidden as you "
+              "type), or reads it from standard input with --stdin", file=sys.stderr)
+        return EXIT_INVALID
+    credentials.split(args.reference)  # (refused before its value is asked for)
+    if args.stdin:
+        value = sys.stdin.buffer.read().decode("utf-8")
+        value = value[:-2] if value.endswith("\r\n") else value.removesuffix("\n")
+    else:
+        value = getpass.getpass(f"Value for secret '{args.reference}': ")
+    where = home.set_secret(args.reference, value)
+    print(f"saved secret '{args.reference}' in {where}")
+    return EXIT_OK
+
+
+def cmd_secret_delete(args, home: Home) -> int:
+    credentials.remove(home.root, args.reference)
+    print(f"deleted {args.reference} and its values")
+    return EXIT_OK
+
+
+def cmd_secret_list(args, home: Home) -> int:
+    for line in credentials.listing(home.root):
+        print(line)
     return EXIT_OK
 
 
@@ -418,7 +563,7 @@ def main(argv=None) -> int:
                    help="email the result as the notify settings say (the scheduler does this)")
     p.add_argument("--interactive", action="store_true",
                    help="read cancel requests and answers to questions as JSON lines on stdin (used by the editor)")
-    p.set_defaults(func=cmd_run)
+    p.set_defaults(func=_run_hiding_below_print)
     p = sub.add_parser("validate", help="check a flow without running it")
     p.add_argument("flow")
     p.set_defaults(func=cmd_validate)
@@ -448,11 +593,20 @@ def main(argv=None) -> int:
     e.add_argument("pip_args", nargs=argparse.REMAINDER)
     env_sub.add_parser("info", help="where it is and whether it exists")
     p.set_defaults(func=cmd_env)
-    p = sub.add_parser("secret", help="manage secrets")
+    p = sub.add_parser("secret", help="manage credentials: cards of keys, their values in the system's credential "
+                                      "store")
     secret_sub = p.add_subparsers(dest="secret_command", required=True)
-    s = secret_sub.add_parser("set", help="store a secret (prompts for the value)")
-    s.add_argument("name")
+    s = secret_sub.add_parser("set", help="store the value of CARD.key, e.g. UAT.password (asks for it)")
+    s.add_argument("reference", metavar="CARD.key")
+    s.add_argument("value", nargs="*", help=argparse.SUPPRESS)  # (refused: never a value on the command line)
+    s.add_argument("--stdin", action="store_true",
+                   help="read the value from standard input (a line break at its end is left out)")
     s.set_defaults(func=cmd_secret_set)
+    s = secret_sub.add_parser("list", help="the cards and their keys, never a value")
+    s.set_defaults(func=cmd_secret_list)
+    s = secret_sub.add_parser("delete", help="delete a key (CARD.key) or a whole card (CARD), and their values")
+    s.add_argument("reference", metavar="CARD.key|CARD")
+    s.set_defaults(func=cmd_secret_delete)
 
     args = parser.parse_args(argv)
     if args.home:  # (as TASKLOOM_HOME: also for the runs and services this process starts)
@@ -468,12 +622,49 @@ def main(argv=None) -> int:
         for message in e.errors:
             print(f"error: {message}", file=sys.stderr)
         return EXIT_INVALID
+    except credentials.CredentialError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_FAILED
     except (ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_INVALID
     except KeyboardInterrupt:  # e.g. a second Ctrl+C during a run: it is recorded as cancelled
         print("stopped", file=sys.stderr)
         return EXIT_CANCELLED
+
+
+class _Hiding:
+    """A text stream that writes what it is given with every secret this process has read as *** (engine.redact):
+    what a run prints (also what a block's code or a library writes straight to it, or logs with Python's logging),
+    so what the editor's Log, the scheduler service and the terminal get; error lines; a connection's test. Whole
+    lines at a time (the rest when flushed), so a secret written in parts is found too; lines that may begin a secret
+    of several lines wait for the rest (relay.ready; at a flush in a run, in the relay below)."""
+
+    def __init__(self, stream):
+        self._stream, self._held = stream, ""
+        self._lock = threading.RLock()  # (re-entered by a Ctrl+C handler that prints while a line is written)
+        self._relay = None  # (a run's: see _hide_below_print)
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            whole = self._held + text
+            end = relay.ready(whole, [form for form in secret_forms() if "\n" in form])
+            self._held = whole[end:]
+            if end:
+                self._stream.write(redact(whole[:end]))
+        return len(text)
+
+    def flush(self):
+        with self._lock:
+            held, self._held = self._held, ""
+            if held:
+                self._stream.write(redact(held))
+            self._stream.flush()
+            if self._relay is not None:
+                self._relay.flushed()
+
+    def __getattr__(self, name):  # (fileno, encoding, isatty, …: the stream's own)
+        return getattr(self._stream, name)
 
 
 def run_cli(argv=None):
@@ -485,6 +676,7 @@ def run_cli(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if stream is not None:  # None under pythonw (no console)
             stream.reconfigure(encoding=encoding, errors="backslashreplace")
+    sys.stdout, sys.stderr = (None if stream is None else _Hiding(stream) for stream in (sys.stdout, sys.stderr))
     if ARGS_VARIABLE in os.environ:  # how the editor starts it (not passed on to the blocks of a run)
         argv = json.loads(os.environ.pop(ARGS_VARIABLE))
     code = main(argv)
@@ -498,5 +690,7 @@ def run_cli(argv=None):
     sys.exit(code)
 
 
-if __name__ == "__main__":
-    run_cli()
+if __name__ == "__main__":  # python -m taskloom.cli: runs as the module taskloom.cli, as the taskloom program does
+    import taskloom.cli  # (not as a second copy of it named __main__)
+
+    taskloom.cli.run_cli()

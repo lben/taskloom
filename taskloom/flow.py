@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import hashlib
 import itertools
@@ -18,7 +19,8 @@ import yaml
 from . import params as P
 from .block import AFTER, DONE, IDENTIFIER, all_ports, applies, fields, has_placeholders, setting_label
 from .calendars import load_calendar
-from .config import keep_runs_for
+from .config import SECRET_PREFIX, keep_runs_for
+from .credentials import CredentialError, cards, holder
 from .expr import functions
 from .registry import LOCAL, for_flow
 from .schedule import Trigger
@@ -425,6 +427,99 @@ def placeholder_problems(f: fields.Field | None, text: str, params, inputs, type
 
 
 DICT_INPUTS = {("db.run_query", "params"), ("data.statistics", "extra")}  # inputs that expect a dictionary
+COMMANDS = {("servers.ssh_command", "command"), ("servers.stop_process", "pid_file"),  # seen by others as they run
+            ("servers.health_check", "pid_file"), ("servers.remote_extract", "archive"),
+            ("servers.remote_extract", "destination"),
+            *(("servers.start_process", name) for name in ("command", "workdir", "log_file", "pid_file",
+                                                           "check_after"))}
+
+
+def _texts(value) -> list[str]:
+    """The texts of a setting's or typed value: it, each item of a list, each key and value of a table's rows
+    (fields.KeyValues)."""
+    return [text for item in (value if isinstance(value, list) else [value])
+            for text in ((item.get("key"), item.get("value")) if isinstance(item, dict) else (item,))
+            if isinstance(text, str)]
+
+
+def _references(texts: list[str]) -> list[str]:
+    """The CARD.key of each {{secret:CARD.key}} in `texts` (one that cannot be read: placeholder_problems names it)."""
+    found = []
+    for text in texts:
+        try:
+            found += P.references(text)
+        except ValueError:
+            pass
+    return found
+
+
+def _secret_refs(value) -> list[str]:
+    """The CARD.key of each secret:CARD.key in a connection (also inside its dicts and lists, as resolve_secrets reads
+    them)."""
+    if isinstance(value, str):
+        return [value[len(SECRET_PREFIX):]] if value.startswith(SECRET_PREFIX) else []
+    if isinstance(value, dict):
+        return [ref for v in value.values() for ref in _secret_refs(v)]
+    if isinstance(value, list):
+        return [ref for v in value for ref in _secret_refs(v)]
+    return []
+
+
+_SECRET_CALL = re.compile(r"""(\bsecret\(\s*)(["'])([^"'\\\n]*)\2""")
+
+
+def renamed_credentials(data: dict, registry, new) -> dict:
+    """A copy of the flow file's `data` whose blocks name new(block, CARD.key) instead of each credential they name,
+    unless that is None: where Validate finds them, {{secret:CARD.key}} in a templated setting or a typed value, and in
+    a setting the block's references() name, in the form the block reads there: the whole setting CARD.key, each text
+    secret:CARD.key of a list or dict, secret("CARD.key") in Python code; never part of a sentence."""
+    data = copy.deepcopy(data)
+    for block_id, spec in (data.get("blocks") or {}).items():
+        cls = registry.get(spec.get("type")) if isinstance(spec, dict) else None
+        if cls is None:
+            continue
+        config = spec.get("config") or {}
+        try:
+            read = cls.references(block_config(cls, BlockSpec(
+                id=block_id, type=cls.type_id, version=spec.get("version"), config=dict(config))))
+            labels = {label for label, _ in read}
+        except Exception:  # (a setting that cannot be read: Validate names it)
+            read, labels = [], set()
+        given = lambda ref, b=block_id: new(b, ref)  # noqa: E731
+        for key, value in config.items():
+            f = cls.config.get(key)
+            if f is None:
+                continue
+            label = setting_label(key, f)
+            if label in labels:
+                config[key] = _renamed(value, given, "whole" if (label, value) in read
+                                       else "code" if isinstance(f, fields.Code) and f.language == "python"
+                                       else "setting" if isinstance(value, (list, dict)) else "text")
+            elif f.template:
+                config[key] = _renamed(value, given)
+        for typed in (spec.get("inputs") or {}).values():
+            if isinstance(typed, dict):
+                typed["value"] = _renamed(typed.get("value"), given)
+    return data
+
+
+def _renamed(value, new, how: str = "text"):
+    """`value` (a text, or a list or dict of them) with each {{secret:CARD.key}} naming new(CARD.key) instead (None:
+    as it is); `how` "whole": also the text, a CARD.key; "setting": also each text secret:CARD.key in it, a list or
+    dict; "code": also each secret("CARD.key") in it."""
+    if isinstance(value, (list, dict)):
+        found = {k: _renamed(v, new, how) for k, v in (value.items() if isinstance(value, dict) else enumerate(value))}
+        return found if isinstance(value, dict) else list(found.values())
+    if not isinstance(value, str):
+        return value
+    if how == "whole" and new(value):
+        return new(value)
+    if how == "setting" and value.startswith(SECRET_PREFIX) and new(value[len(SECRET_PREFIX):]):
+        return SECRET_PREFIX + new(value[len(SECRET_PREFIX):])
+    if how == "code":
+        value = _SECRET_CALL.sub(lambda m: m.group(1) + m.group(2) + (new(m.group(3)) or m.group(3)) + m.group(2),
+                                 value)
+    return P.renamed(value, new)
 
 
 def no_value_reason(type_id: str, hole: str, port) -> str | None:
@@ -527,8 +622,13 @@ def run_clock(flow: Flow, home, as_of: dt.datetime | None = None) -> tuple[dt.da
     return now, functions(now.replace(tzinfo=None), calendar, lambda name: load_calendar(name, home.calendars_dir))
 
 
-def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[list[str], list[str]]:
+def validate(flow: Flow, registry, home, part: set[str] | None = None,
+             values: bool = False) -> tuple[list[str], list[str]]:
     """Return (errors, warnings). A flow with errors cannot run.
+
+    Each credential the blocks name ({{secret:CARD.key}}, secret("CARD.key"), a Stored secret, a secret:CARD.key of the
+    connection a block uses) must be a listed card and key; `values` (a run, before its first block): the blocks taking
+    part need its stored value too.
 
     `part`: the blocks of the run it checks the flow for; None: the flow as a whole, whose blocks taking part in some
     run are those a start block's line reaches (all of them, without start blocks). A problem only blocks that do not
@@ -552,6 +652,10 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         keep_runs_for(home.settings())  # used as a run ends: a mistake there is refused before it starts
     except Exception as e:
         errors.append(str(e))
+    if P.SECRET in flow.params:
+        errors.append(f"params.{P.SECRET}: a flow parameter cannot be named {P.SECRET}: {{{{secret:CARD.key}}}} is "
+                      "always a credential; rename the parameter")
+    needed = []  # (the block, where, CARD.key): each credential a block names
 
     # A problem in a Local block's definition is said once, naming its copies (then not checked one by one).
     for type_id, problem in registry.problems.items():
@@ -591,19 +695,31 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
         for key, f in cls.config.items():
             if isinstance(f, fields.SourceNames):  # (e.g. an HTML Template's inputs go by these names, not the port's)
                 named = named - {f.port} | set(f.in_effect(config[key], sources.get(f.port, []), flow.params).values())
+        if P.SECRET in named - set(flow.params):
+            found.append(f"{block_id}: an input cannot be named {P.SECRET}: {{{{secret:CARD.key}}}} is always a "
+                         "credential; rename the input")
         typed_problems, slips = _typed_value_problems(block_id, spec, inputs, sources, flow.params, named)
         found += typed_problems
         warnings += slips
+        needed += [(block_id, f"{block_id}: the value typed for the input {hole}", ref)
+                   for hole, typed in spec.inputs.items() if isinstance(typed, dict)
+                   for ref in _references(_texts(typed.get("value")))]
+        try:
+            needed += [(block_id, f"{block_id}: {label}", ref) for label, ref in cls.references(config)]
+        except ValueError:  # (its problems name it)
+            pass
         for name, f in cls.config.items():
             value = config.get(name)
             setting = f"{block_id}: {setting_label(name, f)}"
-            # (in each item of a list; a table's rows, fields.KeyValues: in each key and value)
-            texts = [text for item in (value if isinstance(value, list) else [value])
-                     for text in ((item.get("key"), item.get("value")) if isinstance(item, dict) else (item,))
-                     if isinstance(text, str)]
+            texts = _texts(value)
             if f.template:
                 found += [f"{setting}: {problem}" for text in texts
                           for problem in placeholder_problems(f, text, flow.params, inputs)]
+                refs = _references(texts)
+                needed += [(block_id, setting, ref) for ref in refs]
+                if refs and (spec.type, name) in COMMANDS:
+                    warnings.append(f"{setting}: it holds a secret: other programs on that machine can see a command "
+                                    "while it runs (the Log shows ***)")
             if f.template or isinstance(f, fields.Code) and f.language in ("html", "f-string"):  # (filled by its block)
                 sql = isinstance(f, fields.Code) and f.language == "sql"  # (flow parameters only)
                 warnings += [f"{setting}: {{{n}}} is plain text: did you mean {{{{{n}}}}}?" for text in texts
@@ -619,6 +735,20 @@ def validate(flow: Flow, registry, home, part: set[str] | None = None) -> tuple[
                     found.append(f"{setting}: no connection named '{value}' in connections.yaml")
                 elif conn["kind"] != f.kind:
                     found.append(f"{setting}: connection '{value}' is {conn['kind']}, expected {f.kind}")
+                else:  # what its connection names is needed too (CR-8)
+                    needed += [(block_id, f"{setting}: the connection {value}", ref) for ref in _secret_refs(conn)]
+
+    if needed:
+        try:
+            listed = cards(home.root)
+        except CredentialError as e:
+            listed, needed = {}, []
+            errors.append(str(e))
+        for block_id, where, ref in needed:
+            try:
+                home.get_secret(ref) if values and block_id in part else holder(listed, ref)
+            except CredentialError as e:
+                (errors if block_id in part else apart).append(f"{where}: {e}")
 
     connected = set()
     for edge in flow.edges:

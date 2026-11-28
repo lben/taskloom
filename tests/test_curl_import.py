@@ -17,8 +17,8 @@ What the tests take as given (the specification leaves it to the change):
   input box (QInputDialog, or a window with one text field) that holds the name it suggests;
 - the API Request (built by another item of this release) shows its Params and Headers as tables, its Auth and Body
   kinds in lists (combo boxes) and its body in a text box, and has a setting labelled "Follow redirects";
-- the tests' credential store is a file in the Taskloom folder (the keyring is the fail one): read with
-  Home.get_secret, and secrets.yaml for "nothing was stored".
+- the tests' credential store is a file in the test's folder (tests/credential_store): read with Home.get_secret,
+  and that file for "nothing was stored".
 """
 
 import base64
@@ -276,8 +276,11 @@ def block_statuses(win) -> dict[str, str]:
 
 def stored_text(win) -> str:
     """Everything the tests' credential store holds (its file), '' when nothing was ever stored."""
-    store = win.home.root / "secrets.yaml"
-    return store.read_text(encoding="utf-8") if store.exists() else ""
+    store = os.environ["TEST_CREDENTIAL_STORE"]
+    if not os.path.exists(store):
+        return ""
+    with open(store, encoding="utf-8") as f:
+        return f.read()
 
 
 def basic(user: str, password: str) -> str:
@@ -706,7 +709,7 @@ def test_a_bearer_token_fills_in_bearer_auth_with_the_token_stored_under_the_nam
     with editing(win), Site() as site:
         tab, api = new_api(win)
         shown, _ = fill_in(win, f"curl {site.base}/me -H 'Accept: application/json' "
-                                "-H 'Authorization: Bearer tok-5f2a9c71'", names=["nightly_token"])
+                                "-H 'Authorization: Bearer tok-5f2a9c71'", names=["nightly.token"])
         asked = one(shown.names(), "secret names asked")
         assert "secret" in asked["text"].lower() and asked["suggested"].strip(), asked
         assert chosen(win, "bearer"), f"Auth is not Bearer: {combo_texts(win)}"
@@ -715,7 +718,7 @@ def test_a_bearer_token_fills_in_bearer_auth_with_the_token_stored_under_the_nam
         check(site.only(), {"path": "/me", "headers": {"Accept": "application/json",
                                                        "Authorization": "Bearer tok-5f2a9c71"}})
     assert "tok-5f2a9c71" not in path.read_text(encoding="utf-8")
-    assert win.home.get_secret("nightly_token") == "tok-5f2a9c71"
+    assert win.home.get_secret("nightly.token") == "tok-5f2a9c71"
 
 
 def test_api_key_and_token_like_headers_are_each_stored_as_a_secret_under_its_own_name(win, tmp_path):

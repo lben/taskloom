@@ -3,7 +3,12 @@
 import os
 import sys
 
-from taskloom.cli import run_cli
+if __name__ == "__main__" and sys.argv[1:2] == ["--relay"]:  # a run's relay (taskloom.launch.RELAY_ARGUMENT)
+    from taskloom import relay
+
+    sys.exit(relay.main(*sys.argv[2:4]))
+
+from taskloom.cli import run_cli  # noqa: E402
 
 if __name__ == "__main__":
     windowed = os.path.splitext(os.path.basename(sys.executable))[0].lower() == "taskloomw"

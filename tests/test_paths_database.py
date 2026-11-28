@@ -10,7 +10,6 @@ import datetime as dt
 import decimal
 import gc
 import json
-import os
 import socket
 import stat
 import subprocess
@@ -26,6 +25,7 @@ import pytest
 import yaml
 
 from conftest import events
+from taskloom.config import Home
 
 PASSWORD = 'Pa ss:w0rd "q" #é'  # spaces, YAML and shell specials, non-ASCII
 WRONG_PASSWORD = "Wr0ng-Passw0rd"
@@ -45,15 +45,14 @@ def h2_sql(h2, db: str, sql: str, password: str = "") -> str:
 
 
 def add_connection(env, h2, name: str, db: str, password: str | None = None, **conn):
-    """Add the JDBC connection `name` (H2 database `db`, user sa) with its password as the secret NAME_password."""
+    """Add the JDBC connection `name` (H2 database `db`, user sa) with its password as the secret NAME.password."""
     entry = {"kind": "jdbc", "driver": "org.h2.Driver", "url": f"jdbc:h2:tcp://localhost:{h2['port']}/mem:{db}",
-             "jars": [h2["jar"].as_posix()], "properties": {"user": "sa", "password": f"secret:{name}_password"}}
+             "jars": [h2["jar"].as_posix()], "properties": {"user": "sa", "password": f"secret:{name}.password"}}
     entry.update(conn)
     with (env.home / "connections.yaml").open("a", encoding="utf-8") as f:
         f.write(yaml.safe_dump({name: entry}, sort_keys=False))
     if password is not None:
-        with (env.home / "secrets.yaml").open("a", encoding="utf-8") as f:
-            f.write(yaml.safe_dump({f"{name}_password": password}))
+        Home(env.home).set_secret(f"{name}.password", password)
 
 
 def write_flow(env, flow: dict, name: str = "flow.yaml") -> Path:
@@ -109,53 +108,6 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("localhost", 0))
         return s.getsockname()[1]
-
-
-CREDENTIAL_STORE = '''
-"""A stand-in for the system credential store (Keychain, Credential Manager): a JSON file, $TEST_CREDENTIAL_STORE."""
-import json
-import os
-
-from keyring.backend import KeyringBackend
-
-
-class FileStore(KeyringBackend):
-    priority = 1
-
-    def _read(self):
-        path = os.environ["TEST_CREDENTIAL_STORE"]
-        if not os.path.exists(path):
-            return {}
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-
-    def get_password(self, service, username):
-        return self._read().get(service + "/" + username)
-
-    def set_password(self, service, username, password):
-        data = self._read()
-        data[service + "/" + username] = password
-        with open(os.environ["TEST_CREDENTIAL_STORE"], "w", encoding="utf-8") as f:
-            json.dump(data, f)
-'''
-
-
-def use_a_credential_store(env, monkeypatch=None) -> Path:
-    """Give the taskloom programs `env` runs (and, with monkeypatch, the programs this process starts) a system
-    credential store: a JSON file, never the developer's real one. Only the store is a stand-in; Taskloom finds
-    and uses it through keyring as it does the real one. Returns the store's file."""
-    folder = env.root / "credential-store"
-    folder.mkdir()
-    (folder / "taskloom_test_store.py").write_text(CREDENTIAL_STORE, encoding="utf-8")
-    store = folder / "store.json"
-    settings = {"PYTHON_KEYRING_BACKEND": "taskloom_test_store.FileStore", "TEST_CREDENTIAL_STORE": str(store),
-                "PYTHONPATH": os.pathsep.join(p for p in (str(folder), os.environ.get("PYTHONPATH")) if p)}
-    env.env.update(settings)
-    if monkeypatch is not None:
-        for name, value in settings.items():
-            monkeypatch.setenv(name, value)
-        monkeypatch.syspath_prepend(str(folder))
-    return store
 
 
 def stored(store: Path) -> dict:
@@ -614,7 +566,8 @@ def test_a_block_timeout_ends_a_query_that_never_returns(jdbc_env, h2_server):
 
 # --- connections, secrets and their failures -------------------------------------------------------------------
 
-def test_a_wrong_password_fails_clearly_and_no_password_reaches_logs_or_history(jdbc_env, h2_server):
+def test_a_wrong_password_fails_clearly_and_no_password_reaches_logs_or_history(jdbc_env, h2_server,
+                                                                                credential_store):
     h2_sql(h2_server, "locked", "create table sales (amount decimal(10, 2)); insert into sales values (10.50)",
            password=PASSWORD)
     add_connection(jdbc_env, h2_server, "locked", "locked", PASSWORD)
@@ -623,8 +576,8 @@ def test_a_wrong_password_fails_clearly_and_no_password_reaches_logs_or_history(
     good_run = jdbc_env.taskloom("run", flow, "--json-events")
     good_test = jdbc_env.taskloom("connection", "test", "locked")
     good_rows = rows(jdbc_env)
-    secrets = jdbc_env.home / "secrets.yaml"
-    secrets.write_text(yaml.safe_dump({"warehouse_password": "", "locked_password": WRONG_PASSWORD}))
+    secrets = credential_store  # (the tests' credential store, where the passwords are kept on purpose)
+    Home(jdbc_env.home).set_secret("locked.password", WRONG_PASSWORD)
     bad_run = jdbc_env.taskloom("run", flow, "--json-events")
     bad_test = jdbc_env.taskloom("connection", "test", "locked")
 
@@ -642,43 +595,48 @@ def test_a_wrong_password_fails_clearly_and_no_password_reaches_logs_or_history(
         assert not [p for p in files if password.encode() in p.read_bytes()], password
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin; POSIX file modes")
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
 def test_secret_set_stores_a_password_that_queries_then_use(jdbc_env, h2_server):
+    jdbc_env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
+    jdbc_env.write("home/secrets.yaml", "warehouse.password: ''\n").chmod(0o600)
     h2_sql(h2_server, "vault", "create table t (x int); insert into t values (7)", password=PASSWORD)
     add_connection(jdbc_env, h2_server, "vault", "vault")
     flow = query_flow(jdbc_env, "select x from t", connection="vault")
 
-    stored = jdbc_env.taskloom("secret", "set", "vault_password", input=PASSWORD + "\n", start_new_session=True)
+    stored = jdbc_env.taskloom("secret", "set", "vault.password", input=PASSWORD + "\n", start_new_session=True)
     run = jdbc_env.taskloom("run", flow)
 
-    assert stored.returncode == 0 and "saved secret 'vault_password'" in stored.stdout, stored.stderr
+    assert stored.returncode == 0 and "saved secret 'vault.password'" in stored.stdout, stored.stderr
     assert PASSWORD not in stored.stdout + stored.stderr
     secrets = jdbc_env.home / "secrets.yaml"
     assert stat.S_IMODE(secrets.stat().st_mode) == 0o600
-    assert yaml.safe_load(secrets.read_text()) == {"warehouse_password": "", "vault_password": PASSWORD}
+    assert yaml.safe_load(secrets.read_text()) == {"warehouse.password": "", "vault.password": PASSWORD}
     assert run.returncode == 0, run.stderr
     assert rows(jdbc_env) == [{"X": 7}]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="getpass reads the Windows console, not stdin")
-def test_secret_set_saves_in_the_system_credential_store_and_queries_log_in_with_it(jdbc_env, h2_server):
-    store = use_a_credential_store(jdbc_env)
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
+def test_secret_set_saves_in_the_system_credential_store_and_queries_log_in_with_it(jdbc_env, h2_server,
+                                                                                       credential_store):
+    store = credential_store  # (every test's: tests/credential_store)
     h2_sql(h2_server, "keychain", "create table t (x int); insert into t values (7)", password=PASSWORD)
     add_connection(jdbc_env, h2_server, "vault", "keychain")
+    store.unlink()  # (warehouse.password, listed, is only in secrets.yaml)
     secrets = jdbc_env.home / "secrets.yaml"  # an older value of the same name in secrets.yaml (e.g. copied over)
-    secrets.write_text(yaml.safe_dump({"warehouse_password": "", "vault_password": WRONG_PASSWORD}))
+    secrets.write_text(yaml.safe_dump({"warehouse.password": "", "vault.password": WRONG_PASSWORD}))
+    secrets.chmod(0o600)
     flow = write_flow(jdbc_env, {"blocks": {
         "from_store": {"type": "db.run_query", "config": {"connection": "vault", "sql": "select x from t"}},
         "from_file": {"type": "db.run_query", "config": {"connection": "warehouse", "sql": "select 1 as one"}}}})
 
-    saved = jdbc_env.taskloom("secret", "set", "vault_password", input=PASSWORD + "\n", start_new_session=True)
+    saved = jdbc_env.taskloom("secret", "set", "vault.password", input=PASSWORD + "\n", start_new_session=True)
     run = jdbc_env.taskloom("run", flow)
     tested = jdbc_env.taskloom("connection", "test", "vault")
 
     assert saved.returncode == 0, saved.stderr
-    assert "saved secret 'vault_password' in the system credential store" in saved.stdout
-    assert stored(store) == {"taskloom/vault_password": PASSWORD}
-    assert yaml.safe_load(secrets.read_text()) == {"warehouse_password": "", "vault_password": WRONG_PASSWORD}
+    assert "saved secret 'vault.password' in the system credential store" in saved.stdout
+    assert stored(store) == {"taskloom-cards/vault.password": PASSWORD}
+    assert yaml.safe_load(secrets.read_text()) == {"warehouse.password": "", "vault.password": WRONG_PASSWORD}
     assert run.returncode == 0, told(jdbc_env, run)
     assert rows(jdbc_env, "from_store") == [{"X": 7}]  # the value just set, not the older one in the file
     assert rows(jdbc_env, "from_file") == [{"ONE": 1}]  # a secret only in secrets.yaml is still found
@@ -687,24 +645,33 @@ def test_secret_set_saves_in_the_system_credential_store_and_queries_log_in_with
 
 
 def test_a_password_secret_that_is_not_set_fails_with_how_to_set_it(jdbc_env):
-    (jdbc_env.home / "secrets.yaml").write_text("other: x\n")
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the connection's secret."""
+    jdbc_env.write("home/credentials.yaml", "cards:\n  other:\n    rows: {x: null}\n")  # (warehouse's card is not listed)
     flow = query_flow(jdbc_env, "select 1 as one")
 
     run = jdbc_env.taskloom("run", flow)
     tested = jdbc_env.taskloom("connection", "test", "warehouse")
 
-    assert run.returncode == 1 and "taskloom secret set warehouse_password" in block_error(jdbc_env)
-    assert tested.returncode == 1 and "taskloom secret set warehouse_password" in tested.stderr
+    assert run.returncode == 2 and "taskloom secret set warehouse.password" in run.stderr, run.stderr
+    assert not (jdbc_env.home / "history.db").exists() or jdbc_env.query("SELECT id FROM runs") == []
+    assert tested.returncode == 1 and "taskloom secret set warehouse.password" in tested.stderr
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is used on Linux only (CR-13)")
 def test_a_secrets_file_others_can_read_is_refused(jdbc_env):
-    (jdbc_env.home / "secrets.yaml").chmod(0o644)
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the file and why; the file is
+    left as it was."""
+    jdbc_env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
+    secrets = jdbc_env.write("home/secrets.yaml", "warehouse.password: ''\n")
+    secrets.chmod(0o644)
     flow = query_flow(jdbc_env, "select 1 as one")
 
     run = jdbc_env.taskloom("run", flow)
 
-    assert run.returncode == 1 and "chmod 600" in block_error(jdbc_env)
+    assert run.returncode == 2
+    assert not (jdbc_env.home / "history.db").exists() or jdbc_env.query("SELECT id FROM runs") == []  # no run
+    assert "secrets.yaml must be readable only by you (chmod 600)" in run.stderr, run.stderr
+    assert secrets.read_text() == "warehouse.password: ''\n" and secrets.stat().st_mode & 0o777 == 0o644
 
 
 def _missing_jar(env, h2, conn):
@@ -775,7 +742,7 @@ def test_a_connection_without_a_kind_is_reported(env):
 
 def test_driver_properties_reach_the_driver_and_jars_can_be_one_path(jdbc_env, h2_server):
     add_connection(jdbc_env, h2_server, "lower_db", "lower_case", "", jars=h2_server["jar"].as_posix(),
-                   properties={"user": "sa", "password": "secret:lower_db_password", "DATABASE_TO_LOWER": "TRUE"})
+                   properties={"user": "sa", "password": "secret:lower_db.password", "DATABASE_TO_LOWER": "TRUE"})
     flow = query_flow(jdbc_env, "select 1 as amount", connection="lower_db")
 
     run = jdbc_env.taskloom("run", flow)
@@ -855,8 +822,8 @@ def test_a_database_connection_made_in_the_editor_is_tested_and_used_by_a_query(
     assert tab.doc.blocks["q"]["config"]["connection"] == "sales_db"
     assert yaml.safe_load((jdbc_env.home / "connections.yaml").read_text())["sales_db"] == {
         "kind": "jdbc", "driver": "org.h2.Driver", "url": f"jdbc:h2:tcp://localhost:{h2_server['port']}/mem:from_editor",
-        "jars": [h2_server["jar"].as_posix()], "properties": {"user": "sa", "password": "secret:sales_db_password"}}
-    assert win.home.get_secret("sales_db_password") == PASSWORD
+        "jars": [h2_server["jar"].as_posix()], "properties": {"user": "sa", "password": "secret:sales_db.password"}}
+    assert win.home.get_secret("sales_db.password") == PASSWORD
 
     win.run_flow(tab)
     qtbot.waitUntil(lambda: tab.runs and not tab.running and tab.last is not None, timeout=60_000)
@@ -868,19 +835,14 @@ def test_a_database_connection_made_in_the_editor_is_tested_and_used_by_a_query(
 
 
 def test_a_password_typed_in_the_editor_goes_to_the_system_credential_store_and_queries_log_in_with_it(
-        jdbc_env, h2_server, win, qtbot, monkeypatch, request):
-    import importlib
-
-    import keyring
+        jdbc_env, h2_server, win, qtbot, monkeypatch, credential_store):
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import QDialogButtonBox, QPushButton
 
     from taskloom.editor.dialogs import ConnectionsDialog
 
-    before = keyring.get_keyring()  # the `win` fixture's: no store
-    store = use_a_credential_store(jdbc_env, monkeypatch)  # for the runs and tests the editor starts
-    keyring.set_keyring(importlib.import_module("taskloom_test_store").FileStore())  # for the editor itself
-    request.addfinalizer(lambda: keyring.set_keyring(before))
+    store = credential_store  # the editor's and that of the runs and tests it starts (every test's: tests/credential_store)
+    store.unlink()  # (jdbc_env's warehouse.password out of it: only what the window stores is there)
     h2_sql(h2_server, "editor_store", "create table t (x int); insert into t values (7)", password=PASSWORD)
     flow = jdbc_env.write("flow.yaml", """
         blocks:
@@ -915,9 +877,9 @@ def test_a_password_typed_in_the_editor_goes_to_the_system_credential_store_and_
 
     assert "✓" in seen["tested"] and "Connected to H2" in seen["tested"], seen["tested"]
     assert "A password is saved" in seen["status"], seen["status"]
-    assert stored(store) == {"taskloom/vault_db_password": PASSWORD}
+    assert stored(store) == {"taskloom-cards/vault_db.password": PASSWORD}
     conns = yaml.safe_load((jdbc_env.home / "connections.yaml").read_text())
-    assert conns["vault_db"]["properties"] == {"user": "sa", "password": "secret:vault_db_password"}
+    assert conns["vault_db"]["properties"] == {"user": "sa", "password": "secret:vault_db.password"}
 
     win.run_flow(tab)
     qtbot.waitUntil(lambda: tab.runs and not tab.running and tab.last is not None, timeout=60_000)
@@ -938,7 +900,7 @@ def test_editing_a_database_connection_keeps_its_password_and_adds_driver_settin
     h2_sql(h2_server, "edited", "create schema reports; create table reports.sales (amount decimal(10, 2));"
            "insert into reports.sales values (10.50)", password=PASSWORD)
     add_connection(jdbc_env, h2_server, "sales_db", "edited", PASSWORD, properties={
-        "user": "sa", "password": "secret:sales_db_password", "QUERY_TIMEOUT": 600000})
+        "user": "sa", "password": "secret:sales_db.password", "QUERY_TIMEOUT": 600000})
     before = yaml.safe_load((jdbc_env.home / "connections.yaml").read_text())
     flow = jdbc_env.write("flow.yaml", """
         blocks:
@@ -975,7 +937,7 @@ def test_editing_a_database_connection_keeps_its_password_and_adds_driver_settin
     assert {k: v for k, v in after["sales_db"].items() if k != "properties"} == {
         k: v for k, v in before["sales_db"].items() if k != "properties"}
     assert {k: str(v) for k, v in after["sales_db"]["properties"].items()} == {
-        "user": "sa", "password": "secret:sales_db_password", "QUERY_TIMEOUT": "600000", "SCHEMA": "REPORTS"}
+        "user": "sa", "password": "secret:sales_db.password", "QUERY_TIMEOUT": "600000", "SCHEMA": "REPORTS"}
 
     win.run_flow(tab)
     qtbot.waitUntil(lambda: tab.runs and not tab.running and tab.last is not None, timeout=60_000)

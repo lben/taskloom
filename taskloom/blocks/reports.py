@@ -190,7 +190,8 @@ class HtmlTemplate(Block):
                 found.append(f"Inputs: {name} (from {', '.join(using)}) is also a flow parameter; "
                              "give the input another name")
         try:
-            placeholders = [name for _, name, _ in P.parse(_without_notes(config["template"])) if name is not None]
+            placeholders = [name for _, name, _ in P.parse(_without_notes(config["template"]))
+                            if name not in (None, P.SECRET)]
         except ValueError as e:  # e.g. a {{ with no }}
             return found + [f"Template: {e}"]
         listed = ", ".join(dict.fromkeys(names.values())) or "none"
@@ -199,6 +200,10 @@ class HtmlTemplate(Block):
                 found.append(f"Template: {{{{{name}}}}} is not an input or a flow parameter (inputs: {listed}; "
                              f"{P.LITERAL_BRACES})")
         return list(dict.fromkeys(found))
+
+    @classmethod
+    def references(cls, config):
+        return [("Template", name) for name in P.references(_without_notes(config["template"]))]
 
     def run(self, ctx, data=None):
         c, data = self.config, {} if data is None else data
@@ -215,7 +220,8 @@ class HtmlTemplate(Block):
             parts.append(text)
             if name is not None:
                 if (name, spec) not in shown:  # each once: a chart shown twice is attached once
-                    shown[name, spec] = _placed(values[name], name, spec, c.max_rows)
+                    shown[name, spec] = (_text(ctx.home.get_secret(spec)) if name == P.SECRET  # (a credential's value)
+                                         else _placed(values[name], name, spec, c.max_rows))
                 parts.append(shown[name, spec].html)
         return {"html": Html("".join(parts), {k: v for part in shown.values() for k, v in part.images.items()})}
 

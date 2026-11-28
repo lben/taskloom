@@ -89,7 +89,7 @@ def save_as(monkeypatch, path):
 
 def taskloom(win, *args, cwd=None) -> subprocess.CompletedProcess:
     """The real command line, on the editor's Taskloom folder."""
-    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
+    env = {**os.environ, "TASKLOOM_HOME": str(win.home.root)}  # (the tests' credential store, as the editor's)
     return subprocess.run([sys.executable, "-m", "taskloom.cli", *map(str, args)], env=env, cwd=cwd,
                           capture_output=True, text=True, errors="replace", timeout=120)
 
@@ -2042,12 +2042,12 @@ def test_saving_the_connections_keeps_a_connection_of_a_kind_of_your_own_blocks_
 def test_a_new_ssh_connection_is_saved_with_its_password_kept_out_of_the_file_and_tested(server, win, qtbot,
                                                                                           monkeypatch):
     import keyring
-    from keyring.backends import fail
 
     from sshserver import PASSWORD, USER
     from taskloom.editor.dialogs import ConnectionsDialog
+    from taskloom_test_store import FileStore
 
-    assert isinstance(keyring.get_keyring(), fail.Keyring)  # never the real credential store
+    assert isinstance(keyring.get_keyring(), FileStore)  # the tests' credential store, never the real one
     appserver = win.home.connections()["appserver"]
     names = iter(["backup", "wrong"])
     monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", staticmethod(lambda *a, **k: (next(names), True)))
@@ -2077,9 +2077,9 @@ def test_a_new_ssh_connection_is_saved_with_its_password_kept_out_of_the_file_an
     assert PASSWORD not in text and "not the password" not in text
     conns = win.home.connections()
     assert conns["backup"] == {"kind": "ssh", "host": "127.0.0.1", "port": server.port, "username": USER,
-                               "password": "secret:backup_password"}
+                               "password": "secret:backup.password"}
     assert conns["appserver"] == appserver  # the connection that was there is kept as it was
-    assert win.home.get_secret("backup_password") == PASSWORD
+    assert win.home.get_secret("backup.password") == PASSWORD
     assert taskloom(win, "connection", "test", "backup").returncode == 0
 
 
@@ -2249,7 +2249,7 @@ def test_a_new_database_connection_is_saved_for_jdbc_and_tested(jdbc_env, win, q
     assert str(timeout) == "600"  # (written as a number or as text: the driver gets 600 either way)
     assert other == {"kind": "jdbc", "driver": "com.example.jdbc.Driver", "url": "jdbc:example://db.example.com/x",
                      "jars": ["C:/drivers/a.jar", "C:/drivers/b.jar"],
-                     "properties": {"user": "me", "password": "secret:other_db_password"}}
+                     "properties": {"user": "me", "password": "secret:other_db.password"}}
     assert "pw for the example" not in (win.home.root / "connections.yaml").read_text(encoding="utf-8")
     assert "warehouse" in conns  # the one that was there is kept
 

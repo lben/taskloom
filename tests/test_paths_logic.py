@@ -631,12 +631,12 @@ def test_a_failure_in_your_environment_shows_the_values_of_your_variables(env, p
 
 def test_a_failure_in_your_environment_never_shows_a_secret_in_its_variables(env, python_env):
     use(env, python_env)
-    env.write("home/secrets.yaml", "pw: hunter2SECRET\n").chmod(0o600)
+    env.set_secret("app.pw", "hunter2SECRET")
     flow = env.write("flow.yaml", """
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "Password?", kind: password, secret: pw}
+            config: {prompt: "Password?", kind: password, secret: app.pw}
           outside:
             type: logic.python
             config:
@@ -966,8 +966,7 @@ def test_ask_users_prompt_and_default_fill_in_parameters(env):
 @pytest.mark.parametrize("config, problem", [
     ("{prompt: 'Region?', kind: choice, options: [EU, US], default: APAC}", "'APAC' is not one of ['EU', 'US']"),
     ("{prompt: 'Region?', kind: choice, default: EU}", "kind 'choice' needs options"),
-    ("{prompt: 'Token?', kind: password, secret: not_stored}", "secret 'not_stored' is not set (run: taskloom secret set not_stored)"),
-], ids=["choice-default-not-an-option", "choice-without-options", "secret-not-stored"])
+], ids=["choice-default-not-an-option", "choice-without-options"])
 def test_ask_user_without_a_usable_answer_fails_clearly_and_at_once(env, config, problem):
     started = time.monotonic()
     result = env.taskloom("run", ask_flow(env, config), "--json-events")
@@ -979,13 +978,25 @@ def test_ask_user_without_a_usable_answer_fails_clearly_and_at_once(env, config,
     assert row(env, run_id, "save")["status"] == "skipped"
 
 
+def test_ask_user_whose_secret_is_not_stored_is_refused_before_the_run_starts(env):
+    """Credentials CR-8: a run stops before its first block naming the stored secret it needs and lacks."""
+    started = time.monotonic()
+    result = env.taskloom("run", ask_flow(env, "{prompt: 'Token?', kind: password, secret: not.stored}"),
+                          "--json-events")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    assert time.monotonic() - started < 30
+    assert "secret 'not.stored' is not set (run: taskloom secret set not.stored)" in result.stderr, result.stderr
+
+
 def test_ask_users_secret_is_used_unattended_and_never_shows(env):
-    env.write("home/secrets.yaml", "api_token: tok-Zx81-unseen\n").chmod(0o600)
+    env.set_secret("api.token", "tok-Zx81-unseen")
     flow = env.write("flow.yaml", """
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "API token?", kind: password, secret: api_token}
+            config: {prompt: "API token?", kind: password, secret: api.token}
           show:
             type: logic.inspect
             config: {message: "token is {{value}}"}
@@ -1018,13 +1029,13 @@ TRICKY_PASSWORDS = pytest.mark.parametrize("password", ['Zq81\\Vx"Ny4', 'Rm5ä\\
 
 
 def ask_for_password(env, password, blocks, to, edges=""):
-    """A flow whose Ask User gives the stored secret `pw` (holding `password`) to the input `to`."""
-    env.write("home/secrets.yaml", f"pw: {json.dumps(password)}\n").chmod(0o600)
+    """A flow whose Ask User gives the stored secret `app.pw` (holding `password`) to the input `to`."""
+    env.set_secret("app.pw", password)
     return env.write("flow.yaml", f"""
         blocks:
           ask:
             type: logic.ask_user
-            config: {{prompt: "Password?", kind: password, secret: pw}}
+            config: {{prompt: "Password?", kind: password, secret: app.pw}}
 {blocks}
         edges:
           - ask.answer -> {to}

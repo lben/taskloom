@@ -9,8 +9,6 @@ import calendar
 import datetime as dt
 import os
 import re
-import stat
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,9 +20,25 @@ SETTINGS_DEFAULTS = {
     "keep_runs_for": "5 years",  # runs (their history, logs and files) that started longer ago are deleted
 }
 SECRET_PREFIX = "secret:"
+
+
+class Seen(set):
+    """Values to hide (REVEALED, engine.HIDDEN) that tells each of its `told` (functions) of a value added, before
+    code gets that value: so a run's relays (cli._hide_below_print) hide it in what code writes below print too."""
+
+    def __init__(self):
+        super().__init__()
+        self.told = []
+
+    def add(self, value):
+        if value not in self:
+            super().add(value)
+            for tell in list(self.told):
+                tell(value)
+
+
 # Every secret value this process has seen; run output is scrubbed of them (see engine.redact).
-REVEALED: set[str] = set()
-KEYRING_SERVICE = "taskloom"
+REVEALED: set[str] = Seen()
 
 
 PERIOD = r"([1-9][0-9]*) *(day|month|year)s?"  # e.g. 18 months, 1 year, 90 days
@@ -178,46 +192,25 @@ class Home:
                 raise ValueError(f"connections.yaml: connection '{name}' needs a 'kind'")
         return data
 
-    # --- secrets -------------------------------------------------------------
-    # The OS credential store (Windows Credential Manager, macOS Keychain) when one is
-    # usable; otherwise a secrets.yaml readable only by the user (headless Linux).
+    # --- secrets: credentials (see credentials.py) -----------------------------
 
-    @property
-    def _secrets_file(self) -> Path:
-        return self.root / "secrets.yaml"
+    def get_secret(self, reference: str) -> str:
+        """The value of the credential CARD.key; every such value is hidden in what a run tells (REVEALED).
+        credentials.CredentialError (a KeyError) if there is none or the credential store cannot be used."""
+        from .credentials import value
 
-    def get_secret(self, name: str) -> str:
-        keyring = _keyring()
-        value = keyring.get_password(KEYRING_SERVICE, name) if keyring is not None else None
-        if value is None:
-            self._check_secrets_file_permissions()
-            value = _load_yaml(self._secrets_file).get(name)
-        if value is None:
-            raise KeyError(f"secret '{name}' is not set (run: taskloom secret set {name})")
-        REVEALED.add(str(value))
-        return str(value)
+        found = value(self.root, reference)
+        REVEALED.add(found)
+        return found
 
-    def set_secret(self, name: str, value: str) -> str:
-        keyring = _keyring()
-        if keyring is not None:
-            keyring.set_password(KEYRING_SERVICE, name, value)
-            return "the system credential store"
-        self.root.mkdir(parents=True, exist_ok=True)
-        data = _load_yaml(self._secrets_file)
-        data[name] = value
-        fd = os.open(self._secrets_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            os.chmod(self._secrets_file, 0o600)  # the mode above is only for a new file: also one made by hand
-            yaml.safe_dump(data, f)
-        return str(self._secrets_file)
+    def set_secret(self, reference: str, value: str) -> str:
+        """Stores the credential CARD.key (listing its card and key if they are not); returns where it is."""
+        from .credentials import store
 
-    def _check_secrets_file_permissions(self):
-        if sys.platform != "win32" and self._secrets_file.exists():
-            if self._secrets_file.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-                raise PermissionError(f"{self._secrets_file} must be readable only by you (chmod 600)")
+        return store(self.root, {reference: value})
 
     def resolve_secrets(self, value):
-        """Replace "secret:NAME" strings (also inside dicts and lists) with the secret."""
+        """Replace "secret:CARD.key" strings (also inside dicts and lists) with the credential's value."""
         if isinstance(value, str) and value.startswith(SECRET_PREFIX):
             return self.get_secret(value[len(SECRET_PREFIX):])
         if isinstance(value, dict):

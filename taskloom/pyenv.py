@@ -8,6 +8,7 @@ installed on this computer. Install packages into it with `taskloom env pip inst
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pickle
 import shutil
@@ -24,7 +25,7 @@ NO_PANDAS = 3
 # Runs inside the environment's Python, so it may only use the standard library (and pandas, to
 # read the tables among the inputs; pandas/polars/pyarrow for the DataFrames your code sets).
 HELPER = r'''
-import pickle, sys
+import hashlib, pickle, sys
 # The pipe to Taskloom is read as UTF-8 (on Windows it would otherwise get the ANSI code page, e.g. cp1252):
 # what you print reaches the log as written, so a password in it is masked.
 sys.stdout.reconfigure(encoding="utf-8")
@@ -43,14 +44,20 @@ def as_dataframes(value):
         return [as_dataframes(v) for v in value]
     return value
 
-namespace = {"params": job["params"], "log": lambda *a: print(*a, flush=True)}
+def secret(name):
+    """The value of the credential `name` (CARD.key) the code names as text: Taskloom read it before it ran."""
+    if name not in job["credentials"]:
+        raise LookupError(f"secret({name!r}): write the name in the code as text, e.g. secret(\"UAT.password\")")
+    return job["credentials"][name]
+
+namespace = {"params": job["params"], "log": lambda *a: print(*a, flush=True), "secret": secret}
 try:
     namespace.update((name, as_dataframes(value)) for name, value in job["inputs"].items())
 except ImportError as error:  # no pandas, or no pyarrow for it to read Parquet with: Taskloom says what to install
     print(error, flush=True)
     sys.exit(3)  # NO_PANDAS
 import inspect, linecache, types
-given = set(namespace)  # params, log and the inputs: not among the variables your code created
+given = set(namespace)  # params, log, secret and the inputs: not among the variables your code created
 filename = job["name"] + ".py"
 linecache.cache[filename] = (len(job["code"]), None, job["code"].splitlines(True), filename)
 
@@ -123,9 +130,18 @@ if "output" in job["outputs"] and "output" not in namespace:
     created = [(k, v) for k, v in namespace.items() if k not in given and not k.startswith("_")
                and not (isinstance(v, types.ModuleType) or inspect.isroutine(v) or inspect.isclass(v))]
     result["variables"] = {k: packed(v, f"output.{i}") for i, (k, v) in enumerate(created)}
-with open(result_file, "wb") as f:
-    pickle.dump(result, f, protocol=4)
+with open(result_file, "wb") as f:  # (masked: see pyenv.masked)
+    data = pickle.dumps(result, protocol=4)
+    stream = hashlib.shake_256(job["key"]).digest(len(data))
+    f.write((int.from_bytes(data, "big") ^ int.from_bytes(stream, "big")).to_bytes(len(data), "big"))
 '''
+
+
+def masked(data: bytes, key: bytes) -> bytes:
+    """The outputs' file as the helper writes it, and read back: `data` XOR a stream made from `key` (SHAKE-256).
+    Outputs can hold passwords: masked so, with a key only the job carries (through the pipe), no file holds one."""
+    stream = hashlib.shake_256(key).digest(len(data))
+    return (int.from_bytes(data, "big") ^ int.from_bytes(stream, "big")).to_bytes(len(data), "big")
 
 
 def env_dir(home) -> Path:
@@ -221,8 +237,9 @@ def _portable(value, table_type, secret_type):
     return str(value)
 
 
-def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, dict]:
-    """Run a Python Code block's code in the environment: (its outputs, {variable left out of output: why})."""
+def run_code(ctx, code: str, inputs: dict, outputs: list[str], credentials: dict) -> tuple[dict, dict]:
+    """Run a Python Code block's code in the environment: (its outputs, {variable left out of output: why}).
+    `credentials`: {CARD.key: its value} for the code's secret()."""
     from .engine import HIDDEN, Cancelled, Failed, HiddenStr, SecretStr, _map_marks, secret_forms
     from .table import Table
 
@@ -234,12 +251,13 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, di
     work.mkdir(exist_ok=True)
     helper, result_file = work / "helper.py", work / "result.pickle"
     helper.write_text(HELPER, encoding="utf-8")
-    # Inputs can hold passwords (Ask User, secrets): they go through a pipe, never to a file.
+    # Inputs and credentials can hold passwords (Ask User, secrets): they go through a pipe, never to a file or the
+    # environment.
     # "secrets": what to mask in the Variables report, as redact() does.
     job = {"code": code, "outputs": outputs, "workspace": str(work), "name": ctx.block_id,
            "params": _portable(ctx.params, Table, SecretStr),
            "inputs": {k: _portable(v, Table, SecretStr) for k, v in inputs.items()},
-           "secrets": secret_forms()}
+           "credentials": credentials, "secrets": secret_forms(), "key": os.urandom(32)}
     proc = subprocess.Popen([str(python), "-I", str(helper), str(result_file)], cwd=os.getcwd(),
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             creationflags=_no_window())
@@ -249,12 +267,28 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, di
     except BrokenPipeError:
         pass  # it failed before reading its job; the error is in its output
     lines: list[str] = []
+    # A secret of several lines that the code prints comes a line at a time: lines that may begin one are held, then
+    # logged together, so that it is hidden whole (ctx.log hides the others).
+    several = {"\n".join(part.rstrip() for part in s.splitlines()) for s in secret_forms() if len(s.splitlines()) > 1}
+
+    def log(held: list[str]):
+        text = "\n".join(held)
+        for secret in several:
+            text = text.replace(secret, "***")
+        ctx.log(text)
 
     def read():
+        held = []
         for raw in proc.stdout:
             line = raw.decode(errors="replace").rstrip()
             lines.append(line)
-            ctx.log(line)
+            held.append(line)
+            text = "\n".join(held)
+            if not any(text.endswith(s[:i]) for s in several for i, c in enumerate(s) if c == "\n" and i > 0):
+                log(held)
+                held = []
+        if held:
+            log(held)
 
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
@@ -272,9 +306,9 @@ def run_code(ctx, code: str, inputs: dict, outputs: list[str]) -> tuple[dict, di
     if proc.returncode != 0:
         raise RuntimeError("the code failed in your Python environment:\n" + "\n".join(lines[-30:]))
     try:
-        result = pickle.loads(result_file.read_bytes())
+        result = pickle.loads(masked(result_file.read_bytes(), job["key"]))
     finally:
-        result_file.unlink(missing_ok=True)  # outputs can hold passwords too
+        result_file.unlink(missing_ok=True)
     secrets = _secret_values(inputs) | _secret_values(ctx.params)
 
     def restore(value):  # a password that comes back out is still a password (a hidden cookie still hidden)

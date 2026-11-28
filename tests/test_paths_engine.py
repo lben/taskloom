@@ -858,8 +858,8 @@ def where_the_password_shows(places: dict) -> list[str]:
 
 def test_a_connection_password_never_reaches_the_terminal_the_history_or_the_run_folders(env):
     env.write("home/blocks/login.py", LOGIN_BLOCK)
-    env.write("home/connections.yaml", "vault:\n  kind: api\n  password: 'secret:vault_pw'\n")
-    env.write("home/secrets.yaml", f"vault_pw: {PASSWORD}\n").chmod(0o600)
+    env.write("home/connections.yaml", "vault:\n  kind: api\n  password: 'secret:vault.pw'\n")
+    env.set_secret("vault.pw", PASSWORD)
     flow = write(env, """
         blocks:
           login:
@@ -912,8 +912,8 @@ def test_a_connection_password_never_reaches_the_terminal_the_history_or_the_run
 
 def test_a_password_in_a_table_never_shows_in_its_preview_even_where_a_long_cell_is_cut_short(env):
     env.write("home/blocks/login.py", LOGIN_BLOCK)
-    env.write("home/connections.yaml", "vault:\n  kind: api\n  password: 'secret:vault_pw'\n")
-    env.write("home/secrets.yaml", f"vault_pw: {PASSWORD}\n").chmod(0o600)
+    env.write("home/connections.yaml", "vault:\n  kind: api\n  password: 'secret:vault.pw'\n")
+    env.set_secret("vault.pw", PASSWORD)
     flow = write(env, """
         blocks:
           login:
@@ -1103,8 +1103,8 @@ def test_the_editor_refuses_to_run_one_block_with_a_required_input_cleared(env, 
 
 def test_running_on_from_a_block_is_refused_when_a_block_after_it_needs_a_password_from_before_it(env):
     env.write("home/blocks/login.py", LOGIN_BLOCK)
-    env.write("home/connections.yaml", "vault:\n  kind: api\n  password: 'secret:vault_pw'\n")
-    env.write("home/secrets.yaml", f"vault_pw: {PASSWORD}\n").chmod(0o600)
+    env.write("home/connections.yaml", "vault:\n  kind: api\n  password: 'secret:vault.pw'\n")
+    env.set_secret("vault.pw", PASSWORD)
     flow = write(env, """
         blocks:
           login:

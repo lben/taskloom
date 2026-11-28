@@ -48,7 +48,7 @@ CMD = ('curl ^"https://api.example.com/v1/orders?expand=items^" ^\n'
 ANOTHER = "curl https://api.example.com/v1/me -H 'Accept: application/json'"
 NOT_CURL = "wget --header='Accept: application/json' https://api.example.com/v1/orders"
 API_KEY, PASSWORD = "abc123secret", "s3cret"
-KEY_NAME, PASSWORD_NAME = "api_example_com_x_api_key", "api_example_com_password"  # the names Fill in suggests
+KEY_NAME, PASSWORD_NAME = "api_example_com.x_api_key", "api_example_com.password"  # the names Fill in suggests
 FILLED = ["Method: POST", "URL: https://api.example.com/v1/orders", "Params (the URL's query): expand",
           "Headers: Content-Type, X-API-Key", "Auth: Basic, user name reports", "Body: JSON"]
 
@@ -348,8 +348,8 @@ def test_import_from_curl_fills_in_the_request(proof, win, qtbot, tmp_path, monk
         real.setattr(QMessageBox, "information", REAL_INFORMATION)
         in_turn(lambda: press_fill_in(win), name_it("the password of -u reports"),
                 name_it("the value of the header X-API-Key"), read_message)
-    p.check("It asked two names: for the password of -u, suggesting api_example_com_password, then for the API key, "
-            "suggesting api_example_com_x_api_key",
+    p.check("It asked two names: for the password of -u, suggesting api_example_com.password, then for the API key, "
+            "suggesting api_example_com.x_api_key",
             [suggested for _, suggested in asked] == [PASSWORD_NAME, KEY_NAME]
             and "password of -u reports" in asked[0][0] and "X-API-Key" in asked[1][0])
     message = said[0]
@@ -375,7 +375,7 @@ def test_import_from_curl_fills_in_the_request(proof, win, qtbot, tmp_path, monk
                 "it is sent.", highlight=request, badges=True, zoom=request)
     p.check("Neither secret is in the flow file: not the API key abc123secret, not the password s3cret",
             API_KEY not in saved and PASSWORD not in saved)
-    p.check("The file names them instead: secret:api_example_com_x_api_key, and api_example_com_password",
+    p.check("The file names them instead: secret:api_example_com.x_api_key, and api_example_com.password",
             f"secret:{KEY_NAME}" in saved and PASSWORD_NAME in saved)
     p.check("Method is POST, the URL https://api.example.com/v1/orders?expand=items, and Params has expand = items, "
             "ticked", now["Method"] == "POST" and now["URL"] == "https://api.example.com/v1/orders?expand=items"
@@ -383,13 +383,13 @@ def test_import_from_curl_fills_in_the_request(proof, win, qtbot, tmp_path, monk
     scroll_to(win, "Method")
     auth = [field(win, "Auth"), field(win, "User name"), field(win, "Stored secret (name)")]
     headers = table(win, "Headers")
-    p.shot(win, "① Auth is Basic: user name reports, its password the stored secret api_example_com_password. ② "
-                "Headers has Content-Type, and X-API-Key, whose value secret:api_example_com_x_api_key names the "
+    p.shot(win, "① Auth is Basic: user name reports, its password the stored secret api_example_com.password. ② "
+                "Headers has Content-Type, and X-API-Key, whose value secret:api_example_com.x_api_key names the "
                 "stored secret: the key itself is not in the block.",
            highlight=[auth, headers], badges=True, zoom=[auth, headers])
-    p.check("Auth is Basic, user name reports, with the stored secret api_example_com_password",
+    p.check("Auth is Basic, user name reports, with the stored secret api_example_com.password",
             (now["Auth"], now["User name"], now["Stored secret (name)"]) == ("Basic", "reports", PASSWORD_NAME))
-    p.check("Headers has Content-Type: application/json, and X-API-Key: secret:api_example_com_x_api_key, the stored "
+    p.check("Headers has Content-Type: application/json, and X-API-Key: secret:api_example_com.x_api_key, the stored "
             "key's name", now["Headers"] == [(True, "Content-Type", "application/json"),
                                              (True, "X-API-Key", f"secret:{KEY_NAME}")])
     scroll_to(win, "Method")

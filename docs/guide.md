@@ -168,9 +168,11 @@ taskloom editor examples/daily-sales-report.yaml
   ones, `taskloom run`) use its **Default**, which every kind but password has; for kind
   number it must be a number (or have `{{name}}` placeholders, read as the block runs), or
   Validate and runs refuse the flow. A password never comes
-  from a Default: its **Stored secret** setting names a password saved in Taskloom's secret
-  store (`taskloom secret set NAME`), and runs nobody can answer use that one. With no
-  name there, or a name never saved, such a run fails and says what is missing.
+  from a Default: its **Stored secret** setting names the card's row that holds it, as
+  CARD.key (e.g. `UAT.password`, stored with `taskloom secret set UAT.password`; see
+  Credentials), and runs nobody can answer use that one. With nothing there, such a run fails
+  at the block and says what is missing; a run whose card, key or value is missing stops
+  before its first block, naming each one missing.
 - In Ask User's question box, the **Default** of a text or number question is shown in
   grey in the empty box, with a note under it: OK (or Enter) with the box left empty
   answers the Default, and the Log says so; what you type replaces it. A choice question
@@ -235,7 +237,7 @@ taskloom editor examples/daily-sales-report.yaml
   run: its start blocks (e.g. `manual`, `nightly`), or `only BLOCK` / `from BLOCK` for a
   re-run. Right-click a run → **Copy executed query** copies the SQL a Run Query or DuckDB SQL
   block sent in it, also one the database refused, with each parameter's value written in
-  (`'O''Brien'`, `DATE '2026-01-16'`, a secret as `<hidden: secret NAME>`), to paste into a
+  (`'O''Brien'`, `DATE '2026-01-16'`, a secret as `<hidden: secret CARD.key>`), to paste into a
   SQL tool and run; several such blocks are listed in the order they ran, and a run in which
   no query ran (or one recorded before runs kept their queries) says so. **Stop** cancels.
 - **Ctrl+F** (Cmd+F on macOS) in the Log, Data preview, Run history or a code box opens a find
@@ -336,7 +338,8 @@ taskloom editor examples/daily-sales-report.yaml
   the values of your variables (each input and variable on one line; one too long for it
   ends with how many characters it has, e.g. `… (33,412 characters)`). A failure Ask User expects (you chose **Don't answer**;
   nobody can be asked, e.g. in a scheduled run, and it has no Default, or for a password no
-  stored secret or one never saved; an answer that is not one of its Options; kind choice
+  stored secret (one never saved stops the run before its first block); an answer that is not
+  one of its Options; kind choice
   without Options) says so in a short message,
   without a Python traceback. It is a failure like any other: it goes out the block's
   `error` output, and a retry setting on the block asks again. When you run a block again
@@ -463,7 +466,11 @@ taskloom editor examples/daily-sales-report.yaml
   list of open flows is kept in `editor.ini`, so a new version opens where you left off.
 - Connections: use **New…** or **Edit…** next to a block's connection field, or **Tools →
   Connections**. Type the password in the Password field (it is stored in the system's
-  secure store, never in a file) and click **Save and test connection**. A database
+  secure store as a row of a card named after the connection, e.g. `warehouse.password`, never
+  in a file), or choose
+  a row of your cards in the list beside it (e.g. `DEFAULT.password`, also the keys a card
+  takes from another): the connection then names `secret:DEFAULT.password` and stores nothing.
+  Click **Save and test connection**. A database
   connection asks for its driver .jar file(s) first, then the Driver class, URL, User name
   and Password. Choosing the jar(s) with **…**, or typing or pasting their paths (separate
   several with `;`) and then leaving the field or pressing Enter (there it does not save),
@@ -1495,12 +1502,12 @@ tabs, a line above each group in Properties:
 - **Auth**: none, **Basic** (a user name and password, sent with the request), a **Bearer
   token**, an **API key** in a header or in the query (its **Key name** is the header's or the
   parameter's), or **Digest** (in answer to the server's challenge). The password, token or key
-  is a stored secret: **Stored secret (name)** names it (store it with `taskloom secret set
-  orders_token`); its value is never in the flow file, the Log or the run history. A run whose
-  secret is not stored fails before it sends anything, saying how to store it. Auth's header
-  replaces one of the same name in Headers.
-- **Headers**: a table as Params (add a row as `Name: value`). A value `secret:NAME` sends the
-  stored secret NAME, e.g. `X-Api-Key: secret:orders_key`: the key itself is never in the flow.
+  is a card's row: **Stored secret (name)** names it as CARD.key, e.g. `ORDERS.token` (store it
+  with `taskloom secret set ORDERS.token`); its value is never in the flow file, the Log or the
+  run history. A run whose card, key or value is missing stops before its first block, naming
+  each one and how to store it. Auth's header replaces one of the same name in Headers.
+- **Headers**: a table as Params (add a row as `Name: value`). A value `secret:CARD.key` sends
+  that row's value, e.g. `X-Api-Key: secret:ORDERS.key`: the key itself is never in the flow.
 - **Body**: none, **JSON**, **text** or **XML** (written in **Content**; JSON is checked before it
   is sent), a **form (url-encoded)** (its **Form** table), **multipart form-data** (its
   **Parts**: a part ticked **File** sends the file its value names) or a **file** sent as it is.
@@ -1514,7 +1521,7 @@ tabs, a line above each group in Properties:
   One that is not a status nor a range of them is refused before the run starts.
 - **Follow redirects** (ticked unless you untick it): unticked, the redirect is the answer. A
   redirect to another host (or scheme or port) is followed without the Authorization header
-  and the headers that carry a stored secret (an API key, a header written `secret:NAME`), as
+  and the headers that carry a stored secret (an API key, a header written `secret:CARD.key`), as
   curl and Postman do.
 - **Certificates** are checked against the system's store; **CA certificate file** adds an
   authority to trust (e.g. your company's), and **Don't verify certificates** checks none, which
@@ -1540,7 +1547,7 @@ a secret: `GET https://api.example.com/v1/orders?status=open`, then `200 OK: 512
 **Run only this block** (right-click it) is Postman's Send: its response shows in Data preview.
 **Copy as cURL** (right-click it) copies the request as a curl command (as bash reads it), its
 placeholders filled in with the flow's parameters and each stored secret shown as `<hidden:
-secret NAME>`: put the secret there to run it in a terminal.
+secret CARD.key>`: put the secret there to run it in a terminal.
 
 **Import from cURL**, at the top of its Properties, does the reverse: paste a curl command into
 its box (coloured as code: options, quoted strings, the URL), as an API's documentation or a
@@ -1562,9 +1569,10 @@ Windows cmd (`^` at a line's end, `^"`, `\"`), and click **Fill in**. It fills t
 
 The secrets it recognises never go into the flow: for a `-u` password, a Bearer token and each
 header named like a secret (Authorization, or with token, key, secret or password in its name,
-e.g. `X-API-Key`), Fill in asks the name of a stored secret, suggesting one, and stores the value
-there; the block uses it by that name (a header as `secret:NAME`). Anything else in the command,
-such as a key in the URL's query or in the data, is filled in as written. When the block's request is
+e.g. `X-API-Key`), Fill in asks the card's row to store it in, as CARD.key, suggesting one, and
+stores the value there; the block uses it by that name (a header as `secret:CARD.key`).
+Anything else in the command, such as a key in the URL's query or in the data, is filled in as
+written. When the block's request is
 filled in already, a box says what Fill in replaces and asks: **Approve**, or **Cancel**, which
 changes nothing. The request is replaced as a whole, Connection included (what the command does
 not give is left empty; Follow redirects, Don't verify certificates and the Timeout change only
@@ -1603,7 +1611,7 @@ blocks:
       method: POST
       url: https://reports.example.com/api/uploads
       auth: Bearer token
-      secret: reports_token
+      secret: REPORTS.token
       body: JSON
       content: '{"day": "{{day:%Y-%m-%d}}", "file": "orders_{{day:%Y-%m-%d}}.csv"}'
 edges:
@@ -1618,7 +1626,7 @@ shop:
   kind: api
   base_url: https://api.example.com/v1
   auth: Bearer token
-  secret: "secret:shop_token"
+  secret: "secret:SHOP.token"
   headers: [{key: Accept, value: application/json}]
 ```
 
@@ -1763,11 +1771,10 @@ warehouse:
   driver: com.example.jdbc.Driver
   url: "jdbc:example://db.example.com/default"
   jars: [C:/drivers/example-jdbc.jar]
-  properties: {user: me, password: "secret:warehouse_password", queryTimeout: 600}
+  properties: {user: me, password: "secret:WAREHOUSE.password", queryTimeout: 600}
 ```
 
-Store the password with `taskloom secret set warehouse_password` (Windows Credential
-Manager / macOS Keychain, or a private `secrets.yaml` on headless Linux). JDBC needs
+Store the password with `taskloom secret set WAREHOUSE.password` (see Credentials). JDBC needs
 Java; set `java_home` in `settings.yaml` (or `JAVA_HOME`) if it is not found.
 
 Runs are kept for `keep_runs_for` in `settings.yaml`: a number and `days`, `months` or
@@ -1792,6 +1799,72 @@ same name never delete each other's runs. Each run records the Keep runs of its 
 blocks, and the flow's newest run decides for all their runs: a change applies to earlier runs
 too, from when the flow's next run ends (lowering The last N then deletes the older ones). The
 last N counts the finished runs: a run still going is neither deleted nor counted.
+
+### Credentials: cards and their keys
+
+A password, token or key that a flow needs is a row of a **card**: a card has a name, e.g.
+`UAT`, and rows of a key and its value, e.g. `host`, `username` and `password`. A flow names a
+row as CARD.key: `secret:UAT.password` as a whole setting (a connection's password, a header's
+value), `{{secret:UAT.password}}` inside a text that takes placeholders, and
+`secret("UAT.password")` in Python Code. Names are letters, digits, `_` and `-`; upper and lower
+case make no other name. `credentials.yaml` in the Taskloom folder lists the cards and their
+keys, never a value: the values are in the system's credential store (Windows Credential
+Manager, macOS Keychain; on Linux, a private `secrets.yaml` when there is none).
+
+Store a value with `taskloom secret set UAT.password`: it asks for the value without showing
+it (`--stdin` reads it from standard input instead), never takes it on the command line, and
+adds the card and the key if they are new. `taskloom secret list` shows the cards and keys,
+never a value; `taskloom secret delete UAT.password` removes a row and `taskloom secret delete
+UAT` a whole card, from the credential store too. Validate names each card or key that a flow
+names (also in a connection its blocks use) and that does not exist, with its block and setting.
+A run checks every card, key and value it needs before its first block, and stops naming each
+one missing.
+
+A value shows as `***` wherever Taskloom shows or keeps what a run did: the Log and run history,
+the results, Data preview and the hovers, the terminal, emails and the scheduler's notices, also
+when a block's code, a library or a program it starts prints it, a value of several lines too.
+Programs on a server can see the command it runs while it runs, so Validate warns about a
+`{{secret:…}}` in the `command` of SSH Command or Start Remote Process and in every other setting
+put onto the server's command line (Start Remote Process's `workdir`, `log_file`, `pid_file` and
+`check_after`, the `pid_file` of Stop Remote Process and Health Check, Remote Extract's `archive`
+and `destination`); the Log shows `***` there too.
+
+The editor's **Tools → Credentials…** does the same in a window. The cards are on the left, with
+**Add…**, **Rename…** and **Delete**; the chosen card's rows are on the right, a key and its
+value each, and always one empty row last: type a key there to add a row. Every value shows as
+the same dots, whatever its length, also while you type it; a row's eye shows that value alone
+until you press it again, and the window opens again with dots. A value shorter than 4
+characters, or empty, has a note on its row: a run cannot hide so short a value in the Log. A
+key listed with no value in the credential store says *no value stored*.
+
+- **Takes its values from**: a card can take the rows it does not have from another card, e.g.
+  `DEFAULT` from `UAT`. Those rows show greyed, "from UAT"; a row of the card's own with the
+  same key wins. Switch `DEFAULT` to `PROD` and every flow that names `DEFAULT.password` gets
+  PROD's value at its next run, unchanged.
+- **Point at another row…** (right-click a row's key) makes a row hold no value of its own but
+  give another card's row, e.g. `archive_password → PROD.password`; **Delete row** removes it.
+- A choice that would make a circle (two cards taking from each other, or rows pointing at each
+  other), deleting a card or row that another uses, and a name with a dot or a space, or one
+  that differs from another only in upper and lower case, are refused, saying why. Renaming a
+  card or a key that open flows use names them and their blocks, and asks whether to rename
+  only or also rewrite those flows (one change each, which Undo takes back); flows that are not
+  open keep the old name, and Validate names it.
+- **Save** stores every change at once, the values and the list, or none if one cannot be
+  stored, and says why; **Cancel** stores nothing.
+
+**Secrets stored before version 0.42.0** are not read any more. Enter each again as a card's
+row, e.g. `taskloom secret set WAREHOUSE.password` (or in Tools → Credentials), and write the
+new CARD.key where your flows and `connections.yaml` named the old secret. Then remove the old
+entries, which nothing reads now:
+
+- On Windows: open Credential Manager (Control Panel → Credential Manager → Windows
+  Credentials) and, under Generic Credentials, remove the entries named `taskloom` and
+  `NAME@taskloom` (NAME is an old secret's name, e.g. `warehouse_password@taskloom`).
+- On macOS: open Keychain Access and delete the items named `taskloom` (their Account is an
+  old secret's name), or in Terminal run `security delete-generic-password -s taskloom` until
+  it finds none.
+- On Linux: delete the old secrets' lines (names without a card) from `secrets.yaml` in the
+  Taskloom folder.
 
 ## Writing a block
 

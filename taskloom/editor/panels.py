@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstract
                                QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QTimeEdit, QToolButton,
                                QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from .. import credentials
 from .. import params as P
 from ..block import IDENTIFIER, RESERVED_OUTPUTS, applies, fields, has_placeholders, setting_label
 from ..blocks.logic import ReusableBlock
@@ -1604,8 +1605,13 @@ class PropertiesPanel(QScrollArea):
             if name is None:
                 return  # (nothing stored, nothing changed)
             names.append(name)
-        for (_, value, _, row), name in zip(found.secrets, names):
-            self.home.set_secret(name, value)
+        try:
+            if names:
+                credentials.store(self.home.root, {name: value for (_, value, *_), name in zip(found.secrets, names)})
+        except (credentials.CredentialError, OSError) as e:  # (the store, or the list of cards: put back as it was)
+            QMessageBox.warning(window, title, f"{e}\n\nNothing is stored and the block is as it was.")
+            return
+        for (*_, row), name in zip(found.secrets, names):
             if row is None:
                 found.config["secret"] = name
             else:
@@ -1629,12 +1635,12 @@ class PropertiesPanel(QScrollArea):
         while True:
             name, ok = QInputDialog.getText(
                 window, "Import from cURL", f"{what[0].upper()}{what[1:]} goes into a stored secret, never into the "
-                "flow. Store it under the name (letters, digits, _ . and -; a stored secret of that name is "
-                "replaced):", QLineEdit.Normal, name)
+                "flow. Store it as CARD.key (a card and its key, each of letters, digits, _ and -; a value stored "
+                "there is replaced):", QLineEdit.Normal, name)
             if not ok:
                 return None
             name = name.strip()
-            if re.fullmatch(r"[\w.-]+", name) and name not in taken:
+            if re.fullmatch(r"[\w-]+\.[\w-]+", name) and name not in taken:
                 return name
 
     def _stored(self, name: str) -> str | None:

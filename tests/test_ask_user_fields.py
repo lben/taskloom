@@ -34,6 +34,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QLabel, QLineEdit  # noqa: E402
 
 from taskloom.block import setting_label  # noqa: E402
+from taskloom.config import Home  # noqa: E402
 from taskloom.editor import docs  # noqa: E402
 from taskloom.editor.dialogs import AskDialog  # noqa: E402
 from taskloom.registry import discover  # noqa: E402
@@ -53,7 +54,7 @@ SHOWN = {
     "choice": {"prompt", "kind", "options", "default"},
     "number": {"prompt", "kind", "default"},
 }
-SECRET = "tok-Zx81-unseen"  # the value of the stored secret api_token, where a test saves it
+SECRET = "tok-Zx81-unseen"  # the value of the stored secret api.token, where a test saves it
 # What says that a setting is about runs nobody can answer.
 UNATTENDED = ("unattended", "scheduled", "nobody can be asked", "nobody can answer")
 
@@ -65,8 +66,8 @@ def write(path: Path, text: str) -> Path:
 
 
 def save_secret(home: Path, name: str, value: str):
-    """Save a secret as `taskloom secret set` does where there is no system credential store (the tests' case)."""
-    write(home / "secrets.yaml", f"{name}: {value}\n").chmod(0o600)
+    """Save a secret as `taskloom secret set` does (in the tests' credential store)."""
+    Home(home).set_secret(name, value)
 
 
 def kinds_named(text: str) -> set[str]:
@@ -283,17 +284,17 @@ def answer_flow(path: Path, config: str) -> Path:
 
 
 @pytest.mark.parametrize("config, answer, shown", [
-    ("{prompt: 'Region?', kind: text, default: North, secret: api_token}", "'North'", "got North"),
-    ("{prompt: 'How many?', kind: number, default: '7', secret: api_token}", "7", "got 7"),
-    ("{prompt: 'Go on?', kind: yes_no, default: 'yes', secret: api_token}", "True", "got True"),
-    ("{prompt: 'Region?', kind: choice, options: [North, South], default: South, secret: api_token}", "'South'",
+    ("{prompt: 'Region?', kind: text, default: North, secret: api.token}", "'North'", "got North"),
+    ("{prompt: 'How many?', kind: number, default: '7', secret: api.token}", "7", "got 7"),
+    ("{prompt: 'Go on?', kind: yes_no, default: 'yes', secret: api.token}", "True", "got True"),
+    ("{prompt: 'Region?', kind: choice, options: [North, South], default: South, secret: api.token}", "'South'",
      "got South"),
 ], ids=["text", "number", "yes_no", "choice"])
 def test_a_secret_filled_in_for_another_kind_is_not_used_and_the_answer_is_not_hidden(env, config, answer, shown):
     """Spec 1 (the value of a setting hidden for the kind is not used by the run), spec 4 (only a password answer is
     hidden, whatever else is filled in) and spec 2 (Default is what runs nobody can answer use for these kinds): with
     a stored secret named in Secret, an unattended run gives the Default, shown as it is in the Log."""
-    save_secret(env.home, "api_token", SECRET)
+    save_secret(env.home, "api.token", SECRET)
 
     result = env.taskloom("run", answer_flow(env.root / "flow.yaml", config))
 
@@ -308,12 +309,12 @@ def test_a_secret_filled_in_for_another_kind_is_not_used_and_the_answer_is_not_h
 def test_a_password_ask_user_run_nobody_can_answer_uses_its_stored_secret_hidden_never_the_default(env):
     """Spec 5 (the stored secret named in Secret, never the Default) and spec 4 (a password answer stays hidden).
     Passes today: protects what the change keeps."""
-    save_secret(env.home, "api_token", SECRET)
+    save_secret(env.home, "api.token", SECRET)
     flow = write(env.root / "flow.yaml", f"""
         blocks:
           ask:
             type: logic.ask_user
-            config: {{prompt: 'Password?', kind: password, default: other-pass, secret: api_token}}
+            config: {{prompt: 'Password?', kind: password, default: other-pass, secret: api.token}}
           show:
             type: logic.inspect
             config: {{message: "got {{{{value}}}}"}}
@@ -340,13 +341,29 @@ def test_a_password_ask_user_run_nobody_can_answer_uses_its_stored_secret_hidden
     assert SECRET not in logs + result.stdout + result.stderr
 
 
+def test_a_password_ask_user_run_with_a_stored_secret_never_saved_is_refused_before_it_starts(env):
+    """Spec 5, with credentials CR-8 (a run stops before its first block naming every missing card, key or stored
+    value it needs): Secret named but never saved: the run is refused before it starts, saying that secret is not
+    saved and how to save it, cleanly. Never the Default."""
+    flow = answer_flow(env.root / "flow.yaml",
+                       "{prompt: 'Password?', kind: password, default: fallback-pass, secret: never.saved}")
+
+    result = env.taskloom("run", flow)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    assert not (env.root / "answer.txt").exists()  # the Default was not used
+    for pattern in (r"never\.saved", r"not (saved|set|stored)", r"secret set never\.saved"):
+        assert re.search(pattern, result.stderr, re.IGNORECASE), (pattern, result.stderr)
+    assert python_internals(result.stdout + result.stderr) == [], result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("secret, says", [
     ("", [r"nobody can answer", r"secret"]),
-    (", secret: never_saved", [r"never_saved", r"not (saved|set|stored)", r"secret set never_saved"]),
-], ids=["no-secret", "secret-never-saved"])
+], ids=["no-secret"])
 def test_a_password_ask_user_run_without_its_stored_secret_fails_cleanly_and_never_uses_the_default(env, secret, says):
-    """Spec 5: Secret empty: a clean failure saying nobody can answer and a stored secret is needed; Secret named but
-    never saved: a clean failure saying that secret is not saved and how to save it. Never the Default."""
+    """Spec 5: Secret empty: a clean failure saying nobody can answer and a stored secret is needed. Never the
+    Default. (Secret named but never saved: refused before the run starts, the test above.)"""
     flow = answer_flow(env.root / "flow.yaml", f"{{prompt: 'Password?', kind: password, default: fallback-pass{secret}}}")
 
     result = env.taskloom("run", flow)
@@ -443,7 +460,7 @@ def test_a_text_answer_typed_in_the_editor_shows_in_the_log_even_with_a_secret_f
             type: trigger.manual
           ask:
             type: logic.ask_user
-            config: {prompt: "Which region?", kind: text, secret: api_token}
+            config: {prompt: "Which region?", kind: text, secret: api.token}
           use:
             type: logic.python
             config: {inputs: [region], outputs: [], code: "print('using', region)"}

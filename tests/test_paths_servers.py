@@ -26,6 +26,7 @@ import yaml
 
 from conftest import REPO
 from sshserver import PASSWORD, USER, SSHTestServer, free_port
+from taskloom.config import Home
 from test_servers import _kill_from_pid_file
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the test server runs commands in /bin/sh")
@@ -383,7 +384,7 @@ def test_a_password_the_server_prints_never_reaches_logs_or_history(env, server)
 
 
 def test_a_wrong_password_fails_clearly_and_is_never_shown(env, server):
-    env.write("home/secrets.yaml", "appserver_password: not-the-password\n").chmod(0o600)
+    Home(env.home).set_secret("appserver.password", "not-the-password")
     result, run_id, status = _run(env, {"cmd": _ssh("echo hi")})
 
     assert result.returncode == 1
@@ -394,21 +395,27 @@ def test_a_wrong_password_fails_clearly_and_is_never_shown(env, server):
 
 
 def test_a_missing_secret_says_how_to_set_it(env, server):
-    env.write("home/secrets.yaml", "other: x\n").chmod(0o600)
-    result, run_id, _ = _run(env, {"cmd": _ssh("echo hi")})
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the connection's secret."""
+    env.write("home/credentials.yaml", "cards:\n  other:\n    rows: {x: null}\n")  # (appserver's card is not listed)
+    result = env.taskloom("run", _write_flow(env, {"cmd": _ssh("echo hi")}, ()))
 
-    assert result.returncode == 1
-    error = _error(env, run_id, "cmd")
-    assert "secret 'appserver_password' is not set" in error
-    assert "taskloom secret set appserver_password" in error
+    assert result.returncode == 2
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    error = result.stderr
+    assert "secret 'appserver.password' is not set" in error, error
+    assert "taskloom secret set appserver.password" in error
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="secrets.yaml is read on Linux only (CR-13)")
 def test_a_secrets_file_others_can_read_is_refused(env, server):
-    (env.home / "secrets.yaml").chmod(0o644)
-    result, run_id, _ = _run(env, {"cmd": _ssh("echo hi")})
+    """Credentials CR-8: the run stops before its first block (no run starts), naming the file and why."""
+    env.env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # no credential store: secrets.yaml
+    env.write("home/secrets.yaml", f"appserver.password: {PASSWORD}\n").chmod(0o644)
+    result = env.taskloom("run", _write_flow(env, {"cmd": _ssh("echo hi")}))
 
-    assert result.returncode == 1
-    assert "must be readable only by you (chmod 600)" in _error(env, run_id, "cmd")
+    assert result.returncode == 2
+    assert not (env.home / "history.db").exists() or env.query("SELECT id FROM runs") == []  # no run started
+    assert "secrets.yaml must be readable only by you (chmod 600)" in result.stderr, result.stderr
 
 
 def test_every_server_block_refuses_a_missing_or_non_ssh_connection_before_running(env, server):
@@ -435,7 +442,7 @@ def test_every_server_block_refuses_a_missing_or_non_ssh_connection_before_runni
 
 def test_an_ssh_connection_without_a_user_name_fails_clearly(env, server):
     with open(env.home / "connections.yaml", "a") as f:
-        f.write(f"nouser:\n  kind: ssh\n  host: 127.0.0.1\n  port: {server.port}\n  password: 'secret:appserver_password'\n")
+        f.write(f"nouser:\n  kind: ssh\n  host: 127.0.0.1\n  port: {server.port}\n  password: 'secret:appserver.password'\n")
     result, run_id, _ = _run(env, {"cmd": _ssh("echo hi", connection="nouser")})
 
     assert result.returncode == 1
@@ -446,7 +453,7 @@ def test_a_server_nobody_listens_on_fails_quickly_and_names_the_port(env, server
     port = free_port()
     with open(env.home / "connections.yaml", "a") as f:
         f.write(f"down:\n  kind: ssh\n  host: 127.0.0.1\n  port: {port}\n  username: {USER}\n"
-                f"  password: 'secret:appserver_password'\n")
+                f"  password: 'secret:appserver.password'\n")
     result, run_id, _ = _run(env, {"cmd": _ssh("echo hi", connection="down")})
 
     assert result.returncode == 1
@@ -458,7 +465,7 @@ def test_a_server_that_never_answers_is_bounded_by_the_block_timeout(env, server
     with _silent_port() as port:
         with open(env.home / "connections.yaml", "a") as f:
             f.write(f"silent:\n  kind: ssh\n  host: 127.0.0.1\n  port: {port}\n  username: {USER}\n"
-                    f"  password: 'secret:appserver_password'\n")
+                    f"  password: 'secret:appserver.password'\n")
         result, run_id, _ = _run(env, {"cmd": {**_ssh("echo hi", connection="silent"), "timeout": "2s"}})
 
         assert result.returncode == 1
@@ -507,7 +514,7 @@ def test_logging_in_with_a_key_file_instead_of_a_password(env, tmp_path):
 
 def test_the_server_key_is_remembered_and_a_changed_one_is_refused(env, tmp_path):
     (tmp_path / "srv").mkdir()
-    env.write("home/secrets.yaml", f"appserver_password: {PASSWORD}\n").chmod(0o600)
+    Home(env.home).set_secret("appserver.password", PASSWORD)
     first = SSHTestServer(tmp_path / "srv").start()
     env.write("home/connections.yaml", first.connection())
     try:
@@ -533,7 +540,7 @@ def test_the_server_key_is_remembered_and_a_changed_one_is_refused(env, tmp_path
 def test_a_server_that_allows_one_command_per_connection_still_starts_checks_and_stops_apps(env, tmp_path):
     home = tmp_path / "srv"
     home.mkdir()
-    env.write("home/secrets.yaml", f"appserver_password: {PASSWORD}\n").chmod(0o600)
+    Home(env.home).set_secret("appserver.password", PASSWORD)
     srv = _OneCommandServer(home).start()
     env.write("home/connections.yaml", srv.connection())
     pid_file = home / "app" / "app.pid"
@@ -557,13 +564,10 @@ def test_a_server_that_allows_one_command_per_connection_still_starts_checks_and
 
 
 def test_an_ssh_connection_made_in_the_connections_window_logs_in_and_runs_flows(env, server, win, qtbot, monkeypatch):
-    import keyring.core
-    from keyring.backends import fail
     from PySide6.QtWidgets import QDialogButtonBox, QInputDialog
 
     from taskloom.editor.dialogs import ConnectionsDialog
 
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("box", True)))
     dialog = ConnectionsDialog(win.home, win, new_kind="ssh")
     dialog.edits["host"].setText("127.0.0.1")
@@ -579,7 +583,7 @@ def test_an_ssh_connection_made_in_the_connections_window_logs_in_and_runs_flows
     text = (env.home / "connections.yaml").read_text()
     assert PASSWORD not in text
     assert yaml.safe_load(text)["box"] == {"kind": "ssh", "host": "127.0.0.1", "port": server.port,
-                                           "username": USER, "password": "secret:box_password"}
+                                           "username": USER, "password": "secret:box.password"}
     result, _, status = _run(env, {"cmd": _ssh("echo hi", connection="box")})
     assert status == {"cmd": "success"}, result.stderr
 

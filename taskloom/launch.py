@@ -11,8 +11,11 @@ import struct
 import sys
 from pathlib import Path
 
-EXE = ".exe" if sys.platform == "win32" else ""
+from . import relay
+
+EXE =".exe" if sys.platform == "win32" else ""
 ARGS_VARIABLE = "TASKLOOM_ARGS"  # the command line program's arguments (a JSON list), instead of its own
+RELAY_ARGUMENT = "--relay"  # the packaged command line program as a run's relay (taskloom/relay.py)
 
 
 def frozen() -> bool:
@@ -33,6 +36,22 @@ def windowed_command() -> list[str]:
         return [str(windowed if windowed.exists() else Path(sys.executable).with_name(f"taskloom{EXE}"))]
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     return [str(pythonw if pythonw.exists() else sys.executable), "-m", "taskloom.cli"]
+
+
+# (taskloom/relay.py by itself, as the module it is: not the package, whose start takes long)
+_RELAY_START = ("import importlib.util, sys; "
+                "spec = importlib.util.spec_from_file_location('taskloom.relay', sys.argv[1]); "
+                "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+                "sys.exit(module.main(*sys.argv[2:4]))")
+
+
+def relay_command() -> list[str]:
+    """How to start the relay of a run's output: the packaged program with --relay, or taskloom/relay.py by itself
+    (-I: not the folder it starts in, nor PYTHONPATH; the installed packages, as a copy mutation testing makes of it
+    imports one)."""
+    if frozen():
+        return [*runner_command(), RELAY_ARGUMENT]
+    return [sys.executable, "-I", "-c", _RELAY_START, relay.__file__]
 
 
 def pid_alive(pid: int) -> bool:

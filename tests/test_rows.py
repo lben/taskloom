@@ -622,8 +622,8 @@ def test_a_secret_header_value_stays_hidden_while_its_row_is_edited(qtbot, win, 
     keeps secret:NAME, never the value."""
     with editing(win):
         hidden = f"hidden-{secrets.token_hex(8)}"
-        win.home.set_secret("orders_key", hidden)
-        rows = (("Accept", "application/json"), ("X-Api-Key", "secret:orders_key"), ("X-Trace", "nightly"))
+        win.home.set_secret("orders.key", hidden)
+        rows = (("Accept", "application/json"), ("X-Api-Key", "secret:orders.key"), ("X-Trace", "nightly"))
         _, path = open_list(qtbot, win, tmp_path, HEADERS, rows=rows)
         assert hidden not in everything_shown(win), "the secret's value is shown with its row"
 
@@ -640,7 +640,7 @@ def test_a_secret_header_value_stays_hidden_while_its_row_is_edited(qtbot, win, 
         QTest.keyClick(editor, Qt.Key_Return)
         settle()
 
-        holds(win, path, HEADERS, [rows[0], ("X-Key", "secret:orders_key"), rows[2]])
+        holds(win, path, HEADERS, [rows[0], ("X-Key", "secret:orders.key"), rows[2]])
         assert hidden not in everything_shown(win)
         assert hidden not in path.read_text(encoding="utf-8")
 
@@ -942,10 +942,10 @@ def test_the_note_under_connection_says_word_for_word_what_the_connection_gives_
     not in connections.yaml. The note under Connection says each, word for word."""
     with editing(win):
         (win.home.root / "connections.yaml").write_text(yaml.safe_dump({
-            "basic": {"kind": "api", "auth": "Basic", "username": "nightly", "secret": "secret:shop_pw",
+            "basic": {"kind": "api", "auth": "Basic", "username": "nightly", "secret": "secret:shop.pw",
                       "headers": as_rows([("X-Client", "taskloom"), ("X-Tag", "zero")]), "ca_file": "certs/ca.pem"},
             "keyed": {"kind": "api", "base_url": "http://127.0.0.1:9/api", "auth": "API key in a header",
-                      "key_name": "X-Api-Key", "secret": "secret:shop_key", "dont_verify": True}}), encoding="utf-8")
+                      "key_name": "X-Api-Key", "secret": "secret:shop.key", "dont_verify": True}}), encoding="utf-8")
         own = {"basic": {"headers": [{"key": "X-Tag"}]}, "keyed": {}, "gone": {}}
         tab = win.open_flow(flow_file(tmp_path / "notes.yaml", {
             name: {"type": API, "config": {"url": "/orders", "connection": name, **config},
@@ -958,10 +958,10 @@ def test_the_note_under_connection_says_word_for_word_what_the_connection_gives_
 
         assert notes == {
             "basic": "From the connection basic (change it in Tools > Connections):\nBase URL: (none)\n"
-                     "Auth: Basic, user name nightly, with the stored secret shop_pw\nHeader X-Client: taskloom\n"
+                     "Auth: Basic, user name nightly, with the stored secret shop.pw\nHeader X-Client: taskloom\n"
                      "Header X-Tag: zero (replaced by this block's X-Tag: )\nCA certificate file: certs/ca.pem",
             "keyed": "From the connection keyed (change it in Tools > Connections):\nBase URL: http://127.0.0.1:9/api\n"
-                     "Auth: API key in a header, key name X-Api-Key, with the stored secret shop_key\n"
+                     "Auth: API key in a header, key name X-Api-Key, with the stored secret shop.key\n"
                      "Certificates are not verified",
             "gone": "Connection: no connection named 'gone' in connections.yaml"}
 

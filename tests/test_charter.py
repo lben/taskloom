@@ -17,8 +17,8 @@ LAYERS = {
     1: ["cli", "editor", "scheduler", "check", "entries", "update"],
     2: ["blocks"],
     3: ["flow", "engine", "registry", "pyenv", "upgrade"],
-    4: ["config", "history", "jdbc", "ssh", "mail"],
-    5: ["__init__", "block", "table", "expr", "params", "calendars", "schedule", "report", "launch"],
+    4: ["config", "credentials", "history", "jdbc", "ssh", "mail"],
+    5: ["__init__", "block", "table", "expr", "params", "calendars", "schedule", "report", "launch", "relay"],
 }
 LAYER_OF = {name: layer for layer, names in LAYERS.items() for name in names}
 # Calls to a database, a server, a mail server or the web, which foundations never make.
@@ -156,14 +156,14 @@ def test_design_health_is_no_worse_than_the_last_release():
 def test_a_secret_never_reaches_the_failure_email_the_history_or_the_logs(env, smtp):
     """C6: a block that fails with a secret in its error: the email about it, the output, the run history and every
     file of the Taskloom folder show *** instead."""
-    env.write("home/secrets.yaml", "api_token: tok-Q7v-never-shown\n").chmod(0o600)
+    env.set_secret("api.token", "tok-Q7v-never-shown")
     env.write("home/settings.yaml", "notify_email: me@example.com\nsmtp_connection: mailer\n")
     flow = env.write("flow.yaml", """
         name: nightly
         blocks:
           ask:
             type: logic.ask_user
-            config: {prompt: "API token?", kind: password, secret: api_token}
+            config: {prompt: "API token?", kind: password, secret: api.token}
           use:
             type: logic.python
             config:

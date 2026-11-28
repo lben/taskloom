@@ -426,10 +426,10 @@ def test_a_rerun_still_refuses_an_output_that_was_not_kept_when_it_also_feeds_a_
 def test_a_password_answer_connected_to_run_after_feeds_a_full_run_and_reruns(env):
     """Spec §6 and its edge path: an Ask User password answer into run after works in full runs and in re-runs (it
     used to go through ask.done)."""
-    env.write("home/secrets.yaml", "pw: hunter2SECRET\n").chmod(0o600)
+    env.set_secret("app.pw", "hunter2SECRET")
     flow = write_flow(env.root / "flow.yaml", {
         "start": MANUAL,
-        "ask": {"type": "logic.ask_user", "config": {"prompt": "Password?", "kind": "password", "secret": "pw"}},
+        "ask": {"type": "logic.ask_user", "config": {"prompt": "Password?", "kind": "password", "secret": "app.pw"}},
         "use": writes("use.txt"),
     }, ["start.start -> ask.after", "ask.answer -> use.after"])
     full = env.taskloom("run", flow)

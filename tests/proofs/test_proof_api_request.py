@@ -4,12 +4,11 @@ block as Postman's Send, and Copy as cURL. How proofs are written: README.md her
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
-import keyring
 import yaml
-from keyring.backends import fail
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QHelpEvent, QPalette, QTextCursor
 from PySide6.QtTest import QTest
@@ -45,7 +44,7 @@ API = "servers.api_request"
 ORDERS = [{"id": 1, "item": "paper", "quantity": 10, "status": "open"},
           {"id": 2, "item": "toner", "quantity": 2, "status": "open"},
           {"id": 3, "item": "labels", "quantity": 5, "status": "open"}]
-TOKEN_NAME = "orders_token"  # the stored secret list_orders sends as its Bearer token
+TOKEN_NAME = "orders.token"  # the stored secret list_orders sends as its Bearer token
 NEW_ORDER = {"item": "paper", "quantity": 3}  # what new_order makes, the body create_order sends
 MISSING = {"error": "no order 999"}  # the server's answer to /orders/999, with 404
 HANDLE = ("print('the error output carries:', ', '.join(error))\n"
@@ -317,8 +316,8 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
                   "kept in step with it.")
     p.fits("It is in the Blocks list under Servers, next to Health Check, with its own icon, and in Help > "
            "Documentation and the hover help, as every block.")
-    p.fits("Stored secrets are the ones connections already use (taskloom secret set NAME), in the system's "
-           "credential store or a file only you can read; the Log and the run history already hide them as ***.")
+    p.fits("Stored secrets are the ones connections already use (taskloom secret set CARD.key), in the system's "
+           "credential store; the Log and the run history already hide them as ***.")
     p.fits("An API connection is one more kind in Tools > Connections, next to databases, SSH servers and email "
            "servers; its token is saved as a stored secret, as their passwords are.")
     p.fits("A response read as a table is a table like any other block's: Data preview shows it, and a Write File, "
@@ -328,7 +327,6 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
         monkeypatch.delenv(name, raising=False)  # (the runs the editor starts inherit this process's)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
-    monkeypatch.setattr(keyring.core, "_keyring_backend", fail.Keyring())  # never the real credential store
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))  # (Save in Settings writes Windows' Startup script there)
     win.resizeDocks([win.output], [LOG_HEIGHT], Qt.Vertical)
     token = secret("token")
@@ -448,7 +446,7 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
                       rows_of("Headers"), rows_of("Body"), rows_of("Response as", "Statuses that count as success"),
                       rows_of("Follow redirects", "CA certificate file", "Don't verify certificates")]
             p.shot(panel, "The request, in the order of Postman's tabs, each group outlined and numbered: ① Connection, "
-                          "Method and URL; ② Params; ③ Auth, a Bearer token from the stored secret orders_token; "
+                          "Method and URL; ② Params; ③ Auth, a Bearer token from the stored secret orders.token; "
                           "④ Headers (none yet); ⑤ Body (none, for a GET); ⑥ Response as table, and the statuses "
                           "that count as success, 200-299 unless you write others; ⑦ Follow redirects, and the "
                           "certificate settings: a CA certificate file (an authority to trust besides the system's) "
@@ -465,12 +463,15 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
             p.step(f"Store the orders API's token as the stored secret {TOKEN_NAME}, as taskloom secret set "
                    f"{TOKEN_NAME} does.")
             p.note("taskloom secret set reads the token from the keyboard, which a proof cannot type into. So the "
-                   "proof stores it with the same code that command runs, in this proof's own temporary Taskloom "
-                   "folder: never in your system's credential store.")
-            assert isinstance(keyring.get_keyring(), fail.Keyring), "the proof never uses the real credential store"
+                   "proof stores it with the same code that command runs, in the tests' stand-in for the "
+                   "system's credential store, a file in this proof's temporary folder: never in your system's "
+                   "credential store.")
             where = win.home.set_secret(TOKEN_NAME, token)
-            p.check(f"{TOKEN_NAME} is stored in the proof's temporary Taskloom folder",
-                    Path(where).resolve() == (win.home.root / "secrets.yaml").resolve())
+            store = Path(os.environ["TEST_CREDENTIAL_STORE"])
+            p.check(f"{TOKEN_NAME} is stored in the credential store, here the tests' stand-in in the proof's "
+                    "temporary folder",
+                    where == "the system credential store" and store.parent == tmp_path
+                    and token in store.read_text(encoding="utf-8"))
 
             p.step("Right-click list_orders and choose “Run only this block, with inputs I choose…”: Postman's "
                    "Send. In the window that asks for its input, body, leave it empty (a GET sends no body) and "
@@ -622,12 +623,12 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
 
             written = (win.home.root / "connections.yaml").read_text(encoding="utf-8")
             p.check("Save wrote shop to connections.yaml, in the Taskloom folder: kind api, the base URL, auth Bearer "
-                    "token, secret: secret:shop_token (the stored secret's name) and the header X-Version: 1",
+                    "token, secret: secret:shop.token (the stored secret's name) and the header X-Version: 1",
                     yaml.safe_load(written).get("shop") == {
                         "kind": "api", "base_url": f"{api.base}/v1", "auth": "Bearer token",
-                        "secret": "secret:shop_token", "headers": [{"key": "X-Version", "value": "1"}]})
-            p.check("The token is stored as the stored secret shop_token, and is nowhere in connections.yaml",
-                    win.home.get_secret("shop_token") == shop_token and shop_token not in written)
+                        "secret": "secret:shop.token", "headers": [{"key": "X-Version", "value": "1"}]})
+            p.check("The token is stored as the stored secret shop.token, and is nowhere in connections.yaml",
+                    win.home.get_secret("shop.token") == shop_token and shop_token not in written)
 
             api.answers["/v1/orders"] = lambda got: json_answer(ORDERS)
             flow = flow_file(tmp_path / "shop-orders.yaml", {
@@ -648,7 +649,7 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
             scroll_to(win, "Connection")
             note = said_under(win, "From the connection shop")
             p.shot(win, "① What the connection gives, shown here and changed in Tools > Connections: its base URL, "
-                        "its Auth with the stored secret shop_token (by its name, never its value), and its header "
+                        "its Auth with the stored secret shop.token (by its name, never its value), and its header "
                         "X-Version: 1, replaced by this block's X-Version: 2. ② The URL, relative to the base URL. "
                         "③ The block's own header. Auth and the certificate settings are no longer shown: they come "
                         "from the connection.",
@@ -656,10 +657,10 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
                    zoom=[properties_row(win, "Connection"), headers_box(win)])
             p.check("Properties shows the connection's values where they cannot be changed: “From the connection "
                     "shop (change it in Tools > Connections): Base URL … Auth: Bearer token, with the stored secret "
-                    "shop_token; Header X-Version: 1 (replaced by this block's X-Version: 2)”",
+                    "shop.token; Header X-Version: 1 (replaced by this block's X-Version: 2)”",
                     note.text().splitlines() == [
                         "From the connection shop (change it in Tools > Connections):", f"Base URL: {api.base}/v1",
-                        "Auth: Bearer token, with the stored secret shop_token",
+                        "Auth: Bearer token, with the stored secret shop.token",
                         "Header X-Version: 1 (replaced by this block's X-Version: 2)"])
             p.check("Its own settings are the URL /orders and the header X-Version: 2; Auth is not shown",
                     tab.doc.blocks["shop_orders"]["config"] == {
@@ -706,9 +707,9 @@ def test_api_request_is_postman_in_a_block(proof, win, qtbot, tmp_path, monkeypa
             p.check("The status bar says “Copied shop_orders as a curl command, its secrets hidden”",
                     win.statusBar().currentMessage() == "Copied shop_orders as a curl command, its secrets hidden")
             p.check("The clipboard holds a curl command, an option a line as bash reads it, with the base URL and "
-                    "/orders, the block's X-Version: 2, and the token as <hidden: secret shop_token>",
+                    "/orders, the block's X-Version: 2, and the token as <hidden: secret shop.token>",
                     copied == (f"curl {api.base}/v1/orders \\\n  --location \\\n  -H 'X-Version: 2' \\\n"
-                               "  -H 'Authorization: Bearer <hidden: secret shop_token>'"))
+                               "  -H 'Authorization: Bearer <hidden: secret shop.token>'"))
             p.check("The token's value is not in it", shop_token not in copied)
 
             # --- 8. A cookie set by the server ------------------------------------------------------------------------

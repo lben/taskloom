@@ -26,6 +26,7 @@ scope:
         - tests/test_typed_values.py -k "python_code_gets_each or each_kind_of_block or typed_list_of_two or empty_typed_text or filled_once_like_any_field or setting_naming_an_input or inside_a_loop_gets or splitters_lines"
         - tests/test_braces.py -k cannot_be_filled_fails
         - tests/test_typed_values_mutants.py -k "cannot_fill or cannot_hold or written_by_hand_with_numbers"
+        - tests/test_credentials_in_other_features.py -k typed_text
     - mutate:
         - taskloom/flow.py _typed_value_problems
       tests:

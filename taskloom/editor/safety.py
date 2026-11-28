@@ -17,6 +17,7 @@ from pathlib import Path
 
 import yaml
 
+from ..engine import redact
 from ..launch import pid_alive
 
 CRASH_LOG = "crash.log"
@@ -34,12 +35,13 @@ class Safety:
 
     def install_crash_log(self, on_error=None):
         """Low-level crashes, uncaught Python errors and Qt's own fatal messages go to crash.log; the errors and
-        messages are also printed in the terminal the editor was started from."""
+        messages are also printed in the terminal the editor was started from. A secret's value the editor read shows
+        only as *** in them, and in the box `on_error` shows (CR-5)."""
         self._log_file = open(self.root / CRASH_LOG, "a", encoding="utf-8")
         faulthandler.enable(file=self._log_file, all_threads=True)
 
         def log_exception(kind, exc_type, exc, tb):
-            text = "".join(traceback.format_exception(exc_type, exc, tb))
+            text = redact("".join(traceback.format_exception(exc_type, exc, tb)))
             self.log(f"{kind}:\n{text}")
             if on_error is not None:
                 on_error(text)
@@ -52,7 +54,7 @@ class Safety:
 
             def qt_messages(mode, context, message):
                 if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
-                    self.log(f"Qt: {message}")
+                    self.log(f"Qt: {redact(message)}")
 
             qInstallMessageHandler(qt_messages)
         except ImportError:

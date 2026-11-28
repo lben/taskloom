@@ -38,6 +38,7 @@ from pathlib import Path
 
 from . import __version__, mail, ssh
 from .config import Home, _write_whole
+from .engine import redact
 from .flow import FlowError, load_flow, real_path
 from .history import History
 from .history import connect as history_connect
@@ -143,7 +144,10 @@ class Scheduler:
         runs a service before it started no longer begin (see claim_time)."""
         self.home = home
         self.id = uuid.uuid4().hex  # (the runs it starts say it, to claim what they are for: see claim_time)
-        self.notify = notify or (lambda title, message: None)
+        told = notify or (lambda title, message: None)
+        # Every notice with the secrets this process read (e.g. a mail server's message repeating the password it
+        # refused, a server the keeper could not check) as ***; a run hides its own in what it prints.
+        self.notify = lambda title, message: told(redact(title), redact(message))
         self.ask, self.withdraw = ask, withdraw
         self.runs: list[_Run] = []
         self.yours: set[str] = set()  # the flows with a run going that you started yourself (see _adopt)
