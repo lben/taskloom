@@ -159,3 +159,34 @@ def test_in_a_windows_console_what_code_writes_below_print_shows_the_value_as_st
         f"out os.write *** {text} .", f"out sys.stdout *** {text} .", f"out child *** {text} ."], seen["screen"]
     assert [row for row in rows if row.startswith("err ")] == [f"err os.write *** {text} ."], seen["screen"]
     assert secret_shown(seen["screen"].encode("utf-8"), TOKEN) == [], seen["screen"]
+
+
+# --- a flush: what comes after it ----------------------------------------------------------------------------------
+
+@pytest.mark.invariant("CR-5")
+def test_a_long_text_with_no_line_break_flushed_shows_whole_before_the_error_output_line_written_next(env):
+    """Output and error output to one terminal (2>&1): the code writes a long text with no line break (4 MB, the value
+    in it 4 times) to the output and flushes, then writes a line to the error output and flushes, then ends the line
+    on the output. The terminal shows the whole long text, each value as ***, then the error output's line, then the
+    output's line break; the value shows nowhere."""
+    from test_credentials_relay import lines, run_bytes
+
+    source = '''\
+import sys
+t = secret("UAT.token")
+block = "x" * 1_000_000
+sys.stdout.write("long " + "".join(f"{block} {t} " for _ in range(4)) + "end")
+sys.stdout.flush()
+sys.stderr.write(f"after {t}\\n")
+sys.stderr.flush()
+sys.stdout.write("\\n")
+sys.stdout.flush()
+'''
+    result = run_bytes(env, flow_of(env, source), stderr=subprocess.STDOUT)
+    shown = lines(result.stdout)
+    after = shown.find(b"after ")
+
+    assert result.returncode == 0, shown[-2000:]
+    wanted = b"long " + b"".join(b"x" * 1_000_000 + b" *** " for _ in range(4)) + b"end" + b"after ***\n\n"
+    assert (shown.count(b"after "), wanted in shown) == (1, True), shown[max(0, after - 200):after + 200]
+    assert secret_shown(shown, TOKEN) == []
