@@ -211,7 +211,7 @@ class _Relay:
     until all written to `fd` before it has been written on (as a flush does)."""
 
     def __init__(self, fd: int, encoding: str, console: bool):
-        token = os.urandom(16).hex()
+        token = os.urandom(relay.TOKEN).hex()
         self.fd, self.mark = fd, f"\0{token}\0".encode()
         self.lock = threading.RLock()  # (re-entered by a Ctrl+C handler that prints while it waits)
         self.before, (read, write), (self.acks, acked) = os.dup(fd), os.pipe(), os.pipe()

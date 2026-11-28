@@ -12,7 +12,9 @@ The run tells it, in the stream itself, between two MARKs (TOKEN, a random text 
 import os
 import signal
 
-PART = 220  # bytes of a secret in one record: with its MARKs (34 bytes each), under 512, macOS' PIPE_BUF
+TOKEN = 16  # random bytes of the token: 32 hexadecimal digits, so a MARK (them between NULs) is 34 bytes
+# bytes of a secret in one record (MARK, +, the secret's hexadecimal, MARK): at most 512, macOS' PIPE_BUF
+PART = (512 - 2 * (2 * TOKEN + 2) - 1) // 2
 
 
 def main(encoding: str, token: str) -> int:
